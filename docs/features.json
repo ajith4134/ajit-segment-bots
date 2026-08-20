@@ -687,6 +687,36 @@
       "id": "novel-idea",
       "name": "novel idea",
       "description": "A strategy nobody here has tried, proposed rather than derived from what already happened."
+    },
+    {
+      "id": "subscription-llm-request",
+      "name": "subscription LLM request",
+      "description": "An llm-request routed to the Claude subscription session, because subscription allowance remains."
+    },
+    {
+      "id": "paid-llm-request",
+      "name": "paid LLM request",
+      "description": "An llm-request routed to a metered cloud model API key, because the subscription allowance is spent."
+    },
+    {
+      "id": "llm-call-record",
+      "name": "LLM call record",
+      "description": "What one answered call actually cost: model, tokens, latency, which route answered it."
+    },
+    {
+      "id": "llm-quota-state",
+      "name": "LLM quota state",
+      "description": "How much subscription allowance is left before the next reset."
+    },
+    {
+      "id": "llm-spend-state",
+      "name": "LLM spend state",
+      "description": "How much money the metered route has spent against its ceiling."
+    },
+    {
+      "id": "llm-model-choice",
+      "name": "LLM model choice",
+      "description": "Which language model answers a given class of request. Distinct from model-choice, which sizes a Kronos forecaster."
     }
   ],
   "features": [
@@ -1625,6 +1655,161 @@
       ],
       "origin": "user",
       "note": "Hypothesis is reactive by design -- it turns what happened into instructions. This is the generative counterpart."
+    },
+    {
+      "id": "llm-request-router",
+      "name": "LLM request router",
+      "role": "route each llm-request to the cheapest route that still has allowance",
+      "category": "llm-services",
+      "consumes": [
+        "llm-request",
+        "llm-quota-state",
+        "llm-spend-state",
+        "llm-model-choice"
+      ],
+      "produces": [
+        "subscription-llm-request",
+        "paid-llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Routing is a data-plane decision, not a control-plane one: this part emits a differently typed request, it never switches a caller on or off. That is what keeps T-2 and T-4 intact -- it names no caller, only data."
+    },
+    {
+      "id": "subscription-session-caller",
+      "name": "Subscription session caller",
+      "role": "answer a subscription-routed request through the Claude subscription session",
+      "category": "llm-services",
+      "consumes": [
+        "subscription-llm-request"
+      ],
+      "produces": [
+        "llm-response",
+        "llm-call-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's Claude Pro/Max subscription used as the model backend, so reasoning costs allowance rather than per-token API money. Measured 2026-08-20 on this server: a headless call returned in 2.4s with the answer intact, so the mechanism is proven rather than assumed."
+    },
+    {
+      "id": "metered-api-caller",
+      "name": "Metered API caller",
+      "role": "answer a paid-routed request through a cloud model API key",
+      "category": "llm-services",
+      "consumes": [
+        "paid-llm-request"
+      ],
+      "produces": [
+        "llm-response",
+        "llm-call-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The fallback the user chose for a spent subscription allowance: keep thinking on a paid cloud key rather than queue or go dark. Which providers hold those keys is not decided here, and no key is written into this repository -- see docs/secrets.md."
+    },
+    {
+      "id": "subscription-quota-watch",
+      "name": "Subscription quota watch",
+      "role": "report how much subscription allowance is left before the next reset",
+      "category": "llm-services",
+      "consumes": [
+        "llm-call-record"
+      ],
+      "produces": [
+        "llm-quota-state",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "A bot running 24/7 shares one allowance with every interactive session on the same account. Without this part the router cannot know when to fall back, and the first symptom would be brains failing silently mid-session."
+    },
+    {
+      "id": "paid-spend-ledger",
+      "name": "Paid spend ledger",
+      "role": "record what the metered route spends against its ceiling",
+      "category": "llm-services",
+      "consumes": [
+        "llm-call-record"
+      ],
+      "produces": [
+        "llm-spend-state",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The fallback turns a fixed subscription into a variable bill. This is the part that makes that bill a measured number the router can act on, instead of a surprise at the end of a month."
+    },
+    {
+      "id": "llm-model-picker",
+      "name": "LLM model picker",
+      "role": "name which model answers a given class of request",
+      "category": "llm-services",
+      "consumes": [
+        "llm-request",
+        "llm-call-record"
+      ],
+      "produces": [
+        "llm-model-choice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's instruction for now: on the subscription account pick a model that is fast and costs little allowance. OPEN QUESTION the user left open deliberately -- once the whole bot is built, every model is to be experimented on. Because the choice lives in this one part, that experiment is a swap of this part, never an edit to a caller."
+    },
+    {
+      "id": "llm-response-cache",
+      "name": "LLM response cache",
+      "role": "return the stored answer for a repeated llm-request",
+      "category": "llm-services",
+      "consumes": [
+        "llm-request",
+        "llm-response"
+      ],
+      "produces": [
+        "llm-response",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "One of the three reasons the user's own category summary gives for having a single LLM block: swap models, cap cost, cache. The cheapest call is the one never made, and on a shared subscription allowance that is the difference between a bot that thinks all day and one that stops at noon."
     }
   ],
   "control_plane": {

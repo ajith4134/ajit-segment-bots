@@ -98,3 +98,45 @@ That means, every time:
 
 This is the same discipline C-20 asks of the bot. The rule is that the project and
 the person building it work the same way.
+
+---
+
+## D-005 — The subscription is the model backend; a paid key is the fallback
+
+**Given:** 2026-08-20
+
+> "for llm feature i needd a featuretat uses my claude pro or maxsubscription in
+> to a api llm claude so it emitaes or workes same as te llms or claude api and
+> all te resonin"
+
+and, when asked what should happen once that allowance is spent:
+
+> "back fall to cloud llm api keys and for te claude sccout coose model wic
+> isfast and cost less after entire dot is completed we need to experement on all
+> modes so keep it asopen qution"
+
+**Three rulings in one answer, and they are separate:**
+
+1. **The Claude Pro/Max subscription is the default model backend.** Thinking
+   costs allowance, not per-token API money. The mechanism is the Claude Agent
+   SDK, and it was proven on this server before the design leaned on it -- a real
+   headless call, 2.4s, answer intact.
+2. **When the allowance is spent, fall back to a metered cloud API key.** Not
+   queue, not go dark. The bot keeps thinking and the cost becomes visible
+   instead of the bot becoming silent. The `paid spend ledger` part exists
+   because that turns a fixed subscription into a variable bill.
+3. **On the subscription account, prefer a fast, cheap model** -- for now.
+
+**The open question, left open deliberately:** which model serves which class of
+request is *not* settled. After the whole bot is built, every model is to be
+experimented on. Recorded here so it is not quietly defaulted later by whoever
+writes the first caller.
+
+**Also decided, by declining to decide:** the stack for this block stays open.
+The user chose blueprint rows only and "do not settle stack yet", so C-10 names
+the mechanism without naming a language, and no code was written.
+
+**What this changed:** C-10 went from a described block with no parts to seven
+parts. Fallback is expressed as a *typed request* rather than a switch, because a
+router that turned a caller on would be the exact T-2 breach the transistor rule
+exists to prevent.

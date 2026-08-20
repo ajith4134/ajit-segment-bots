@@ -430,3 +430,96 @@ proposes something untried.
 
 Twenty foundation blocks, none awaiting a description. What remains open is
 correction, not absence.
+
+---
+
+# C-10 LLM services — seven parts, subscription first (2026-08-20)
+
+## What the user asked for
+
+> "for llm feature i needd a featuretat uses my claude pro or maxsubscription in
+> to a api llm claude so it emitaes or workes same as te llms or claude api and
+> all te resonin"
+
+The model backend for every thinking block is the user's **Claude Pro/Max
+subscription**, driven the way an API would be — full reasoning, model choice,
+tool use — so the bot's thinking costs subscription allowance instead of
+per-token API money.
+
+## The mechanism, measured before it was designed around
+
+The Claude Agent SDK (`claude-agent-sdk`, the Claude Code harness as a library)
+authenticates from the subscription login on this server. No `ANTHROPIC_API_KEY`
+is involved. Verified here on 2026-08-20 with a real headless call:
+
+    claude -p "Reply with exactly: PONG" --model claude-haiku-4-5 --output-format json
+    -> {"result":"PONG","is_error":false,"duration_ms":2433, ...}
+
+Three measured facts the design has to answer to, not three worries:
+
+1. **The allowance is shared.** The same 5-hour and weekly limits serve the
+   user's own interactive sessions. A bot running 24/7 (C-11's world) can starve
+   its owner out of their own account.
+2. **Every call carries harness overhead.** That PONG billed 17,772
+   cache-creation tokens of system prompt before it answered four letters. A lean
+   configuration strips most of it -- the amount is to be measured, never assumed.
+3. **Latency floors at roughly two seconds.** Correct for reasoning, wrong for
+   anything sitting on a price tick.
+
+## What happens when the allowance runs out
+
+Given by the user, 2026-08-20:
+
+> "back fall to cloud llm api keys and for te claude sccout coose model wic
+> isfast and cost less"
+
+So: **fall back to a metered cloud API key rather than queue or go dark**, and on
+the subscription account prefer a model that is fast and cheap in allowance. No
+key value enters this repository -- `docs/secrets.md` holds the rule that the repo
+carries the inventory while the machine carries the values.
+
+## Routing is done with data types, never with names
+
+The obvious design -- a router that turns the paid caller on when the
+subscription runs dry -- is exactly the thing T-2 forbids, and it would give the
+clean data flow a second, invisible graph running underneath it.
+
+Instead the router **emits a differently typed request**. It consumes
+`llm-request` and produces either `subscription-llm-request` or
+`paid-llm-request`; each caller consumes only its own type. Fallback becomes an
+edge in the diagram rather than a hidden switch, no part names another part
+(T-4), and swapping either caller changes nothing anywhere else.
+
+## The seven parts
+
+| Part | Its one job |
+|---|---|
+| **LLM request router** | route each request to the cheapest route that still has allowance |
+| **Subscription session caller** | answer a subscription-routed request through the Claude subscription session |
+| **Metered API caller** | answer a paid-routed request through a cloud model API key |
+| **Subscription quota watch** | report how much allowance is left before the next reset |
+| **Paid spend ledger** | record what the metered route spends against its ceiling |
+| **LLM model picker** | name which model answers a given class of request |
+| **LLM response cache** | return the stored answer for a repeated request |
+
+The last three are why this is one block instead of a call scattered through
+every thinker: the user's own summary asked for one place to **swap models, cap
+cost, and cache**, and each of those is a part rather than a setting.
+
+## The open question the user left open on purpose
+
+> "after entire dot is completed we need to experement on all modes so keep it
+> asopen qution"
+
+**Which model each class of request should use is not decided.** For now: fast and
+cheap. Once the whole bot is built, every model is to be experimented on. This is
+recorded as open, not defaulted -- and because the choice lives in one part, that
+experiment is a swap of the model picker, never an edit to a caller. T-6 is what
+makes the later experiment cheap.
+
+## What is still not built
+
+Nothing here is code. These are blueprint rows, and the board reports them as
+designed rather than as working. The stack for this block is still undecided --
+the user declined to settle it, so the subscription caller names the mechanism
+without naming a language.
