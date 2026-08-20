@@ -4,6 +4,7 @@ __pycache__/
 # Generated state output. Rule 9: a committed timestamped snapshot of machine
 # state reads as a fact about the project rather than about one moment.
 dashboard/status-board.html
+dashboard/part-monitor.html
 
 # Secrets never enter this repository. See docs/secrets.md — values live in
 # ~/.config, encrypted with sops+age, outside every repo.

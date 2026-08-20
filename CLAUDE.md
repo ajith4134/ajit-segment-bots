@@ -75,3 +75,18 @@ Regenerates `dashboard/status-board.html` from probes that actually run. Every
 tile traces to one. Nothing on it is hand-written, and anything unprobed renders
 as `NOT MEASURED` — never as healthy. Re-publish that file to the same Artifact
 URL to update the shared link.
+
+## Part monitor
+
+    python3 dashboard/build_part_monitor.py
+
+Regenerates `dashboard/part-monitor.html`: every part in the blueprint as a cell,
+coloured by how far it is actually built. Four rungs, each a probe that runs —
+`DECLARED` (in the blueprint, contract intact, no code), `IMPLEMENTED` (a source
+file named for the part exists), `TESTED` (a test file names it), `RUNNING` (it
+reports a heartbeat). `FAILING` is wired to the contract checker, so a part it
+names goes red.
+
+Today every part is `DECLARED`, which is the correct board for a system that is
+entirely unbuilt. Cells climb as code lands — nothing is ever inferred upward,
+and a failing part never counts as progress.
