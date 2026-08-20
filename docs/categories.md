@@ -615,3 +615,111 @@ These two parts are what keep it a decision rather than a drift.
 - **The block is open.** More jobs are coming from the user.
 - **No part names another part.** Not even the replacement planner, which chooses
   from admitted parts as data, and hands the swap to the governor.
+
+---
+
+# C-21 grows from two read codebases (2026-08-20)
+
+## What the user sent
+
+> "this is the link u need you to read find the project read its code and inspire and add
+> the features to the autonomous and parts to it"
+
+Three Instagram reels. All three were read at media level -- Whisper transcript plus sampled
+frames -- never from the caption, because caption-only reading has produced false conclusions
+in this project before. Then every falsifiable claim in them was checked against the source.
+
+| Reel | Claim | Checked |
+|---|---|---|
+| `100xengineers` | An AI that dies if it does not earn, clones itself if it does. Project "Automaton", infrastructure "Conway" | **True.** `Conway-Research/automaton` -- 5,776 stars, 1,271 forks, TypeScript, MIT. Cloned and read. |
+| `sorhan.hq` | A programming language that makes LLMs code faster, foldable, open source | **True.** `WeaveMindAI/weft` -- 1,868 stars, Rust, POC, open source. Docs read. |
+| `vince.quant` | NASA physicist's paper: order-flow entropy predicts magnitude, not direction | **True and accurately reported.** arXiv 2512.15720, Mainak Singha, NASA Goddard. 2.89x magnitude ratio, 45.0% directional accuracy, +1,126 bps, 36 days. |
+
+The third one does **not** belong to C-21 and no part was invented for it -- see the end of
+this section.
+
+## The seven new parts
+
+| Part | Its one job | Taken from |
+|---|---|---|
+| **Survival tier monitor** | grade how much runway the bot has left before it must conserve | `survival/monitor.ts` |
+| **Conservation planner** | name what the bot sheds at each level of scarcity | `survival/low-compute.ts` |
+| **Autonomy policy engine** | rule on each act the bot proposes to take by itself | `agent/policy-engine.ts` |
+| **Self-modification journal** | record every change the bot makes to itself | `self-mod/audit-log.ts` |
+| **No-progress detector** | spot the bot repeating itself without making progress | `agent/loop-detector.ts` |
+| **Upstream improvement watch** | notice when a better version of the bot's own code exists | `self-mod/upstream.ts` |
+| **Folded circuit view** | compress the whole circuit into a view small enough to reason over | Weft groups |
+
+## The five ideas that actually changed the design
+
+**Scarcity is graded, never binary.** The automaton runs
+`high -> normal -> low_compute -> critical -> dead`, and each rung *changes behaviour* rather
+than stopping: cheaper model, slower heartbeat, non-essential work shed. C-10 was designed
+with a single cliff -- subscription allowance spent, fall to a paid key. That is now one rung
+of a ladder. **And the tier is data, not a part state**: T-5 keeps states `off`/`on`, so the
+tier is produced as `survival-tier` and any part can read it without knowing who computed it.
+
+**A threshold crossed for a second is not an event.** The automaton reaches `dead` only after
+sixty *continuous* minutes at zero, explicitly so funding has time to arrive. A 24/7 bot with
+no grace period kills itself on a blip.
+
+**Authority comes from the trigger, not the actor.** In `policy-engine.ts`, an act the
+**heartbeat** started gets the *lowest* authority level -- below one the creator asked for --
+and an unknown origin defaults to the same floor. This is the single most transferable idea
+for a bot that runs unattended: what it decides to do on its own must clear a higher bar than
+what you asked for.
+
+**"Busy" is not "progressing".** The loop detector blocks three identical calls, warns then
+enforces on a repeated call *pattern*, and keeps an explicit list of idle-only tools --
+checking a balance is not progress. This is the unattended failure that looks healthiest:
+every part green, the machine busy, nothing advancing.
+
+**Integrity is a hash, never a file permission.** The constitution is propagated to children
+with its SHA-256 alongside, and the code says why: *"Uses SHA-256 hash verification instead of
+superficial chmod 444."* The chmod is kept, labelled defense-in-depth, not the mechanism.
+
+## Weft reached this project's architecture from the other direction
+
+Weft is a language; this is a blueprint. They converged:
+
+- nodes declare typed inputs and outputs, never each other's names -- **R-01**
+- the graph is *derived* from the code, never drawn by hand -- `render_blueprint.py`
+- the compiler refuses a graph that breaks a node's declared wiring rules -- the pre-commit hook
+- one source of truth, two views: dense for the machine, visual for the human -- the board
+
+And its group rule, verbatim: *"Child nodes inside a group can only talk to each other and to
+`self`. They cannot reference nodes outside the group, and nothing outside the group can
+reference a child by name."* That is **T-4**, written by someone who had never seen this
+project.
+
+Its foldability answers a problem already flagged here: 66 parts and a `part-health` fan-out
+nobody can read. A part that must *write* a new part cannot first read the whole circuit --
+so the circuit has to fold, or self-building is capped by context rather than by judgement.
+
+## What was deliberately rejected
+
+The automaton's headline features are specific to a **sovereign agent that sells services to
+strangers**, and are wrong here:
+
+- **Crypto wallet, USDC, x402 payments, ERC-8004 identity.** Payment rails for an agent with
+  no human. This bot has an owner and a funded account.
+- **Replication into child agents with their own wallets.** A different product, not a feature
+  of this one.
+- **"Dies if it does not earn."** For a trading system this is strictly worse than standing
+  down. Losing capital allocation is the right pressure; deleting itself is not -- and the
+  graduation gate already applies that pressure correctly.
+
+Copying those would have been the easy way to look inspired. The transferable half is the
+survival machinery, and that is what was taken.
+
+## The entropy paper is real, and it is not C-21
+
+`arXiv:2512.15720` belongs to **C-08 prediction** or **C-02 opportunity scanner**: order-flow
+entropy over a 15-state Markov chain in a rolling 120-second window, forecasting *magnitude*
+while direction stays at chance by mathematical necessity -- entropy is invariant under
+swapping buy and sell labels.
+
+It is not added as a part, for two reasons. It is not autonomy, and the user's instruction was
+to add to C-21. And the paper's own limits are severe: 36 days, one instrument, VIX 14-22
+throughout, and **38.5% of all profit came from a single day**. Recorded here so the finding
+exists; a part for it is the user's call, not an assumption.

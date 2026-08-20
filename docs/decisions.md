@@ -179,3 +179,42 @@ gained an inbound edge — the resource governor now consumes restart requests,
 admitted parts and replacement plans; risk allocation now consumes a trading
 halt. Those are the only two parts of the system allowed to act on what this
 block decides.
+
+---
+
+## D-007 — Two codebases read, seven parts taken, the wallet left behind
+
+**Given:** 2026-08-20
+
+> "this is the link u need you to read find the project read its code and inspire and add the
+> features to the autonomous and parts to it"
+
+**What was done, in the order D-004 requires:** all three reels read at media level (Whisper
+transcript plus frames, never the caption), every falsifiable claim checked at the source, the
+named project cloned and its code read, and the result distilled into a skill rather than a
+summary -- `sovereign-agent-patterns`.
+
+**Verified, not repeated:** `Conway-Research/automaton` (5,776 stars, 1,271 forks, TypeScript,
+MIT) and `WeaveMindAI/weft` (1,868 stars, Rust) both exist and are what the reels said. The
+entropy paper is `arXiv:2512.15720`, Mainak Singha, NASA Goddard, and the reel reported its
+numbers accurately -- which is worth recording, because in this project's history most reels
+did not.
+
+**Seven parts added to C-21**, each traced to a file that was read: survival tier monitor,
+conservation planner, autonomy policy engine, self-modification journal, no-progress detector,
+upstream improvement watch, folded circuit view.
+
+**Three things deliberately rejected**, because inspiration is not imitation: the crypto
+wallet and x402 payment rails, replication into child agents, and "dies if it does not earn".
+The first two solve a problem this bot does not have -- it has an owner and a funded account.
+The third is strictly worse than standing down for a system trading real capital, and the
+graduation gate already applies the right pressure.
+
+**What changed elsewhere:** C-10's fallback was designed as a single cliff -- allowance spent,
+switch to a paid key. It is now one rung of a graded ladder, because the automaton's tiers make
+the case that scarcity handled binary is scarcity handled badly.
+
+**Not added:** the entropy paper. It is real and it is interesting, but it is prediction, not
+autonomy, and its own limits are severe -- 36 days, one instrument, 38.5% of profit from a
+single day. Recorded in categories.md so it is not lost. Whether it becomes a part is the
+user's call.

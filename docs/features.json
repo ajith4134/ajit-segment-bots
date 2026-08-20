@@ -265,7 +265,8 @@
         "part-health",
         "restart-request",
         "admitted-part",
-        "replacement-plan"
+        "replacement-plan",
+        "conservation-plan"
       ],
       "produces": [],
       "flow_origin": "agreed-provisional",
@@ -297,7 +298,8 @@
         "trade-intent",
         "position",
         "exposure-view",
-        "trading-halt"
+        "trading-halt",
+        "policy-decision"
       ],
       "produces": [
         "sized-order",
@@ -460,7 +462,9 @@
         "llm-response",
         "bot-maturity",
         "exposure-view",
-        "regime-break-alert"
+        "regime-break-alert",
+        "trade-intent",
+        "journal-entry"
       ],
       "produces": [
         "restart-request",
@@ -468,7 +472,9 @@
         "replacement-plan",
         "trading-halt",
         "llm-request",
-        "part-health"
+        "part-health",
+        "conservation-plan",
+        "policy-decision"
       ],
       "flow_origin": "proposed",
       "scope": "global",
@@ -795,6 +801,36 @@
       "id": "replacement-plan",
       "name": "replacement plan",
       "description": "Which admitted part takes over from a faulted one. A plan, not an act -- the governor performs the swap."
+    },
+    {
+      "id": "survival-tier",
+      "name": "survival tier",
+      "description": "How much runway is left, graded: full, conserving, critical. A graded scarcity reading, not a part state -- states stay off/on per T-5."
+    },
+    {
+      "id": "conservation-plan",
+      "name": "conservation plan",
+      "description": "What the bot sheds at a given level of scarcity: which work stops, which model steps down, how much the poll slows."
+    },
+    {
+      "id": "policy-decision",
+      "name": "policy decision",
+      "description": "The ruling on one act the bot proposed to take by itself: allow, hold, or refuse, with the rule that decided it and the reason."
+    },
+    {
+      "id": "modification-record",
+      "name": "modification record",
+      "description": "One change the bot made to itself: what changed, the diff, whether it can be undone. Append-only."
+    },
+    {
+      "id": "upstream-change",
+      "name": "upstream change",
+      "description": "A newer version of the bot's own code that exists but is not running here yet."
+    },
+    {
+      "id": "folded-circuit-map",
+      "name": "folded circuit map",
+      "description": "The whole circuit compressed to a readable size: groups folded to one box each, opened only where a question needs the detail."
     }
   ],
   "features": [
@@ -1941,7 +1977,8 @@
       "consumes": [
         "bot-scorecard",
         "research-finding",
-        "part-health"
+        "part-health",
+        "folded-circuit-map"
       ],
       "produces": [
         "capability-gap",
@@ -1963,7 +2000,8 @@
       "category": "autonomous",
       "consumes": [
         "capability-gap",
-        "llm-response"
+        "llm-response",
+        "folded-circuit-map"
       ],
       "produces": [
         "proposed-part",
@@ -1985,7 +2023,9 @@
       "role": "admit a proposed part only after it passes every contract",
       "category": "autonomous",
       "consumes": [
-        "proposed-part"
+        "proposed-part",
+        "upstream-change",
+        "policy-decision"
       ],
       "produces": [
         "admitted-part",
@@ -2006,7 +2046,9 @@
       "role": "name which decisions the bot may take without a human",
       "category": "autonomous",
       "consumes": [
-        "bot-maturity"
+        "bot-maturity",
+        "modification-record",
+        "survival-tier"
       ],
       "produces": [
         "autonomy-envelope",
@@ -2030,7 +2072,8 @@
         "autonomy-envelope",
         "exposure-view",
         "outage-state",
-        "regime-break-alert"
+        "regime-break-alert",
+        "survival-tier"
       ],
       "produces": [
         "trading-halt",
@@ -2087,6 +2130,160 @@
       ],
       "origin": "proposed",
       "note": "Where self-healing meets self-building: the replacement for a faulted part is drawn from what the admission gate has already cleared. It plans; the governor swaps. A planner that performed the swap would be a feature switching a feature, which T-2 forbids however good its reason."
+    },
+    {
+      "id": "survival-tier-monitor",
+      "name": "Survival tier monitor",
+      "role": "grade how much runway the bot has left before it must conserve",
+      "category": "autonomous",
+      "consumes": [
+        "llm-quota-state",
+        "llm-spend-state",
+        "part-health"
+      ],
+      "produces": [
+        "survival-tier",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Drawn from Conway-Research/automaton (src/survival/monitor.ts, low-compute.ts, read 2026-08-20). Its lesson is that scarcity is graded, never binary: high / normal / low_compute / critical / dead, each with different behaviour, and every transition recorded. Note what this is NOT: a part state. T-5 keeps states off/on, so the tier is data a part produces, which is also what lets any part read it without knowing who computed it."
+    },
+    {
+      "id": "conservation-planner",
+      "name": "Conservation planner",
+      "role": "name what the bot sheds at each level of scarcity",
+      "category": "autonomous",
+      "consumes": [
+        "survival-tier"
+      ],
+      "produces": [
+        "conservation-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The automaton's answer to running low is not to stop -- it downgrades to a cheaper model, slows its heartbeat, sheds non-essential tasks, and keeps living. It also holds a one-hour grace period at zero before declaring death, so funding has time to arrive. Both are anti-flap: a threshold crossed for a second is not a death. The plan is data; the governor still performs the shedding."
+    },
+    {
+      "id": "autonomy-policy-engine",
+      "name": "Autonomy policy engine",
+      "role": "rule on each act the bot proposes to take by itself",
+      "category": "autonomous",
+      "consumes": [
+        "autonomy-envelope",
+        "trade-intent",
+        "proposed-part"
+      ],
+      "produces": [
+        "policy-decision",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From automaton src/agent/policy-engine.ts: every tool call passes one engine, rules sorted by priority, FIRST DENY WINS, and each decision is journalled with the rule ids and an args hash. It upgrades the autonomy boundary from a stated limit into an enforced one. Its sharpest idea is authority by trigger: an act the heartbeat started gets the LOWEST authority, below one the creator asked for -- exactly right for a bot that runs 24/7 unattended."
+    },
+    {
+      "id": "self-modification-journal",
+      "name": "Self-modification journal",
+      "role": "record every change the bot makes to itself",
+      "category": "autonomous",
+      "consumes": [
+        "admitted-part",
+        "policy-decision"
+      ],
+      "produces": [
+        "modification-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From automaton src/self-mod/audit-log.ts -- append-only, with the diff and a reversible flag, so the creator can see everything the agent changed about itself. The admission gate says what may enter the circuit; this says what actually did. Without it, self-building is unauditable, and an unauditable change is indistinguishable from a defect nobody noticed."
+    },
+    {
+      "id": "no-progress-detector",
+      "name": "No-progress detector",
+      "role": "spot the bot repeating itself without making progress",
+      "category": "autonomous",
+      "consumes": [
+        "part-health",
+        "journal-entry"
+      ],
+      "produces": [
+        "part-fault",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From automaton src/agent/loop-detector.ts: three identical calls is a loop and gets blocked; a repeated pattern of calls gets one warning then enforcement. It also keeps a list of idle-only tools -- checking a balance is not progress. This is the unattended failure that looks healthiest: every part reporting fine, the machine busy, nothing actually advancing. Rule 8 in the user's own rules, applied to activity rather than to status."
+    },
+    {
+      "id": "upstream-improvement-watch",
+      "name": "Upstream improvement watch",
+      "role": "notice when a better version of the bot's own code exists",
+      "category": "autonomous",
+      "consumes": [
+        "research-finding",
+        "part-health"
+      ],
+      "produces": [
+        "upstream-change",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From automaton src/self-mod/upstream.ts, which fetches its own git origin, counts how many commits it is behind, and reads the per-commit diffs so the agent can decide whether to take them. Note where it sends them here: an upstream change is a PROPOSAL, so it goes to the same admission gate as anything the bot writes itself. Nothing enters the circuit unchecked because it came from outside."
+    },
+    {
+      "id": "folded-circuit-view",
+      "name": "Folded circuit view",
+      "role": "compress the whole circuit into a view small enough to reason over",
+      "category": "autonomous",
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [
+        "folded-circuit-map",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From WeaveMindAI/weft: any group of nodes folds into one node with a typed interface, so a 100-node system still looks like five boxes, and the AI builder searches the catalogue on demand rather than carrying it in context. This blueprint already has 66 parts and a part-health fan-out nobody can read. A part that must write a new part cannot first read the whole circuit -- so the circuit has to be foldable, or self-building is capped by context rather than by judgement."
     }
   ],
   "control_plane": {
