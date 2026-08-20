@@ -37,6 +37,30 @@ without a single profit claim.
 | 9 | put skew | `IV₂₅Δput − IV_ATM`, what fear costs |
 | 10 | market vol | S&P 5-day realised |
 
+**The complete specification, recovered from the final frames** — the transcript
+only ever said "combine them in a linear regression". The board spells it out:
+
+    RV̂₁₀,ₜ = β₀
+           + β₁  RV₁d,t              1-day realised vol
+           + β₂  RV₅d,t              5-day
+           + β₃  RV₂₂d,t             22-day, what is typical recently
+           + β₄  DownsideRV₅d,t      vol from sell-offs
+           + β₅  JumpVar₅d,t         vol from jumps
+           + β₆  VV₂₀d,t             vol of vol
+           + β₇  ATMIV₃₀d,t          what the option market expects
+           + β₈  TermSlope₃₀₋₆₀,t    near-term event pricing
+           + β₉  PutSkew₂₅Δ,t        what fear costs
+           + β₁₀ SpyRV₅d,t           asset or market
+
+Plus three more formulas the frames carried and the audio did not:
+
+    RV₅d   = √(252 · (1/5)  Σⱼ₌₀⁴  variance_{t−j})
+    RV₂₂d  = √(252 · (1/22) Σ      variance_{t−j})
+    DSvar  = Σ_{rᵢ < 0} rᵢ²          squared negative returns only
+    VV₂₀   = σ(RV₁₁ over t−19:t)     stdev of a rolling realised vol
+    TermSlope = IV₃₀ − IV₆₀
+    RV_spy,5d = √(252 · Var_spy,5d)
+
 **Where it lands:** `prediction` (a feature set that is not Kronos and can be
 scored against it), `hypothesis` (this is exactly what an opportunity instruction
 looks like when written out), and the **options** segment.
@@ -207,22 +231,45 @@ prediction markets enter scope. **Backtrader stays last — not for its licence,
 because it has not been pushed since 2024-08-19** while everything above it
 shipped this month. That was always a quality objection.
 
-## 5. OmniPhi — nothing to use
+## 5. OmniPhi — no product to use, but one page worth copying
 
-`p/DbYieIWmUxW` · 1 image + 6 videos
+`p/DbYieIWmUxW` · 1 image + 6 videos, 30 frames
 
-An "Agentic Integrated Trading Environment": describe an agent, it builds and
-runs it; writes, tests and discards strategies until one clears a bar, then goes
-live.
+**Corrected after reading all 30 frames.** The product verdict stands: no GitHub
+presence, application-only closed beta, nothing to evaluate. But two frames carry
+real content that a first pass missed.
 
-**Not verifiable.** No GitHub presence for the product. The site answers, and
-that is all. Closed beta, application only, "comment BETA for early access".
+**An honest-assessment panel that is the opposite of every other post here.**
+Its own output, under the heading *"What this strategy does and does not do"*:
 
-The *pattern* is worth noting — generate, backtest, discard, promote on merit —
-because it is the same shape as `hypothesis → test → promote`. But there is no
-code, no paper, and no way to evaluate the claims.
+> **Does not beat buy-and-hold in every window.** During strong bull quarters the
+> benchmark returns 46–65% while the strategy captures 10–21%. Vol targeting caps
+> exposure at ~0.7× average, sacrificing upside for risk control.
+>
+> **Excels at drawdown management.** Worst out-of-sample drawdown −7.2% against
+> the benchmark's −62.1%.
+>
+> **The first out-of-sample window is the only losing period.** The strategy
+> entered a trend that reversed early — the inherent risk of trend-following.
+>
+> **4.3 years is a limited sample.** Only one full bear-bull cycle in the data.
+> The walk-forward helps, but it has not been tested across multiple cycles.
 
----
+Every other post in this set showed a rising equity curve and a win rate. This one
+names where it loses, by how much, and why the sample is too short to trust.
+**The format is worth copying outright** for how this project reports its own
+results — it is Rule 8 applied to strategy performance rather than to a dashboard.
+
+**A regime classifier, stated concretely.** Its market brief reports a **Hurst
+proxy of 0.462 → "mild mean-reversion tendency"**, alongside RSI(14), current
+drawdown, hourly volatility annualised, and a regime label that reads *"Mixed — no
+clear trending/ranging label"* rather than forcing a call.
+
+That connects two posts. The mean-reversion sheet says the strategy fails in
+strong trends but never says how to detect one. **Hurst is the detector**: below
+0.5 mean-reverting, above 0.5 trending. For the `opportunity-scanner` that is the
+switch deciding *which class of instruction applies right now* — and the honest
+"Mixed" label is the third answer, which is to stand down.
 
 ## 6. Six equations — one of them is a real modelling pattern
 
