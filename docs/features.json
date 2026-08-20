@@ -35,16 +35,31 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bot-maturity",
+        "capital-allotment",
+        "cost-estimate",
+        "fill",
+        "market-data",
+        "order-request",
+        "position",
         "sized-order",
         "stop-adjustment"
       ],
       "produces": [
+        "account-balance",
+        "fill",
         "order-request",
-        "part-health"
+        "part-health",
+        "risk-limit"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "opportunity-scanner",
@@ -53,22 +68,36 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "market-data",
-        "position",
-        "volatility-forecast",
+        "funding-forecast",
         "implied-vol-surface",
+        "liquidation-map",
+        "market-data",
+        "order-book-snapshot",
         "playbook-rule",
-        "proven-instruction"
+        "position",
+        "proven-instruction",
+        "retired-instruction",
+        "sentiment-reading",
+        "symbol-profile",
+        "symbol-universe",
+        "volatility-forecast",
+        "whale-transfer"
       ],
       "produces": [
         "entry-candidate",
-        "part-health",
-        "market-regime"
+        "liquidity-grade",
+        "market-regime",
+        "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "parent": "segment-bot",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "segment-bot",
@@ -77,15 +106,21 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "entry-candidate",
-        "market-data",
         "bot-scorecard",
-        "position",
+        "copy-score",
+        "entry-candidate",
         "external-position",
-        "price-forecast"
+        "implied-vol-surface",
+        "liquidity-grade",
+        "market-data",
+        "position",
+        "price-forecast",
+        "regime-break-alert",
+        "trade-intent"
       ],
       "produces": [
         "directional-opinion",
+        "instrument-choice",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
@@ -96,7 +131,12 @@
       "box_label": "Segment bot",
       "inner_label": "Bull / bear / profit tailgating",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "intelligence",
@@ -105,25 +145,41 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "position",
-        "directional-opinion",
-        "trade-episode",
-        "market-data",
-        "journal-entry",
         "bot-scorecard",
-        "llm-response"
+        "decision-rationale",
+        "decoded-trade-instruction",
+        "directional-opinion",
+        "feed-gap",
+        "instruction-history",
+        "journal-entry",
+        "llm-response",
+        "loss-cause",
+        "market-data",
+        "position",
+        "sentiment-reading",
+        "trade-episode"
       ],
       "produces": [
-        "exposure-view",
+        "correlation-cluster",
+        "cross-segment-lesson",
         "decision-quality-score",
-        "regime-break-alert",
+        "exposure-view",
+        "llm-request",
+        "market-anomaly",
+        "market-event",
         "novel-idea",
         "part-health",
-        "llm-request"
+        "regime-break-alert",
+        "web-idea"
       ],
       "flow_origin": "proposed",
       "scope": "global",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "learning-loop",
@@ -132,21 +188,34 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "decision-quality-score",
         "directional-opinion",
+        "exit-quality",
+        "fill",
+        "forecast-accuracy",
+        "opportunity-instruction",
+        "sized-order",
         "trade-episode",
-        "vol-feature-set",
-        "decision-quality-score"
+        "vol-feature-set"
       ],
       "produces": [
-        "bot-scorecard",
         "bot-maturity",
+        "bot-scorecard",
         "feature-reliability",
-        "part-health"
+        "forecast-trust",
+        "instruction-scorecard",
+        "part-health",
+        "slippage-profile"
       ],
       "flow_origin": "proposed",
       "scope": "per-segment",
       "scope_origin": "user",
-      "shape": "peer"
+      "shape": "peer",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "hypothesis",
@@ -155,24 +224,37 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "cross-segment-lesson",
         "decoded-trade-instruction",
-        "trade-episode",
-        "forecast-accuracy",
-        "recalled-episode",
-        "semantic-fact",
-        "loaded-skill-section",
-        "strategy-gap",
+        "exit-quality",
         "feature-reliability",
+        "forecast-accuracy",
+        "instruction-scorecard",
+        "live-vs-replay-gap",
+        "loaded-skill-section",
+        "loss-cause",
+        "novel-idea",
+        "recalled-episode",
+        "reflection-note",
         "regime-break-alert",
-        "novel-idea"
+        "semantic-fact",
+        "strategy-gap",
+        "trade-episode",
+        "winner-pattern"
       ],
       "produces": [
         "opportunity-instruction",
-        "part-health"
+        "part-health",
+        "retired-instruction"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "knowledge",
@@ -181,19 +263,31 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "instruction-scorecard",
         "journal-entry",
-        "trade-episode",
-        "opportunity-instruction"
+        "market-data",
+        "opportunity-instruction",
+        "retired-instruction",
+        "skill-usefulness",
+        "trade-episode"
       ],
       "produces": [
-        "semantic-fact",
-        "recalled-episode",
+        "instruction-history",
+        "part-health",
         "playbook-rule",
-        "part-health"
+        "recalled-episode",
+        "semantic-fact",
+        "stale-knowledge",
+        "symbol-profile"
       ],
       "flow_origin": "proposed",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "prediction",
@@ -202,19 +296,29 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "market-data"
+        "forecast-trust",
+        "market-data",
+        "order-book-snapshot"
       ],
       "produces": [
-        "price-forecast",
+        "ensemble-forecast",
         "forecast-accuracy",
-        "part-health",
-        "volatility-forecast",
+        "funding-forecast",
         "implied-vol-surface",
-        "vol-feature-set"
+        "liquidation-map",
+        "part-health",
+        "price-forecast",
+        "vol-feature-set",
+        "volatility-forecast"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "online-research",
@@ -223,19 +327,28 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "trade-episode",
-        "llm-response"
+        "llm-response",
+        "symbol-universe",
+        "trade-episode"
       ],
       "produces": [
-        "research-finding",
-        "strategy-gap",
-        "part-health",
+        "copy-score",
         "external-position",
-        "llm-request"
+        "llm-request",
+        "part-health",
+        "research-finding",
+        "sentiment-reading",
+        "strategy-gap",
+        "whale-transfer"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "llm-services",
@@ -244,16 +357,24 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "llm-request"
+        "llm-request",
+        "survival-tier"
       ],
       "produces": [
+        "llm-quota-state",
         "llm-response",
+        "llm-spend-state",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
-      "planned_extension": "Becomes a thinker in its own right once the rest is running \u2014 reasoning about the market rather than only answering other blocks' questions."
+      "planned_extension": "Becomes a thinker in its own right once the rest is running — reasoning about the market rather than only answering other blocks' questions.",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "resource-governor",
@@ -262,16 +383,26 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "part-health",
-        "restart-request",
         "admitted-part",
+        "conservation-plan",
+        "part-health",
         "replacement-plan",
-        "conservation-plan"
+        "restart-request"
       ],
-      "produces": [],
+      "produces": [
+        "hog-report",
+        "part-fault",
+        "part-health",
+        "switch-record"
+      ],
       "flow_origin": "agreed-provisional",
       "scope": "global",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "market-data-feed",
@@ -281,12 +412,20 @@
       "approved": true,
       "consumes": [],
       "produces": [
+        "feed-gap",
         "market-data",
-        "part-health"
+        "order-book-snapshot",
+        "part-health",
+        "symbol-universe"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "risk-capital-allocation",
@@ -295,20 +434,40 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
-        "trade-intent",
-        "position",
+        "account-balance",
+        "closed-trade",
+        "correlation-cluster",
         "exposure-view",
+        "funding-forecast",
+        "human-override",
+        "instrument-choice",
+        "liquidation-map",
+        "market-anomaly",
+        "market-data",
+        "market-event",
+        "policy-decision",
+        "position",
+        "risk-limit",
+        "slippage-profile",
+        "symbol-profile",
+        "trade-intent",
         "trading-halt",
-        "policy-decision"
+        "volatility-forecast"
       ],
       "produces": [
-        "sized-order",
+        "capital-allotment",
         "part-health",
+        "sized-order",
         "stop-adjustment"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "ledger",
@@ -317,24 +476,37 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
+        "ablation-scorecard",
+        "closed-trade",
+        "decision-rationale",
         "entry-candidate",
-        "trade-intent",
-        "sized-order",
-        "order-request",
         "fill",
+        "forecast-accuracy",
+        "modification-record",
+        "opportunity-instruction",
+        "order-request",
+        "peak-excursion",
+        "policy-decision",
         "position",
         "research-finding",
-        "forecast-accuracy",
-        "ablation-scorecard",
-        "skill-usefulness"
+        "sized-order",
+        "skill-usefulness",
+        "switch-record",
+        "trade-intent"
       ],
       "produces": [
         "journal-entry",
+        "journal-gap",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "portfolio-state",
@@ -343,16 +515,26 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
-        "fill"
+        "capital-allotment",
+        "fill",
+        "market-data",
+        "venue-position-report"
       ],
       "produces": [
-        "position",
         "closed-trade",
-        "part-health"
+        "part-health",
+        "peak-excursion",
+        "position",
+        "usdt-pnl-statement"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "observability",
@@ -361,14 +543,28 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
-        "part-health"
+        "account-balance",
+        "hog-report",
+        "journal-gap",
+        "market-anomaly",
+        "part-fault",
+        "part-health",
+        "switch-record",
+        "trading-halt",
+        "usdt-pnl-statement"
       ],
       "produces": [
-        "ablation-scorecard"
+        "ablation-scorecard",
+        "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "global",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "execution-venue-adapter",
@@ -377,15 +573,24 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
+        "fill",
         "order-request"
       ],
       "produces": [
+        "account-balance",
         "fill",
-        "part-health"
+        "order-request",
+        "part-health",
+        "venue-position-report"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "ai-brain",
@@ -394,38 +599,59 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "directional-opinion",
-        "market-regime",
         "bot-maturity",
-        "regime-break-alert"
+        "directional-opinion",
+        "ensemble-forecast",
+        "forecast-trust",
+        "llm-response",
+        "market-regime",
+        "regime-break-alert",
+        "trade-episode"
       ],
       "produces": [
-        "trade-intent",
-        "part-health"
+        "decision-rationale",
+        "llm-request",
+        "part-health",
+        "reflection-note",
+        "trade-intent"
       ],
       "flow_origin": "proposed",
       "parent": "segment-bot",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "closed-trade-decoding",
       "name": "Closed trade decoding",
-      "summary": "Decodes finished trades \u2014 winners and losers both \u2014 into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
+      "summary": "Decodes finished trades — winners and losers both — into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
       "origin": "user",
       "approved": true,
       "consumes": [
         "closed-trade",
-        "journal-entry"
+        "journal-entry",
+        "peak-excursion"
       ],
       "produces": [
         "decoded-trade-instruction",
+        "exit-quality",
+        "loss-cause",
         "part-health",
-        "trade-episode"
+        "trade-episode",
+        "winner-pattern"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "skills",
@@ -436,17 +662,24 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "consumes": [
+        "llm-response",
         "research-finding",
+        "stale-knowledge",
         "trade-episode",
-        "llm-response"
+        "web-idea"
       ],
       "produces": [
+        "llm-request",
         "loaded-skill-section",
-        "skill-usefulness",
         "part-health",
-        "llm-request"
+        "skill-usefulness"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "autonomous",
@@ -455,31 +688,45 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "part-health",
-        "market-data",
-        "bot-scorecard",
-        "research-finding",
-        "llm-response",
         "bot-maturity",
+        "bot-scorecard",
         "exposure-view",
+        "feed-gap",
+        "journal-entry",
+        "llm-quota-state",
+        "llm-response",
+        "llm-spend-state",
+        "market-anomaly",
+        "market-data",
+        "part-fault",
+        "part-health",
         "regime-break-alert",
-        "trade-intent",
-        "journal-entry"
+        "research-finding",
+        "trade-intent"
       ],
       "produces": [
-        "restart-request",
         "admitted-part",
-        "replacement-plan",
-        "trading-halt",
-        "llm-request",
-        "part-health",
         "conservation-plan",
-        "policy-decision"
+        "human-override",
+        "llm-request",
+        "modification-record",
+        "part-fault",
+        "part-health",
+        "policy-decision",
+        "replacement-plan",
+        "restart-request",
+        "survival-tier",
+        "trading-halt"
       ],
       "flow_origin": "proposed",
       "scope": "global",
       "scope_origin": "user",
-      "open": "The user gave four jobs and said more is coming: 'andmore i will explann next'. This block is deliberately unfinished, not complete."
+      "open": "The user gave four jobs and said more is coming: 'andmore i will explann next'. This block is deliberately unfinished, not complete.",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     },
     {
       "id": "backtesting",
@@ -489,15 +736,24 @@
       "approved": true,
       "consumes": [
         "market-data",
-        "opportunity-instruction"
+        "opportunity-instruction",
+        "slippage-profile",
+        "trade-episode"
       ],
       "produces": [
-        "proven-instruction",
-        "part-health"
+        "cost-estimate",
+        "live-vs-replay-gap",
+        "part-health",
+        "proven-instruction"
       ],
       "flow_origin": "proposed",
       "scope": "per-segment",
-      "scope_origin": "proposed"
+      "scope_origin": "proposed",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     }
   ],
   "state_vocabulary": [
@@ -523,7 +779,7 @@
     {
       "id": "sized-order",
       "name": "sized order",
-      "description": "A trade intent with size, leverage and stops applied \u2014 or a refusal, which is also an answer."
+      "description": "A trade intent with size, leverage and stops applied — or a refusal, which is also an answer."
     },
     {
       "id": "order-request",
@@ -899,6 +1155,433 @@
       "id": "proven-instruction",
       "name": "proven instruction",
       "description": "An opportunity instruction that survived replay. The only kind the scanner is given."
+    },
+    {
+      "id": "money-mode",
+      "name": "money mode",
+      "description": "Paper or live, per segment, set by the user. The only place the money question is answered; the scanner never sees it.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "capital-allotment",
+      "name": "capital allotment",
+      "description": "How much paper capital the user has assigned to this segment out of the total portfolio. Editable by the user, journalled on change (RL-040).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "account-balance",
+      "name": "account balance",
+      "description": "Free plus used balance for the segment right now, paper or live, in the quote currency.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "watch-condition",
+      "name": "watch condition",
+      "description": "A proven instruction compiled into a condition the sweeper can test against every symbol on every tick.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "symbol-universe",
+      "name": "symbol universe",
+      "description": "Every symbol the segment can trade right now, as listed by the venue, refreshed as listings change.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "liquidity-grade",
+      "name": "liquidity grade",
+      "description": "How tradeable a symbol is at the size the bot trades: spread, depth, turnover.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instrument-choice",
+      "name": "instrument choice",
+      "description": "The segment's own answer to a trade intent: which contract, strike, expiry or pair actually expresses it.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "cross-segment-lesson",
+      "name": "cross-segment lesson",
+      "description": "A lesson decoded in one segment, restated so another segment can read it. Reported, never enforced.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "correlation-cluster",
+      "name": "correlation cluster",
+      "description": "Symbols that move together, across segments, so two positions that look different can be seen as one bet.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "market-event",
+      "name": "market event",
+      "description": "A scheduled or breaking event that moves markets: token unlock, listing, macro print, exchange notice.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "market-anomaly",
+      "name": "market anomaly",
+      "description": "A print, gap or feed that does not look like a market: flash move, stale tick, outlier.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instruction-scorecard",
+      "name": "instruction scorecard",
+      "description": "What each opportunity instruction has actually earned since it went live, per segment.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "forecast-trust",
+      "name": "forecast trust",
+      "description": "How much weight a forecast has earned from its measured accuracy on trades, not on candles.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "slippage-profile",
+      "name": "slippage profile",
+      "description": "Measured difference between intended price against filled price, by symbol, size, hour.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "inverted-hypothesis",
+      "name": "inverted hypothesis",
+      "description": "A losing trade's information turned around: what the opposite entry would have needed to be true.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hypothesis-priority",
+      "name": "hypothesis priority",
+      "description": "Which hypotheses are worth writing into instructions first, ranked by measured expectancy.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "retired-instruction",
+      "name": "retired instruction",
+      "description": "An instruction withdrawn because it stopped earning or its regime broke. Kept, never deleted.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "symbol-profile",
+      "name": "symbol profile",
+      "description": "What is normal for one symbol: typical range, spread, volume by hour, how it reacts to its own jumps.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instruction-history",
+      "name": "instruction history",
+      "description": "Every instruction ever issued, retired or live, with what it was derived from.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "stale-knowledge",
+      "name": "stale knowledge",
+      "description": "A fact, skill or instruction that measurably stopped helping, named so it can be pruned rather than rot.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "funding-forecast",
+      "name": "funding forecast",
+      "description": "Where the funding rate is headed next period, so a short that pays funding is priced before it is opened.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "liquidation-map",
+      "name": "liquidation map",
+      "description": "Price levels where leveraged positions would be liquidated, from open interest, so a stop is not placed where the crowd's is.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "ensemble-forecast",
+      "name": "ensemble forecast",
+      "description": "Price plus volatility forecasts combined by their earned trust into one view ahead.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "model-drift-alert",
+      "name": "model drift alert",
+      "description": "A forecast model's accuracy has decayed past its floor; retrain it or stand it down.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "copy-score",
+      "name": "copy score",
+      "description": "How worth copying a tracked trader's current position is, given their verified record plus this segment's own history.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "whale-transfer",
+      "name": "whale transfer",
+      "description": "A large on-chain transfer into or out of an exchange, which often precedes a move.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "sentiment-reading",
+      "name": "sentiment reading",
+      "description": "How the crowd is talking about a symbol right now, graded, with the source counted.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "local-llm-request",
+      "name": "local LLM request",
+      "description": "An llm-request routed to a model running on this machine, because no subscription or paid route is usable.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "llm-backpressure",
+      "name": "LLM backpressure",
+      "description": "How hard to throttle asking: when quota or spend runs low, low-value questions wait.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hardware-capacity",
+      "name": "hardware capacity",
+      "description": "What the machine has, what is free right now: CPU, RAM, disk, measured.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "part-resource-usage",
+      "name": "part resource usage",
+      "description": "What each running part actually costs in CPU plus RAM, measured at runtime, not declared.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hog-report",
+      "name": "hog report",
+      "description": "A part using far more than its share while another waits.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "part-priority",
+      "name": "part priority",
+      "description": "Which parts matter most when there is not enough machine for all of them. The user's order.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "switch-plan",
+      "name": "switch plan",
+      "description": "Which parts to turn on or off next, with the reason, before any gate is touched.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "switch-record",
+      "name": "switch record",
+      "description": "One gate flipped: which part, on or off, when, by which plan. The control plane's own journal.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-book-snapshot",
+      "name": "order book snapshot",
+      "description": "Bids plus asks to depth at one moment, for one symbol.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "feed-gap",
+      "name": "feed gap",
+      "description": "A missing or stale run in market data: which symbol, how long, whether it is still open.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "leverage-choice",
+      "name": "leverage choice",
+      "description": "The leverage for one trade, chosen per trade from volatility plus funding, never a fixed setting (RL-041).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "stop-target-plan",
+      "name": "stop-target plan",
+      "description": "Where the initial stop plus take-profit sit for one trade, before it is sized.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "risk-limit",
+      "name": "risk limit",
+      "description": "The most the segment may risk right now, from every brake at once; the sizer takes the smallest.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "usdt-pnl-statement",
+      "name": "USDT PnL statement",
+      "description": "Profit or loss in USDT for one trade against the capital it used, converted at the live rate recorded per fill (RL-028, RL-029).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "peak-excursion",
+      "name": "peak excursion",
+      "description": "The best plus worst unrealised points a position reached while open (RL-042).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-position-report",
+      "name": "venue position report",
+      "description": "What the venue says is held, fetched rather than computed, to reconcile against.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "journal-gap",
+      "name": "journal gap",
+      "description": "A break in the journal: missing sequence, broken hash, or a recorder that stopped.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "heartbeat-table",
+      "name": "heartbeat table",
+      "description": "Every part's latest health in one table, with how old each entry is.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "board-snapshot",
+      "name": "board snapshot",
+      "description": "One rendering of the whole system's measured state, timestamped, every tile traceable to a probe (RL-012).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "alert",
+      "name": "alert",
+      "description": "Something a human should look at now, with the proof attached.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "probe-result",
+      "name": "probe result",
+      "description": "The output of one measurement that ran, with the command that ran it.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-reject-reason",
+      "name": "order reject reason",
+      "description": "Why the venue refused an order, classified: balance, rate limit, price band, size step, outage.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-rate-budget",
+      "name": "venue rate budget",
+      "description": "How many requests the venue still allows this window.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "decision-rationale",
+      "name": "decision rationale",
+      "description": "Why the brain chose this intent, in words, written before the outcome is known.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "reflection-note",
+      "name": "reflection note",
+      "description": "What the brain concluded on rereading its own rationale against what happened.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "forecast-bias",
+      "name": "forecast bias",
+      "description": "How far to lean the arbiter toward a forecast this time, given its trust.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "loss-cause",
+      "name": "loss cause",
+      "description": "Why a trade lost, classified: entry, exit, size, regime, execution.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "winner-pattern",
+      "name": "winner pattern",
+      "description": "A condition that recurs across winning trades, stated so an instruction can test it.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exit-quality",
+      "name": "exit quality",
+      "description": "How much of the peak a trade kept when it closed.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "skill-conflict",
+      "name": "skill conflict",
+      "description": "Two skills that give opposite advice for the same question.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "skill-refresh-request",
+      "name": "skill refresh request",
+      "description": "A skill that should be re-distilled because its usefulness fell or its source moved.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "human-override",
+      "name": "human override",
+      "description": "The user's direct instruction: halt, resume, or cap, which outranks everything the bot decides (RL-038).",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "live-vs-replay-gap",
+      "name": "live-vs-replay gap",
+      "description": "How far paper results drift from what the backtest promised for the same instruction.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "board-link",
+      "name": "board link",
+      "description": "The public URL the board was pushed to, with the snapshot time it carries.",
+      "origin": "proposed",
+      "proposed": "2026-08-20"
     }
   ],
   "features": [
@@ -950,7 +1633,8 @@
       "role": "adapt the Kronos tokenizer plus predictor to the assets actually traded here",
       "category": "prediction",
       "consumes": [
-        "kline-window"
+        "kline-window",
+        "model-drift-alert"
       ],
       "produces": [
         "finetuned-model",
@@ -962,7 +1646,18 @@
         "off",
         "on"
       ],
-      "origin": "user"
+      "origin": "user",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "model-drift-alert"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "forecast-scorer",
@@ -1185,7 +1880,8 @@
       "role": "hold the capped always-injected rule set that never gets searched",
       "category": "knowledge",
       "consumes": [
-        "opportunity-instruction"
+        "opportunity-instruction",
+        "retired-instruction"
       ],
       "produces": [
         "playbook-rule",
@@ -1198,7 +1894,18 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Never searched, so it never pollutes recall. A fixed cost every scan, which is why it is capped and holds behaviour rather than diagnosis."
+      "note": "Never searched, so it never pollutes recall. A fixed cost every scan, which is why it is capped and holds behaviour rather than diagnosis.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "retired-instruction"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "trade-episode-encoder",
@@ -1278,7 +1985,12 @@
         "strategy-gap",
         "feature-reliability",
         "regime-break-alert",
-        "novel-idea"
+        "novel-idea",
+        "cross-segment-lesson",
+        "inverted-hypothesis",
+        "hypothesis-priority",
+        "winner-pattern",
+        "reflection-note"
       ],
       "produces": [
         "opportunity-instruction",
@@ -1290,7 +2002,22 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "cross-segment-lesson",
+              "inverted-hypothesis",
+              "hypothesis-priority",
+              "winner-pattern",
+              "reflection-note"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "ccxt-venue-reader",
@@ -1317,7 +2044,8 @@
       "role": "place each order on its venue through one unified interface",
       "category": "execution-venue-adapter",
       "consumes": [
-        "order-request"
+        "order-request",
+        "venue-rate-budget"
       ],
       "produces": [
         "fill",
@@ -1330,7 +2058,18 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Built on CCXT."
+      "note": "Built on CCXT.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "venue-rate-budget"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "ablation-harness",
@@ -1359,7 +2098,8 @@
       "role": "pull a source into text whatever form it arrived in",
       "category": "skills",
       "consumes": [
-        "research-finding"
+        "research-finding",
+        "skill-refresh-request"
       ],
       "produces": [
         "source-document",
@@ -1372,7 +2112,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "Books, papers, community chats, pages. The form is the ingester's problem, never the distiller's."
+      "note": "Books, papers, community chats, pages. The form is the ingester's problem, never the distiller's.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "skill-refresh-request"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "skill-distiller",
@@ -1403,7 +2154,9 @@
       "role": "hold every skill so one can be found by what it is for",
       "category": "skills",
       "consumes": [
-        "skill"
+        "skill",
+        "skill-conflict",
+        "stale-knowledge"
       ],
       "produces": [
         "available-skill",
@@ -1416,7 +2169,19 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Found by trigger rather than by title, the same reason episodes embed the condition rather than the outcome."
+      "note": "Found by trigger rather than by title, the same reason episodes embed the condition rather than the outcome.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "skill-conflict",
+              "stale-knowledge"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "skill-loader",
@@ -1602,7 +2367,8 @@
       "consumes": [
         "position",
         "external-position",
-        "market-data"
+        "market-data",
+        "copy-score"
       ],
       "produces": [
         "directional-opinion",
@@ -1615,7 +2381,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "Never originates cold. Rides a position already in profit, or follows a high-profit trader that C-09 decoded. Profit protection and scorekeeping were split out of it: see profit-lock and the learning-loop parts."
+      "note": "Never originates cold. Rides a position already in profit, or follows a high-profit trader that C-09 decoded. Profit protection and scorekeeping were split out of it: see profit-lock and the learning-loop parts.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "copy-score"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "opinion-arbiter",
@@ -1626,7 +2403,8 @@
         "directional-opinion",
         "market-regime",
         "bot-maturity",
-        "regime-break-alert"
+        "regime-break-alert",
+        "forecast-bias"
       ],
       "produces": [
         "trade-intent",
@@ -1639,7 +2417,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "Why the brain sits inside the segment bot. Three opinions in, one intent out. Opposing positions on one symbol are allowed while a bot is still in exploration, and after it graduates only when the regime reads mixed."
+      "note": "Why the brain sits inside the segment bot. Three opinions in, one intent out. Opposing positions on one symbol are allowed while a bot is still in exploration, and after it graduates only when the regime reads mixed.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "forecast-bias"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "profit-lock",
@@ -1758,7 +2547,8 @@
       "consumes": [
         "directional-opinion",
         "trade-episode",
-        "llm-response"
+        "llm-response",
+        "decision-rationale"
       ],
       "produces": [
         "decision-quality-score",
@@ -1772,7 +2562,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "Learning loop scores outcomes. A system that cannot separate a lucky win from a correct call learns the wrong lesson with perfect discipline."
+      "note": "Learning loop scores outcomes. A system that cannot separate a lucky win from a correct call learns the wrong lesson with perfect discipline.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "decision-rationale"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "regime-break-detector",
@@ -1781,7 +2582,8 @@
       "category": "intelligence",
       "consumes": [
         "market-data",
-        "journal-entry"
+        "journal-entry",
+        "market-event"
       ],
       "produces": [
         "regime-break-alert",
@@ -1794,7 +2596,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "Distinct from the scanner's regime classifier, which labels the current regime. This one watches for the regime itself breaking -- the failure that kills systems that were working."
+      "note": "Distinct from the scanner's regime classifier, which labels the current regime. This one watches for the regime itself breaking -- the failure that kills systems that were working.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "market-event"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "open-web-reader",
@@ -1824,7 +2637,9 @@
         "web-idea",
         "trade-episode",
         "bot-scorecard",
-        "llm-response"
+        "llm-response",
+        "sentiment-reading",
+        "instruction-history"
       ],
       "produces": [
         "novel-idea",
@@ -1838,7 +2653,19 @@
         "on"
       ],
       "origin": "user",
-      "note": "Hypothesis is reactive by design -- it turns what happened into instructions. This is the generative counterpart."
+      "note": "Hypothesis is reactive by design -- it turns what happened into instructions. This is the generative counterpart.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "sentiment-reading",
+              "instruction-history"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "llm-request-router",
@@ -1849,12 +2676,14 @@
         "llm-request",
         "llm-quota-state",
         "llm-spend-state",
-        "llm-model-choice"
+        "llm-model-choice",
+        "llm-backpressure"
       ],
       "produces": [
         "subscription-llm-request",
         "paid-llm-request",
-        "part-health"
+        "part-health",
+        "local-llm-request"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -1863,7 +2692,21 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Routing is a data-plane decision, not a control-plane one: this part emits a differently typed request, it never switches a caller on or off. That is what keeps T-2 and T-4 intact -- it names no caller, only data."
+      "note": "Routing is a data-plane decision, not a control-plane one: this part emits a differently typed request, it never switches a caller on or off. That is what keeps T-2 and T-4 intact -- it names no caller, only data.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "llm-backpressure"
+            ],
+            "produces": [
+              "local-llm-request"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "subscription-session-caller",
@@ -2024,7 +2867,8 @@
       "category": "autonomous",
       "consumes": [
         "market-data",
-        "part-health"
+        "part-health",
+        "feed-gap"
       ],
       "produces": [
         "outage-state",
@@ -2037,7 +2881,18 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "An outage is the specific unattended failure that loses money rather than merely stopping: positions stay open while the feed is dead. Separated from the warden because riding an outage is judgement about the market, while the warden's job is only that things are running."
+      "note": "An outage is the specific unattended failure that loses money rather than merely stopping: positions stay open while the feed is dead. Separated from the warden because riding an outage is judgement about the market, while the warden's job is only that things are running.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "feed-gap"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "capability-gap-finder",
@@ -2143,7 +2998,9 @@
         "exposure-view",
         "outage-state",
         "regime-break-alert",
-        "survival-tier"
+        "survival-tier",
+        "human-override",
+        "market-anomaly"
       ],
       "produces": [
         "trading-halt",
@@ -2156,7 +3013,19 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Deciding without asking has to include deciding to stop, or autonomy is only ever a throttle stuck open. Risk allocation still owns the kill switch and still refuses for its own reasons; this asks it to be pulled, seeing the whole account at once as only a global block can."
+      "note": "Deciding without asking has to include deciding to stop, or autonomy is only ever a throttle stuck open. Risk allocation still owns the kill switch and still refuses for its own reasons; this asks it to be pulled, seeing the whole account at once as only a global block can.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "human-override",
+              "market-anomaly"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "failing-part-detector",
@@ -2361,7 +3230,8 @@
       "role": "label each second of trade flow as one of fifteen states",
       "category": "prediction",
       "consumes": [
-        "market-data"
+        "market-data",
+        "order-book-snapshot"
       ],
       "produces": [
         "order-flow-state",
@@ -2374,7 +3244,18 @@
         "on"
       ],
       "origin": "user",
-      "note": "From arXiv:2512.15720 (Mainak Singha, NASA Goddard). The state is the sign of the price change {-1,0,+1} crossed with the volume quintile {1..5}, giving fifteen. It reads trades, not candles, which is why this is a new part rather than a change to the kline window builder -- the volatility branch here is built on OHLCV and cannot see the tick sequence at all. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
+      "note": "From arXiv:2512.15720 (Mainak Singha, NASA Goddard). The state is the sign of the price change {-1,0,+1} crossed with the volume quintile {1..5}, giving fifteen. It reads trades, not candles, which is why this is a new part rather than a change to the kline window builder -- the volatility branch here is built on OHLCV and cannot see the tick sequence at all. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "order-book-snapshot"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "flow-entropy-meter",
@@ -2511,7 +3392,8 @@
       "role": "charge each simulated fill what it would really have cost",
       "category": "backtesting",
       "consumes": [
-        "market-data"
+        "market-data",
+        "slippage-profile"
       ],
       "produces": [
         "cost-estimate",
@@ -2524,7 +3406,18 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The single most common way a backtest lies. The entropy paper's rule cleared 1,126 bps against a 1.57 bps round-trip cost calibrated to SPY's 0.7 bps spread -- on a crypto venue with a wider spread the same rule may clear nothing at all. Costs are a per-venue measurement here, never a constant carried over from an equity paper."
+      "note": "The single most common way a backtest lies. The entropy paper's rule cleared 1,126 bps against a 1.57 bps round-trip cost calibrated to SPY's 0.7 bps spread -- on a crypto venue with a wider spread the same rule may clear nothing at all. Costs are a per-venue measurement here, never a constant carried over from an equity paper.",
+      "edited": [
+        {
+          "on": "2026-08-20",
+          "added": {
+            "consumes": [
+              "slippage-profile"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "instruction-replayer",
@@ -2612,11 +3505,2041 @@
       ],
       "origin": "proposed",
       "note": "This is what makes the block a gate rather than a report. The scanner is given proven-instruction, never a raw one, so an untested idea cannot reach live scanning by anyone forgetting to check. It is the same shape as the edge graduation gate that already governs bots -- earn the promotion, do not assume it. Reversible if the user would rather backtesting only advised: point the scanner back at opportunity-instruction."
+    },
+    {
+      "id": "money-mode-reader",
+      "name": "Money mode reader",
+      "role": "read the user's paper-or-live setting for this segment",
+      "category": "paper-live-trading",
+      "consumes": [],
+      "produces": [
+        "money-mode",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-destination-router",
+      "name": "Order destination router",
+      "role": "address a sized order to the paper book or the live venue, by the money mode",
+      "category": "paper-live-trading",
+      "consumes": [
+        "sized-order",
+        "money-mode"
+      ],
+      "produces": [
+        "order-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "stop-order-manager",
+      "name": "Stop order manager",
+      "role": "turn a stop adjustment into an order at whichever destination the money mode names",
+      "category": "paper-live-trading",
+      "consumes": [
+        "stop-adjustment",
+        "position",
+        "money-mode"
+      ],
+      "produces": [
+        "order-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "paper-fill-simulator",
+      "name": "Paper fill simulator",
+      "role": "fill a paper order at the live price with the measured cost applied",
+      "category": "paper-live-trading",
+      "consumes": [
+        "order-request",
+        "market-data",
+        "cost-estimate",
+        "money-mode"
+      ],
+      "produces": [
+        "fill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "paper-account-keeper",
+      "name": "Paper account keeper",
+      "role": "keep the paper balance as paper fills land against the allotted capital",
+      "category": "paper-live-trading",
+      "consumes": [
+        "fill",
+        "capital-allotment",
+        "money-mode"
+      ],
+      "produces": [
+        "account-balance",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "live-switch-guard",
+      "name": "Live switch guard",
+      "role": "refuse live money while the segment's bots have not graduated on paper (RL-005)",
+      "category": "paper-live-trading",
+      "consumes": [
+        "money-mode",
+        "bot-maturity"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "watch-condition-compiler",
+      "name": "Watch condition compiler",
+      "role": "compile each proven instruction into a condition testable on every symbol",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "proven-instruction",
+        "retired-instruction"
+      ],
+      "produces": [
+        "watch-condition",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "universal-symbol-sweeper",
+      "name": "Universal symbol sweeper",
+      "role": "test every symbol in the universe against every watch condition on every tick",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data",
+        "symbol-universe",
+        "watch-condition",
+        "liquidity-grade",
+        "position"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "liquidity-grader",
+      "name": "Liquidity grader",
+      "role": "grade how tradeable each symbol is at the bot's size",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "order-book-snapshot",
+        "market-data"
+      ],
+      "produces": [
+        "liquidity-grade",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "momentum-burst-detector",
+      "name": "Momentum burst detector",
+      "role": "spot a sudden jump that the playbook says tends to pull back",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data",
+        "symbol-profile",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "funding-skew-detector",
+      "name": "Funding skew detector",
+      "role": "spot a funding rate stretched far enough that the crowded side tends to unwind",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data",
+        "funding-forecast",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "whale-flow-detector",
+      "name": "Whale flow detector",
+      "role": "spot an exchange inflow or outflow large enough to precede a move",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "whale-transfer",
+        "market-data"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "liquidation-cascade-detector",
+      "name": "Liquidation cascade detector",
+      "role": "spot price approaching a liquidation cluster dense enough to cascade",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "liquidation-map",
+        "market-data"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "sentiment-shift-detector",
+      "name": "Sentiment shift detector",
+      "role": "spot crowd sentiment turning faster than price has",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "sentiment-reading",
+        "market-data",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exit-opinion-bot",
+      "name": "Exit opinion bot",
+      "role": "issue a flat opinion on an open position once its reason to exist has gone",
+      "category": "segment-bot",
+      "consumes": [
+        "position",
+        "market-data",
+        "price-forecast",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instrument-selector",
+      "name": "Instrument selector",
+      "role": "choose the contract, strike, expiry or pair that expresses a trade intent in this segment",
+      "category": "segment-bot",
+      "consumes": [
+        "trade-intent",
+        "market-data",
+        "implied-vol-surface",
+        "liquidity-grade"
+      ],
+      "produces": [
+        "instrument-choice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "cross-segment-lesson-bridge",
+      "name": "Cross-segment lesson bridge",
+      "role": "restate a lesson decoded in one segment so the other two can read it",
+      "category": "intelligence",
+      "consumes": [
+        "decoded-trade-instruction",
+        "loss-cause"
+      ],
+      "produces": [
+        "cross-segment-lesson",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "correlation-cluster-mapper",
+      "name": "Correlation cluster mapper",
+      "role": "group symbols that move together across all segments",
+      "category": "intelligence",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "correlation-cluster",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "market-event-reader",
+      "name": "Market event reader",
+      "role": "read scheduled or breaking events that move markets",
+      "category": "intelligence",
+      "consumes": [],
+      "produces": [
+        "market-event",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "market-anomaly-detector",
+      "name": "Market anomaly detector",
+      "role": "flag a print or feed that does not look like a market",
+      "category": "intelligence",
+      "consumes": [
+        "market-data",
+        "feed-gap"
+      ],
+      "produces": [
+        "market-anomaly",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instruction-performance-tracker",
+      "name": "Instruction performance tracker",
+      "role": "keep score of what each live instruction has earned",
+      "category": "learning-loop",
+      "consumes": [
+        "trade-episode",
+        "opportunity-instruction"
+      ],
+      "produces": [
+        "instruction-scorecard",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "forecast-trust-learner",
+      "name": "Forecast trust learner",
+      "role": "learn how much each forecast deserves from the trades it preceded",
+      "category": "learning-loop",
+      "consumes": [
+        "forecast-accuracy",
+        "trade-episode"
+      ],
+      "produces": [
+        "forecast-trust",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "slippage-learner",
+      "name": "Slippage learner",
+      "role": "measure intended against filled price by symbol, size, hour",
+      "category": "learning-loop",
+      "consumes": [
+        "fill",
+        "sized-order"
+      ],
+      "produces": [
+        "slippage-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exit-timing-learner",
+      "name": "Exit timing learner",
+      "role": "learn how much of the peak the exits keep, per instruction",
+      "category": "learning-loop",
+      "consumes": [
+        "exit-quality",
+        "trade-episode"
+      ],
+      "produces": [
+        "instruction-scorecard",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "loss-inverter",
+      "name": "Loss inverter",
+      "role": "turn a losing trade's information into the hypothesis for the opposite profitable entry",
+      "category": "hypothesis",
+      "consumes": [
+        "decoded-trade-instruction",
+        "loss-cause"
+      ],
+      "produces": [
+        "inverted-hypothesis",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hypothesis-ranker",
+      "name": "Hypothesis ranker",
+      "role": "rank hypotheses by measured expectancy so the best are written first",
+      "category": "hypothesis",
+      "consumes": [
+        "expectancy-breakdown",
+        "instruction-scorecard",
+        "exit-quality"
+      ],
+      "produces": [
+        "hypothesis-priority",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instruction-retirer",
+      "name": "Instruction retirer",
+      "role": "withdraw an instruction that stopped earning or whose regime broke",
+      "category": "hypothesis",
+      "consumes": [
+        "instruction-scorecard",
+        "regime-break-alert",
+        "live-vs-replay-gap"
+      ],
+      "produces": [
+        "retired-instruction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "symbol-profile-store",
+      "name": "Symbol profile store",
+      "role": "hold what is normal for each symbol, updated as the market teaches it",
+      "category": "knowledge",
+      "consumes": [
+        "market-data",
+        "semantic-fact"
+      ],
+      "produces": [
+        "symbol-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "instruction-archive",
+      "name": "Instruction archive",
+      "role": "keep every instruction ever issued with what it was derived from",
+      "category": "knowledge",
+      "consumes": [
+        "opportunity-instruction",
+        "retired-instruction"
+      ],
+      "produces": [
+        "instruction-history",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "knowledge-pruner",
+      "name": "Knowledge pruner",
+      "role": "name the facts, skills, instructions that measurably stopped helping",
+      "category": "knowledge",
+      "consumes": [
+        "skill-usefulness",
+        "semantic-fact",
+        "instruction-scorecard"
+      ],
+      "produces": [
+        "stale-knowledge",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "funding-rate-forecaster",
+      "name": "Funding rate forecaster",
+      "role": "forecast next period's funding rate",
+      "category": "prediction",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "funding-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "liquidation-cluster-mapper",
+      "name": "Liquidation cluster mapper",
+      "role": "map the price levels where leveraged positions would be liquidated",
+      "category": "prediction",
+      "consumes": [
+        "market-data",
+        "order-book-snapshot"
+      ],
+      "produces": [
+        "liquidation-map",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "forecast-ensembler",
+      "name": "Forecast ensembler",
+      "role": "combine price plus volatility forecasts by their earned trust",
+      "category": "prediction",
+      "consumes": [
+        "price-forecast",
+        "volatility-forecast",
+        "forecast-trust"
+      ],
+      "produces": [
+        "ensemble-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "model-drift-monitor",
+      "name": "Model drift monitor",
+      "role": "raise an alert when a forecaster's accuracy decays past its floor",
+      "category": "prediction",
+      "consumes": [
+        "forecast-accuracy"
+      ],
+      "produces": [
+        "model-drift-alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "copy-worthiness-scorer",
+      "name": "Copy-worthiness scorer",
+      "role": "score how worth copying a tracked trader's position is, here, now",
+      "category": "online-research",
+      "consumes": [
+        "external-position",
+        "tracked-trader",
+        "trade-episode"
+      ],
+      "produces": [
+        "copy-score",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "whale-transfer-reader",
+      "name": "Whale transfer reader",
+      "role": "read large on-chain transfers into or out of exchanges",
+      "category": "online-research",
+      "consumes": [],
+      "produces": [
+        "whale-transfer",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "social-sentiment-reader",
+      "name": "Social sentiment reader",
+      "role": "read how the crowd is talking about each symbol, source counted",
+      "category": "online-research",
+      "consumes": [
+        "symbol-universe"
+      ],
+      "produces": [
+        "sentiment-reading",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "local-model-caller",
+      "name": "Local model caller",
+      "role": "answer a request with a model running on this machine",
+      "category": "llm-services",
+      "consumes": [
+        "local-llm-request"
+      ],
+      "produces": [
+        "llm-response",
+        "llm-call-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "llm-backpressure-gauge",
+      "name": "LLM backpressure gauge",
+      "role": "set how hard to throttle asking as quota, spend or runway run low",
+      "category": "llm-services",
+      "consumes": [
+        "llm-quota-state",
+        "llm-spend-state",
+        "survival-tier"
+      ],
+      "produces": [
+        "llm-backpressure",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hardware-scanner",
+      "name": "Hardware scanner",
+      "role": "measure what the machine has, what is free",
+      "category": "resource-governor",
+      "consumes": [],
+      "produces": [
+        "hardware-capacity",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "part-appetite-meter",
+      "name": "Part appetite meter",
+      "role": "measure what each running part actually costs in CPU plus RAM",
+      "category": "resource-governor",
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [
+        "part-resource-usage",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "hog-detector",
+      "name": "Hog detector",
+      "role": "name a part taking far more than its share while another waits",
+      "category": "resource-governor",
+      "consumes": [
+        "part-resource-usage",
+        "hardware-capacity"
+      ],
+      "produces": [
+        "hog-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "part-priority-reader",
+      "name": "Part priority reader",
+      "role": "read the user's order of which parts matter most under contention",
+      "category": "resource-governor",
+      "consumes": [],
+      "produces": [
+        "part-priority",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "switching-planner",
+      "name": "Switching planner",
+      "role": "decide which parts turn on or off next from capacity, priority, every pending request",
+      "category": "resource-governor",
+      "consumes": [
+        "hardware-capacity",
+        "part-resource-usage",
+        "hog-report",
+        "part-priority",
+        "restart-request",
+        "replacement-plan",
+        "conservation-plan",
+        "admitted-part"
+      ],
+      "produces": [
+        "switch-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "gate-actuator",
+      "name": "Gate actuator",
+      "role": "flip the gates a switch plan names, one at a time, recording each",
+      "category": "resource-governor",
+      "consumes": [
+        "switch-plan"
+      ],
+      "produces": [
+        "switch-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "off-state-verifier",
+      "name": "Off-state verifier",
+      "role": "confirm a part turned off actually released its CPU plus RAM (T-3)",
+      "category": "resource-governor",
+      "consumes": [
+        "switch-record",
+        "part-resource-usage"
+      ],
+      "produces": [
+        "part-fault",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-trade-stream-reader",
+      "name": "Venue trade stream reader",
+      "role": "stream live trades as they print",
+      "category": "market-data-feed",
+      "consumes": [],
+      "produces": [
+        "market-data",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-book-reader",
+      "name": "Order book reader",
+      "role": "snapshot bids plus asks to depth",
+      "category": "market-data-feed",
+      "consumes": [],
+      "produces": [
+        "order-book-snapshot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "symbol-catalogue-reader",
+      "name": "Symbol catalogue reader",
+      "role": "list every symbol the venue offers in this segment",
+      "category": "market-data-feed",
+      "consumes": [],
+      "produces": [
+        "symbol-universe",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "feed-gap-detector",
+      "name": "Feed gap detector",
+      "role": "flag a symbol whose data went missing or stale",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "feed-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "capital-allotment-reader",
+      "name": "Capital allotment reader",
+      "role": "read the paper capital the user assigned this segment (RL-040)",
+      "category": "risk-capital-allocation",
+      "consumes": [],
+      "produces": [
+        "capital-allotment",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "leverage-selector",
+      "name": "Leverage selector",
+      "role": "choose leverage per trade from volatility plus funding (RL-041)",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "trade-intent",
+        "volatility-forecast",
+        "funding-forecast"
+      ],
+      "produces": [
+        "leverage-choice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "stop-target-placer",
+      "name": "Stop-target placer",
+      "role": "place the initial stop away from the crowd's liquidation levels",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "trade-intent",
+        "volatility-forecast",
+        "liquidation-map",
+        "symbol-profile"
+      ],
+      "produces": [
+        "stop-target-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exposure-limiter",
+      "name": "Exposure limiter",
+      "role": "cap what may be risked from open positions, total exposure, correlated bets",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "position",
+        "exposure-view",
+        "correlation-cluster"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "drawdown-breaker",
+      "name": "Drawdown breaker",
+      "role": "cut the limit to zero when the segment's drawdown breaches its floor",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "account-balance",
+        "closed-trade"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "halt-enforcer",
+      "name": "Halt enforcer",
+      "role": "turn a trading halt, a refused policy or a human override into a zero limit",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "trading-halt",
+        "policy-decision",
+        "human-override"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "event-risk-limiter",
+      "name": "Event risk limiter",
+      "role": "shrink the limit around events plus anomalies",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "market-event",
+        "market-anomaly"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "position-sizer",
+      "name": "Position sizer",
+      "role": "size one trade from intent, instrument, leverage, stop plus the smallest limit, or refuse",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "trade-intent",
+        "instrument-choice",
+        "leverage-choice",
+        "stop-target-plan",
+        "account-balance",
+        "risk-limit",
+        "slippage-profile"
+      ],
+      "produces": [
+        "sized-order",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "trade-lifecycle-recorder",
+      "name": "Trade lifecycle recorder",
+      "role": "journal every step from candidate to fill",
+      "category": "ledger",
+      "consumes": [
+        "entry-candidate",
+        "trade-intent",
+        "sized-order",
+        "order-request",
+        "fill"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "position-recorder",
+      "name": "Position recorder",
+      "role": "journal positions as they open, change, close",
+      "category": "ledger",
+      "consumes": [
+        "position",
+        "closed-trade",
+        "peak-excursion"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "learning-recorder",
+      "name": "Learning recorder",
+      "role": "journal what was learned, researched, forecast, scored",
+      "category": "ledger",
+      "consumes": [
+        "research-finding",
+        "forecast-accuracy",
+        "ablation-scorecard",
+        "skill-usefulness",
+        "opportunity-instruction",
+        "decision-rationale"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "control-recorder",
+      "name": "Control recorder",
+      "role": "journal every gate flip, policy ruling, self-modification",
+      "category": "ledger",
+      "consumes": [
+        "switch-record",
+        "policy-decision",
+        "modification-record"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "journal-integrity-checker",
+      "name": "Journal integrity checker",
+      "role": "detect a break in the journal's sequence or hash chain",
+      "category": "ledger",
+      "consumes": [
+        "journal-entry"
+      ],
+      "produces": [
+        "journal-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "fill-reconciler",
+      "name": "Fill reconciler",
+      "role": "build the held position from fills, checked against what the venue reports",
+      "category": "portfolio-state",
+      "consumes": [
+        "fill",
+        "venue-position-report"
+      ],
+      "produces": [
+        "position",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "position-close-detector",
+      "name": "Position close detector",
+      "role": "emit a closed trade when a position goes flat, with its peak excursion attached",
+      "category": "portfolio-state",
+      "consumes": [
+        "position",
+        "fill",
+        "peak-excursion"
+      ],
+      "produces": [
+        "closed-trade",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "peak-excursion-tracker",
+      "name": "Peak excursion tracker",
+      "role": "track the best plus worst unrealised points each open position reaches (RL-042)",
+      "category": "portfolio-state",
+      "consumes": [
+        "position",
+        "market-data"
+      ],
+      "produces": [
+        "peak-excursion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "usdt-pnl-accountant",
+      "name": "USDT PnL accountant",
+      "role": "state each trade's profit or loss in USDT against the capital it used (RL-028)",
+      "category": "portfolio-state",
+      "consumes": [
+        "closed-trade",
+        "fill",
+        "market-data",
+        "capital-allotment"
+      ],
+      "produces": [
+        "usdt-pnl-statement",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "heartbeat-collector",
+      "name": "Heartbeat collector",
+      "role": "gather every part's latest health into one table with its age",
+      "category": "observability",
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [
+        "heartbeat-table",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "probe-runner",
+      "name": "Probe runner",
+      "role": "run each measurement, keep its output with the command that ran it",
+      "category": "observability",
+      "consumes": [
+        "heartbeat-table",
+        "journal-gap"
+      ],
+      "produces": [
+        "probe-result",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "alert-raiser",
+      "name": "Alert raiser",
+      "role": "raise what a human should look at now, proof attached",
+      "category": "observability",
+      "consumes": [
+        "part-fault",
+        "trading-halt",
+        "journal-gap",
+        "market-anomaly",
+        "hog-report"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "board-snapshot-builder",
+      "name": "Board snapshot builder",
+      "role": "render the whole system's measured state, every tile traced to a probe (RL-012)",
+      "category": "observability",
+      "consumes": [
+        "heartbeat-table",
+        "probe-result",
+        "usdt-pnl-statement",
+        "alert",
+        "switch-record",
+        "account-balance"
+      ],
+      "produces": [
+        "board-snapshot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "board-publisher",
+      "name": "Board publisher",
+      "role": "push the snapshot to the public link the user can open",
+      "category": "observability",
+      "consumes": [
+        "board-snapshot"
+      ],
+      "produces": [
+        "board-link",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "stale-board-watch",
+      "name": "Stale board watch",
+      "role": "raise an alert when the published board is older than its source",
+      "category": "observability",
+      "consumes": [
+        "board-link",
+        "board-snapshot"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-balance-reader",
+      "name": "Venue balance reader",
+      "role": "fetch the live balance from the venue",
+      "category": "execution-venue-adapter",
+      "consumes": [],
+      "produces": [
+        "account-balance",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-position-reader",
+      "name": "Venue position reader",
+      "role": "fetch what the venue says is held",
+      "category": "execution-venue-adapter",
+      "consumes": [],
+      "produces": [
+        "venue-position-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-state-poller",
+      "name": "Order state poller",
+      "role": "follow each open order until it fills, part-fills or is cancelled",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-request"
+      ],
+      "produces": [
+        "fill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-reject-classifier",
+      "name": "Order reject classifier",
+      "role": "classify why the venue refused an order",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "fill"
+      ],
+      "produces": [
+        "order-reject-reason",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "order-resubmitter",
+      "name": "Order resubmitter",
+      "role": "resubmit an order whose rejection was transient, within the rate budget",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-reject-reason",
+        "order-request",
+        "venue-rate-budget"
+      ],
+      "produces": [
+        "order-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "venue-rate-budgeter",
+      "name": "Venue rate budgeter",
+      "role": "count what the venue still allows this window",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-request"
+      ],
+      "produces": [
+        "venue-rate-budget",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exploration-pair-opener",
+      "name": "Exploration pair opener",
+      "role": "open both sides while a bot is still exploring, so the pair's outcome teaches",
+      "category": "ai-brain",
+      "consumes": [
+        "directional-opinion",
+        "bot-maturity",
+        "market-regime"
+      ],
+      "produces": [
+        "trade-intent",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "forecast-bias-weigher",
+      "name": "Forecast bias weigher",
+      "role": "decide how far to lean toward the ensemble forecast this time",
+      "category": "ai-brain",
+      "consumes": [
+        "ensemble-forecast",
+        "forecast-trust"
+      ],
+      "produces": [
+        "forecast-bias",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "intent-explainer",
+      "name": "Intent explainer",
+      "role": "write why an intent was chosen before its outcome is known",
+      "category": "ai-brain",
+      "consumes": [
+        "trade-intent",
+        "directional-opinion",
+        "llm-response"
+      ],
+      "produces": [
+        "decision-rationale",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "brain-self-reflector",
+      "name": "Brain self-reflector",
+      "role": "reread each rationale against what happened, state what it concluded",
+      "category": "ai-brain",
+      "consumes": [
+        "decision-rationale",
+        "trade-episode",
+        "llm-response"
+      ],
+      "produces": [
+        "reflection-note",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "loss-cause-classifier",
+      "name": "Loss cause classifier",
+      "role": "classify why a trade lost: entry, exit, size, regime or execution",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode",
+        "peak-excursion"
+      ],
+      "produces": [
+        "loss-cause",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "winner-pattern-miner",
+      "name": "Winner pattern miner",
+      "role": "find conditions that recur across winning trades",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode"
+      ],
+      "produces": [
+        "winner-pattern",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "exit-quality-scorer",
+      "name": "Exit quality scorer",
+      "role": "score how much of the peak a closed trade kept",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode",
+        "peak-excursion"
+      ],
+      "produces": [
+        "exit-quality",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "community-chat-reader",
+      "name": "Community chat reader",
+      "role": "read community chats into source documents",
+      "category": "skills",
+      "consumes": [],
+      "produces": [
+        "source-document",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "book-and-paper-fetcher",
+      "name": "Book-paper fetcher",
+      "role": "fetch the books or papers the web reader pointed at",
+      "category": "skills",
+      "consumes": [
+        "web-idea"
+      ],
+      "produces": [
+        "source-document",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "skill-conflict-detector",
+      "name": "Skill conflict detector",
+      "role": "find two skills giving opposite advice for one question",
+      "category": "skills",
+      "consumes": [
+        "skill"
+      ],
+      "produces": [
+        "skill-conflict",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "skill-refresher",
+      "name": "Skill refresher",
+      "role": "ask for a skill to be re-distilled when its usefulness falls or it goes stale",
+      "category": "skills",
+      "consumes": [
+        "skill-usefulness",
+        "stale-knowledge"
+      ],
+      "produces": [
+        "skill-refresh-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "human-override-reader",
+      "name": "Human override reader",
+      "role": "read the user's direct halt, resume or cap, which outranks the bot",
+      "category": "autonomous",
+      "consumes": [],
+      "produces": [
+        "human-override",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
+    },
+    {
+      "id": "live-vs-replay-reconciler",
+      "name": "Live-vs-replay reconciler",
+      "role": "measure how far paper results drift from what replay promised",
+      "category": "backtesting",
+      "consumes": [
+        "backtest-result",
+        "trade-episode"
+      ],
+      "produces": [
+        "live-vs-replay-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-20"
     }
   ],
   "control_plane": {
     "driver": "resource-governor",
-    "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+    "note": "T-2 — the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
   },
   "segments": {
     "note": "Every segment is a bot with all of this inside it. The user's words. The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a put in options is a short in futures.",
@@ -2801,16 +5724,273 @@
       "used_by": [
         "skills"
       ],
-      "verified": "2026-08-20 via gh \u2014 the post said 16.3k stars, the repo has 23,262",
+      "verified": "2026-08-20 via gh — the post said 16.3k stars, the repo has 23,262",
       "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     }
   ],
-  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
+  "_dependency_note": "Licence is recorded as a fact, not a constraint — see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
   "opposing_positions": {
     "given": "2026-08-20",
     "exploration": "While a bot is still in exploration, bull and bear may both open on the same symbol. It is a live test of which one is right on this kind of setup, and the paired outcome is what the scorekeeper learns from.",
     "mature": "Once a bot graduates on measured edge, opposing positions are allowed only when the regime classifier reads mixed -- a deliberate straddle when there is no trend to take a side on.",
     "gate": "Measured edge, per bot, per segment. Bull and bear graduate separately.",
     "cost": "Two legs means two sets of fees and, in futures, funding on both sides. In a chop both can lose. That is the price of the exploration phase and it is why the phase ends on evidence."
+  },
+  "_proposal_2026-08-20": {
+    "what": "Every foundation block opened into a mini project: parts inside, inputs in, outputs out.",
+    "origin": "proposed by Claude, awaiting the user's verdict; nothing here is a user decision",
+    "new_parts": [
+      "money-mode-reader",
+      "order-destination-router",
+      "stop-order-manager",
+      "paper-fill-simulator",
+      "paper-account-keeper",
+      "live-switch-guard",
+      "watch-condition-compiler",
+      "universal-symbol-sweeper",
+      "liquidity-grader",
+      "momentum-burst-detector",
+      "funding-skew-detector",
+      "whale-flow-detector",
+      "liquidation-cascade-detector",
+      "sentiment-shift-detector",
+      "exit-opinion-bot",
+      "instrument-selector",
+      "cross-segment-lesson-bridge",
+      "correlation-cluster-mapper",
+      "market-event-reader",
+      "market-anomaly-detector",
+      "instruction-performance-tracker",
+      "forecast-trust-learner",
+      "slippage-learner",
+      "exit-timing-learner",
+      "loss-inverter",
+      "hypothesis-ranker",
+      "instruction-retirer",
+      "symbol-profile-store",
+      "instruction-archive",
+      "knowledge-pruner",
+      "funding-rate-forecaster",
+      "liquidation-cluster-mapper",
+      "forecast-ensembler",
+      "model-drift-monitor",
+      "copy-worthiness-scorer",
+      "whale-transfer-reader",
+      "social-sentiment-reader",
+      "local-model-caller",
+      "llm-backpressure-gauge",
+      "hardware-scanner",
+      "part-appetite-meter",
+      "hog-detector",
+      "part-priority-reader",
+      "switching-planner",
+      "gate-actuator",
+      "off-state-verifier",
+      "venue-trade-stream-reader",
+      "order-book-reader",
+      "symbol-catalogue-reader",
+      "feed-gap-detector",
+      "capital-allotment-reader",
+      "leverage-selector",
+      "stop-target-placer",
+      "exposure-limiter",
+      "drawdown-breaker",
+      "halt-enforcer",
+      "event-risk-limiter",
+      "position-sizer",
+      "trade-lifecycle-recorder",
+      "position-recorder",
+      "learning-recorder",
+      "control-recorder",
+      "journal-integrity-checker",
+      "fill-reconciler",
+      "position-close-detector",
+      "peak-excursion-tracker",
+      "usdt-pnl-accountant",
+      "heartbeat-collector",
+      "probe-runner",
+      "alert-raiser",
+      "board-snapshot-builder",
+      "board-publisher",
+      "stale-board-watch",
+      "venue-balance-reader",
+      "venue-position-reader",
+      "order-state-poller",
+      "order-reject-classifier",
+      "order-resubmitter",
+      "venue-rate-budgeter",
+      "exploration-pair-opener",
+      "forecast-bias-weigher",
+      "intent-explainer",
+      "brain-self-reflector",
+      "loss-cause-classifier",
+      "winner-pattern-miner",
+      "exit-quality-scorer",
+      "community-chat-reader",
+      "book-and-paper-fetcher",
+      "skill-conflict-detector",
+      "skill-refresher",
+      "human-override-reader",
+      "live-vs-replay-reconciler"
+    ],
+    "new_data_types": [
+      "money-mode",
+      "capital-allotment",
+      "account-balance",
+      "watch-condition",
+      "symbol-universe",
+      "liquidity-grade",
+      "instrument-choice",
+      "cross-segment-lesson",
+      "correlation-cluster",
+      "market-event",
+      "market-anomaly",
+      "instruction-scorecard",
+      "forecast-trust",
+      "slippage-profile",
+      "inverted-hypothesis",
+      "hypothesis-priority",
+      "retired-instruction",
+      "symbol-profile",
+      "instruction-history",
+      "stale-knowledge",
+      "funding-forecast",
+      "liquidation-map",
+      "ensemble-forecast",
+      "model-drift-alert",
+      "copy-score",
+      "whale-transfer",
+      "sentiment-reading",
+      "local-llm-request",
+      "llm-backpressure",
+      "hardware-capacity",
+      "part-resource-usage",
+      "hog-report",
+      "part-priority",
+      "switch-plan",
+      "switch-record",
+      "order-book-snapshot",
+      "feed-gap",
+      "leverage-choice",
+      "stop-target-plan",
+      "risk-limit",
+      "usdt-pnl-statement",
+      "peak-excursion",
+      "venue-position-report",
+      "journal-gap",
+      "heartbeat-table",
+      "board-snapshot",
+      "alert",
+      "probe-result",
+      "order-reject-reason",
+      "venue-rate-budget",
+      "decision-rationale",
+      "reflection-note",
+      "forecast-bias",
+      "loss-cause",
+      "winner-pattern",
+      "exit-quality",
+      "skill-conflict",
+      "skill-refresh-request",
+      "human-override",
+      "live-vs-replay-gap",
+      "board-link"
+    ],
+    "edited_parts": {
+      "opinion-arbiter": {
+        "consumes": [
+          "forecast-bias"
+        ]
+      },
+      "profit-tailgater": {
+        "consumes": [
+          "copy-score"
+        ]
+      },
+      "instruction-writer": {
+        "consumes": [
+          "cross-segment-lesson",
+          "inverted-hypothesis",
+          "hypothesis-priority",
+          "winner-pattern",
+          "reflection-note"
+        ]
+      },
+      "procedural-playbook": {
+        "consumes": [
+          "retired-instruction"
+        ]
+      },
+      "decision-quality-critic": {
+        "consumes": [
+          "decision-rationale"
+        ]
+      },
+      "kronos-finetuner": {
+        "consumes": [
+          "model-drift-alert"
+        ]
+      },
+      "llm-request-router": {
+        "consumes": [
+          "llm-backpressure"
+        ],
+        "produces": [
+          "local-llm-request"
+        ]
+      },
+      "venue-outage-rider": {
+        "consumes": [
+          "feed-gap"
+        ]
+      },
+      "trading-halt-decider": {
+        "consumes": [
+          "human-override",
+          "market-anomaly"
+        ]
+      },
+      "ccxt-order-router": {
+        "consumes": [
+          "venue-rate-budget"
+        ]
+      },
+      "skill-index": {
+        "consumes": [
+          "skill-conflict",
+          "stale-knowledge"
+        ]
+      },
+      "source-ingester": {
+        "consumes": [
+          "skill-refresh-request"
+        ]
+      },
+      "execution-cost-model": {
+        "consumes": [
+          "slippage-profile"
+        ]
+      },
+      "regime-break-detector": {
+        "consumes": [
+          "market-event"
+        ]
+      },
+      "idea-generator": {
+        "consumes": [
+          "sentiment-reading",
+          "instruction-history"
+        ]
+      },
+      "order-flow-state-encoder": {
+        "consumes": [
+          "order-book-snapshot"
+        ]
+      }
+    },
+    "rule_used_for_block_contracts": "a block consumes what its parts read that no part of its own writes, or that a part of another block also writes; it produces what its parts write that a part of another block reads",
+    "answers_open_question": {
+      "C-11 appetite": "measured at runtime by part-appetite-meter, not declared -- proposed, not decided"
+    }
   }
 }

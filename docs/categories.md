@@ -1000,3 +1000,64 @@ rather than a rewrite, and that decision belongs to the implementation phase.
 **Per-segment**, following RL-019 — each segment is its own bot with its own
 architecture. Marked `scope_origin: proposed`, not `user`: it follows the pattern the
 user set rather than a scoping decision they made for this block specifically.
+
+---
+
+# Every block opened into a mini project (2026-08-20, proposed)
+
+> "every foundation feature is a mini project with its own internal features and
+> parts … think for your self and create the connections … inputs and outputs …
+> think of many more features inside the foundation features"
+
+At the user's instruction Claude designed the inside of all 22 blocks. **Every
+addition carries `origin: proposed`** in `docs/features.json`, and the batch is
+listed under `_proposal_2026-08-20` so it can be accepted, cut or reshaped block by
+block. Nothing in it is recorded as the user's decision.
+
+**Measured after the change:** 78 → 170 parts, 79 → 140 data types, 187 block
+edges, 554 part-level data edges. Zero dangling inputs, zero orphan outputs at the
+*part* level — before this, five types had no producer (`position`, `closed-trade`,
+`journal-entry`, `order-request`, `sized-order`) and ten had no reader, because the
+blocks that owned them were empty. All six contract rules hold.
+
+## The four blocks that were empty now have parts
+
+| block | the parts inside |
+|---|---|
+| Paper trading on live data | money-mode reader → order destination router, stop order manager, paper fill simulator, paper account keeper, live switch guard (refuses live before graduation) |
+| Hardware resource governor | hardware scanner, part appetite meter (**measured**, not declared — the open question, answered as a proposal), hog detector, part priority reader, switching planner, gate actuator (the only thing that flips a gate), off-state verifier (T-3 proven, not assumed) |
+| Ledger | trade lifecycle, position, learning, control recorders; journal integrity checker |
+| Portfolio state | fill reconciler (against what the venue reports), position close detector, peak excursion tracker (RL-042), USDT PnL accountant (RL-028/029) |
+
+## Rulings that now have a part
+
+RL-028/029 `usdt-pnl-accountant` · RL-038 `human-override-reader` → `halt-enforcer` ·
+RL-040 `capital-allotment-reader` · RL-041 `leverage-selector` (per trade) ·
+RL-042 `peak-excursion-tracker` · RL-005 `live-switch-guard` · RL-012 `board-snapshot-builder`,
+`stale-board-watch`.
+
+## How a block's boundary is now derived
+
+A block **consumes** what its parts read that no part of its own writes (or that
+another block also writes), and **produces** what its parts write that a part of
+another block reads. This rule was tested against the hand-declared contracts
+before anything was added: it reproduced all of them except the unbuilt blocks and
+two real crossings the hand contracts had missed (`llm-quota-state`,
+`llm-spend-state` into autonomous). So the block diagram is computed from the
+parts, never maintained by hand.
+
+## Sixteen existing parts gained an input
+
+Listed under `edited_parts` in the proposal block. The largest: the instruction
+writer now also reads cross-segment lessons, inverted hypotheses, hypothesis
+priority, winner patterns and the brain's reflection notes. Each edit is an added
+reader for new data, never a changed responsibility.
+
+## What the user should look at first
+
+1. **The governor's data types** (`switch-plan`, `switch-record`) — the control
+   plane now has a visible journal. It is still the only thing that switches a part.
+2. **`risk-limit` from five brakes** — exposure, drawdown, halt, event, live-switch
+   guard all emit it; the sizer takes the smallest. Five parts, not one clever one.
+3. **`cross-segment-lesson`** — the one place a lesson crosses segments, reported
+   not enforced, because the split's stated cost was that nothing could.
