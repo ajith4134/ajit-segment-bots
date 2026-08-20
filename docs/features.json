@@ -46,12 +46,13 @@
     {
       "id": "opportunity-scanner",
       "name": "Universal opportunity scanner",
-      "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. Lives inside the segment bot, alongside the bull, bear and profit-tailgating bots. Does not know whether the money is paper or live.",
+      "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. It holds no built-in rules: what counts as an opportunity arrives as instructions from the hypothesis feature. An opportunity can be anything -- a sudden price jump implying a minor pullback, for instance -- and the response depends on the segment. Lives inside the segment bot. Does not know whether the money is paper or live.",
       "origin": "user",
       "approved": true,
       "consumes": [
         "market-data",
-        "position"
+        "position",
+        "opportunity-instruction"
       ],
       "produces": [
         "entry-candidate",
@@ -104,12 +105,17 @@
     {
       "id": "hypothesis",
       "name": "Hypothesis",
-      "summary": "Named by the user; contents not yet described.",
+      "summary": "Takes what closed trades taught and turns it into opportunity instructions for the scanner. Explicitly includes thinking about how the information in a losing trade becomes an opening profit trade. Further internals not yet described.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description"
+      "consumes": [
+        "decoded-trade-instruction"
+      ],
+      "produces": [
+        "opportunity-instruction",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "knowledge",
@@ -227,6 +233,7 @@
       ],
       "produces": [
         "position",
+        "closed-trade",
         "part-health"
       ],
       "flow_origin": "proposed"
@@ -254,6 +261,31 @@
       ],
       "produces": [
         "fill",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
+    },
+    {
+      "id": "ai-brain",
+      "name": "AI brain",
+      "summary": "Named by the user on 2026-08-20 as a new feature. Contents, placement and flow not yet described.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
+    },
+    {
+      "id": "closed-trade-decoding",
+      "name": "Closed trade decoding",
+      "summary": "Decodes finished trades -- winners and losers both -- into instructions, and hands them to the hypothesis feature. The loser is not discarded: its information is what hypothesis works on to turn into an opening profit trade.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "closed-trade"
+      ],
+      "produces": [
+        "decoded-trade-instruction",
         "part-health"
       ],
       "flow_origin": "proposed"
@@ -313,11 +345,44 @@
       "id": "part-health",
       "name": "part health",
       "description": "A part's own state and health, emitted by the part rather than inferred about it."
+    },
+    {
+      "id": "opportunity-instruction",
+      "name": "opportunity instruction",
+      "description": "What the scanner should watch for and what it implies. The user's words: opportunities are instructions or feeds derived from the hypothesis feature, not rules built into the scanner."
+    },
+    {
+      "id": "closed-trade",
+      "name": "closed trade",
+      "description": "A finished trade with its outcome, profit or loss, and everything that led to it."
+    },
+    {
+      "id": "decoded-trade-instruction",
+      "name": "decoded trade instruction",
+      "description": "What a closed trade taught, drawn from winners and losers alike, expressed as an instruction for the hypothesis feature to work on."
     }
   ],
   "features": [],
   "control_plane": {
     "driver": "resource-governor",
     "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+  },
+  "segments": {
+    "note": "Every segment is a bot with all of this inside it. The user's words. The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a put in options is a short in futures.",
+    "members": [
+      {
+        "id": "spot",
+        "name": "Spot"
+      },
+      {
+        "id": "futures",
+        "name": "Futures"
+      },
+      {
+        "id": "options",
+        "name": "Options"
+      }
+    ],
+    "origin": "user"
   }
 }

@@ -142,3 +142,64 @@ segment bot as a whole is what the rest of the system sees.
 In the registry this is `parent: segment-bot` on the scanner and
 `contains: [opportunity-scanner]` on the segment bot. The diagram renders it as a
 box, so containment is visible rather than implied.
+
+---
+
+# Added 2026-08-20 — what an opportunity is, and the loop that closes
+
+## What "opportunity" means (C-02 clarified)
+
+> "what is the opportunities mean in the universe opportunity scanner they may be
+> instructions or feeds that can be derivatives from hypotheses feature ... I need
+> you to think opportunity can be any thing like if a symbols has sudden increase
+> in pride then there can be a minor decrease following after so the we can put or
+> short or according to the bot segment"
+
+**The scanner holds no rules of its own.** What counts as an opportunity arrives
+as an **instruction** from the hypothesis feature. This is the difference between
+a scanner that can only ever find what someone coded into it, and one whose
+search widens as the system learns.
+
+An opportunity is a condition plus what it implies. The user's example: a symbol
+jumps sharply, a minor pullback often follows, so the bot takes the other side —
+**a put in options, a short in futures**, and whatever the equivalent is in spot.
+The condition is shared; the response belongs to the segment.
+
+## C-18 — AI brain
+
+> "Now I need a ai brain new feature"
+
+Named, not described. No flow declared, no placement decided.
+
+## C-19 — Closed trade decoding
+
+> "a new feature closed trades decoding feature that create instructions from
+> profit trades and loss trades and this goes to the hypothesis feature that can
+> think how to turn the loss trades informtion to open profit trade"
+
+Decodes finished trades into instructions and hands them to hypothesis. **Losers
+are not discarded** — their information is precisely what hypothesis works on to
+produce an opening profit trade.
+
+## The loop this closes
+
+The blueprint previously had a dead end: the ledger produced journal entries that
+nothing consumed. These two additions close the circuit.
+
+    portfolio state --closed trade--> closed trade decoding
+                    --decoded trade instruction--> hypothesis
+                    --opportunity instruction--> scanner
+                    --entry candidate--> bull / bear / profit tailgating
+                    --trade intent--> risk --> paper/live --> venue
+                    --fill--> portfolio state
+
+A trade closes, is decoded, becomes a hypothesis, becomes an instruction the
+scanner did not have before, and changes what the system looks for next. That is
+the learning loop expressed as data flow rather than as a promise.
+
+## Still open
+
+- `journal-entry` from the ledger is still consumed by nothing. Closed trades are
+  proposed as coming from portfolio state, which knows when a position closes —
+  but the ledger is what holds everything that led to it. Which one decoding
+  reads from is not decided.
