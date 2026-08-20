@@ -185,15 +185,19 @@
         "market-event",
         "model-version",
         "mutated-hypothesis",
+        "near-miss-episode",
         "opportunity-instruction",
+        "outcome-significance",
         "position",
         "premortem-note",
         "recalled-episode",
         "regime-memory",
         "sentiment-reading",
         "skill-gap",
+        "trade-cluster",
         "trade-episode",
         "trade-intent",
+        "trade-narrative",
         "venue-announcement",
         "verified-snapshot",
         "web-idea",
@@ -245,6 +249,7 @@
         "decision-quality-score",
         "directional-opinion",
         "duty-cycle",
+        "exit-counterfactual",
         "exit-quality",
         "feature-attribution",
         "feature-vector",
@@ -256,11 +261,16 @@
         "model-drift-alert",
         "model-version",
         "opportunity-instruction",
+        "outcome-significance",
+        "pair-verdict",
         "peak-excursion",
+        "pnl-attribution",
         "raw-conviction",
         "refutation-verdict",
         "retrain-request",
+        "shortfall-breakdown",
         "sized-order",
+        "trade-cluster",
         "trade-episode",
         "trade-intent",
         "training-label",
@@ -311,6 +321,7 @@
         "falsification-criterion",
         "feature-reliability",
         "forecast-accuracy",
+        "horizon-profile",
         "hypothesis-priority",
         "hypothesis-regime-tag",
         "instruction-history",
@@ -323,8 +334,10 @@
         "loss-cause",
         "market-regime",
         "mutated-hypothesis",
+        "near-miss-episode",
         "novel-idea",
         "novelty-score",
+        "pnl-attribution",
         "recalled-episode",
         "reflection-note",
         "regime-break-alert",
@@ -381,6 +394,7 @@
         "opportunity-instruction",
         "playbook-rule",
         "recalled-episode",
+        "regime-transition-flag",
         "research-finding",
         "retired-instruction",
         "semantic-fact",
@@ -660,6 +674,7 @@
         "closed-trade",
         "correlation-cluster",
         "drawdown-episode",
+        "excursion-profile",
         "exit-plan",
         "exposure-view",
         "fill",
@@ -678,12 +693,15 @@
         "position",
         "price-increment",
         "risk-limit",
+        "sequence-pattern",
         "size-hint",
         "sized-order",
         "slippage-profile",
+        "stop-audit",
         "stop-target-plan",
         "symbol-profile",
         "timed-intent",
+        "trade-cluster",
         "trade-intent",
         "trading-halt",
         "turbulence-index",
@@ -731,6 +749,7 @@
         "peak-excursion",
         "policy-decision",
         "position",
+        "replay-mismatch",
         "research-finding",
         "sized-order",
         "skill-usefulness",
@@ -814,6 +833,7 @@
         "part-health",
         "probe-result",
         "raw-venue-order-status",
+        "replay-mismatch",
         "switch-record",
         "trading-halt",
         "usdt-pnl-statement"
@@ -908,6 +928,7 @@
         "regime-memory",
         "trade-episode",
         "trade-intent",
+        "trade-narrative",
         "verified-snapshot"
       ],
       "produces": [
@@ -942,16 +963,61 @@
       "approved": true,
       "consumes": [
         "closed-trade",
+        "correlation-cluster",
+        "cost-estimate",
+        "decision-rationale",
+        "directional-opinion",
+        "entry-candidate",
+        "entry-quality",
+        "exit-counterfactual",
+        "exit-plan",
+        "fill",
+        "funding-settlement",
         "journal-entry",
+        "llm-response",
+        "market-data",
+        "market-regime",
+        "near-miss-episode",
+        "order-book-snapshot",
+        "outcome-significance",
         "peak-excursion",
-        "trade-episode"
+        "pnl-attribution",
+        "regime-break-alert",
+        "regime-transition-flag",
+        "sequence-pattern",
+        "shortfall-breakdown",
+        "sized-order",
+        "stop-audit",
+        "stop-target-plan",
+        "symbol-profile",
+        "trade-cluster",
+        "trade-episode",
+        "trade-intent",
+        "trade-narrative",
+        "volatility-forecast"
       ],
       "produces": [
         "decoded-trade-instruction",
+        "entry-quality",
+        "excursion-profile",
+        "exit-counterfactual",
         "exit-quality",
+        "horizon-profile",
+        "llm-request",
         "loss-cause",
+        "near-miss-episode",
+        "outcome-significance",
+        "pair-verdict",
         "part-health",
+        "pnl-attribution",
+        "regime-transition-flag",
+        "replay-mismatch",
+        "sequence-pattern",
+        "shortfall-breakdown",
+        "stop-audit",
+        "trade-cluster",
         "trade-episode",
+        "trade-narrative",
         "winner-pattern"
       ],
       "flow_origin": "agreed-provisional",
@@ -1098,6 +1164,7 @@
         "opportunity-instruction",
         "refutation-verdict",
         "required-sample-size",
+        "shortfall-breakdown",
         "slippage-profile",
         "trade-episode",
         "trial-ledger",
@@ -1136,11 +1203,14 @@
         "calibrated-conviction",
         "champion-choice",
         "entry-candidate",
+        "entry-quality",
         "entry-timing",
+        "excursion-profile",
         "exit-plan",
         "feature-vector",
         "forecast-out-of-distribution-flag",
         "funding-forecast",
+        "horizon-profile",
         "instruction-scorecard",
         "kline-window",
         "learning-reward",
@@ -1155,6 +1225,7 @@
         "sample-weight",
         "setup-weight",
         "side-candidate",
+        "stop-audit",
         "symbol-profile",
         "training-label"
       ],
@@ -1198,11 +1269,14 @@
         "calibrated-conviction",
         "champion-choice",
         "entry-candidate",
+        "entry-quality",
         "entry-timing",
+        "excursion-profile",
         "exit-plan",
         "feature-vector",
         "forecast-out-of-distribution-flag",
         "funding-forecast",
+        "horizon-profile",
         "instruction-scorecard",
         "kline-window",
         "learning-reward",
@@ -1217,6 +1291,7 @@
         "sample-weight",
         "setup-weight",
         "side-candidate",
+        "stop-audit",
         "symbol-profile",
         "training-label"
       ],
@@ -1263,6 +1338,8 @@
         "copy-score",
         "crowding-reading",
         "entry-candidate",
+        "excursion-profile",
+        "exit-counterfactual",
         "exit-plan",
         "external-position",
         "follow-candidate",
@@ -1271,6 +1348,7 @@
         "market-data",
         "move-remaining",
         "order-book-snapshot",
+        "pair-verdict",
         "peak-excursion",
         "position",
         "price-forecast",
@@ -2558,6 +2636,81 @@
       "id": "feed-coverage",
       "name": "feed coverage",
       "description": "Per symbol, which venues currently supply which data, and where nothing does."
+    },
+    {
+      "id": "pnl-attribution",
+      "name": "P&L attribution",
+      "description": "One closed trade's result split into what direction, timing, size, fees, slippage plus funding each contributed."
+    },
+    {
+      "id": "entry-quality",
+      "name": "entry quality",
+      "description": "How close the entry was to the best price available in the window after the signal, in basis points plus bars."
+    },
+    {
+      "id": "exit-counterfactual",
+      "name": "exit counterfactual",
+      "description": "What the same trade would have earned under each other exit rail: earlier, later, trailing, time-stop."
+    },
+    {
+      "id": "horizon-profile",
+      "name": "horizon profile",
+      "description": "How return net of cost evolves with holding time for a setup class, so the best horizon is measured, not chosen."
+    },
+    {
+      "id": "trade-cluster",
+      "name": "trade cluster",
+      "description": "Closed trades that were effectively one bet: opened together on symbols that moved together."
+    },
+    {
+      "id": "outcome-significance",
+      "name": "outcome significance",
+      "description": "Whether a trade's result is distinguishable from noise given the symbol's volatility over the hold."
+    },
+    {
+      "id": "near-miss-episode",
+      "name": "near-miss episode",
+      "description": "A candidate that was raised but not traded, with what the market then did, so abstentions teach too."
+    },
+    {
+      "id": "regime-transition-flag",
+      "name": "regime transition flag",
+      "description": "Whether the regime changed between a trade's entry plus its exit."
+    },
+    {
+      "id": "shortfall-breakdown",
+      "name": "shortfall breakdown",
+      "description": "Implementation shortfall split into delay, spread, impact plus opportunity cost."
+    },
+    {
+      "id": "trade-narrative",
+      "name": "trade narrative",
+      "description": "The trade told in plain words from its journal: why entered, what happened, why exited."
+    },
+    {
+      "id": "sequence-pattern",
+      "name": "sequence pattern",
+      "description": "A pattern across consecutive trades: losses after losses, time-of-day clusters, size creep after wins."
+    },
+    {
+      "id": "stop-audit",
+      "name": "stop audit",
+      "description": "Whether a stop was hit by noise before price reached the target: too tight, too wide, or right."
+    },
+    {
+      "id": "excursion-profile",
+      "name": "excursion profile",
+      "description": "The distribution of best plus worst unrealised points per setup class, from every closed trade."
+    },
+    {
+      "id": "pair-verdict",
+      "name": "pair verdict",
+      "description": "For an exploration pair on one symbol: which side was right, by how much, and what distinguished the setup."
+    },
+    {
+      "id": "replay-mismatch",
+      "name": "replay mismatch",
+      "description": "A closed trade whose replay from its own journal does not reproduce the ledger's P&L."
     }
   ],
   "features": [
@@ -2899,7 +3052,13 @@
       "category": "closed-trade-decoding",
       "consumes": [
         "closed-trade",
-        "journal-entry"
+        "journal-entry",
+        "pnl-attribution",
+        "near-miss-episode",
+        "regime-transition-flag",
+        "entry-quality",
+        "outcome-significance",
+        "trade-cluster"
       ],
       "produces": [
         "trade-episode",
@@ -2920,7 +3079,11 @@
       "role": "turn a trade episode into an instruction the hypothesis feature can work on",
       "category": "closed-trade-decoding",
       "consumes": [
-        "trade-episode"
+        "trade-episode",
+        "trade-narrative",
+        "pnl-attribution",
+        "stop-audit",
+        "sequence-pattern"
       ],
       "produces": [
         "decoded-trade-instruction",
@@ -2941,7 +3104,9 @@
       "category": "hypothesis",
       "consumes": [
         "trade-episode",
-        "forecast-accuracy"
+        "forecast-accuracy",
+        "pnl-attribution",
+        "horizon-profile"
       ],
       "produces": [
         "expectancy-breakdown",
@@ -2980,7 +3145,8 @@
         "mutated-hypothesis",
         "falsification-criterion",
         "knowledge-link",
-        "regime-memory"
+        "regime-memory",
+        "horizon-profile"
       ],
       "produces": [
         "opportunity-instruction",
@@ -3360,7 +3526,8 @@
       "category": "risk-capital-allocation",
       "consumes": [
         "position",
-        "market-data"
+        "market-data",
+        "excursion-profile"
       ],
       "produces": [
         "stop-adjustment",
@@ -3384,7 +3551,10 @@
         "directional-opinion",
         "trade-episode",
         "counterfactual-outcome",
-        "learning-reward"
+        "learning-reward",
+        "trade-cluster",
+        "outcome-significance",
+        "pair-verdict"
       ],
       "produces": [
         "bot-scorecard",
@@ -3432,7 +3602,9 @@
         "decision-quality-score",
         "refutation-verdict",
         "trial-ledger",
-        "coverage-report"
+        "coverage-report",
+        "pair-verdict",
+        "trade-cluster"
       ],
       "produces": [
         "bot-maturity",
@@ -3481,7 +3653,10 @@
         "verified-snapshot",
         "counterfactual-outcome",
         "premortem-note",
-        "counter-argument"
+        "counter-argument",
+        "outcome-significance",
+        "trade-narrative",
+        "near-miss-episode"
       ],
       "produces": [
         "decision-quality-score",
@@ -4331,7 +4506,8 @@
       "category": "backtesting",
       "consumes": [
         "market-data",
-        "slippage-profile"
+        "slippage-profile",
+        "shortfall-breakdown"
       ],
       "produces": [
         "cost-estimate",
@@ -4943,7 +5119,8 @@
       "category": "learning-loop",
       "consumes": [
         "fill",
-        "sized-order"
+        "sized-order",
+        "shortfall-breakdown"
       ],
       "produces": [
         "slippage-profile",
@@ -4969,7 +5146,8 @@
       "category": "learning-loop",
       "consumes": [
         "exit-quality",
-        "trade-episode"
+        "trade-episode",
+        "exit-counterfactual"
       ],
       "produces": [
         "instruction-scorecard",
@@ -5621,7 +5799,9 @@
         "volatility-forecast",
         "liquidation-map",
         "symbol-profile",
-        "exit-plan"
+        "exit-plan",
+        "stop-audit",
+        "excursion-profile"
       ],
       "produces": [
         "stop-target-plan",
@@ -5644,7 +5824,8 @@
       "consumes": [
         "position",
         "exposure-view",
-        "correlation-cluster"
+        "correlation-cluster",
+        "trade-cluster"
       ],
       "produces": [
         "risk-limit",
@@ -5714,7 +5895,8 @@
         "market-event",
         "market-anomaly",
         "turbulence-index",
-        "venue-announcement"
+        "venue-announcement",
+        "sequence-pattern"
       ],
       "produces": [
         "risk-limit",
@@ -5868,7 +6050,8 @@
       "role": "detect a break in the journal's sequence or hash chain",
       "category": "ledger",
       "consumes": [
-        "journal-entry"
+        "journal-entry",
+        "replay-mismatch"
       ],
       "produces": [
         "journal-gap",
@@ -6035,7 +6218,8 @@
         "journal-gap",
         "market-anomaly",
         "hog-report",
-        "feed-coverage"
+        "feed-coverage",
+        "replay-mismatch"
       ],
       "produces": [
         "alert",
@@ -6336,7 +6520,8 @@
         "llm-response",
         "knowledge-snapshot",
         "premortem-note",
-        "counter-argument"
+        "counter-argument",
+        "trade-narrative"
       ],
       "produces": [
         "reflection-note",
@@ -6359,7 +6544,11 @@
       "category": "closed-trade-decoding",
       "consumes": [
         "trade-episode",
-        "peak-excursion"
+        "peak-excursion",
+        "pnl-attribution",
+        "regime-transition-flag",
+        "stop-audit",
+        "shortfall-breakdown"
       ],
       "produces": [
         "loss-cause",
@@ -6380,7 +6569,9 @@
       "role": "find conditions that recur across winning trades",
       "category": "closed-trade-decoding",
       "consumes": [
-        "trade-episode"
+        "trade-episode",
+        "sequence-pattern",
+        "outcome-significance"
       ],
       "produces": [
         "winner-pattern",
@@ -7242,7 +7433,8 @@
         "side-candidate",
         "market-data",
         "calibrated-conviction",
-        "playbook-rule"
+        "playbook-rule",
+        "entry-quality"
       ],
       "produces": [
         "entry-timing",
@@ -7266,7 +7458,10 @@
         "side-candidate",
         "market-data",
         "symbol-profile",
-        "calibrated-conviction"
+        "calibrated-conviction",
+        "excursion-profile",
+        "horizon-profile",
+        "stop-audit"
       ],
       "produces": [
         "exit-plan",
@@ -7479,7 +7674,8 @@
         "side-candidate",
         "market-data",
         "calibrated-conviction",
-        "playbook-rule"
+        "playbook-rule",
+        "entry-quality"
       ],
       "produces": [
         "entry-timing",
@@ -7503,7 +7699,10 @@
         "side-candidate",
         "market-data",
         "symbol-profile",
-        "calibrated-conviction"
+        "calibrated-conviction",
+        "excursion-profile",
+        "horizon-profile",
+        "stop-audit"
       ],
       "produces": [
         "exit-plan",
@@ -7620,7 +7819,8 @@
       "consumes": [
         "position",
         "market-data",
-        "peak-excursion"
+        "peak-excursion",
+        "pair-verdict"
       ],
       "produces": [
         "follow-candidate",
@@ -7742,7 +7942,9 @@
       "consumes": [
         "follow-candidate",
         "market-data",
-        "symbol-profile"
+        "symbol-profile",
+        "exit-counterfactual",
+        "excursion-profile"
       ],
       "produces": [
         "exit-plan",
@@ -7832,7 +8034,8 @@
       "consumes": [
         "opportunity-instruction",
         "mutated-hypothesis",
-        "model-version"
+        "model-version",
+        "trade-cluster"
       ],
       "produces": [
         "trial-ledger",
@@ -7877,7 +8080,8 @@
       "category": "intelligence",
       "consumes": [
         "directional-opinion",
-        "trade-episode"
+        "trade-episode",
+        "near-miss-episode"
       ],
       "produces": [
         "coverage-report",
@@ -8110,7 +8314,9 @@
       "consumes": [
         "closed-trade",
         "usdt-pnl-statement",
-        "peak-excursion"
+        "peak-excursion",
+        "pnl-attribution",
+        "outcome-significance"
       ],
       "produces": [
         "learning-reward",
@@ -8272,7 +8478,8 @@
       "consumes": [
         "instruction-scorecard",
         "retired-instruction",
-        "instruction-history"
+        "instruction-history",
+        "near-miss-episode"
       ],
       "produces": [
         "mutated-hypothesis",
@@ -8408,7 +8615,8 @@
       "consumes": [
         "trade-episode",
         "market-regime",
-        "instruction-scorecard"
+        "instruction-scorecard",
+        "regime-transition-flag"
       ],
       "produces": [
         "regime-memory",
@@ -9180,6 +9388,355 @@
       ],
       "origin": "user",
       "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "pnl-attributor",
+      "name": "P&L attributor",
+      "role": "split one closed trade's result into direction, timing, size, fees, slippage plus funding",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "fill",
+        "funding-settlement",
+        "cost-estimate",
+        "peak-excursion"
+      ],
+      "produces": [
+        "pnl-attribution",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "entry-quality-scorer",
+      "name": "Entry quality scorer",
+      "role": "score how close the entry was to the best price in the window after the signal",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "market-data",
+        "journal-entry"
+      ],
+      "produces": [
+        "entry-quality",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "exit-counterfactual-replayer",
+      "name": "Exit counterfactual replayer",
+      "role": "replay the same trade under every other exit rail",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "market-data",
+        "exit-plan"
+      ],
+      "produces": [
+        "exit-counterfactual",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "holding-horizon-profiler",
+      "name": "Holding horizon profiler",
+      "role": "measure how net return evolves with holding time per setup class",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode",
+        "exit-counterfactual"
+      ],
+      "produces": [
+        "horizon-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "trade-cluster-detector",
+      "name": "Trade cluster detector",
+      "role": "group closed trades that were effectively one bet",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "correlation-cluster"
+      ],
+      "produces": [
+        "trade-cluster",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "luck-skill-separator",
+      "name": "Luck-skill separator",
+      "role": "test whether a trade's result is distinguishable from noise given the symbol's volatility",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "volatility-forecast",
+        "symbol-profile"
+      ],
+      "produces": [
+        "outcome-significance",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "near-miss-recorder",
+      "name": "Near-miss recorder",
+      "role": "keep every candidate raised but not traded, with what the market then did",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "entry-candidate",
+        "trade-intent",
+        "directional-opinion",
+        "market-data"
+      ],
+      "produces": [
+        "near-miss-episode",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "regime-transition-tagger",
+      "name": "Regime transition tagger",
+      "role": "flag a trade whose regime changed between entry plus exit",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "market-regime",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "regime-transition-flag",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "shortfall-decomposer",
+      "name": "Shortfall decomposer",
+      "role": "split implementation shortfall into delay, spread, impact plus opportunity cost",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "fill",
+        "sized-order",
+        "order-book-snapshot",
+        "market-data"
+      ],
+      "produces": [
+        "shortfall-breakdown",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "trade-narrative-writer",
+      "name": "Trade narrative writer",
+      "role": "tell the trade in plain words from its journal",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode",
+        "journal-entry",
+        "decision-rationale",
+        "llm-response"
+      ],
+      "produces": [
+        "trade-narrative",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "sequence-pattern-miner",
+      "name": "Sequence pattern miner",
+      "role": "find patterns across consecutive trades: streak behaviour, time-of-day clusters, size creep",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode",
+        "closed-trade"
+      ],
+      "produces": [
+        "sequence-pattern",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "stop-placement-auditor",
+      "name": "Stop placement auditor",
+      "role": "judge whether each stop was hit by noise before the target: too tight, too wide, or right",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "peak-excursion",
+        "stop-target-plan",
+        "market-data"
+      ],
+      "produces": [
+        "stop-audit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "excursion-profiler",
+      "name": "Excursion profiler",
+      "role": "build the distribution of best plus worst unrealised points per setup class",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "peak-excursion",
+        "trade-episode"
+      ],
+      "produces": [
+        "excursion-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "exploration-pair-decoder",
+      "name": "Exploration pair decoder",
+      "role": "decode an exploration pair: which side was right, by how much, what distinguished the setup",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "trade-episode",
+        "directional-opinion"
+      ],
+      "produces": [
+        "pair-verdict",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "trade-replay-verifier",
+      "name": "Trade replay verifier",
+      "role": "replay each closed trade from its own journal to confirm it reproduces the ledger's P&L",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "journal-entry",
+        "fill"
+      ],
+      "produces": [
+        "replay-mismatch",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
     }
   ],
   "control_plane": {
@@ -9659,5 +10216,11 @@
     "origin": "thinking-block parts proposed by Claude at the user's request; feed rotation parts are RL-049",
     "applied_by": "dashboard/blueprint_edits/apply_2026-08-20_thinking_blocks_and_feed.py",
     "rationale": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+  },
+  "_proposal_2026-08-20_closed_trade_decoding": {
+    "what": "Closed-trade decoding opened from 5 to 20 parts.",
+    "origin": "proposed by Claude at the user's request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-08-20_closed_trade_decoding.py",
+    "rationale": "docs/proposals/closed-trade-decoding-expansion.md"
   }
 }
