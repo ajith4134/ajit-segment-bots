@@ -38,19 +38,31 @@
         "bot-maturity",
         "capital-allotment",
         "cost-estimate",
+        "delayed-order-request",
+        "execution-schedule",
+        "feed-jump",
         "fill",
+        "fill-price-estimate",
+        "liquidation-price",
         "market-data",
+        "money-mode",
+        "order-book-snapshot",
         "order-request",
         "position",
         "sized-order",
+        "stamped-order",
         "stop-adjustment"
       ],
       "produces": [
         "account-balance",
+        "delayed-order-request",
         "fill",
+        "fill-price-estimate",
+        "money-mode",
         "order-request",
         "part-health",
-        "risk-limit"
+        "risk-limit",
+        "stamped-order"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -68,10 +80,13 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "cointegrated-pair",
         "funding-forecast",
         "implied-vol-surface",
         "liquidation-map",
+        "liquidity-grade",
         "market-data",
+        "market-regime",
         "order-book-snapshot",
         "playbook-rule",
         "position",
@@ -81,13 +96,16 @@
         "symbol-profile",
         "symbol-universe",
         "volatility-forecast",
+        "watch-condition",
         "whale-transfer"
       ],
       "produces": [
+        "cointegrated-pair",
         "entry-candidate",
         "liquidity-grade",
         "market-regime",
-        "part-health"
+        "part-health",
+        "watch-condition"
       ],
       "flow_origin": "agreed-provisional",
       "parent": "segment-bot",
@@ -102,24 +120,16 @@
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three bots -- bull, bear and profit tailgating. The bots issue opinions; the brain turns three opinions into one intent.",
+      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots — bull, bear and profit tailgating — each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
       "origin": "user",
       "approved": true,
       "consumes": [
-        "bot-scorecard",
-        "copy-score",
-        "entry-candidate",
-        "external-position",
         "implied-vol-surface",
         "liquidity-grade",
         "market-data",
-        "position",
-        "price-forecast",
-        "regime-break-alert",
         "trade-intent"
       ],
       "produces": [
-        "directional-opinion",
         "instrument-choice",
         "part-health"
       ],
@@ -155,9 +165,12 @@
         "llm-response",
         "loss-cause",
         "market-data",
+        "market-event",
         "position",
         "sentiment-reading",
-        "trade-episode"
+        "trade-episode",
+        "verified-snapshot",
+        "web-idea"
       ],
       "produces": [
         "correlation-cluster",
@@ -170,6 +183,7 @@
         "novel-idea",
         "part-health",
         "regime-break-alert",
+        "turbulence-index",
         "web-idea"
       ],
       "flow_origin": "proposed",
@@ -188,6 +202,7 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bot-scorecard",
         "decision-quality-score",
         "directional-opinion",
         "exit-quality",
@@ -227,9 +242,12 @@
         "cross-segment-lesson",
         "decoded-trade-instruction",
         "exit-quality",
+        "expectancy-breakdown",
         "feature-reliability",
         "forecast-accuracy",
+        "hypothesis-priority",
         "instruction-scorecard",
+        "inverted-hypothesis",
         "live-vs-replay-gap",
         "loaded-skill-section",
         "loss-cause",
@@ -243,6 +261,9 @@
         "winner-pattern"
       ],
       "produces": [
+        "expectancy-breakdown",
+        "hypothesis-priority",
+        "inverted-hypothesis",
         "opportunity-instruction",
         "part-health",
         "retired-instruction"
@@ -268,6 +289,7 @@
         "market-data",
         "opportunity-instruction",
         "retired-instruction",
+        "semantic-fact",
         "skill-usefulness",
         "trade-episode"
       ],
@@ -296,16 +318,35 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "finetuned-model",
+        "flow-entropy",
+        "forecast-accuracy",
+        "forecast-out-of-distribution-flag",
         "forecast-trust",
+        "implied-vol-surface",
+        "kline-window",
         "market-data",
-        "order-book-snapshot"
+        "model-choice",
+        "model-drift-alert",
+        "order-book-snapshot",
+        "order-flow-state",
+        "price-forecast",
+        "vol-feature-set",
+        "volatility-forecast"
       ],
       "produces": [
         "ensemble-forecast",
+        "finetuned-model",
+        "flow-entropy",
         "forecast-accuracy",
+        "forecast-out-of-distribution-flag",
         "funding-forecast",
         "implied-vol-surface",
+        "kline-window",
         "liquidation-map",
+        "model-choice",
+        "model-drift-alert",
+        "order-flow-state",
         "part-health",
         "price-forecast",
         "vol-feature-set",
@@ -327,8 +368,11 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "external-position",
         "llm-response",
+        "research-finding",
         "symbol-universe",
+        "tracked-trader",
         "trade-episode"
       ],
       "produces": [
@@ -339,6 +383,7 @@
         "research-finding",
         "sentiment-reading",
         "strategy-gap",
+        "tracked-trader",
         "whale-transfer"
       ],
       "flow_origin": "agreed-provisional",
@@ -357,14 +402,31 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "llm-backpressure",
+        "llm-call-record",
+        "llm-model-choice",
+        "llm-quota-state",
         "llm-request",
+        "llm-response",
+        "llm-spend-state",
+        "local-llm-request",
+        "market-data",
+        "paid-llm-request",
+        "subscription-llm-request",
         "survival-tier"
       ],
       "produces": [
+        "llm-backpressure",
+        "llm-call-record",
+        "llm-model-choice",
         "llm-quota-state",
         "llm-response",
         "llm-spend-state",
-        "part-health"
+        "local-llm-request",
+        "paid-llm-request",
+        "part-health",
+        "subscription-llm-request",
+        "verified-snapshot"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -385,14 +447,24 @@
       "consumes": [
         "admitted-part",
         "conservation-plan",
+        "hardware-capacity",
+        "hog-report",
         "part-health",
+        "part-priority",
+        "part-resource-usage",
         "replacement-plan",
-        "restart-request"
+        "restart-request",
+        "switch-plan",
+        "switch-record"
       ],
       "produces": [
+        "hardware-capacity",
         "hog-report",
         "part-fault",
         "part-health",
+        "part-priority",
+        "part-resource-usage",
+        "switch-plan",
         "switch-record"
       ],
       "flow_origin": "agreed-provisional",
@@ -410,12 +482,18 @@
       "summary": "Exchange connectivity, reconnects, gap detection and symbol normalisation across venues. The substrate the scanner, prediction and paper-fill pricing all read from.",
       "origin": "proposed",
       "approved": true,
-      "consumes": [],
+      "consumes": [
+        "market-data",
+        "order-book-snapshot",
+        "symbol-universe"
+      ],
       "produces": [
         "feed-gap",
+        "feed-jump",
         "market-data",
         "order-book-snapshot",
         "part-health",
+        "price-increment",
         "symbol-universe"
       ],
       "flow_origin": "agreed-provisional",
@@ -437,28 +515,43 @@
         "account-balance",
         "closed-trade",
         "correlation-cluster",
+        "drawdown-episode",
+        "exit-plan",
         "exposure-view",
+        "fill",
         "funding-forecast",
         "human-override",
         "instrument-choice",
+        "leverage-choice",
         "liquidation-map",
+        "liquidation-price",
+        "locked-allocation",
         "market-anomaly",
         "market-data",
         "market-event",
+        "order-book-snapshot",
         "policy-decision",
         "position",
+        "price-increment",
         "risk-limit",
+        "sized-order",
         "slippage-profile",
+        "stop-target-plan",
         "symbol-profile",
         "trade-intent",
         "trading-halt",
+        "turbulence-index",
         "volatility-forecast"
       ],
       "produces": [
         "capital-allotment",
+        "execution-schedule",
+        "leverage-choice",
         "part-health",
+        "risk-limit",
         "sized-order",
-        "stop-adjustment"
+        "stop-adjustment",
+        "stop-target-plan"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -482,6 +575,8 @@
         "entry-candidate",
         "fill",
         "forecast-accuracy",
+        "journal-entry",
+        "market-data",
         "modification-record",
         "opportunity-instruction",
         "order-request",
@@ -495,6 +590,7 @@
         "trade-intent"
       ],
       "produces": [
+        "funding-settlement",
         "journal-entry",
         "journal-gap",
         "part-health"
@@ -515,13 +611,24 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
+        "account-balance",
         "capital-allotment",
+        "closed-trade",
+        "cost-basis",
         "fill",
+        "funding-settlement",
+        "leverage-choice",
         "market-data",
+        "peak-excursion",
+        "position",
+        "sized-order",
         "venue-position-report"
       ],
       "produces": [
         "closed-trade",
+        "cost-basis",
+        "liquidation-price",
+        "locked-allocation",
         "part-health",
         "peak-excursion",
         "position",
@@ -544,18 +651,32 @@
       "approved": true,
       "consumes": [
         "account-balance",
+        "alert",
+        "board-link",
+        "board-snapshot",
+        "fill",
+        "heartbeat-table",
         "hog-report",
+        "journal-entry",
         "journal-gap",
         "market-anomaly",
         "part-fault",
         "part-health",
+        "probe-result",
+        "raw-venue-order-status",
         "switch-record",
         "trading-halt",
         "usdt-pnl-statement"
       ],
       "produces": [
         "ablation-scorecard",
-        "part-health"
+        "alert",
+        "board-link",
+        "board-snapshot",
+        "drawdown-episode",
+        "heartbeat-table",
+        "part-health",
+        "probe-result"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "global",
@@ -573,15 +694,26 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
-        "fill",
-        "order-request"
+        "cancel-decision",
+        "market-data",
+        "order-book-snapshot",
+        "order-reject-reason",
+        "order-reprice",
+        "order-request",
+        "raw-venue-order-status",
+        "venue-rate-budget"
       ],
       "produces": [
         "account-balance",
+        "cancel-decision",
         "fill",
+        "order-reject-reason",
+        "order-reprice",
         "order-request",
         "part-health",
-        "venue-position-report"
+        "raw-venue-order-status",
+        "venue-position-report",
+        "venue-rate-budget"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -600,16 +732,21 @@
       "approved": true,
       "consumes": [
         "bot-maturity",
+        "decision-rationale",
         "directional-opinion",
         "ensemble-forecast",
+        "forecast-bias",
         "forecast-trust",
         "llm-response",
         "market-regime",
         "regime-break-alert",
-        "trade-episode"
+        "trade-episode",
+        "trade-intent",
+        "verified-snapshot"
       ],
       "produces": [
         "decision-rationale",
+        "forecast-bias",
         "llm-request",
         "part-health",
         "reflection-note",
@@ -634,7 +771,8 @@
       "consumes": [
         "closed-trade",
         "journal-entry",
-        "peak-excursion"
+        "peak-excursion",
+        "trade-episode"
       ],
       "produces": [
         "decoded-trade-instruction",
@@ -662,17 +800,29 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "consumes": [
+        "available-skill",
         "llm-response",
+        "loaded-skill-section",
         "research-finding",
+        "skill",
+        "skill-conflict",
+        "skill-refresh-request",
+        "skill-usefulness",
+        "source-document",
         "stale-knowledge",
         "trade-episode",
         "web-idea"
       ],
       "produces": [
+        "available-skill",
         "llm-request",
         "loaded-skill-section",
         "part-health",
-        "skill-usefulness"
+        "skill",
+        "skill-conflict",
+        "skill-refresh-request",
+        "skill-usefulness",
+        "source-document"
       ],
       "flow_origin": "proposed",
       "contract_recomputed": {
@@ -688,35 +838,52 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "admitted-part",
+        "autonomy-envelope",
         "bot-maturity",
         "bot-scorecard",
+        "capability-gap",
         "exposure-view",
         "feed-gap",
+        "folded-circuit-map",
+        "human-override",
         "journal-entry",
         "llm-quota-state",
         "llm-response",
         "llm-spend-state",
         "market-anomaly",
         "market-data",
-        "part-fault",
-        "part-health",
-        "regime-break-alert",
-        "research-finding",
-        "trade-intent"
-      ],
-      "produces": [
-        "admitted-part",
-        "conservation-plan",
-        "human-override",
-        "llm-request",
         "modification-record",
+        "outage-state",
         "part-fault",
         "part-health",
         "policy-decision",
+        "proposed-part",
+        "regime-break-alert",
+        "research-finding",
+        "survival-tier",
+        "trade-intent",
+        "upstream-change"
+      ],
+      "produces": [
+        "admitted-part",
+        "autonomy-envelope",
+        "capability-gap",
+        "conservation-plan",
+        "folded-circuit-map",
+        "human-override",
+        "llm-request",
+        "modification-record",
+        "outage-state",
+        "part-fault",
+        "part-health",
+        "policy-decision",
+        "proposed-part",
         "replacement-plan",
         "restart-request",
         "survival-tier",
-        "trading-halt"
+        "trading-halt",
+        "upstream-change"
       ],
       "flow_origin": "proposed",
       "scope": "global",
@@ -735,20 +902,200 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "backtest-result",
+        "backtest-run",
+        "backtest-verdict",
+        "cost-estimate",
+        "fill-sequence",
+        "fillable-size",
+        "historical-window",
         "market-data",
         "opportunity-instruction",
         "slippage-profile",
-        "trade-episode"
+        "trade-episode",
+        "walk-forward-split"
       ],
       "produces": [
+        "backtest-result",
+        "backtest-run",
+        "backtest-verdict",
         "cost-estimate",
+        "fill-sequence",
+        "fillable-size",
+        "historical-window",
         "live-vs-replay-gap",
         "part-health",
-        "proven-instruction"
+        "proven-instruction",
+        "walk-forward-split"
       ],
       "flow_origin": "proposed",
       "scope": "per-segment",
       "scope_origin": "proposed",
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
+    },
+    {
+      "id": "bull-bot",
+      "name": "Bull bot",
+      "summary": "A complete bot with its own features, model, scorecard and board cells, issuing the long-side opinion on every candidate the scanner raises. Same skeleton as the other side (T-1), separate at runtime (RL-048).",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "bot-scorecard",
+        "calibrated-conviction",
+        "entry-candidate",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector",
+        "forecast-out-of-distribution-flag",
+        "funding-forecast",
+        "instruction-scorecard",
+        "kline-window",
+        "market-data",
+        "order-book-snapshot",
+        "playbook-rule",
+        "position",
+        "price-forecast",
+        "raw-conviction",
+        "regime-break-alert",
+        "setup-weight",
+        "side-candidate",
+        "symbol-profile"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "directional-opinion",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector",
+        "forecast-out-of-distribution-flag",
+        "part-health",
+        "raw-conviction",
+        "setup-weight",
+        "side-candidate"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "per-segment",
+      "scope_origin": "user",
+      "template": "directional-bot",
+      "rulings": [
+        "RL-011",
+        "RL-023",
+        "RL-026",
+        "RL-046",
+        "RL-048"
+      ],
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
+    },
+    {
+      "id": "bear-bot",
+      "name": "Bear bot",
+      "summary": "A complete bot with its own features, model, scorecard and board cells, issuing the short-side opinion on every candidate the scanner raises. Same skeleton as the other side (T-1), separate at runtime (RL-048).",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "bot-scorecard",
+        "calibrated-conviction",
+        "entry-candidate",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector",
+        "forecast-out-of-distribution-flag",
+        "funding-forecast",
+        "instruction-scorecard",
+        "kline-window",
+        "market-data",
+        "order-book-snapshot",
+        "playbook-rule",
+        "position",
+        "price-forecast",
+        "raw-conviction",
+        "regime-break-alert",
+        "setup-weight",
+        "side-candidate",
+        "symbol-profile"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "directional-opinion",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector",
+        "forecast-out-of-distribution-flag",
+        "part-health",
+        "raw-conviction",
+        "setup-weight",
+        "side-candidate"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "per-segment",
+      "scope_origin": "user",
+      "template": "directional-bot",
+      "rulings": [
+        "RL-011",
+        "RL-023",
+        "RL-026",
+        "RL-046",
+        "RL-048"
+      ],
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
+    },
+    {
+      "id": "profit-tailgating-bot",
+      "name": "Profit tailgating bot",
+      "summary": "A complete bot that joins what is already working: continuation setups from the scanner, this segment's own winning leg of an exploration pair (RL-047), and tracked traders' positions. Never proposes a reversal; always trails, never targets.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "bot-scorecard",
+        "calibrated-conviction",
+        "copy-score",
+        "crowding-reading",
+        "entry-candidate",
+        "exit-plan",
+        "external-position",
+        "follow-candidate",
+        "funding-forecast",
+        "market-data",
+        "move-remaining",
+        "order-book-snapshot",
+        "peak-excursion",
+        "position",
+        "price-forecast",
+        "sentiment-reading",
+        "setup-weight",
+        "symbol-profile"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "crowding-reading",
+        "directional-opinion",
+        "exit-plan",
+        "follow-candidate",
+        "move-remaining",
+        "part-health",
+        "setup-weight"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "per-segment",
+      "scope_origin": "user",
+      "rulings": [
+        "RL-011",
+        "RL-023",
+        "RL-026",
+        "RL-047"
+      ],
       "contract_recomputed": {
         "on": "2026-08-20",
         "from": "its parts",
@@ -769,7 +1116,7 @@
     {
       "id": "entry-candidate",
       "name": "entry candidate",
-      "description": "A symbol and the moment it should enter trading. Carries nothing about paper or live."
+      "description": "A symbol, the moment it should enter trading, which watch condition fired and its reading. Never a side. Carries nothing about paper or live."
     },
     {
       "id": "trade-intent",
@@ -1582,6 +1929,151 @@
       "description": "The public URL the board was pushed to, with the snapshot time it carries.",
       "origin": "proposed",
       "proposed": "2026-08-20"
+    },
+    {
+      "id": "fill-price-estimate",
+      "name": "fill price estimate",
+      "description": "The weighted-average price an order of this size would fill at, from walking live book depth, with whether it cleared fully."
+    },
+    {
+      "id": "delayed-order-request",
+      "name": "delayed order request",
+      "description": "An order request released only after a simulated venue round-trip, so a paper fill can never be faster than a real one."
+    },
+    {
+      "id": "liquidation-price",
+      "name": "liquidation price",
+      "description": "The price at which this bot's own leveraged position is force-closed by the venue, from entry, leverage and maintenance margin."
+    },
+    {
+      "id": "locked-allocation",
+      "name": "locked allocation",
+      "description": "Capital earmarked against one sent order, owned but unavailable to a second order until the first fills or is cancelled."
+    },
+    {
+      "id": "price-increment",
+      "name": "price increment",
+      "description": "The smallest price step the venue accepts for a symbol, declared or inferred from live bid/ask spacing."
+    },
+    {
+      "id": "raw-venue-order-status",
+      "name": "raw venue order status",
+      "description": "One venue's native order status payload, before translation into the system's closed status set."
+    },
+    {
+      "id": "stamped-order",
+      "name": "stamped order",
+      "description": "A sized order carrying a client-generated idempotency id, so a resubmit reuses it and the venue deduplicates."
+    },
+    {
+      "id": "cancel-decision",
+      "name": "cancel decision",
+      "description": "A still-open order that should be pulled: past its time-to-live, or the market has drifted too far from it."
+    },
+    {
+      "id": "order-reprice",
+      "name": "order reprice",
+      "description": "A bounded step of an unfilled limit order's price toward the market, on a fixed cadence."
+    },
+    {
+      "id": "cost-basis",
+      "name": "cost basis",
+      "description": "The average price a position was actually built at, updated on every fill, zeroed when flat."
+    },
+    {
+      "id": "funding-settlement",
+      "name": "funding settlement",
+      "description": "One perpetual funding payment, settled as an idempotent event keyed on its settlement boundary."
+    },
+    {
+      "id": "drawdown-episode",
+      "name": "drawdown episode",
+      "description": "One drawdown from peak through recovery or still open: depth, how long it has lasted, how long recovery took."
+    },
+    {
+      "id": "fill-sequence",
+      "name": "fill sequence",
+      "description": "The order in which pending orders would have filled inside one simulated bar, with the bar split so later checks see the narrowed range."
+    },
+    {
+      "id": "fillable-size",
+      "name": "fillable size",
+      "description": "The most a simulated fill may take from one bar, from a participation cap against real traded volume."
+    },
+    {
+      "id": "feed-jump",
+      "name": "feed jump",
+      "description": "A candle whose open does not match the prior close: present but discontinuous data, so a stop in the gap still counts as crossed."
+    },
+    {
+      "id": "forecast-out-of-distribution-flag",
+      "name": "forecast out-of-distribution flag",
+      "description": "A forecast made from a feature vector far from anything the model was trained on, so it should be discounted regardless of past accuracy."
+    },
+    {
+      "id": "turbulence-index",
+      "name": "turbulence index",
+      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance — is everything moving together abnormally."
+    },
+    {
+      "id": "verified-snapshot",
+      "name": "verified snapshot",
+      "description": "A deterministic, non-LLM rendering of the latest bars, a fixed indicator set and recent closes, that an LLM-backed part is told to defer to."
+    },
+    {
+      "id": "execution-schedule",
+      "name": "execution schedule",
+      "description": "A sized order split into timed slices, front-loaded when forecast volatility is high, each slice capped by participation."
+    },
+    {
+      "id": "setup-weight",
+      "name": "setup weight",
+      "description": "How much one bot trusts each setup class on each time-frame, learned from its own scorecard, applied inside the bot. The scanner never sees it (RL-046)."
+    },
+    {
+      "id": "side-candidate",
+      "name": "side candidate",
+      "description": "An entry candidate one side's bot has kept, with the setup weight it carried."
+    },
+    {
+      "id": "feature-vector",
+      "name": "feature vector",
+      "description": "One bot's own features for one candidate: the numbers its model reads."
+    },
+    {
+      "id": "raw-conviction",
+      "name": "raw conviction",
+      "description": "A learned model's probability that the move goes the bot's way by more than cost within the horizon, before calibration."
+    },
+    {
+      "id": "calibrated-conviction",
+      "name": "calibrated conviction",
+      "description": "A conviction mapped onto the bot's own measured hit-rate, so 0.7 means 70% for this bot."
+    },
+    {
+      "id": "entry-timing",
+      "name": "entry timing",
+      "description": "Now, or wait for the pullback the playbook says comes, with a give-up time."
+    },
+    {
+      "id": "exit-plan",
+      "name": "exit plan",
+      "description": "A bot's proposed target, stop and time-stop for its own candidate. Proposed; the risk gate decides."
+    },
+    {
+      "id": "follow-candidate",
+      "name": "follow candidate",
+      "description": "Something already working that the tailgater may join: a continuation setup, our own winning leg, or a tracked trader's position."
+    },
+    {
+      "id": "move-remaining",
+      "name": "move remaining",
+      "description": "How much of a move is likely left against how much has already gone."
+    },
+    {
+      "id": "crowding-reading",
+      "name": "crowding reading",
+      "description": "How crowded the move already is: funding stretch, book one-sidedness, sentiment extreme."
     }
   ],
   "features": [
@@ -2045,10 +2537,12 @@
       "category": "execution-venue-adapter",
       "consumes": [
         "order-request",
-        "venue-rate-budget"
+        "venue-rate-budget",
+        "cancel-decision",
+        "order-reprice"
       ],
       "produces": [
-        "fill",
+        "raw-venue-order-status",
         "part-health"
       ],
       "switchable": true,
@@ -2312,89 +2806,6 @@
       "note": "The 'or step up into us' half. Copying is the floor; the gap is where the value is."
     },
     {
-      "id": "bull-bot",
-      "name": "Bull bot",
-      "role": "issue a long-side opinion on an entry candidate",
-      "category": "segment-bot",
-      "consumes": [
-        "entry-candidate",
-        "market-data",
-        "bot-scorecard",
-        "price-forecast"
-      ],
-      "produces": [
-        "directional-opinion",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "user",
-      "note": "Learns from its own right and wrong calls with its own features. In spot it is the same template as the bear with the direction configured; in futures and options it is a separate design, because funding is paid rather than received, liquidation is asymmetric, and a short can lose more than it stakes."
-    },
-    {
-      "id": "bear-bot",
-      "name": "Bear bot",
-      "role": "issue a short-side opinion on an entry candidate",
-      "category": "segment-bot",
-      "consumes": [
-        "entry-candidate",
-        "market-data",
-        "bot-scorecard",
-        "price-forecast"
-      ],
-      "produces": [
-        "directional-opinion",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "user",
-      "note": "Same template as the bull in spot, its own design in futures and options. Learns from its own scorecard."
-    },
-    {
-      "id": "profit-tailgater",
-      "name": "Profit tailgater",
-      "role": "take a position in something already proven to be working",
-      "category": "segment-bot",
-      "consumes": [
-        "position",
-        "external-position",
-        "market-data",
-        "copy-score"
-      ],
-      "produces": [
-        "directional-opinion",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "user",
-      "note": "Never originates cold. Rides a position already in profit, or follows a high-profit trader that C-09 decoded. Profit protection and scorekeeping were split out of it: see profit-lock and the learning-loop parts.",
-      "edited": [
-        {
-          "on": "2026-08-20",
-          "added": {
-            "consumes": [
-              "copy-score"
-            ]
-          },
-          "origin": "proposed"
-        }
-      ]
-    },
-    {
       "id": "opinion-arbiter",
       "name": "Opinion arbiter",
       "role": "weigh the bots' opinions into one trade intent",
@@ -2548,7 +2959,8 @@
         "directional-opinion",
         "trade-episode",
         "llm-response",
-        "decision-rationale"
+        "decision-rationale",
+        "verified-snapshot"
       ],
       "produces": [
         "decision-quality-score",
@@ -3427,7 +3839,9 @@
       "consumes": [
         "opportunity-instruction",
         "walk-forward-split",
-        "cost-estimate"
+        "cost-estimate",
+        "fill-sequence",
+        "fillable-size"
       ],
       "produces": [
         "backtest-run",
@@ -3532,7 +3946,9 @@
       "category": "paper-live-trading",
       "consumes": [
         "sized-order",
-        "money-mode"
+        "money-mode",
+        "stamped-order",
+        "execution-schedule"
       ],
       "produces": [
         "order-request",
@@ -3579,7 +3995,10 @@
         "order-request",
         "market-data",
         "cost-estimate",
-        "money-mode"
+        "money-mode",
+        "delayed-order-request",
+        "fill-price-estimate",
+        "feed-jump"
       ],
       "produces": [
         "fill",
@@ -3689,7 +4108,7 @@
     {
       "id": "liquidity-grader",
       "name": "Liquidity grader",
-      "role": "grade how tradeable each symbol is at the bot's size",
+      "role": "grade how tradeable each symbol is at the bot's size, refreshed on a fixed interval rather than every tick",
       "category": "opportunity-scanner",
       "consumes": [
         "order-book-snapshot",
@@ -3706,7 +4125,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "docs/research/repo-harvest/freqtrade.md VolumePairList FtTTLCache"
+      }
     },
     {
       "id": "momentum-burst-detector",
@@ -3810,30 +4233,6 @@
       ],
       "produces": [
         "entry-candidate",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20"
-    },
-    {
-      "id": "exit-opinion-bot",
-      "name": "Exit opinion bot",
-      "role": "issue a flat opinion on an open position once its reason to exist has gone",
-      "category": "segment-bot",
-      "consumes": [
-        "position",
-        "market-data",
-        "price-forecast",
-        "regime-break-alert"
-      ],
-      "produces": [
-        "directional-opinion",
         "part-health"
       ],
       "switchable": true,
@@ -4000,7 +4399,7 @@
     {
       "id": "slippage-learner",
       "name": "Slippage learner",
-      "role": "measure intended against filled price by symbol, size, hour",
+      "role": "measure each fill against a TWAP baseline over its own execution window, signed by direction, in basis points, by symbol, size, hour",
       "category": "learning-loop",
       "consumes": [
         "fill",
@@ -4017,7 +4416,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "docs/research/repo-harvest/qlib.md price_advantage"
+      }
     },
     {
       "id": "exit-timing-learner",
@@ -4227,7 +4630,8 @@
       "consumes": [
         "price-forecast",
         "volatility-forecast",
-        "forecast-trust"
+        "forecast-trust",
+        "forecast-out-of-distribution-flag"
       ],
       "produces": [
         "ensemble-forecast",
@@ -4652,7 +5056,8 @@
         "trade-intent",
         "volatility-forecast",
         "liquidation-map",
-        "symbol-profile"
+        "symbol-profile",
+        "exit-plan"
       ],
       "produces": [
         "stop-target-plan",
@@ -4697,7 +5102,8 @@
       "category": "risk-capital-allocation",
       "consumes": [
         "account-balance",
-        "closed-trade"
+        "closed-trade",
+        "drawdown-episode"
       ],
       "produces": [
         "risk-limit",
@@ -4742,7 +5148,8 @@
       "category": "risk-capital-allocation",
       "consumes": [
         "market-event",
-        "market-anomaly"
+        "market-anomaly",
+        "turbulence-index"
       ],
       "produces": [
         "risk-limit",
@@ -4760,7 +5167,7 @@
     {
       "id": "position-sizer",
       "name": "Position sizer",
-      "role": "size one trade from intent, instrument, leverage, stop plus the smallest limit, or refuse",
+      "role": "size one trade from intent, instrument, leverage, stop plus the smallest limit, iterating until fees fit, snapped to the price increment, shrunk to the largest affordable size rather than refused outright",
       "category": "risk-capital-allocation",
       "consumes": [
         "trade-intent",
@@ -4769,7 +5176,9 @@
         "stop-target-plan",
         "account-balance",
         "risk-limit",
-        "slippage-profile"
+        "slippage-profile",
+        "locked-allocation",
+        "price-increment"
       ],
       "produces": [
         "sized-order",
@@ -4782,7 +5191,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "docs/research/repo-harvest/lean.md GetAmountToOrder; vectorbt.md buy_nb downsize"
+      }
     },
     {
       "id": "trade-lifecycle-recorder",
@@ -4927,7 +5340,7 @@
     {
       "id": "position-close-detector",
       "name": "Position close detector",
-      "role": "emit a closed trade when a position goes flat, with its peak excursion attached",
+      "role": "emit a closed trade when a position goes flat, matching closing fills against the oldest open lots so partial closes resolve correctly, with its peak excursion attached",
       "category": "portfolio-state",
       "consumes": [
         "position",
@@ -4945,7 +5358,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "docs/research/repo-harvest/vectorbt.md get_exit_trades_nb FIFO lot matching"
+      }
     },
     {
       "id": "peak-excursion-tracker",
@@ -4954,7 +5371,8 @@
       "category": "portfolio-state",
       "consumes": [
         "position",
-        "market-data"
+        "market-data",
+        "cost-basis"
       ],
       "produces": [
         "peak-excursion",
@@ -4978,7 +5396,9 @@
         "closed-trade",
         "fill",
         "market-data",
-        "capital-allotment"
+        "capital-allotment",
+        "cost-basis",
+        "funding-settlement"
       ],
       "produces": [
         "usdt-pnl-statement",
@@ -5177,7 +5597,7 @@
         "order-request"
       ],
       "produces": [
-        "fill",
+        "raw-venue-order-status",
         "part-health"
       ],
       "switchable": true,
@@ -5195,7 +5615,7 @@
       "role": "classify why the venue refused an order",
       "category": "execution-venue-adapter",
       "consumes": [
-        "fill"
+        "raw-venue-order-status"
       ],
       "produces": [
         "order-reject-reason",
@@ -5236,7 +5656,7 @@
     {
       "id": "venue-rate-budgeter",
       "name": "Venue rate budgeter",
-      "role": "count what the venue still allows this window",
+      "role": "count what the venue still allows this window, as a separate weighted budget per endpoint class",
       "category": "execution-venue-adapter",
       "consumes": [
         "order-request"
@@ -5252,7 +5672,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "docs/research/repo-harvest/hummingbot.md RATE_LIMITS per-endpoint weights; ccxt.md leaky bucket"
+      }
     },
     {
       "id": "exploration-pair-opener",
@@ -5307,7 +5731,8 @@
       "consumes": [
         "trade-intent",
         "directional-opinion",
-        "llm-response"
+        "llm-response",
+        "verified-snapshot"
       ],
       "produces": [
         "decision-rationale",
@@ -5535,6 +5960,1249 @@
       ],
       "origin": "proposed",
       "proposed": "2026-08-20"
+    },
+    {
+      "id": "book-walk-fill-pricer",
+      "name": "Book-walk fill pricer",
+      "role": "compute the price an order of this size would really fill at by walking live book depth",
+      "category": "paper-live-trading",
+      "consumes": [
+        "order-request",
+        "order-book-snapshot"
+      ],
+      "produces": [
+        "fill-price-estimate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/hummingbot.md OrderBook.simulate_buy; polymarket-py-sdk.md _calculate_buy_market_price"
+    },
+    {
+      "id": "order-latency-simulator",
+      "name": "Order latency simulator",
+      "role": "hold a paper order for a simulated venue round-trip before it may fill",
+      "category": "paper-live-trading",
+      "consumes": [
+        "order-request",
+        "money-mode"
+      ],
+      "produces": [
+        "delayed-order-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md crates/execution/src/models/latency.rs"
+    },
+    {
+      "id": "paper-liquidation-simulator",
+      "name": "Paper liquidation simulator",
+      "role": "close a paper position at its bankruptcy price when the live range crosses its liquidation price",
+      "category": "paper-live-trading",
+      "consumes": [
+        "position",
+        "market-data",
+        "liquidation-price",
+        "money-mode"
+      ],
+      "produces": [
+        "fill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/jesse.md _check_for_liquidations; nautilus_trader.md process_liquidations"
+    },
+    {
+      "id": "order-idempotency-stamper",
+      "name": "Order idempotency stamper",
+      "role": "stamp every sized order with a stable client id once, before it can ever be retried",
+      "category": "paper-live-trading",
+      "consumes": [
+        "sized-order"
+      ],
+      "produces": [
+        "stamped-order",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/ccxt.md binance.py newClientOrderId"
+    },
+    {
+      "id": "liquidation-price-tracker",
+      "name": "Liquidation price tracker",
+      "role": "compute the price at which this bot's own leveraged position gets force-closed",
+      "category": "portfolio-state",
+      "consumes": [
+        "position",
+        "leverage-choice",
+        "market-data"
+      ],
+      "produces": [
+        "liquidation-price",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/octobot.md LinearPosition.update_isolated_liquidation_price; jesse.md Position.liquidation_price"
+    },
+    {
+      "id": "fund-lock-ledger",
+      "name": "Fund lock ledger",
+      "role": "reserve capital against an order the instant it is sent, so two orders in one tick never spend the same balance",
+      "category": "portfolio-state",
+      "consumes": [
+        "sized-order",
+        "fill",
+        "account-balance"
+      ],
+      "produces": [
+        "locked-allocation",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.lock; hummingbot.md BudgetChecker.adjust_candidates"
+    },
+    {
+      "id": "cost-basis-tracker",
+      "name": "Cost basis tracker",
+      "role": "keep the average price each position was actually built at",
+      "category": "portfolio-state",
+      "consumes": [
+        "fill"
+      ],
+      "produces": [
+        "cost-basis",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/FinRL.md avg_buy_price incremental update"
+    },
+    {
+      "id": "margin-liquidation-watch",
+      "name": "Margin liquidation watch",
+      "role": "zero the limit when balance plus unrealised PnL nears the maintenance margin on a leveraged segment",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "position",
+        "account-balance",
+        "liquidation-price",
+        "market-data"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md exchange.rs process_liquidations"
+    },
+    {
+      "id": "stop-frequency-breaker",
+      "name": "Stop frequency breaker",
+      "role": "cut the limit when stop-loss exits in a rolling window cross a threshold, before equity drawdown shows it",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "closed-trade"
+      ],
+      "produces": [
+        "risk-limit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/freqtrade.md plugins/protections/stoploss_guard.py"
+    },
+    {
+      "id": "exit-order-chainer",
+      "name": "Exit order chainer",
+      "role": "emit the paired stop plus target the moment an entry fill lands, without waiting for anything to notice the position",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "stop-target-plan",
+        "fill"
+      ],
+      "produces": [
+        "stop-adjustment",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/tensortrade.md risk_managed_order OrderSpec attach"
+    },
+    {
+      "id": "participation-capped-order-splitter",
+      "name": "Participation-capped order splitter",
+      "role": "split a sized order into timed slices capped against recent traded volume",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "sized-order",
+        "volatility-forecast",
+        "order-book-snapshot"
+      ],
+      "produces": [
+        "execution-schedule",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/qlib.md ACStrategy.generate_trade_decision; Exchange._clip_amount_by_volume"
+    },
+    {
+      "id": "venue-order-status-translator",
+      "name": "Venue order status translator",
+      "role": "collapse one venue's native order status vocabulary into the system's closed status set",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "raw-venue-order-status"
+      ],
+      "produces": [
+        "fill",
+        "order-reject-reason",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/lumibot.md order.py STATUS_ALIAS_MAP; hummingbot.md order-state machine"
+    },
+    {
+      "id": "order-not-found-debouncer",
+      "name": "Order-not-found debouncer",
+      "role": "count consecutive order-not-found replies per order, declaring it lost only past a threshold",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "raw-venue-order-status"
+      ],
+      "produces": [
+        "order-reject-reason",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/hummingbot.md ClientOrderTracker.process_order_not_found"
+    },
+    {
+      "id": "resting-order-cancel-policy",
+      "name": "Resting order cancel policy",
+      "role": "decide when a still-open order is stale enough to pull: past its time-to-live or too far from the market",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-request",
+        "market-data"
+      ],
+      "produces": [
+        "cancel-decision",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/octobot.md orders/cancel_policies/"
+    },
+    {
+      "id": "limit-price-walker",
+      "name": "Limit price walker",
+      "role": "step an unfilled limit order's price toward the market by a bounded amount on a fixed cadence",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-request",
+        "market-data",
+        "order-book-snapshot"
+      ],
+      "produces": [
+        "order-reprice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/lumibot.md smart_limit_utils.build_price_ladder"
+    },
+    {
+      "id": "tick-size-resolver",
+      "name": "Tick size resolver",
+      "role": "resolve the valid price increment per symbol, declared by the venue or inferred from live bid/ask spacing",
+      "category": "market-data-feed",
+      "consumes": [
+        "order-book-snapshot",
+        "symbol-universe"
+      ],
+      "produces": [
+        "price-increment",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/lumibot.md infer_tick_size; lean.md RoundOrderPrices"
+    },
+    {
+      "id": "feed-jump-detector",
+      "name": "Feed jump detector",
+      "role": "flag a candle whose open does not meet the prior close, so a stop in the gap still counts as crossed",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "feed-jump",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/jesse.md _get_fixed_jumped_candle"
+    },
+    {
+      "id": "funding-settlement-recorder",
+      "name": "Funding settlement recorder",
+      "role": "book each perpetual funding payment as its own idempotent event, separate from fill PnL",
+      "category": "ledger",
+      "consumes": [
+        "position",
+        "market-data"
+      ],
+      "produces": [
+        "funding-settlement",
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md settle_funding_rate; backtrader.md CommInfoBase.get_credit_interest"
+    },
+    {
+      "id": "drawdown-episode-tracker",
+      "name": "Drawdown episode tracker",
+      "role": "track each equity drawdown from peak through recovery as its own record: depth, duration so far, recovery time",
+      "category": "observability",
+      "consumes": [
+        "account-balance"
+      ],
+      "produces": [
+        "drawdown-episode",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/vectorbt.md generic/drawdowns.py; backtrader.md DrawDown.next streak"
+    },
+    {
+      "id": "fund-conservation-auditor",
+      "name": "Fund conservation auditor",
+      "role": "recompute both sides of every fill's balance equation independently, alerting the step they disagree",
+      "category": "observability",
+      "consumes": [
+        "fill",
+        "journal-entry"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.transfer lhs/rhs assertion"
+    },
+    {
+      "id": "clock-skew-monitor",
+      "name": "Clock skew monitor",
+      "role": "raise an alert when timestamp-drift rejections recur, before every private order starts failing",
+      "category": "observability",
+      "consumes": [
+        "raw-venue-order-status"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/ccxt.md binance -1021 InvalidNonce"
+    },
+    {
+      "id": "intra-bar-fill-sequencer",
+      "name": "Intra-bar fill sequencer",
+      "role": "decide which of several pending orders filled first inside one simulated bar, splitting the bar for the rest",
+      "category": "backtesting",
+      "consumes": [
+        "historical-window",
+        "cost-estimate"
+      ],
+      "produces": [
+        "fill-sequence",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/jesse.md _sort_execution_orders"
+    },
+    {
+      "id": "fill-volume-capper",
+      "name": "Fill volume capper",
+      "role": "cap a simulated fill against the bar's real traded volume so replay never assumes infinite liquidity",
+      "category": "backtesting",
+      "consumes": [
+        "historical-window"
+      ],
+      "produces": [
+        "fillable-size",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/backtrader.md fillers.FixedBarPerc"
+    },
+    {
+      "id": "forecast-distribution-gate",
+      "name": "Forecast distribution gate",
+      "role": "flag a forecast whose input features sit far from anything the model trained on",
+      "category": "prediction",
+      "consumes": [
+        "kline-window",
+        "finetuned-model",
+        "price-forecast"
+      ],
+      "produces": [
+        "forecast-out-of-distribution-flag",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/freqtrade.md freqai dissimilarity index (DI) pipeline"
+    },
+    {
+      "id": "turbulence-index-gauge",
+      "name": "Turbulence index gauge",
+      "role": "measure how abnormally every symbol is moving together, as one market-wide distance number",
+      "category": "intelligence",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "turbulence-index",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/FinRL.md FeatureEngineer.calculate_turbulence (Mahalanobis)"
+    },
+    {
+      "id": "ground-truth-snapshot-builder",
+      "name": "Ground-truth snapshot builder",
+      "role": "render the latest bars plus a fixed indicator set deterministically, so an LLM part is told numbers instead of inventing them",
+      "category": "llm-services",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "verified-snapshot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/research/repo-harvest/TradingAgents.md dataflows/market_data_validator.py"
+    },
+    {
+      "id": "bull-setup-filter",
+      "name": "Bull bot: setup filter",
+      "role": "keep the candidates whose setup this long side can trade, weighted by what it has learned",
+      "category": "bull-bot",
+      "consumes": [
+        "entry-candidate",
+        "setup-weight"
+      ],
+      "produces": [
+        "side-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-feature-builder",
+      "name": "Bull bot: feature builder",
+      "role": "compute this side's own features for a candidate: distance from support or resistance, flow imbalance, VWAP gap, funding sign, burst age, volume against the symbol's hour-norm",
+      "category": "bull-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "order-book-snapshot",
+        "symbol-profile",
+        "funding-forecast"
+      ],
+      "produces": [
+        "feature-vector",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-outlier-rejector",
+      "name": "Bull bot: outlier rejector",
+      "role": "refuse to opine when the feature vector is far from anything the model has seen",
+      "category": "bull-bot",
+      "consumes": [
+        "feature-vector"
+      ],
+      "produces": [
+        "forecast-out-of-distribution-flag",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI"
+    },
+    {
+      "id": "bull-conviction-model",
+      "name": "Bull bot: conviction model",
+      "role": "learn the probability that a long move clears cost within the horizon, from the feature vector plus the price forecast",
+      "category": "bull-bot",
+      "consumes": [
+        "feature-vector",
+        "price-forecast",
+        "kline-window",
+        "forecast-out-of-distribution-flag"
+      ],
+      "produces": [
+        "raw-conviction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-conviction-calibrator",
+      "name": "Bull bot: conviction calibrator",
+      "role": "map the model's number onto this bot's measured hit-rate",
+      "category": "bull-bot",
+      "consumes": [
+        "raw-conviction",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-entry-timer",
+      "name": "Bull bot: entry timer",
+      "role": "decide now or wait for the pullback, with a give-up time",
+      "category": "bull-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "calibrated-conviction",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-timing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-exit-plan-proposer",
+      "name": "Bull bot: exit plan proposer",
+      "role": "propose target, stop plus time-stop for a long candidate from ATR plus structure",
+      "category": "bull-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "symbol-profile",
+        "calibrated-conviction"
+      ],
+      "produces": [
+        "exit-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-opinion-composer",
+      "name": "Bull bot: opinion composer",
+      "role": "pack side, conviction, timing, plan plus feature snapshot into one opinion",
+      "category": "bull-bot",
+      "consumes": [
+        "calibrated-conviction",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-setup-weight-learner",
+      "name": "Bull bot: setup weight learner",
+      "role": "rewrite how much this bot trusts each setup class from what it has actually been right about",
+      "category": "bull-bot",
+      "consumes": [
+        "bot-scorecard",
+        "instruction-scorecard"
+      ],
+      "produces": [
+        "setup-weight",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bull-position-invalidation-watcher",
+      "name": "Bull bot: position invalidation watcher",
+      "role": "say flat when the reason a long position was opened has gone",
+      "category": "bull-bot",
+      "consumes": [
+        "position",
+        "market-data",
+        "feature-vector",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-setup-filter",
+      "name": "Bear bot: setup filter",
+      "role": "keep the candidates whose setup this short side can trade, weighted by what it has learned",
+      "category": "bear-bot",
+      "consumes": [
+        "entry-candidate",
+        "setup-weight"
+      ],
+      "produces": [
+        "side-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-feature-builder",
+      "name": "Bear bot: feature builder",
+      "role": "compute this side's own features for a candidate: distance from support or resistance, flow imbalance, VWAP gap, funding sign, burst age, volume against the symbol's hour-norm",
+      "category": "bear-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "order-book-snapshot",
+        "symbol-profile",
+        "funding-forecast"
+      ],
+      "produces": [
+        "feature-vector",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-outlier-rejector",
+      "name": "Bear bot: outlier rejector",
+      "role": "refuse to opine when the feature vector is far from anything the model has seen",
+      "category": "bear-bot",
+      "consumes": [
+        "feature-vector"
+      ],
+      "produces": [
+        "forecast-out-of-distribution-flag",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI"
+    },
+    {
+      "id": "bear-conviction-model",
+      "name": "Bear bot: conviction model",
+      "role": "learn the probability that a short move clears cost within the horizon, from the feature vector plus the price forecast",
+      "category": "bear-bot",
+      "consumes": [
+        "feature-vector",
+        "price-forecast",
+        "kline-window",
+        "forecast-out-of-distribution-flag"
+      ],
+      "produces": [
+        "raw-conviction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-conviction-calibrator",
+      "name": "Bear bot: conviction calibrator",
+      "role": "map the model's number onto this bot's measured hit-rate",
+      "category": "bear-bot",
+      "consumes": [
+        "raw-conviction",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-entry-timer",
+      "name": "Bear bot: entry timer",
+      "role": "decide now or wait for the pullback, with a give-up time",
+      "category": "bear-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "calibrated-conviction",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-timing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-exit-plan-proposer",
+      "name": "Bear bot: exit plan proposer",
+      "role": "propose target, stop plus time-stop for a short candidate from ATR plus structure",
+      "category": "bear-bot",
+      "consumes": [
+        "side-candidate",
+        "market-data",
+        "symbol-profile",
+        "calibrated-conviction"
+      ],
+      "produces": [
+        "exit-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-opinion-composer",
+      "name": "Bear bot: opinion composer",
+      "role": "pack side, conviction, timing, plan plus feature snapshot into one opinion",
+      "category": "bear-bot",
+      "consumes": [
+        "calibrated-conviction",
+        "entry-timing",
+        "exit-plan",
+        "feature-vector"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-setup-weight-learner",
+      "name": "Bear bot: setup weight learner",
+      "role": "rewrite how much this bot trusts each setup class from what it has actually been right about",
+      "category": "bear-bot",
+      "consumes": [
+        "bot-scorecard",
+        "instruction-scorecard"
+      ],
+      "produces": [
+        "setup-weight",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "bear-position-invalidation-watcher",
+      "name": "Bear bot: position invalidation watcher",
+      "role": "say flat when the reason a short position was opened has gone",
+      "category": "bear-bot",
+      "consumes": [
+        "position",
+        "market-data",
+        "feature-vector",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-mover-qualifier",
+      "name": "Tailgater: mover qualifier",
+      "role": "keep a continuation candidate only if the move is sustained rather than a spike already fading",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "entry-candidate",
+        "market-data",
+        "symbol-profile",
+        "setup-weight"
+      ],
+      "produces": [
+        "follow-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-winner-selector",
+      "name": "Tailgater: winner selector",
+      "role": "pick this segment's own open leg that is in profit plus still moving",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "position",
+        "market-data",
+        "peak-excursion"
+      ],
+      "produces": [
+        "follow-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-copy-selector",
+      "name": "Tailgater: copy selector",
+      "role": "pick a tracked trader's position the copy score says to follow",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "external-position",
+        "copy-score"
+      ],
+      "produces": [
+        "follow-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-move-remaining-estimator",
+      "name": "Tailgater: move remaining estimator",
+      "role": "estimate how much of the move is left against how much has already gone",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "follow-candidate",
+        "market-data",
+        "price-forecast"
+      ],
+      "produces": [
+        "move-remaining",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-crowding-detector",
+      "name": "Tailgater: crowding detector",
+      "role": "read whether everyone is already in, so the tail would be the exit liquidity",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "follow-candidate",
+        "order-book-snapshot",
+        "funding-forecast",
+        "sentiment-reading"
+      ],
+      "produces": [
+        "crowding-reading",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-follow-conviction-model",
+      "name": "Tailgater: follow conviction model",
+      "role": "learn the probability that continuation clears cost, from remaining move plus crowding, calibrated to this bot's record",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "follow-candidate",
+        "move-remaining",
+        "crowding-reading",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "calibrated-conviction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-trailing-exit-planner",
+      "name": "Tailgater: trailing exit planner",
+      "role": "trail a stop below the last higher low, tightening as the move ages; never a fixed target",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "follow-candidate",
+        "market-data",
+        "symbol-profile"
+      ],
+      "produces": [
+        "exit-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-opinion-composer",
+      "name": "Tailgater: opinion composer",
+      "role": "pack direction, conviction plus trailing plan into one opinion",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "calibrated-conviction",
+        "exit-plan",
+        "follow-candidate"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "tail-setup-weight-learner",
+      "name": "Tailgater: setup weight learner",
+      "role": "rewrite how much this bot trusts each continuation class from what it has been right about",
+      "category": "profit-tailgating-bot",
+      "consumes": [
+        "bot-scorecard"
+      ],
+      "produces": [
+        "setup-weight",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/three-bots-inside-segment.md"
     }
   ],
   "control_plane": {
@@ -5991,6 +7659,22 @@
     "rule_used_for_block_contracts": "a block consumes what its parts read that no part of its own writes, or that a part of another block also writes; it produces what its parts write that a part of another block reads",
     "answers_open_question": {
       "C-11 appetite": "measured at runtime by part-appetite-meter, not declared -- proposed, not decided"
+    }
+  },
+  "_proposal_2026-08-20_harvest": {
+    "what": "Parts fifteen open-source repos proved useful, merged after deduplication; plus RL-046..048 opening bull, bear and profit tailgating into blocks.",
+    "origin": "harvest parts proposed by Claude; three-bots blocks are user rulings RL-046..048",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-08-20_harvest_and_three_bots.py",
+    "skipped_from_harvest": {
+      "inventory-skew-spread-adjuster, quote-refresh-tolerance-gate": "market-making; this system takes direction, it does not quote",
+      "onchain-allowance-checker": "on-chain venues only; every venue here is a CEX through ccxt",
+      "symbol-alias-resolver": "ccxt's unified symbols already do this",
+      "turnover-cost-solver": "portfolio re-weighting; this system sizes one trade at a time",
+      "decision-outcome-resolver": "our closed trades already carry their realised price",
+      "exit-criteria-compiler": "covered by exit-plan plus stop-target-plan",
+      "expectancy-component-ledger": "expectancy-decomposer already exists in hypothesis",
+      "round-trip-trade-matcher, fee-aware-size-solver, fill-cost-downsizer, liquidity-cache-refresher, endpoint-weight-budgeter, fill-price-advantage-scorer": "folded into an existing part's role (role_refined), not a new part",
+      "carry-cost-accountant, batch-collateral-locker, order-book-walk-pricer, liquidation-simulator, margin variants": "merged with their duplicates"
     }
   }
 }

@@ -1,6 +1,6 @@
 # The three bots inside a segment bot: what feeds them, and what is inside each
 
-Proposed by Claude 2026-08-20. Awaiting the user's verdict. Nothing here is a ruling.
+Proposed by Claude 2026-08-20; the three open questions were answered the same day as RL-046 (scanner stays blind, weight lives in the bot), RL-047 (tailgater follows own winner) and RL-048 (bull and bear separate, same skeleton). Applied by `dashboard/blueprint_edits/apply_2026-08-20_harvest_and_three_bots.py`.
 Binding rulings: RL-009 (teacher watches the whole class), RL-011 (bull, bear and
 profit tailgating are each a complete bot with its own deep architecture and data),
 RL-014 (watch every symbol), RL-023 (not bull/bear/arbiter), RL-026 (real AI, not
