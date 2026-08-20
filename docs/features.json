@@ -130,7 +130,8 @@
         "forecast-accuracy",
         "recalled-episode",
         "semantic-fact",
-        "loaded-skill-section"
+        "loaded-skill-section",
+        "strategy-gap"
       ],
       "produces": [
         "opportunity-instruction",
@@ -184,12 +185,15 @@
     {
       "id": "online-research",
       "name": "Online research",
-      "summary": "Decoding the portfolios of famous or high-profit crypto traders, to copy their strategy or step up beyond it.",
+      "summary": "Decodes the portfolios of famous or high-profit crypto traders to copy their strategy or step up beyond it. Reads through front doors only -- venue leaderboard APIs and public chain explorers -- because the data that matters is published, and typed data survives a redesign where scraped HTML does not.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
+      "consumes": [
+        "trade-episode"
+      ],
       "produces": [
         "research-finding",
+        "strategy-gap",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
@@ -569,6 +573,21 @@
       "id": "skill-usefulness",
       "name": "skill usefulness",
       "description": "Whether loading a skill changed the outcome. A skill nobody scores is an assertion."
+    },
+    {
+      "id": "tracked-trader",
+      "name": "tracked trader",
+      "description": "A high-performing trader worth following, with the venue or wallet that identifies them."
+    },
+    {
+      "id": "external-position",
+      "name": "external position",
+      "description": "What a tracked trader currently holds, from public explorers or venue leaderboards."
+    },
+    {
+      "id": "strategy-gap",
+      "name": "strategy gap",
+      "description": "What a decoded strategy does that this bot does not. The 'step up beyond it' half of C-09."
     }
   ],
   "features": [
@@ -942,7 +961,8 @@
         "expectancy-breakdown",
         "recalled-episode",
         "semantic-fact",
-        "loaded-skill-section"
+        "loaded-skill-section",
+        "strategy-gap"
       ],
       "produces": [
         "opportunity-instruction",
@@ -1122,6 +1142,89 @@
       ],
       "origin": "proposed",
       "note": "Lets a skill that never changes anything be retired instead of accumulating."
+    },
+    {
+      "id": "leaderboard-reader",
+      "name": "Leaderboard reader",
+      "role": "read the public copy-trading leaderboards each venue publishes",
+      "category": "online-research",
+      "consumes": [],
+      "produces": [
+        "tracked-trader",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Binance and Bybit publish these with official APIs. A front door, so no bot-detection evasion is needed or wanted."
+    },
+    {
+      "id": "onchain-position-reader",
+      "name": "On-chain position reader",
+      "role": "read a tracked trader's on-chain positions from public explorers",
+      "category": "online-research",
+      "consumes": [
+        "tracked-trader"
+      ],
+      "produces": [
+        "external-position",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Etherscan, Dune, DeBank, Arkham. Typed data that survives a redesign, unlike scraped HTML."
+    },
+    {
+      "id": "strategy-decoder",
+      "name": "Strategy decoder",
+      "role": "infer the strategy behind a tracked trader's position history",
+      "category": "online-research",
+      "consumes": [
+        "external-position"
+      ],
+      "produces": [
+        "research-finding",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The 'decode' half of the user's words. Position history over time, not a single snapshot."
+    },
+    {
+      "id": "edge-comparator",
+      "name": "Edge comparator",
+      "role": "compare a decoded strategy against what this bot already does",
+      "category": "online-research",
+      "consumes": [
+        "research-finding",
+        "trade-episode"
+      ],
+      "produces": [
+        "strategy-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The 'or step up into us' half. Copying is the floor; the gap is where the value is."
     }
   ],
   "control_plane": {
