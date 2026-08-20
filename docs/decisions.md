@@ -316,3 +316,43 @@ indistinguishable from a sound one. Nothing currently keeps the past (RL-024 put
 on live data), random splits leak the future, costs inherited from an equity paper do
 not survive a crypto spread, and a pooled number hides that one day carried 38.5% of
 the profit. Each of those is a part rather than a good intention.
+
+---
+
+## D-011 — The four open runtime questions were delegated, and answered by measurement
+
+**Given:** 2026-08-20, on being shown the part runtime spec and its §15 open questions
+
+> "you decide so it is best option woit out loosin te plan effectivity"
+
+The user reviewed the spec, was told the two calls that were still theirs to change —
+§6's deliberately narrow throttling rule, and the four questions §15 named rather than
+defaulted — and handed both back with the instruction to pick the best option without
+costing the plan its effectiveness.
+
+**How that was taken.** Not as permission to default them quietly. Each was answered on
+the box, and the scripts are kept in `measurements/2026-08-20-part-runtime/` so any
+answer can be re-run. The answers are written into §15 of the spec with their numbers:
+
+| | |
+|---|---|
+| Interpreter | **standard CPython 3.14**, not free-threaded 3.14t — five packages including `ta-lib` publish `cp314` but no `cp314t` wheel, and this box has no compiler, so on the free-threaded build they cannot be installed at all |
+| Structured state | **SQLite**, stdlib, WAL — LMDB is faster at bulk append and loses on being a dependency, on having no answer to relational reads, and on `map_size` being a hardcoded ceiling |
+| Settings (RL-055, closed) | **`~/.config/ajit-segment-bots/settings/`**, TOML, one file per scope, read with stdlib `tomllib`; no part ever writes it |
+| `numpy.memmap` | **safe** — 6 of 6 unflushed 16 MB writes survived `SIGKILL` intact on ext4; the missing `close()` is an fd concern for long-lived processes, not a durability one |
+| §6 throttling | **kept as written**, deliberately narrow — the two errors are not symmetric, and eviction plus a reserved floor already covers what a rate ladder would have |
+
+**Three claims in the spec were measured false and are corrected there rather than
+dropped**: OpenBLAS is not lazy (`import numpy` alone spawns 12 threads unless the caps
+are already set, which makes those caps load-bearing for fork safety); a scope placement
+that returns rc=0 can still not have happened; and a part's `memory.max` counts the page
+cache it dirties, so a stream writer must drop its own cache or be killed.
+
+**One correction worth keeping visible:** the first round of store testing ran under
+`/tmp`, which is tmpfs on this box, and appeared to disqualify both candidate stores and
+then a plain file write containing no database. It was an artefact of measuring RAM
+against RAM. Recorded in the spec and in the measurements README because the trap
+generalises — no part writes state under `/tmp`.
+
+**What is now closed:** RL-055, open since the design phase. **What is now open:**
+nothing in the runtime spec. Phase 0 can start.

@@ -1,7 +1,12 @@
 # The part runtime
 
 **Status:** approved in conversation 2026-08-20. Supersedes nothing; this is the
-first implementation spec in the project.
+first implementation spec in the project. **Amended the same day**: the four questions
+§15 left open are answered by measurement, §6's throttling restriction was re-examined
+and kept, and three claims measured false are corrected in place — §1 rule 3 (OpenBLAS
+is not lazy), §3 (a placement that returns rc=0 can still not have happened), and §5
+(a part's memory limit counts the page cache it dirties). The evidence is in
+`measurements/2026-08-20-part-runtime/`.
 
 **What it decides:** what a part physically *is* at runtime, where its on/off
 switch sits, how the resource governor answers scarcity, and where a part's state
@@ -132,10 +137,27 @@ Verified constraints, not preferences:
 2. **Every part's entry point is module-level.** `forkserver` pickles the target
    by qualified name; a nested function fails with
    `AttributeError: module '__mp_main__' has no attribute '…'`. Measured here.
-3. **The preload imports numpy but must never execute a BLAS call.** OpenBLAS
-   spawns its worker threads lazily at first computational use, not at import —
-   established by numpy#30092's own reproducer. A warm-up matmul in the preload
-   would put threads in the forking process, which is the hazard itself.
+3. **`import numpy` alone spawns 12 OpenBLAS threads on this box unless the
+   thread caps are already in the environment — so rule 4 is what makes the
+   forkserver safe, not the order of operations in the preload.** An earlier draft
+   of this spec said OpenBLAS spawns its worker threads lazily at first
+   computational use and not at import, and therefore that the preload only had to
+   avoid a warm-up matmul. **That is measured false here and the claim is
+   withdrawn.** With the caps unset, `/proc/self/stat` field 20 reads **12
+   immediately after `import numpy`**, before any array maths, on both the standard
+   and free-threaded builds, and `threadpoolctl` reports `openblas num_threads=12`
+   at that point. With `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` exported
+   **before** the interpreter imports numpy, field 20 stays **1** after the import
+   and stays 1 after a 600×600 matmul. Note also that `threading.active_count()`
+   reports 1 in every one of those cases, which is exactly why rule 5 reads the
+   kernel's count and not Python's.
+
+   Two consequences. The caps in rule 4 are **load-bearing for fork safety**, not
+   merely a scheduling preference — an unset cap does not make parts slower, it
+   makes the forkserver unforkable. And the check in rule 5 stops being a rare
+   safety net: it is the thing that catches a missing environment variable on the
+   first fork instead of on a hang weeks later. Avoiding a warm-up matmul in the
+   preload remains correct, but it was never sufficient on its own.
 4. **`OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` are set before numpy is
    imported anywhere.** See §6.
 5. **The fork site checks field 20 of `/proc/self/stat`** (the kernel's real
@@ -204,6 +226,29 @@ the scarcity signal §5 depends on.
 So the full switch-on cost is **2.78 ms to fork plus 5.6 ms to place ≈ 8.4 ms**,
 against 158 ms for a cold spawn. `gate-actuator` records both steps; a part running
 outside its own scope is a fault, because it is a part the governor cannot bound.
+
+**`gate-actuator` must confirm the placement by reading `/proc/<pid>/cgroup`, because
+the D-Bus call reports success before the move is attempted.** `StartTransientUnit`
+queues an asynchronous job and returns its object path; a job that then fails to move
+the PID still leaves the caller holding **rc=0**. Observed directly here once: a
+placement returned rc=0 in 7.6 ms while the child stayed in `session-9.scope` with
+`memory.max` unset, and the user manager's journal carried the real outcome —
+
+```
+Couldn't move process … to requested cgroup '…/app.slice/…scope'
+    (directly or via the system bus): No such process
+Failed to add PIDs to scope's control group: Permission denied
+Failed with result 'resources'.
+```
+
+That failure did not reproduce: **87 of 88 subsequent placements succeeded**, across
+forkserver children at settle delays of 0, 1, 5, 25 and 100 ms (15 each, 75/75) and a
+further 12 fresh-exec children at zero settle (12/12). Fork stayed at a 2.3 ms median
+and placement at a 5.7 ms median with a 6.9 ms p95, which reproduces the 2.78 + 5.6 ms
+figures above. So the migration is reliable and needs no settle delay — but a rate of
+roughly one silent failure in ninety, on the path that puts a part under its resource
+limits, is answered by verification rather than by trusting the return code. An
+unverified placement is a part the governor believes it has bounded and has not.
 
 **Serialization cost is not a concern, and an earlier claim that it was is
 withdrawn.** Measured on this box: pickle over a pipe moves a normalised bar in
@@ -327,6 +372,43 @@ admit if the sum of measured CPU-seconds per second fits the remaining budget of
 **6 physical cores**. If it does not, `switching-planner` evicts by
 `part-priority`, then admits. It never queues.
 
+### A part's memory limit counts the page cache it dirties
+
+A part's `memory.max` does not bound its heap. It bounds its heap **plus the page
+cache the part dirties by writing**, and on this box there is no swap to absorb the
+difference. A part that writes more than its own memory limit is therefore killed by
+the kernel unless it hands those pages back as it goes. Measured on ext4 under
+`MemoryMax=200M` with `MemorySwapMax=0`, writing 500 MB:
+
+| what the writer does | outcome | cgroup peak |
+|---|---|---|
+| never calls `fsync` | **OOM-killed, 3 of 3** | — |
+| `fsync` every 8 MB | survives, 3 of 3 | 200 MB — pinned at the ceiling |
+| `fsync` every 8 MB, then `posix_fadvise(POSIX_FADV_DONTNEED)` over the written range | survives, 3 of 3 | **16 MB** |
+
+Dirty pages are not reclaimable, so a writer that never forces writeback outruns the
+kernel and dies. `fsync` alone is enough to survive, but it leaves the part sitting at
+its ceiling on clean cache that the kernel must reclaim under pressure — which means
+the part's measured appetite is its limit rather than its need, and
+`part-appetite-meter` would size every writer at its cap. Dropping the range after
+writing it back holds the same job at **16 MB instead of 200 MB**, a twelvefold
+difference in what the governor has to reserve.
+
+So: **a part that writes a stream to disk — the tape writer above all — forces
+writeback and drops its own cache at a declared interval, and that interval is a named
+setting with provenance, not a literal (RL-061).** The same measurement on SQLite:
+200 MB of journal appends peaks at the 200 MB ceiling under autocheckpoint, and at
+**36 MB** when it checkpoints and drops cache every 8 MB, at a cost of 7.71 s against
+5.01 s.
+
+**This was nearly recorded backwards.** The first round of these tests ran under
+`/tmp`, which on this box is **tmpfs** — RAM with a filesystem interface. There, every
+writer is killed, including a plain file write with no database in it, because tmpfs
+pages are not backed by a disk to be written to and there is no swap to evict them to.
+That artefact briefly appeared to disqualify first LMDB and then SQLite. It is recorded
+because the trap generalises: **no part writes state under `/tmp`,** and any
+measurement of memory behaviour states the filesystem it ran on.
+
 ### Reserved floors
 
 `resource-reservation-ledger` holds a guaranteed CPU and RAM floor for parts that
@@ -412,6 +494,24 @@ Hystrix's `countSuccess` versus `countFallbackSuccess` is a usable cheap gauge.
 Prometheus's `StaleNaN` does **not** solve this: it detects a metric that stopped
 reporting, not a metric reporting fine about a degraded thing.
 
+### This restriction was reviewed and kept
+
+This section is deliberately narrower than the design first approved in conversation,
+and the narrowing was re-examined on 2026-08-20 rather than inherited. It stands.
+
+The reason is that the two errors are not symmetric. Refusing to throttle something
+that could safely have been throttled costs a part being evicted instead of slowed —
+visible, recoverable, and reported. Throttling something that could not costs a number
+that is wrong while still looking healthy, and the failure mode of a silently biased
+indicator is a trade placed on it. Since eviction plus a reserved floor already covers
+every scarcity case a rate ladder would have covered, the narrow rule loses no
+capability; it only moves which mechanism answers scarcity for those parts.
+
+The rule also stays cheap to widen later. Each part already declares (a) and (b), so a
+part that is genuinely latency-risk-only can be admitted to a rate ladder by changing
+its declaration and nothing else — with a measurement behind the change, the way every
+other number here is set.
+
 ---
 
 ## 7. Every part declares its resource class
@@ -455,9 +555,10 @@ DRAM — three 600×600 float64 matrices are 8.2 MiB, which fits inside one of t
 4–6x, and near flat for the bandwidth-bound rolling-window work.
 
 **`threadpoolctl` is not installed, and `numpy.show_runtime()` warns that it cannot
-report BLAS thread state without it. It is installed as part of phase 0, because
-until then no claim about live BLAS thread counts is verifiable** — which under
-Rule 0 means no such claim gets made.
+report BLAS thread state without it. Without it no claim about live BLAS thread
+counts is verifiable** — which under Rule 0 means no such claim gets made.
+`threadpoolctl` 3.6.0 is now present, and the counts quoted in §1 rule 3 are its
+output rather than an inference.
 
 ---
 
@@ -493,6 +594,14 @@ No rung is inferred. Each claim in this spec has a probe that runs.
 | A throttled part is visible | rate ratio and staleness timestamp ride on every output and render on the board |
 | Built code matches the blueprint (RL-067) | a probe compares each part's real `consumes`/`produces` against `features.json` and fails on divergence |
 | Tests use real data (RL-063) | every test names the dated tape it replays; a test with an invented numeric fixture fails review |
+| A part landed in its own scope | `gate-actuator` reads `/proc/<pid>/cgroup` after every placement — the D-Bus call returns rc=0 before the move is attempted, so the return code is not evidence (§3) |
+| The thread caps are actually in effect | field 20 of `/proc/self/stat` is 1 after `import numpy`; unset caps make it 12 (§1 rule 3), so this probe catches a missing environment variable at the first fork |
+| A writer is not sitting on its memory ceiling | the part's `memory.peak` against what it wrote — a stream writer that never drops its cache reads as needing its whole limit (§5) |
+| Numeric state survived the last off | on switch-on, the part compares its memmap's recorded sequence stamp against the store's; a gap is a fault, not a silent reseed (§15.4) |
+| A measurement was taken on real disk | every memory or durability probe records `stat -f` of the directory it used; a result from tmpfs is void (§5) |
+
+The scripts behind every number in this spec are kept in
+`measurements/2026-08-20-part-runtime/`, so each can be re-run rather than believed.
 
 The existing `python3 dashboard/check_contracts.py` and the pre-commit hook remain
 the gate for T-1..T-6 and R-01.
@@ -599,22 +708,270 @@ anticipation.
 
 ---
 
-## 15. Open questions
+## 15. The four questions, answered
 
-Named rather than defaulted, each to be answered before the phase it blocks.
+These were left open so they would be **decided by measurement rather than defaulted**.
+They were decided on 2026-08-20, under D-011 — the user delegated the call, asking for
+the best option without losing the plan's effectiveness. Every number below was measured
+on this box on that date, and the scripts are kept as part of the substrate's probe suite
+(§9) so each answer can be re-run rather than believed. §6 was re-examined in the same
+pass and kept; the reasoning is at the end of that section.
 
-1. **Standard build or free-threaded 3.14t?** Decided in phase 0 by measurement of
-   the actual glue workload, against the two risks in §14.
-2. **SQLite or LMDB for structured part state?** Both are crash-only stores. Decided
-   in phase 0 against real write patterns from the feed, not from preference.
-3. **Where the settings files live on disk** (RL-055) — still open from the design
-   phase, needed by phase 3.
-4. **`numpy.memmap`'s lack of an explicit close** must be exercised under a real
-   off/on cycle before numeric state is committed to it. If refcount cleanup proves
-   unreliable, `multiprocessing.shared_memory` with explicit `unlink` is the
-   fallback.
+Where a measurement turned out to be wrong it is corrected in place rather than quietly
+dropped — see the tmpfs artefact recorded in §5, which briefly appeared to disqualify
+both candidate state stores and was an artefact of writing to RAM.
 
 ---
+
+### 15.1 The interpreter: the standard build, not free-threaded 3.14t
+
+**Decided: standard CPython 3.14.** Three measurements, in descending order of weight.
+
+**Wheels, on a machine with no compiler — this is what actually decides it.** There is
+no `cc`, `gcc` or `clang` on this box and no `Python.h`, and no sudo or `apt-get` to
+obtain them. Every dependency must therefore arrive as a prebuilt wheel matching the
+interpreter's exact ABI tag, and a missing wheel is not "slower", it is *cannot
+install*. Measured: `uv pip install lmdb` against the free-threaded venv falls through
+to a source build and dies with `error: [Errno 2] No such file or directory: 'cc'`,
+while the identical command against the standard venv installs `lmdb==2.3.0` from a
+wheel.
+
+Scanning PyPI's JSON API for 35 packages this project could plausibly want: of the 28
+that need a compiled ABI wheel, **26 publish `cp314` and 21 publish `cp314t`**. The five
+that publish `cp314` but not `cp314t` — installable on the standard build, uninstallable
+here on the free-threaded one — are **`ta-lib`, `orjson`, `duckdb`, `zstandard` and
+`lmdb`**. `ta-lib` is the obvious library for the indicators §6 spends its length on,
+and RL-065 says solved problems get the proven library. One of the five turns out not to
+matter either way: Python 3.14 ships **`compression.zstd` in the standard library**
+(zstd 1.5.7, verified working here), so the tape's compression needs no third-party
+package on either build.
+
+**Performance, in the configuration this architecture actually runs.** Parts are
+processes and BLAS is pinned to one thread per part, so the question is never "threads
+versus the GIL" — it is "which build is faster across six processes". Pure-Python bar
+aggregation over OHLCV tuples, which is precisely the glue workload free-threading is
+supposed to help, with setup excluded from the timed region by a barrier, six workers on
+six physical cores, five repetitions on a quiet box:
+
+| build | one worker | 6 threads | **6 processes** |
+|---|---|---|---|
+| standard 3.14.4 | 9.03 M tuples/s | 8.05 M/s (0.89×) | **48.1 M/s** |
+| free-threaded 3.14.6t | 7.75 M/s | 24.7 M/s (3.23×) | 42.6 M/s |
+
+Free-threading delivers real thread parallelism and the standard build gets none; that
+is not in dispute. It is the wrong axis here. **The fastest configuration measured is
+the standard build across processes**, and free-threading's thread mode reaches about
+half of it. Free-threading also costs roughly 14% single-threaded, in the same direction
+as CPython's own documented 1–8% range.
+
+An earlier run of this benchmark showed a far wider gap and then contradicted itself on
+repetition. The cause was this session's own research agents loading the box. The table
+above is from a quiet box and is tight run to run — standard 43–51, free-threaded
+36–44 M tuples/s across processes.
+
+**Risk, which points the same way.** The free-threading HOWTO does not mention `fork` or
+`multiprocessing` anywhere. Two closed CPython issues make the hazard class concrete
+rather than theoretical: gh-117303, a crash from `os.fork()` racing
+`PyThreadState_DeleteCurrent()`, and gh-118332, a deadlock between the free-threaded
+GC's stop-the-world pause and a thread attaching, in a test combining threads with
+`multiprocessing`. Both are fixed in 3.13+, and `forkserver.py` is byte-identical between
+the two builds, and neither build starts a background thread of its own at startup — so
+this is a widened risk surface, not a live defect. It is still a widened surface on the
+exact mechanism this whole runtime rests on. Separately, the free-threaded build doubles
+the non-GC object header, makes every interned string immortal, and defers frees through
+QSBR, all of which raise the per-part idle cost that §1 already paid 693 MB for once.
+
+**What does not decide it:** numpy 2.5.2 is clean on the free-threaded build — it
+publishes `cp314t` wheels and `sys._is_gil_enabled()` stays `False` after importing it,
+measured here. The silent-GIL-re-enable hazard of §14 is real but does not fire on our
+current dependency set.
+
+**When this gets revisited:** if some part is ever *measured* to be limited by
+Python-level work inside one process that genuinely cannot be split across processes.
+Nothing in the blueprint looks like that today, and §14's rule stands unchanged — Rust
+by measurement, never by anticipation. The project `.venv` is currently built on
+3.14.6t and must be rebuilt on 3.14.4; that is phase 0 work, and it is small.
+
+---
+
+### 15.2 Structured part state: SQLite
+
+**Decided: SQLite, from the standard library, in WAL mode.** LMDB was not disqualified —
+it was outperformed on the things this workload is made of.
+
+The first round of testing *appeared* to disqualify LMDB with an OOM kill under a cgroup
+memory limit, then disqualified SQLite the same way, then killed a plain file write with
+no database in it at all. All three were the tmpfs artefact recorded in §5. Re-run on
+ext4, writing 200 MB of journal records under `MemoryMax=200M` with no swap, **neither
+store is disqualified**: LMDB completes in 3.69 s, SQLite in 5.01 s at
+`synchronous=NORMAL` and 5.08 s at `FULL`, all at the 200 MB ceiling, and SQLite drops to
+a **36 MB** peak when it checkpoints and releases cache every 8 MB, at 7.71 s. LMDB is
+about 1.36× faster at bulk append and that is a real result, honestly reported.
+
+It loses anyway, on four grounds that matter more than append speed at this workload's
+cadence — journal entries, switch records, provenance stamps and settings reads, not
+per-tick data:
+
+1. **It is not a dependency at all.** `sqlite3` is compiled into CPython; SQLite 3.46.1
+   is already present. RL-065 admits a library for a solved problem, and admitting none
+   is strictly better than admitting one.
+2. **The read patterns are relational and LMDB has no answer to them.** "What did this
+   part produce between t0 and t1" and "what is this setting now and when did it last
+   change" are `WHERE`, `ORDER BY` and an index. LMDB is a sorted key/value store: every
+   one of those queries becomes a hand-built composite key plus cursor discipline that
+   every part must implement identically and keep correct. Encoding a time index is not
+   this project's edge, so under RL-065 it is the wrong place for own code.
+3. **`map_size` is a hardcoded ceiling chosen up front**, and growing it later is not
+   transparent — other processes learn about it through `MDB_MAP_RESIZED` on their next
+   transaction, so a resize is a fleet-wide coordination event. That cuts directly against
+   RL-061.
+4. **Crash-only durability is already exact.** SQLite's own documentation:
+   *"Transactions are durable across application crashes regardless of the synchronous
+   setting or journal mode."* A committed row survives a part being `SIGKILL`ed no matter
+   how `synchronous` is set — which is precisely the off switch §4 defines. `synchronous`
+   only governs power loss.
+
+**How it is configured**, every value a named setting with provenance rather than a
+literal (RL-061): WAL mode; `busy_timeout` set on every connection, because measured with
+it unset a second writer fails instantly with `database is locked`, and with it set the
+same writer simply waits 2.54 s and succeeds — parts should never carry bespoke retry
+code for this; `synchronous=FULL` for the trade ledger, where losing a committed row to
+power loss is not acceptable; `synchronous=NORMAL` for provenance, metadata and soft
+stores, which is never corrupt and only risks the last write on a genuine power failure.
+Write transactions stay short — open, insert, commit — because WAL permits exactly one
+writer per database file and a held transaction stalls every other writer for its whole
+duration.
+
+Numeric arrays never go here; they are §15.4's business, so SQLite is never on a hot
+numeric path.
+
+---
+
+### 15.3 Settings live at `~/.config/ajit-segment-bots/settings/`, in TOML
+
+**Decided,** and it closes RL-055, which has been open since the design phase.
+
+RL-055 is the constraint: *"Capital settings are edited in a settings file on the server
+(SSH, or a local form through an SSH tunnel); the board shows the current values and when
+they last changed."* A human edits the file in `vi` over SSH; every part reads it at
+startup; the board shows the value and its change time, and under Rule 8 that display
+must come from a probe, never an assertion.
+
+**Location.** `~/.config/ajit-segment-bots/settings/`, following the XDG base-directory
+convention and the precedent this project already set for the more sensitive case —
+`docs/secrets.md` puts the encrypted store at `~/.config/trading/`, on the principle that
+*the repo carries the inventory, the machine carries the values*. A sibling namespace
+keeps the two from being confused. `/etc` is out because it needs root and there is none.
+Inside the repository is out for three reasons: an operator editing over SSH would have to
+remember to commit or the file silently drifts from what is deployed; a repository that is
+private by policy is one settings click from not being, and these are real account numbers;
+and a git-tracked file invites `git log` to answer "when did it last change", which
+duplicates a job the blueprint already gave to `capital-settings-change-recorder`. The path
+also contains none of the substrings the `protect-files.sh` hook and `.gitignore` block —
+`secret`, `credential`, `.key`, `.pem`, `.env` — so the tooling will neither refuse to
+write it nor accidentally ignore it.
+
+**Rule 9 is satisfied by splitting the file from its schema**, exactly as `docs/secrets.md`
+does: the repository carries the schema, the documented defaults and a commented template;
+the machine carries the live values. Values outside git is the deliberate decision here,
+not an oversight, and it is recorded so it reads as one.
+
+**Layout — one file per scope, which is what RL-055 says and what T-4 requires.**
+
+```
+~/.config/ajit-segment-bots/settings/
+    main-account.toml           # main-account-settings-reader
+    segments/
+        futures.toml            # the futures segment's own scope
+        # spot.toml and options.toml are not created: those segments stay
+        # DECLARED with no file and no code (RL-050, RL-062)
+```
+
+A single file across 27 blocks would mean one typo takes every reading part down at once,
+and every reader would have to parse a shared document and pick its own slice out of it —
+a part reasoning about a structure it does not own, which is a T-4 violation. Each reader
+is handed its scope by the governor at launch, consistent with T-2: the control plane
+decides a part's identity, never the part by discovering its siblings.
+
+**Format: TOML, read with stdlib `tomllib`.** It has comments, so a unit and a reason sit
+beside the number where the operator is already looking; it has real types, so nothing is
+string-coerced downstream; and it has one unambiguous specification, unlike INI. YAML's
+bare `no`/`on`/`off` booleans are a hazard in a file full of switches. JSON cannot carry a
+comment, which disqualifies it for a file whose whole purpose is to be human-edited.
+
+`tomllib` is read-only, and that turns out to be exactly right rather than a gap: **no part
+ever writes this file.** `capital-settings-change-recorder` declares
+`produces: ["journal-entry", "part-health"]`, so under R-01 it is structurally incapable of
+writing settings back, and `check_contracts.py` would refuse any wiring that tried. No TOML
+writer is needed anywhere in the runtime.
+
+**Per entry: `value`, `unit`, and an operator-written `note`** carrying who changed it and
+why — RL-061's provenance, recorded at the point the number enters the system. There is
+deliberately **no self-reported "last changed" field**: a timestamp the operator maintains
+by hand is an assertion, and Rule 8 does not accept assertions.
+
+**"When it last changed" is measured, not asserted.** `watchdog` on its inotify backend
+watches the *directory* — not the individual files, so an editor that saves by
+write-temp-then-rename does not orphan the watch. A wake triggers a re-parse, and the
+parsed structure is diffed against the last accepted value, which filters the no-op save
+that mtime alone reports as a change. `IN_Q_OVERFLOW` is treated as "re-establish ground
+truth" and forces a full re-read, because a dropped event must never read as *nothing
+changed*. `capital-settings-change-recorder` appends the diff as an immutable
+`journal-entry`, and the board queries that journal — never the file's mtime, never `git
+log`. `watchdog` 6.0.0 ships a pure-Python Linux wheel, so it needs no compiler here.
+
+**A bad edit fails closed and keeps the last known good.** A syntax error must not take the
+part down — under T-3, "off" is the governor's decision and never a part's reaction to its
+input. So the reader parses the candidate into a fresh value and swaps only on success;
+on failure it keeps serving the last value that parsed and raises `part-health` so the
+board shows the rejection and its reason. A semantically dangerous edit that parses fine is
+`capital-settings-validator`'s existing job, and the existing answer stands: inconsistent
+settings zero the risk limit rather than trade on a guess.
+
+---
+
+### 15.4 `numpy.memmap` is safe, and the missing `close()` is not a durability hazard
+
+**Decided: file-backed `numpy.memmap` for durable numeric part state.** The worry that
+opened this question is answered and does not survive contact with the measurement.
+
+numpy's own documentation is blunt — *"Currently there is no API to close the underlying
+mmap"* — and numpy#13510 has been open since 2019 because there is no safe way to add one:
+a `memmap` can be aliased by other `ndarray` views, and closing under a live view
+segfaults the interpreter.
+
+None of that touches durability, because **durability here is the kernel's job, not
+numpy's.** Dirty `MAP_SHARED` file-backed pages live in the page cache, which belongs to
+the inode and not to the process, and `mmap(2)` states that a mapping is torn down when
+the process terminates by any means. So the writeback happens whether or not a single line
+of userspace cleanup ever runs — which is exactly the case under `SIGKILL`, where none of
+it does.
+
+Measured here, on ext4: a child process opens a 16 MB `float64` memmap, writes a
+deterministic pattern, **does not flush**, and is `SIGKILL`ed. The parent reopens the file
+and compares. **6 of 6 trials, 2 000 000 of 2 000 000 elements survived — 100%, with and
+without an explicit `flush()`.** (The same test was first run under `/tmp` and had to be
+re-run, because tmpfs would have proved nothing about writeback to disk — see §5.)
+
+`flush()` therefore is not what makes state durable; it is what makes durability happen at
+a *chosen moment*. It is used where write ordering across files matters, and not as a
+ritual after every update.
+
+What the missing `close()` genuinely costs is file descriptors and VMAs accumulating in a
+process that opens and abandons many mappings **without exiting**. That is not this
+architecture: a part is a process, it maps its state once at switch-on, and switch-off is
+the process ending, at which point the kernel reclaims the fd table and the mappings
+unconditionally. The rule this implies is worth stating because it is the one way to
+reintroduce the bug: **the governor must not map part state into its own long-lived
+process.**
+
+`multiprocessing.shared_memory` is **not** the fallback for durable state, and the earlier
+suggestion that it was is withdrawn. It is `/dev/shm`, which is RAM: it is not durable
+across an off/on cycle, and memory that stays resident while a part is off is precisely
+what T-3 forbids. Its resource-tracker also still carries cpython#82300, open since 2019,
+where the tracker deletes a segment other processes are still using. Its correct and only
+role here is hot live-to-live transport between two running parts, with `track=False`,
+never as a store.
 
 ## Sources
 
