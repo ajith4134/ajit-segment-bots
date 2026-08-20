@@ -162,6 +162,21 @@ def probe_declared_categories() -> ProbeResult:
     return ProbeResult("Foundation categories", OK, detail, proof)
 
 
+def probe_contract_enforcement() -> ProbeResult:
+    """The rules must hold without anyone being reminded, so the enforcement is measured too."""
+    proof = "test -x .githooks/pre-commit; git config core.hooksPath"
+    hook = PROJECT_HOME / ".githooks" / "pre-commit"
+    checker = PROJECT_HOME / "dashboard" / "check_contracts.py"
+    if not checker.is_file():
+        return ProbeResult("Contract enforcement", NOT_BUILT, "no checker", proof)
+    if not (hook.is_file() and os.access(hook, os.X_OK)):
+        return ProbeResult("Contract enforcement", FAILING, "checker present, hook missing", proof)
+    hooks_path = read_command_output(f"git -C {PROJECT_HOME} config core.hooksPath")
+    if hooks_path != ".githooks":
+        return ProbeResult("Contract enforcement", FAILING, "hook present, git not pointed at it", proof)
+    return ProbeResult("Contract enforcement", OK, "pre-commit hook armed", proof)
+
+
 def probe_defined_features() -> ProbeResult:
     """How many parts the user has described. Empty until they do — never invented."""
     proof = "features[] in docs/features.json"
@@ -259,6 +274,7 @@ PROBES = (
     probe_claude_startup_directory,
     probe_git_repository,
     probe_declared_categories,
+    probe_contract_enforcement,
     probe_defined_features,
     probe_flow_contract,
     probe_running_processes,

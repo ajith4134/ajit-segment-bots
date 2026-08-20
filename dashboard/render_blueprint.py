@@ -36,6 +36,7 @@ class FeatureRegistry:
     categories: list[dict] = field(default_factory=list)
     data_types: list[dict] = field(default_factory=list)
     features: list[dict] = field(default_factory=list)
+    state_vocabulary: list[str] = field(default_factory=list)
 
     @property
     def has_features(self) -> bool:
@@ -63,47 +64,107 @@ def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
         categories=raw.get("categories", []),
         data_types=raw.get("data_types", []),
         features=raw.get("features", []),
+        state_vocabulary=raw.get("state_vocabulary", []),
     )
 
 
+REQUIRED_FEATURE_FIELDS = (
+    "id",
+    "name",
+    "role",
+    "category",
+    "consumes",
+    "produces",
+    "switchable",
+    "off_releases_resources",
+    "states",
+)
+
+
 def find_contract_violations(registry: FeatureRegistry) -> list[str]:
-    """Return every way the declared flow fails to hold together."""
+    """Return every breach of R-01 and of the transistor rule, tagged with the rule.
+
+    See docs/contracts.md and docs/transistor-rule.md. Anything reported here is
+    a defect in the design, not a warning to weigh up.
+    """
     violations: list[str] = []
     known_types = {entry["id"] for entry in registry.data_types}
+    known_categories = {entry["id"] for entry in registry.categories}
+    known_features = {entry.get("id") for entry in registry.features}
+    vocabulary = set(registry.state_vocabulary)
+
     produced: set[str] = set()
     consumed: set[str] = set()
     for feature in registry.features:
         produced.update(feature.get("produces", []))
         consumed.update(feature.get("consumes", []))
 
-    known_categories = {entry["id"] for entry in registry.categories}
-
     for feature in registry.features:
         name = feature.get("name", feature.get("id", "?"))
         reads = feature.get("consumes", [])
         writes = feature.get("produces", [])
-        category = feature.get("category", "")
-        if category not in known_categories:
+
+        # T-1 every feature is the same shape
+        for required in REQUIRED_FEATURE_FIELDS:
+            if required not in feature:
+                violations.append(f"T-1 {name}: missing required field '{required}' — every part is the same shape")
+        if feature.get("switchable") is not True:
+            violations.append(f"T-1 {name}: not switchable — every part is a switch, no exemptions")
+
+        # T-2 control path separate from data path
+        if feature.get("controls"):
             violations.append(
-                f"{name}: belongs to no declared category — every feature sits in exactly one"
+                f"T-2 {name}: declares control over another part — only the resource governor "
+                f"drives the control plane, or the clean flow gains a second invisible graph"
             )
-        if not feature.get("switchable"):
+
+        # T-3 off means genuinely off
+        if feature.get("off_releases_resources") is not True:
             violations.append(
-                f"{name}: declares no execution switch — R-02, every part must be turnable "
-                f"off and on or the resource governor cannot govern it"
+                f"T-3 {name}: does not release CPU and RAM when off — the governor would turn "
+                f"parts off and find the machine just as full"
             )
+
+        # T-4 a part knows nothing about the circuit
+        if feature.get("category", "") not in known_categories:
+            violations.append(f"T-4 {name}: belongs to no declared category — every part sits in exactly one")
+        for type_id in list(reads) + list(writes):
+            if type_id in known_features:
+                violations.append(
+                    f"T-4 {name}: names the part '{type_id}' instead of a data type — parts never know each other"
+                )
+
+        # T-5 states are explicit and countable
+        declared_states = feature.get("states", [])
+        if not declared_states:
+            violations.append(f"T-5 {name}: declares no states — a part is always in exactly one known state")
+        for state in declared_states:
+            if state not in vocabulary:
+                violations.append(
+                    f"T-5 {name}: state '{state}' is outside the declared vocabulary — a new state is "
+                    f"named and added deliberately, never smuggled in"
+                )
+
+        # T-6 one part, one responsibility (the checkable symptom only)
+        role = feature.get("role", "")
+        if " and " in role.lower():
+            violations.append(
+                f"T-6 {name}: role names more than one responsibility — that is two parts welded together"
+            )
+
+        # R-01 the data plane holds together
         if not reads and not writes:
-            violations.append(f"{name}: isolated — neither consumes nor produces anything")
+            violations.append(f"R-01 {name}: isolated — neither consumes nor produces anything")
         for type_id in reads:
             if type_id not in known_types:
-                violations.append(f"{name}: consumes undeclared data type '{type_id}'")
+                violations.append(f"R-01 {name}: consumes undeclared data type '{type_id}'")
             elif type_id not in produced:
-                violations.append(f"{name}: dangling input — nothing produces '{type_id}'")
+                violations.append(f"R-01 {name}: dangling input — nothing produces '{type_id}'")
         for type_id in writes:
             if type_id not in known_types:
-                violations.append(f"{name}: produces undeclared data type '{type_id}'")
+                violations.append(f"R-01 {name}: produces undeclared data type '{type_id}'")
             elif type_id not in consumed:
-                violations.append(f"{name}: orphan output — nothing consumes '{type_id}'")
+                violations.append(f"R-01 {name}: orphan output — nothing consumes '{type_id}'")
 
     return violations
 

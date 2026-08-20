@@ -36,7 +36,19 @@ anything), undeclared data type, and a part belonging to no category.
 
 ---
 
-## R-02 — Every part has an execution switch
+## R-02 — Every part is a transistor
+
+**The full rule lives in [`transistor-rule.md`](transistor-rule.md), and it
+decides how every feature in this project is built.** What follows is the summary
+only; that file is the authority.
+
+T-1 every feature is the same shape · T-2 control path separate from data path ·
+T-3 off means genuinely off · T-4 a part knows nothing about the circuit ·
+T-5 states are explicit and countable · T-6 grow by adding parts, never by making
+a part cleverer.
+
+**Checked:** `dashboard/check_contracts.py`, run by the git pre-commit hook, which
+refuses a commit that breaks any of them.
 
 **Given by the user on 2026-08-20:**
 

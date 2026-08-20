@@ -4,6 +4,30 @@
 Everything built for it lives inside this directory. Claude Code starts here on
 this server by default (see *Startup* below).
 
+## Every part is a transistor — read this before designing anything
+
+**`docs/transistor-rule.md` decides how every feature in this project is built.**
+Read it before proposing, designing, or writing any part. It is not a guideline
+and no feature is exempt.
+
+The six rules, in short — the full statement and the reasoning are in that file:
+
+| | |
+|---|---|
+| **T-1** | every feature is the same shape — one part template, no privileged parts |
+| **T-2** | control path separate from data path — only the resource governor switches parts, never a feature |
+| **T-3** | off means genuinely off — an off part releases its CPU and RAM |
+| **T-4** | a part knows nothing about the circuit — it names data, never other parts |
+| **T-5** | states are explicit and countable, from `state_vocabulary` |
+| **T-6** | grow by adding parts, never by making a part cleverer |
+
+Alongside them, **R-01** (`docs/contracts.md`): edges are computed from
+consumes/produces, so a part swaps out cleanly and none can wire itself in.
+
+Checked by `python3 dashboard/check_contracts.py`, and the git pre-commit hook
+refuses a commit that breaks any of them. If a design seems to need an exception,
+that is the signal to stop and ask — never to grant one.
+
 ## This project is not the trading-system project
 
 It is unrelated to `~/trading-system`, `~/capture`, `~/research`, the AJIT MASTER

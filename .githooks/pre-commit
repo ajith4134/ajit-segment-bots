@@ -1,0 +1,18 @@
+#!/bin/sh
+# Refuse a commit that breaks the contract rules.
+#
+# The user asked that the transistor rule hold without them having to remind
+# anyone. This is the part that does not depend on memory: docs/transistor-rule.md
+# states it, dashboard/check_contracts.py checks it, and this refuses the commit.
+#
+# Enabled by: git config core.hooksPath .githooks
+# Bypass, only when you mean it and can say why: git commit --no-verify
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+
+python3 "$repo_root/dashboard/check_contracts.py" || {
+  echo ""
+  echo "commit refused: the design breaks a contract rule."
+  echo "fix the registry, or use --no-verify and say why in the commit message."
+  exit 1
+}
