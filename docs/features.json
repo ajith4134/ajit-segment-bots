@@ -1,0 +1,40 @@
+{
+  "_readme": [
+    "The feature registry for the ajit-segment-bots blueprint.",
+    "",
+    "This is the single source the diagram is drawn from. Nothing is hand-drawn:",
+    "the generator reads this file and computes the edges, so the picture cannot",
+    "drift from the contract.",
+    "",
+    "THE RULE THAT KEEPS THE FLOW CLEAN AS PARTS ARE ADDED:",
+    "a feature never names another feature. It names only the data it consumes and",
+    "the data it produces. Two features are connected when, and only when, one",
+    "produces a data type the other consumes. A new part therefore cannot invent a",
+    "new private wire to an old part -- it can only attach to data that already",
+    "exists, or declare new data of its own. That is what makes a part replaceable:",
+    "swap any feature for a better one that honours the same consumes/produces",
+    "contract and nothing else in the system changes.",
+    "",
+    "data_types[] fields:",
+    "  id          stable identifier, referenced by features",
+    "  name        what a person calls it",
+    "  description one line: what this data actually carries",
+    "",
+    "features[] fields:",
+    "  id          stable identifier, kebab-case",
+    "  name        what a person calls this part",
+    "  role        one line: what the part is responsible for",
+    "  stage       which band of the flow it sits in (see stages[])",
+    "  consumes    data_type ids it reads   (may be empty for a source)",
+    "  produces    data_type ids it emits   (may be empty for a sink)",
+    "  replaces    optional: the id of an earlier part this one supersedes",
+    "",
+    "The user supplies the features. They are never invented here."
+  ],
+
+  "stages": [],
+
+  "data_types": [],
+
+  "features": []
+}
