@@ -1,0 +1,23 @@
+# ajit-segment-bots -- main account settings.
+#
+# Copy to ~/.config/ajit-segment-bots/settings/main-account.toml and edit there.
+# Read by main-account-settings-reader. Never written by any part: R-01 gives
+# capital-settings-change-recorder produces = [journal-entry, part-health], so it
+# is structurally incapable of writing back here.
+#
+# No API keys or secrets belong here -- see docs/secrets.md.
+
+[main_balance]
+value = 0.0
+unit  = "USDT"
+note  = "operator: set this to the real balance before anything trades. Zero means nothing is allocated, which is the safe value to ship."
+
+[maximum_capital_per_trade]
+value = 0.0
+unit  = "USDT"
+note  = "operator: a hard ceiling on what any sizer may produce, whatever it estimates. RL-061 -- estimation gives the bot intelligence, this bound stops a broken estimator sizing a trade at any value."
+
+[leverage_ceiling]
+value = 1.0
+unit  = "multiple"
+note  = "operator: the highest leverage any futures position may carry. 1.0 means unlevered, which is the safe value to ship."
