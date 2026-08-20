@@ -5,6 +5,13 @@ __pycache__/
 # state reads as a fact about the project rather than about one moment.
 dashboard/status-board.html
 dashboard/part-monitor.html
+dashboard/board.html
+
+# The board's frontend build. Sources are tracked; node_modules and the two
+# bundle outputs are re-made by `npm install && npm run build`.
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/web/dist-single/
 
 # Secrets never enter this repository. See docs/secrets.md — values live in
 # ~/.config, encrypted with sops+age, outside every repo.

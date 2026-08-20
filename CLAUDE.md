@@ -90,3 +90,26 @@ names goes red.
 Today every part is `DECLARED`, which is the correct board for a system that is
 entirely unbuilt. Cells climb as code lands — nothing is ever inferred upward,
 and a failing part never counts as progress.
+
+## Part board (the live one)
+
+    python3 dashboard/part_health_api.py          # serves /api/board + the built frontend
+    cd dashboard/web && npm install && npm run build
+    python3 dashboard/build_board_snapshot.py     # freezes it into dashboard/board.html
+    dashboard/web/verify_board_renders.sh         # proves the page actually draws
+
+A React board over the same probes as the part monitor: 22 blocks, 78 parts, each
+cell clickable for the proof that produced its rung. Two builds from one source —
+`dist/` polls the API and says `LIVE · polling`, `board.html` inlines one measured
+payload and says `SNAPSHOT · frozen`. The mode travels inside the payload, so a
+frozen page can never pass itself off as live.
+
+The snapshot exists because only port 22 listens on this server: the live board
+cannot reach the user, so the page is published instead.
+
+Never trust a green build for this. `verify_board_renders.sh` mounts the page in
+Chromium and fails on any console error. Chromium needs libraries and fonts this
+server does not have; both are installed in `~/.local/pwdeps` and the script
+refuses to run without them. Missing fonts do not error — they paint every glyph
+invisible while every DOM assertion still passes, which is exactly the failure a
+screenshot catches and an assertion does not.
