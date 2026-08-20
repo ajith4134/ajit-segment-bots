@@ -29,3 +29,4 @@ keys.txt
 
 # The inventory doc carries no values and must stay tracked.
 !docs/secrets.md
+dashboard/wiring-explorer.html
