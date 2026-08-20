@@ -89,6 +89,34 @@ the user has named but not described:
 
 If `knowledge` needs a shape, this is a tested one.
 
+**Read in full afterwards, and three more things came out of it:**
+
+**Embed the symptom, not the fix.** The guide calls this "the section that decides
+whether the project works". Only the `text` field gets a vector; diagnosis and fix
+sit beside it, unembedded. Episodes are retrieved by matching an incoming
+*symptom*, so `text` must hold the symptom in the words someone would actually use.
+Put the root cause there and "nothing errors — you just get bad episodes forever."
+
+For `closed-trade-decoding` that is a hard rule: an episode must be keyed on **the
+market condition that was observed**, not on the outcome. Storing "lost 2% on a
+long" retrieves nothing later. Storing "price jumped 4% in three minutes on rising
+volume after a funding flip" is what a future scan can actually match against.
+
+**Keys come from a closed set.** File each fact under a fixed topic slug drawn
+from a closed vocabulary, so a contradicting statement lands on the same key *by
+construction* and overwrites. An open-ended topic string lets the model file
+`plan` on Monday and `plan_tier` on Friday, and the contradiction is back. This is
+the same argument as **T-5**'s closed state vocabulary, reached independently.
+
+**The ablation harness.** Switch each tier off in turn and show that every one
+fails in its own specific, diagnosable way — "a scorecard with a clean diagonal
+down it". That is how **R-02 and T-3 get proven rather than asserted**: turn a
+part off, measure what actually breaks. It is a test method this project should
+copy outright.
+
+*(Slide 19 is a paywall — the full notes are gated behind a subscription. Slides
+1–18 carry the substance; nothing important appears to be behind it.)*
+
 ---
 
 ## 3. Three reference sheets — mean reversion, neural nets, stat arb
@@ -137,7 +165,10 @@ obligations attach to distribution. Running and modifying them privately trigger
 nothing, and a private repository is a backup rather than a distribution. Licence
 is recorded above as a fact about each project; it constrains nothing today.
 
-**So the ranking below is on merit alone.**
+**So the ranking below is on merit alone. All eleven are now saved in
+`docs/features.json` under `upstream_dependencies`**, each tagged with the block
+it serves and whether it is a candidate dependency, an architecture reference,
+rejected, or out of scope.
 
 ### 1. CCXT — the single most actionable item in all six posts
 One unified API over 100+ exchanges: OHLCV, order placement, balances. That is
@@ -193,14 +224,43 @@ code, no paper, and no way to evaluate the claims.
 
 ---
 
-## 6. Six equations — not relevant
+## 6. Six equations — one of them is a real modelling pattern
 
-`p/DblhZgvkjbZ` · 8 slides · Schrödinger, Einstein field equations, and four more.
+`p/DblhZgvkjbZ` · 8 slides · @equation.verse
 
-Physics. Well made, and unrelated to a crypto trading bot. Recorded so it does
-not get re-read later hoping for something.
+**Corrected 2026-08-20.** This was first dismissed after reading 2 slides of 8.
+That was the exact failure the process exists to prevent, and reading all eight
+changed the verdict.
 
----
+The six: Schrödinger, Riemann `ζ(s) = 0`, Euler's identity, Einstein field
+equations, Navier-Stokes, and the **Drake equation**.
+
+**The Drake equation earns its place, and not for its subject.** It is a
+*decomposition pattern*:
+
+    N = R* × f_p × n_e × f_l × f_i × f_c × L
+
+Take a quantity nobody can measure directly, break it into a chain of factors
+that each *can* be estimated, and the slide's own framing — "breaks a huge
+question into smaller factors" and "reveals how much we still do not know" — is
+the point. Multiply through and the uncertainty concentrates visibly in whichever
+factor is worst known.
+
+That is directly usable. "Is this opportunity worth taking" is the same shape:
+
+    E[trade] = P(signal is real) × P(entry fills) × P(target before stop)
+               × avg win − (1 − …) × avg loss − costs
+
+Each factor is separately measurable from the ledger, and the product tells you
+*which one* is sinking the expectancy rather than just that the expectancy is
+poor. That belongs in `hypothesis` and in `risk-capital-allocation`.
+
+**The other five are not usable here, and the honest reason matters.** Two have
+real but *indirect* links that these slides never make — Euler's identity
+underpins Fourier analysis, which is used on price series; random matrix theory
+connects zeta-zero statistics to cleaning financial correlation matrices. Neither
+link comes from this post, and claiming them from it would be dressing up a guess.
+Schrödinger, Einstein and Navier-Stokes carry nothing for this project.
 
 ## Every performance number in these posts is decoration
 

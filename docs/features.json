@@ -599,14 +599,142 @@
       "id": "kronos",
       "name": "Kronos",
       "repo": "shiyu-coder/Kronos",
-      "license": "MIT",
+      "license": "mit",
       "paper": "https://arxiv.org/abs/2508.02739",
       "verified": "2026-08-20 via gh, not from the social post",
-      "stars_at_check": 37616,
       "forks_at_check": 6254,
-      "last_push": "2026-04-13",
       "note": "Decoder-only foundation model family for K-line sequences from Tsinghua, accepted to AAAI 2026. Model zoo: Kronos-mini 4.1M params context 2048, Kronos-small 24.7M context 512, Kronos-base 102.3M context 512. Kronos-large 499.2M is NOT open-source. Finetuning scripts released 2025-08-17.",
-      "used_by": "prediction"
+      "used_by": [
+        "prediction"
+      ],
+      "use": "in use",
+      "stars": 37616,
+      "last_push": "2026-04-13"
+    },
+    {
+      "id": "ccxt",
+      "name": "CCXT",
+      "repo": "ccxt/ccxt",
+      "license": "mit",
+      "stars": 43672,
+      "last_push": "2026-08-20",
+      "use": "candidate dependency",
+      "used_by": [
+        "market-data-feed",
+        "execution-venue-adapter"
+      ],
+      "note": "One unified API over 100+ exchanges: OHLCV, order placement, balances. Two foundation blocks from one dependency."
+    },
+    {
+      "id": "freqtrade",
+      "name": "Freqtrade",
+      "repo": "freqtrade/freqtrade",
+      "license": "gpl-3.0",
+      "stars": 53453,
+      "last_push": "2026-08-20",
+      "use": "candidate dependency",
+      "used_by": [
+        "paper-live-trading"
+      ],
+      "note": "A complete crypto bot: strategy framework, backtesting, paper trading before real money, live automation. C-01's whole shape already solved."
+    },
+    {
+      "id": "nautilus-trader",
+      "name": "NautilusTrader",
+      "repo": "nautechsystems/nautilus_trader",
+      "license": "lgpl-3.0",
+      "stars": 26600,
+      "last_push": "2026-08-20",
+      "use": "architecture reference",
+      "used_by": [
+        "execution-venue-adapter"
+      ],
+      "note": "Event-driven engine built for correctness under load. The reference for structuring an engine meant to be trusted rather than demonstrated."
+    },
+    {
+      "id": "trading-agents",
+      "name": "TradingAgents",
+      "repo": "TauricResearch/TradingAgents",
+      "license": "apache-2.0",
+      "stars": 99004,
+      "last_push": "2026-07-18",
+      "use": "architecture reference",
+      "used_by": [
+        "ai-brain"
+      ],
+      "note": "Splits a trading brain into news, market, sentiment, strategy and execution agents. The largest project in the set by a wide margin."
+    },
+    {
+      "id": "hummingbot",
+      "name": "Hummingbot",
+      "repo": "hummingbot/hummingbot",
+      "license": "apache-2.0",
+      "stars": 19519,
+      "last_push": "2026-08-20",
+      "use": "architecture reference",
+      "used_by": [
+        "execution-venue-adapter",
+        "opportunity-scanner"
+      ],
+      "note": "Decomposes into core engine, arbitrage scanner, risk manager, strategy executor. An independent team arriving at nearly our block boundaries."
+    },
+    {
+      "id": "finrl",
+      "name": "FinRL",
+      "repo": "AI4Finance-Foundation/FinRL",
+      "license": "mit",
+      "stars": 16048,
+      "last_push": "2026-07-13",
+      "use": "architecture reference",
+      "used_by": [
+        "learning-loop"
+      ],
+      "note": "Load data, build environment, train agent, backtest, evaluate, deploy. The closest worked learning loop in the set."
+    },
+    {
+      "id": "vectorbt",
+      "name": "VectorBT",
+      "repo": "polakowo/vectorbt",
+      "license": "other",
+      "stars": 8732,
+      "last_push": "2026-08-02",
+      "use": "candidate dependency",
+      "used_by": [],
+      "note": "Vectorised backtesting, built for sweeping thousands of parameter sets. Serves no declared block: this project has no backtesting category yet."
+    },
+    {
+      "id": "lumibot",
+      "name": "Lumibot",
+      "repo": "Lumiwealth/lumibot",
+      "license": "gpl-3.0",
+      "stars": 1948,
+      "last_push": "2026-08-13",
+      "use": "considered, lower priority",
+      "used_by": [],
+      "note": "Overlaps Freqtrade with less momentum."
+    },
+    {
+      "id": "backtrader",
+      "name": "Backtrader",
+      "repo": "mementum/backtrader",
+      "license": "gpl-3.0",
+      "stars": 22901,
+      "last_push": "2024-08-19",
+      "use": "rejected",
+      "used_by": [],
+      "note": "Not pushed since 2024-08-19 while everything beside it shipped this month. Rejected on staleness, never on licence."
+    },
+    {
+      "id": "polymarket-clob",
+      "name": "Polymarket CLOB client",
+      "repo": "Polymarket/py-clob-client",
+      "license": "mit",
+      "stars": 1232,
+      "last_push": "2026-05-25",
+      "use": "out of scope",
+      "used_by": [],
+      "note": "Prediction markets. Only relevant if they enter scope, which they have not."
     }
-  ]
+  ],
+  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported."
 }
