@@ -55,10 +55,10 @@
       "consumes": [
         "market-data",
         "position",
-        "opportunity-instruction",
         "volatility-forecast",
         "implied-vol-surface",
-        "playbook-rule"
+        "playbook-rule",
+        "proven-instruction"
       ],
       "produces": [
         "entry-candidate",
@@ -480,6 +480,24 @@
       "scope": "global",
       "scope_origin": "user",
       "open": "The user gave four jobs and said more is coming: 'andmore i will explann next'. This block is deliberately unfinished, not complete."
+    },
+    {
+      "id": "backtesting",
+      "name": "Backtesting",
+      "summary": "Replays recorded history against an opportunity instruction, so an idea is tested before the scanner is ever told to watch for it. C-01 forward-tests on live data, which proves an instruction in real time at real cost; this proves it in past time at no cost. Nothing reaches the scanner until it has survived a replay that was audited for look-ahead and charged real costs.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "market-data",
+        "opportunity-instruction"
+      ],
+      "produces": [
+        "proven-instruction",
+        "part-health"
+      ],
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "proposed"
     }
   ],
   "state_vocabulary": [
@@ -846,6 +864,41 @@
       "id": "cointegrated-pair",
       "name": "cointegrated pair",
       "description": "Two symbols whose spread A - beta*B has tested stationary, carrying the hedge ratio, the reversion speed and the measured half-life."
+    },
+    {
+      "id": "historical-window",
+      "name": "historical window",
+      "description": "A bounded run of recorded market history for one symbol, at the resolution a replay needs."
+    },
+    {
+      "id": "walk-forward-split",
+      "name": "walk-forward split",
+      "description": "Training and test windows that never overlap, in time order, with every threshold frozen after training."
+    },
+    {
+      "id": "cost-estimate",
+      "name": "cost estimate",
+      "description": "What a simulated fill would really have cost: spread crossed, slippage, fees, at that moment on that venue."
+    },
+    {
+      "id": "backtest-run",
+      "name": "backtest run",
+      "description": "One replay of one instruction over one split: every simulated entry, exit and fill it produced."
+    },
+    {
+      "id": "backtest-verdict",
+      "name": "backtest verdict",
+      "description": "Whether a replay can be trusted at all -- look-ahead, overlapping windows, survivorship, or a clean bill."
+    },
+    {
+      "id": "backtest-result",
+      "name": "backtest result",
+      "description": "What a replay actually earned after costs, per fold, with the concentration of the profit across days."
+    },
+    {
+      "id": "proven-instruction",
+      "name": "proven instruction",
+      "description": "An opportunity instruction that survived replay. The only kind the scanner is given."
     }
   ],
   "features": [
@@ -2409,6 +2462,156 @@
       ],
       "origin": "proposed",
       "note": "The Ornstein-Uhlenbeck process dX = kappa(mu - X)dt + sigma dW says how hard the spread is pulled back, and half-life = ln(2)/kappa turns that into a holding period. That is the filter that decides tradeability here: a pair with a three-day half-life is real and useless to an intraday bot on 1m to 30m bars (RL-043). Separated from the pair finder because finding a relationship and timing its stretch are replaced at different times. Equations in docs/research/equations.md section 3."
+    },
+    {
+      "id": "historical-bar-store",
+      "name": "Historical bar store",
+      "role": "keep the recorded history a replay reads from",
+      "category": "backtesting",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "historical-window",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "C-01 runs on live data by the user's decision (RL-024), which means nothing in the system currently keeps the past. A replay needs it, so this part is what makes backtesting possible at all rather than an assumption that history is lying around somewhere."
+    },
+    {
+      "id": "walk-forward-splitter",
+      "name": "Walk-forward splitter",
+      "role": "split history into training windows that never overlap the test window",
+      "category": "backtesting",
+      "consumes": [
+        "historical-window"
+      ],
+      "produces": [
+        "walk-forward-split",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The protocol both research sources independently insist on: the neural-network sheet gives walk-forward validation with time-based splits and never random ones, and arXiv:2512.15720 runs 10 days training against 5 days testing across five non-overlapping folds with thresholds frozen after training. A random split on a time series leaks the future into the past, and the backtest that results is a lie with a Sharpe ratio attached."
+    },
+    {
+      "id": "execution-cost-model",
+      "name": "Execution cost model",
+      "role": "charge each simulated fill what it would really have cost",
+      "category": "backtesting",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "cost-estimate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The single most common way a backtest lies. The entropy paper's rule cleared 1,126 bps against a 1.57 bps round-trip cost calibrated to SPY's 0.7 bps spread -- on a crypto venue with a wider spread the same rule may clear nothing at all. Costs are a per-venue measurement here, never a constant carried over from an equity paper."
+    },
+    {
+      "id": "instruction-replayer",
+      "name": "Instruction replayer",
+      "role": "replay one opportunity instruction over recorded history",
+      "category": "backtesting",
+      "consumes": [
+        "opportunity-instruction",
+        "walk-forward-split",
+        "cost-estimate"
+      ],
+      "produces": [
+        "backtest-run",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The engine. It takes what hypothesis wrote and runs it against the past, charging every fill. Five of the ten repositories the user was shown are backtesting frameworks -- vectorbt for sweeping thousands of parameter sets, NautilusTrader for an event-driven core built for correctness -- so this part has strong prior art and is a candidate for a dependency rather than a rewrite."
+    },
+    {
+      "id": "lookahead-auditor",
+      "name": "Look-ahead auditor",
+      "role": "refuse a replay that used information it could not have had",
+      "category": "backtesting",
+      "consumes": [
+        "backtest-run"
+      ],
+      "produces": [
+        "backtest-verdict",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "A backtest cannot fail loudly. It returns a number either way, and a number from a leaking replay looks exactly like a number from a sound one -- which is why this is a part rather than a habit. It checks the three leaks that flatter a result: information from after the bar, windows that overlap between training and test, and a symbol universe chosen with hindsight."
+    },
+    {
+      "id": "backtest-scorer",
+      "name": "Backtest scorer",
+      "role": "score what a replay earned after costs",
+      "category": "backtesting",
+      "consumes": [
+        "backtest-run"
+      ],
+      "produces": [
+        "backtest-result",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Reports per fold, never pooled only, and reports how concentrated the profit was across days. The entropy paper is the worked example of why: pooled it looks like +1,126 bps, and one single day carried 38.5% of it. A pooled number hides the thing that decides whether an edge is real or was one lucky afternoon."
+    },
+    {
+      "id": "instruction-promotion-gate",
+      "name": "Instruction promotion gate",
+      "role": "let an instruction reach the scanner only after it has survived replay",
+      "category": "backtesting",
+      "consumes": [
+        "backtest-result",
+        "backtest-verdict"
+      ],
+      "produces": [
+        "proven-instruction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "This is what makes the block a gate rather than a report. The scanner is given proven-instruction, never a raw one, so an untested idea cannot reach live scanning by anyone forgetting to check. It is the same shape as the edge graduation gate that already governs bots -- earn the promotion, do not assume it. Reversible if the user would rather backtesting only advised: point the scanner back at opportunity-instruction."
     }
   ],
   "control_plane": {

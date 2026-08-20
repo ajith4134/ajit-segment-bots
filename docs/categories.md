@@ -914,3 +914,89 @@ claiming them from it would be dressing up a guess.
 
 Every performance figure in those six posts remains decoration. None appears in the
 equations file.
+
+---
+
+# C-22 — Backtesting (2026-08-20)
+
+## Why this block exists
+
+It was raised as a gap, twice, and left for the user to call:
+
+> **Five of the ten repositories are backtesting frameworks, and this blueprint has
+> no backtesting block.** `paper-live-trading` (C-01) runs on *live* data — that is
+> forward testing. Replaying history is a different thing, and it is how an
+> opportunity instruction would be tested before the scanner is ever told to watch
+> for it. Without it, every hypothesis has to be proven in forward time at real cost.
+
+The user chose to add it.
+
+**The distinction that makes it a separate block:** C-01 proves an instruction in
+*real time at real cost*. C-22 proves it in *past time at no cost*. Both are needed,
+and neither substitutes for the other — forward testing is the only honest test, and
+backtesting is the only cheap one.
+
+## The seven parts
+
+| Part | Its one job |
+|---|---|
+| **Historical bar store** | keep the recorded history a replay reads from |
+| **Walk-forward splitter** | split history into training windows that never overlap the test window |
+| **Execution cost model** | charge each simulated fill what it would really have cost |
+| **Instruction replayer** | replay one opportunity instruction over recorded history |
+| **Look-ahead auditor** | refuse a replay that used information it could not have had |
+| **Backtest scorer** | score what a replay earned after costs |
+| **Instruction promotion gate** | let an instruction reach the scanner only after it has survived replay |
+
+## It is a gate, not a report
+
+**The scanner now consumes `proven-instruction`, not `opportunity-instruction`.**
+
+Hypothesis writes an instruction; it goes to backtesting; only what survives reaches
+the scanner. An untested idea cannot reach live scanning because somebody forgot to
+check — the same shape as the edge graduation gate that already governs bots: earn
+the promotion, never assume it.
+
+This is a design call, and a reversible one. If backtesting should only *advise*,
+point the scanner back at `opportunity-instruction` and the gate becomes a report.
+
+## Four parts exist because a backtest cannot fail loudly
+
+This is the thing that makes backtesting dangerous rather than merely useful: **it
+returns a number either way.** A result from a leaking replay looks exactly like a
+result from a sound one. So the safeguards are parts, not habits:
+
+**Nothing keeps the past yet.** C-01 runs on live data by the user's own decision
+(RL-024), so the *historical bar store* is what makes a replay possible at all,
+rather than an assumption that history is lying around somewhere.
+
+**Random splits leak the future.** Both research sources insist on the same protocol
+independently — the neural-network sheet gives walk-forward validation with
+time-based splits and never random ones; `arXiv:2512.15720` runs 10 days training
+against 5 days testing across five non-overlapping folds with thresholds frozen after
+training. A random split on a time series produces a lie with a Sharpe ratio attached.
+
+**Costs are where backtests lie most often.** The entropy paper's rule cleared
+1,126 bps against a **1.57 bps** round-trip cost calibrated to SPY's 0.7 bps spread.
+On a crypto venue with a wider spread the same rule may clear nothing. Costs are a
+per-venue measurement here, never a constant inherited from an equity paper.
+
+**Pooled numbers hide the answer.** The scorer reports per fold and reports how
+concentrated the profit was across days, because the same paper looks like +1,126 bps
+pooled while **one single day carried 38.5% of it**. Pooling is what turns one lucky
+afternoon into an apparent edge.
+
+## Prior art, and a candidate dependency
+
+Five of the ten repositories already recorded in `upstream_dependencies` are
+backtesting frameworks. **VectorBT** is vectorised for sweeping thousands of parameter
+sets rather than one run; **NautilusTrader** is an event-driven core built explicitly
+for correctness under load; **Freqtrade** has the whole shape solved including paper
+trading before real money. The instruction replayer is a candidate for a dependency
+rather than a rewrite, and that decision belongs to the implementation phase.
+
+## Scope
+
+**Per-segment**, following RL-019 — each segment is its own bot with its own
+architecture. Marked `scope_origin: proposed`, not `user`: it follows the pattern the
+user set rather than a scoping decision they made for this block specifically.

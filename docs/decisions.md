@@ -284,3 +284,35 @@ hidden:**
 
 Neither would have been caught by copying the formulas as sentences. That is the
 argument for this file existing.
+
+---
+
+## D-010 — Backtesting becomes C-22, and it gates the scanner
+
+**Given:** 2026-08-20, choosing it from the open items
+
+The gap had been raised twice and left for the user: five of the ten repositories
+they were shown are backtesting frameworks, and the blueprint had no block for it.
+C-01 runs on live data, which is *forward* testing — replaying history is a different
+thing, and without it every hypothesis has to be proven in forward time at real cost.
+
+**Seven parts:** historical bar store, walk-forward splitter, execution cost model,
+instruction replayer, look-ahead auditor, backtest scorer, instruction promotion gate.
+
+**Decided rather than asked, and stated so it can be overturned:** backtesting is a
+**gate**, not a report. The scanner now consumes `proven-instruction` instead of
+`opportunity-instruction`, so an untested idea cannot reach live scanning because
+somebody forgot to check. It is the same shape as the edge graduation gate that
+already governs bots. If backtesting should only advise, pointing the scanner back at
+`opportunity-instruction` reverses it in one line.
+
+**Also decided by following precedent rather than by ruling:** scope is per-segment,
+after RL-019. Recorded with `scope_origin: proposed`, not `user`, so it is never read
+back as a decision the user made for this block.
+
+**The reason four of the seven parts are safeguards:** a backtest cannot fail loudly.
+It returns a number either way, and a result from a leaking replay is
+indistinguishable from a sound one. Nothing currently keeps the past (RL-024 put C-01
+on live data), random splits leak the future, costs inherited from an equity paper do
+not survive a crypto spread, and a pooled number hides that one day carried 38.5% of
+the profit. Each of those is a part rather than a good intention.
