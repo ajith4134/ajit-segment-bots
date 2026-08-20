@@ -796,3 +796,40 @@ The paper's limits are severe, and its author states them plainly:
 So it enters as a part like any other: switched off until it earns its way on. The **ablation
 harness** already exists to measure what breaks when a part is switched off, and that is what
 decides whether this one stays — not the paper, and not the fact that the mechanism is elegant.
+
+## The equations, saved (added 2026-08-20 after the user asked)
+
+The section above described the mechanism in prose and saved **not one formula** — no
+state definition, no entropy expression, no threshold, no cost model. A part built from
+that prose would have been guessed at.
+
+**`docs/research/order-flow-entropy.md` now holds the complete specification**, read two
+ways and cross-checked: the paper's own text, and the frames of the `vince.quant` reel,
+which carry boards the transcript never mentions.
+
+What was recovered from the reel frames specifically:
+
+    H_t = −Σ_ij π_i P_ij log P_ij
+
+and the numerical symmetry demonstration — swap B and S in a transition matrix and the
+entropy is unchanged at **0.847** either way, which is the whole argument for why
+direction is unrecoverable rather than merely difficult.
+
+And the piece the earlier write-up missed entirely, **the trading rule**:
+
+    Entry:      entropy < 5th percentile
+    Filter:     volume > 95th percentile
+    Direction:  5-min trailing momentum
+    Exit:       5 bps stop-loss / 300s
+
+That rule is recorded but **deliberately not built into C-08**. Prediction says how far
+price moves. When to enter is the scanner's job, stops are risk allocation's, and
+direction belongs to bull, bear and profit tailgating. Importing the paper's momentum
+heuristic into a prediction part would smuggle a direction call into a block with no
+business making one — and by the paper's own attribution that heuristic earned **0.0%**.
+
+The research file also carries five things that must be decided before any of it is
+implemented on crypto: the cost model (SPY's 1.57 bps round-trip does not survive the
+move), whether the second-resolution clock survives under 1m-30m bars, per-symbol volume
+quintiles, the fact that every threshold is *trained* rather than constant, and the
+5-20 bps trailing filter that actually controls how often the part fires.

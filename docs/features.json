@@ -2314,7 +2314,7 @@
         "on"
       ],
       "origin": "user",
-      "note": "From arXiv:2512.15720 (Mainak Singha, NASA Goddard). The state is the sign of the price change {-1,0,+1} crossed with the volume quintile {1..5}, giving fifteen. It reads trades, not candles, which is why this is a new part rather than a change to the kline window builder -- the volatility branch here is built on OHLCV and cannot see the tick sequence at all."
+      "note": "From arXiv:2512.15720 (Mainak Singha, NASA Goddard). The state is the sign of the price change {-1,0,+1} crossed with the volume quintile {1..5}, giving fifteen. It reads trades, not candles, which is why this is a new part rather than a change to the kline window builder -- the volatility branch here is built on OHLCV and cannot see the tick sequence at all. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
     },
     {
       "id": "flow-entropy-meter",
@@ -2335,7 +2335,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "A 15x15 transition matrix estimated over a rolling 120-second window, its stationary distribution taken by eigendecomposition, entropy computed as the stationary-weighted average of row entropies and normalised by log 15. Rows with no observed transitions default to uniform. Separated from the encoder because the state definition and the entropy estimator are two things that will be replaced at different times."
+      "note": "A 15x15 transition matrix estimated over a rolling 120-second window, its stationary distribution taken by eigendecomposition, entropy computed as the stationary-weighted average of row entropies and normalised by log 15. Rows with no observed transitions default to uniform. Separated from the encoder because the state definition and the entropy estimator are two things that will be replaced at different times. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
     },
     {
       "id": "entropy-magnitude-forecaster",
@@ -2357,7 +2357,7 @@
         "on"
       ],
       "origin": "user",
-      "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place."
+      "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
     }
   ],
   "control_plane": {
