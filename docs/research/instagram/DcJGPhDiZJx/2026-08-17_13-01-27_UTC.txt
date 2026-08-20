@@ -1,0 +1,30 @@
+💬 Comment “TRADING” and I'll send you the full list + GitHub links
+
+🚨 13 OPEN-SOURCE REPOS FOR BUILDING TRADING BOTS
+
+Want to explore algorithmic trading, backtesting, AI agents, or market analysis? Start here. 👇
+
+I found 13 powerful open-source projects covering everything from crypto trading bots to AI-powered quantitative research:
+
+⚡ Freqtrade
+🤖 Hummingbot
+📈 NautilusTrader
+🐍 Jesse
+🧪 Backtrader
+⚙️ LEAN
+🚀 VectorBT
+🧠 FinRL
+👥 TradingAgents
+🔬 Qlib
+🤖 TensorTrade
+⚡ OctoBot
+🧠 FreqAI
+
+These aren't magic money-making machines — they're tools you can learn from, experiment with, backtest, and build on.
+.
+
+📌 Save this post — you'll want it later.
+
+Follow @syntaix.ai for more AI tools, open-source projects & tech updates.
+
+#tradingreels #algorithmictrading #tradingbots #opensource #ᴄʀʏᴘᴛᴏᴛʀᴀᴅɪɴɢ
