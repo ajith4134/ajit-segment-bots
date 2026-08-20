@@ -131,32 +131,50 @@ All ten exist. Checked with `gh` on 2026-08-20:
 | Lumiwealth/lumibot | 1,948 | GPL-3.0 | 2026-08-13 |
 | Polymarket/py-clob-client | 1,232 | MIT | 2026-05-25 |
 
-**The post never mentions licences, and that is the thing that decides what can
-be used.**
+**The post never mentions licences. It turned out not to matter here** — see
+D-003: this is a personal project that is not distributed, and GPL and LGPL
+obligations attach to distribution. Running and modifying them privately triggers
+nothing, and a private repository is a backup rather than a distribution. Licence
+is recorded above as a fact about each project; it constrains nothing today.
 
-- **Permissive, safe to depend on:** CCXT, FinRL, Polymarket (MIT); TradingAgents,
-  Hummingbot (Apache-2.0).
-- **Copyleft:** Freqtrade, Backtrader, Lumibot (GPL-3.0); Nautilus (LGPL-3.0).
-  Fine while the code stays private and undistributed; a decision the moment it
-  is not.
-- **Unclear:** VectorBT is marked *other* and needs reading before use.
-- **Backtrader has not been pushed in two years.** The post presents it beside
-  projects that shipped today.
+**So the ranking below is on merit alone.**
 
-**Where it lands:**
+### 1. CCXT — the single most actionable item in all six posts
+One unified API over 100+ exchanges: OHLCV, order placement, balances. That is
+`market-data-feed` and `execution-venue-adapter` — **two foundation blocks, one
+dependency**, shipping daily at 43k stars.
 
-- **CCXT is the single most actionable item in all six posts.** MIT, one unified
-  API over 100+ exchanges, OHLCV plus order placement plus balances. That is
-  `market-data-feed` and `execution-venue-adapter` — two blocks, one dependency,
-  a licence that permits it.
-- **Hummingbot** decomposes into core engine, arbitrage scanner, risk manager,
-  strategy executor — an independent architecture that reached nearly the same
-  block split, which is worth reading against ours.
-- **TradingAgents** at 99k stars splits an AI brain into news, market, sentiment,
-  strategy and execution agents. A reference for `ai-brain`.
-- **FinRL** is the closest thing to a worked `learning-loop`.
+### 2. Freqtrade — the closest existing thing to what is being built
+53k stars, pushed the same day it was checked. A complete crypto bot: strategy
+framework, backtesting, **paper trading before real money**, live automation. That
+is C-01's whole shape already solved by someone else, and worth reading against
+our design before writing a line of it.
 
----
+### 3. NautilusTrader — the event-driven core, done properly
+26.6k stars, shipping daily, explicitly built for correctness under load. The
+reference for how an event-driven engine is structured when it is meant to be
+trusted rather than demonstrated.
+
+### 4. TradingAgents — a reference for the AI brain
+99k stars, the largest in the list by a wide margin. Splits a trading brain into
+news, market, sentiment, strategy and execution agents. Directly relevant to
+`ai-brain`, which is named and undescribed.
+
+### 5. Hummingbot — an independent architecture that reached a similar split
+Core engine, arbitrage scanner, risk manager, strategy executor. A separate team
+arriving at nearly our block boundaries is evidence worth weighing.
+
+### 6. FinRL — the closest worked `learning-loop`
+Load data, build environment, train agent, backtest, evaluate, deploy.
+
+### 7. VectorBT — the fast backtesting engine
+Vectorised, built for sweeping thousands of parameter sets rather than one run.
+
+### 8–10. Lumibot, Polymarket, Backtrader
+Lumibot overlaps Freqtrade with less momentum. Polymarket only matters if
+prediction markets enter scope. **Backtrader stays last — not for its licence, but
+because it has not been pushed since 2024-08-19** while everything above it
+shipped this month. That was always a quality objection.
 
 ## 5. OmniPhi — nothing to use
 
