@@ -1,3 +1,23 @@
 __pycache__/
 *.pyc
+
+# Generated state output. Rule 9: a committed timestamped snapshot of machine
+# state reads as a fact about the project rather than about one moment.
 dashboard/status-board.html
+
+# Secrets never enter this repository. See docs/secrets.md — values live in
+# ~/.config, encrypted with sops+age, outside every repo.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets*
+*secret*
+*credential*
+keys.txt
+*.enc.yaml
+
+# The inventory doc carries no values and must stay tracked.
+!docs/secrets.md
