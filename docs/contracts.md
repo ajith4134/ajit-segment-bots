@@ -86,3 +86,36 @@ and not defaulted.
 The flow between categories — which category feeds which — is **not** declared.
 Until the user says it, the diagram shows blocks without arrows. An inferred
 arrow would be read back later as a decision that was made.
+
+---
+
+## How edges are counted — health is not flow
+
+*Added 2026-08-20, after measuring.*
+
+At 71 parts the board reported **793 edges**. Measured, **630 of those (79.4%) were
+`part-health`** and only **163 were design flow**.
+
+That is arithmetic, not a defect in the parts: every part emits health and a handful
+of parts read it, so the type fans out as *producers × readers* and grows with the
+square of the system while the trade flow grows linearly. Adding nine parts to C-21
+added twenty-four data edges and three hundred health edges.
+
+The diagrams were always right — every renderer already excluded `part-health`, and
+it has its own control-plane picture. **The number was the problem.** A single "793
+edges" made the flow look five times denser than it is, and hid the one figure worth
+watching as parts are added: the 163.
+
+So the counts are split, and neither number hides the other:
+
+    Architecture blueprint    71 parts, 163 data edges, 630 health
+    Flow contract             163 data edges, all resolved (630 health emissions, counted apart)
+
+**Why this matters beyond tidiness.** The user's hard constraint is that however many
+parts go in, the flow between them stays legible. A metric that folds telemetry into
+flow would have reported that constraint as *degrading* — 164 → 424 → 737 → 793 —
+when the actual design flow went 68 → 106 → 137 → 163. The board would have raised an
+alarm about the wrong thing while the real number stayed healthy.
+
+Rule 8 again, and the same shape as the rest of it: a display shows measured state.
+Counting two different things as one is how a true number becomes a false statement.

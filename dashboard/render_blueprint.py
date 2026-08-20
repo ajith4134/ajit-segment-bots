@@ -176,8 +176,26 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
     return violations
 
 
+# Health is telemetry, not trade flow. Every part emits it and a handful of parts
+# read it, so it fans out as producers x readers and drowns the design flow: at 71
+# parts it was 630 of 793 edges. The diagrams have always excluded it; these counts
+# now do too, and report it separately rather than folding it into one number that
+# looks five times denser than the flow actually is.
+HEALTH_TYPE = "part-health"
+
+
 def count_derived_edges(registry: FeatureRegistry) -> int:
     return len(derive_edges(registry))
+
+
+def count_data_edges(registry: FeatureRegistry) -> int:
+    """Design flow only: every connection that is not a health emission."""
+    return len([e for e in derive_edges(registry) if e[2] != HEALTH_TYPE])
+
+
+def count_health_edges(registry: FeatureRegistry) -> int:
+    """Health telemetry only. Counted apart so neither number hides the other."""
+    return len([e for e in derive_edges(registry) if e[2] == HEALTH_TYPE])
 
 
 def derive_edges(registry: FeatureRegistry) -> list[tuple[str, str, str]]:

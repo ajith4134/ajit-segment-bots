@@ -23,7 +23,8 @@ from pathlib import Path
 
 from render_blueprint import (  # same directory as this script, so already importable
     REGISTRY_PATH,
-    count_derived_edges,
+    count_data_edges,
+    count_health_edges,
     derive_category_edges,
     find_contract_violations,
     find_flow_gaps,
@@ -149,7 +150,8 @@ def probe_architecture_blueprint() -> ProbeResult:
     return ProbeResult(
         "Architecture blueprint",
         OK,
-        f"{len(registry.features)} parts, {count_derived_edges(registry)} edges",
+        f"{len(registry.features)} parts, {count_data_edges(registry)} data edges, "
+        f"{count_health_edges(registry)} health",
         proof,
     )
 
@@ -214,7 +216,12 @@ def probe_flow_contract() -> ProbeResult:
         return ProbeResult(
             "Flow contract", NOT_BUILT, f"{edges} block edges proposed, {gaps} gaps, 0 features", proof
         )
-    return ProbeResult("Flow contract", OK, f"{count_derived_edges(registry)} edges, all resolved", proof)
+    return ProbeResult(
+        "Flow contract", OK,
+        f"{count_data_edges(registry)} data edges, all resolved "
+        f"({count_health_edges(registry)} health emissions, counted apart)",
+        proof,
+    )
 
 
 def probe_running_processes() -> ProbeResult:
