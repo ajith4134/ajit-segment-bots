@@ -35,7 +35,8 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "sized-order"
+        "sized-order",
+        "stop-adjustment"
       ],
       "produces": [
         "order-request",
@@ -61,7 +62,8 @@
       ],
       "produces": [
         "entry-candidate",
-        "part-health"
+        "part-health",
+        "market-regime"
       ],
       "flow_origin": "agreed-provisional",
       "parent": "segment-bot",
@@ -71,15 +73,18 @@
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "The container. Inside it live the universal opportunity scanner and the three bots: bull, bear, profit tailgating. Internals detailed at implementation time.",
+      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three bots -- bull, bear and profit tailgating. The bots issue opinions; the brain turns three opinions into one intent.",
       "origin": "user",
       "approved": true,
       "consumes": [
         "entry-candidate",
-        "market-data"
+        "market-data",
+        "bot-scorecard",
+        "position",
+        "external-position"
       ],
       "produces": [
-        "trade-intent",
+        "directional-opinion",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
@@ -108,12 +113,21 @@
     {
       "id": "learning-loop",
       "name": "Learning loop",
-      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
+      "summary": "Keeps the score the bots learn from: each bot's right and wrong calls, which features actually preceded profit, and whether a bot has earned its way out of exploration.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
+      "consumes": [
+        "directional-opinion",
+        "trade-episode",
+        "vol-feature-set"
+      ],
+      "produces": [
+        "bot-scorecard",
+        "bot-maturity",
+        "feature-reliability",
+        "part-health"
+      ],
+      "flow_origin": "proposed",
       "scope": "per-segment",
       "scope_origin": "user",
       "shape": "peer"
@@ -131,7 +145,8 @@
         "recalled-episode",
         "semantic-fact",
         "loaded-skill-section",
-        "strategy-gap"
+        "strategy-gap",
+        "feature-reliability"
       ],
       "produces": [
         "opportunity-instruction",
@@ -194,7 +209,8 @@
       "produces": [
         "research-finding",
         "strategy-gap",
-        "part-health"
+        "part-health",
+        "external-position"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -259,7 +275,8 @@
       ],
       "produces": [
         "sized-order",
-        "part-health"
+        "part-health",
+        "stop-adjustment"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -345,12 +362,19 @@
     {
       "id": "ai-brain",
       "name": "AI brain",
-      "summary": "Named by the user as a new feature and placed inside each segment bot, alongside the scanner and the bull, bear and profit-tailgating bots. What it does is not yet described, so it has no flow.",
+      "summary": "Arbitrates. Each of the three bots emits a direction with conviction; the brain weighs them and issues the single trade intent that leaves the segment bot. This is why it sits inside the segment bot rather than beside it.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
+      "consumes": [
+        "directional-opinion",
+        "market-regime",
+        "bot-maturity"
+      ],
+      "produces": [
+        "trade-intent",
+        "part-health"
+      ],
+      "flow_origin": "proposed",
       "parent": "segment-bot",
       "scope": "per-segment",
       "scope_origin": "user"
@@ -588,6 +612,31 @@
       "id": "strategy-gap",
       "name": "strategy gap",
       "description": "What a decoded strategy does that this bot does not. The 'step up beyond it' half of C-09."
+    },
+    {
+      "id": "directional-opinion",
+      "name": "directional opinion",
+      "description": "One bot's direction plus conviction on a candidate. An opinion, never an order."
+    },
+    {
+      "id": "bot-scorecard",
+      "name": "bot scorecard",
+      "description": "A bot's own record of right calls against wrong ones. What it learns from."
+    },
+    {
+      "id": "bot-maturity",
+      "name": "bot maturity",
+      "description": "Whether a bot has graduated out of exploration on its own measured edge."
+    },
+    {
+      "id": "feature-reliability",
+      "name": "feature reliability",
+      "description": "Which features preceded profitable trades rather than losing ones."
+    },
+    {
+      "id": "stop-adjustment",
+      "name": "stop adjustment",
+      "description": "A protective stop moved up as a position gains, so a pullback keeps some profit rather than giving it all back."
     }
   ],
   "features": [
@@ -962,7 +1011,8 @@
         "recalled-episode",
         "semantic-fact",
         "loaded-skill-section",
-        "strategy-gap"
+        "strategy-gap",
+        "feature-reliability"
       ],
       "produces": [
         "opportunity-instruction",
@@ -1225,6 +1275,185 @@
       ],
       "origin": "proposed",
       "note": "The 'or step up into us' half. Copying is the floor; the gap is where the value is."
+    },
+    {
+      "id": "bull-bot",
+      "name": "Bull bot",
+      "role": "issue a long-side opinion on an entry candidate",
+      "category": "segment-bot",
+      "consumes": [
+        "entry-candidate",
+        "market-data",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Learns from its own right and wrong calls with its own features. In spot it is the same template as the bear with the direction configured; in futures and options it is a separate design, because funding is paid rather than received, liquidation is asymmetric, and a short can lose more than it stakes."
+    },
+    {
+      "id": "bear-bot",
+      "name": "Bear bot",
+      "role": "issue a short-side opinion on an entry candidate",
+      "category": "segment-bot",
+      "consumes": [
+        "entry-candidate",
+        "market-data",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Same template as the bull in spot, its own design in futures and options. Learns from its own scorecard."
+    },
+    {
+      "id": "profit-tailgater",
+      "name": "Profit tailgater",
+      "role": "take a position in something already proven to be working",
+      "category": "segment-bot",
+      "consumes": [
+        "position",
+        "external-position",
+        "market-data"
+      ],
+      "produces": [
+        "directional-opinion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Never originates cold. Rides a position already in profit, or follows a high-profit trader that C-09 decoded. Profit protection and scorekeeping were split out of it: see profit-lock and the learning-loop parts."
+    },
+    {
+      "id": "opinion-arbiter",
+      "name": "Opinion arbiter",
+      "role": "weigh the bots' opinions into one trade intent",
+      "category": "ai-brain",
+      "consumes": [
+        "directional-opinion",
+        "market-regime",
+        "bot-maturity"
+      ],
+      "produces": [
+        "trade-intent",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Why the brain sits inside the segment bot. Three opinions in, one intent out. Opposing positions on one symbol are allowed while a bot is still in exploration, and after it graduates only when the regime reads mixed."
+    },
+    {
+      "id": "profit-lock",
+      "name": "Profit lock",
+      "role": "raise the stop as an open position gains so a pullback keeps some profit",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "position",
+        "market-data"
+      ],
+      "produces": [
+        "stop-adjustment",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Lives in risk, not in a bot, deliberately. It defends every open position whoever opened it -- if it sat inside the tailgater then a bull-opened trade would lose protection the moment that bot was switched off, and R-02 says every part can be switched off."
+    },
+    {
+      "id": "bot-scorekeeper",
+      "name": "Bot scorekeeper",
+      "role": "keep each bot's record of right calls against wrong ones",
+      "category": "learning-loop",
+      "consumes": [
+        "directional-opinion",
+        "trade-episode"
+      ],
+      "produces": [
+        "bot-scorecard",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Pairs each opinion with what the trade actually did. This is what the bots learn from."
+    },
+    {
+      "id": "feature-reliability-scorer",
+      "name": "Feature reliability scorer",
+      "role": "score which features preceded profitable trades rather than losing ones",
+      "category": "learning-loop",
+      "consumes": [
+        "trade-episode",
+        "vol-feature-set"
+      ],
+      "produces": [
+        "feature-reliability",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's scorekeeping idea, moved out of the tailgater: it runs after trades close, not during them."
+    },
+    {
+      "id": "edge-graduation-gate",
+      "name": "Edge graduation gate",
+      "role": "graduate a bot out of exploration when its own numbers clear the bar",
+      "category": "learning-loop",
+      "consumes": [
+        "bot-scorecard"
+      ],
+      "produces": [
+        "bot-maturity",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Bull and bear graduate separately, per segment, on measured edge rather than on a trade count or a date."
     }
   ],
   "control_plane": {
@@ -1418,5 +1647,12 @@
       "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     }
   ],
-  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported."
+  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
+  "opposing_positions": {
+    "given": "2026-08-20",
+    "exploration": "While a bot is still in exploration, bull and bear may both open on the same symbol. It is a live test of which one is right on this kind of setup, and the paired outcome is what the scorekeeper learns from.",
+    "mature": "Once a bot graduates on measured edge, opposing positions are allowed only when the regime classifier reads mixed -- a deliberate straddle when there is no trend to take a side on.",
+    "gate": "Measured edge, per bot, per segment. Bull and bear graduate separately.",
+    "cost": "Two legs means two sets of fees and, in futures, funding on both sides. In a chop both can lose. That is the price of the exploration phase and it is why the phase ends on evidence."
+  }
 }

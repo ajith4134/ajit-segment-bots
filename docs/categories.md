@@ -304,3 +304,70 @@ rather than quietly accumulating. A skill nobody scores is an assertion.
 with `gh`. The screenshot said 16.3k; the repository has 23,262. It emits the open
 **Agent Skills** `SKILL.md` format, which Claude Code, Copilot CLI and Amp all
 read — so the output is not locked to one host.
+
+---
+
+# The three bots, the brain, and what came out of them (2026-08-20)
+
+## Bull and bear
+
+Each issues a **directional opinion** — a direction with conviction — on an entry
+candidate. Never an order. Both learn from their own right and wrong calls, each
+with its own features.
+
+**One template in spot, two designs in futures and options.** In spot a short is
+just an exit, so the same machine with the direction configured is enough and T-1
+is satisfied cleanly. In futures and options the asymmetry is real — funding is
+paid rather than received, liquidation is not symmetric, and a short can lose more
+than it stakes — so the bear earns a separate design there.
+
+## Profit tailgating, and why it became three parts
+
+The user's description gave it four jobs: ride winners, follow smart money, keep
+score of which features preceded profits and losses, and protect open profit so a
+pullback locks in gain. All four are good ideas. Four jobs in one part is a **T-6**
+breach, and two of them had specific reasons to move:
+
+**Profit protection is not a bot.** It defends whatever is open regardless of which
+bot opened it. Inside the tailgater, a bull-opened trade would lose its protection
+the moment that bot was switched off — and R-02 says every part can be switched
+off. It now lives in **risk and capital allocation**, which already owns stops.
+
+**Keeping score is measurement, not trading.** It runs after trades close, not
+during them. It now lives in **learning loop**.
+
+| the idea | the part | where |
+|---|---|---|
+| ride winners · follow smart money | `profit-tailgater` | segment bot |
+| lock in profit on a pullback | `profit-lock` | risk and capital allocation |
+| score which features led to profit | `feature-reliability-scorer` | learning loop |
+
+The tailgater keeps one responsibility: **take a position in something already
+proven to be working.** It never originates cold — it rides a position already in
+profit, or follows a high-profit trader that C-09 decoded. That second half wires
+online research straight into the segment bot.
+
+## The AI brain arbitrates
+
+Three opinions in, **one trade intent out**. That is why the brain sits inside the
+segment bot rather than beside it, and it is what finally describes C-18.
+
+## Opposing positions: exploration, then discipline
+
+> "at first it can open 2 positions to test which is correct or which is more
+> profitable ... but i need option 3 as final"
+
+**While a bot is in exploration**, bull and bear may both open on the same symbol.
+It is a live test of which one is right on this kind of setup, and the paired
+outcome is exactly what the scorekeeper learns from.
+
+**Once a bot graduates**, opposing positions are allowed only when the regime
+classifier reads *mixed* — a deliberate straddle when there is no trend to take a
+side on.
+
+**The gate is measured edge**, per bot, per segment. Bull and bear graduate
+separately, on their own numbers, not on a trade count or a date.
+
+**The cost, stated once:** two legs means two sets of fees and, in futures, funding
+on both sides. In a chop both can lose. That is the price of exploration, and it is
+why the phase ends on evidence rather than on a schedule.
