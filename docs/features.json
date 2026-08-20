@@ -36,6 +36,7 @@
       "approved": true,
       "consumes": [
         "bot-maturity",
+        "bounded-order",
         "capital-allotment",
         "consolidated-price",
         "cost-estimate",
@@ -49,8 +50,8 @@
         "money-mode",
         "order-book-snapshot",
         "order-request",
+        "paper-currency-rate",
         "position",
-        "sized-order",
         "stamped-order",
         "stop-adjustment"
       ],
@@ -179,7 +180,6 @@
         "instruction-scorecard",
         "journal-entry",
         "knowledge-link",
-        "llm-response",
         "loss-cause",
         "market-data",
         "market-event",
@@ -198,6 +198,7 @@
         "trade-episode",
         "trade-intent",
         "trade-narrative",
+        "validated-llm-output",
         "venue-announcement",
         "verified-snapshot",
         "web-idea",
@@ -244,12 +245,14 @@
         "bear-feature-vector",
         "bear-raw-conviction",
         "bot-scorecard",
+        "bounded-order",
         "bull-feature-vector",
         "bull-raw-conviction",
         "closed-trade",
         "cost-estimate",
         "counterfactual-outcome",
         "coverage-report",
+        "decision-cost",
         "decision-quality-score",
         "directional-opinion",
         "duty-cycle",
@@ -271,7 +274,6 @@
         "refutation-verdict",
         "retrain-request",
         "shortfall-breakdown",
-        "sized-order",
         "trade-cluster",
         "trade-episode",
         "trade-intent",
@@ -493,13 +495,13 @@
       "consumes": [
         "copy-latency",
         "external-position",
-        "llm-response",
         "market-data",
         "research-finding",
         "skill-gap",
         "symbol-universe",
         "tracked-trader",
         "trade-episode",
+        "validated-llm-output",
         "verified-record",
         "web-idea"
       ],
@@ -539,6 +541,7 @@
         "llm-backpressure",
         "llm-call-record",
         "llm-model-choice",
+        "llm-part-budget",
         "llm-quota-state",
         "llm-request",
         "llm-response",
@@ -546,6 +549,7 @@
         "local-llm-request",
         "market-data",
         "paid-llm-request",
+        "rendered-llm-request",
         "subscription-llm-request",
         "survival-tier"
       ],
@@ -674,7 +678,9 @@
       "consumes": [
         "account-balance",
         "bear-exit-plan",
+        "bounded-order",
         "bull-exit-plan",
+        "capital-settings-verdict",
         "closed-trade",
         "correlation-cluster",
         "drawdown-episode",
@@ -684,6 +690,7 @@
         "funding-forecast",
         "human-override",
         "instrument-choice",
+        "leverage-ceiling",
         "leverage-choice",
         "liquidation-map",
         "liquidation-price",
@@ -705,6 +712,7 @@
         "symbol-profile",
         "tail-exit-plan",
         "timed-intent",
+        "trade-capital-bounds",
         "trade-cluster",
         "trade-intent",
         "trading-halt",
@@ -713,14 +721,17 @@
         "volatility-forecast"
       ],
       "produces": [
+        "bounded-order",
         "capital-allotment",
         "execution-schedule",
+        "leverage-ceiling",
         "leverage-choice",
         "part-health",
         "risk-limit",
         "sized-order",
         "stop-adjustment",
-        "stop-target-plan"
+        "stop-target-plan",
+        "trade-capital-bounds"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -739,6 +750,7 @@
       "approved": true,
       "consumes": [
         "ablation-scorecard",
+        "bounded-order",
         "closed-trade",
         "decision-rationale",
         "entry-candidate",
@@ -755,7 +767,6 @@
         "position",
         "replay-mismatch",
         "research-finding",
-        "sized-order",
         "skill-usefulness",
         "switch-record",
         "trade-intent"
@@ -783,6 +794,7 @@
       "approved": true,
       "consumes": [
         "account-balance",
+        "bounded-order",
         "capital-allotment",
         "closed-trade",
         "cost-basis",
@@ -790,9 +802,9 @@
         "funding-settlement",
         "leverage-choice",
         "market-data",
+        "paper-currency-rate",
         "peak-excursion",
         "position",
-        "sized-order",
         "venue-position-report"
       ],
       "produces": [
@@ -823,22 +835,32 @@
       "consumes": [
         "account-balance",
         "alert",
+        "allocation-headroom",
+        "allocation-proposal",
         "board-link",
         "board-snapshot",
+        "capital-allotment",
+        "capital-settings-verdict",
+        "capital-utilisation",
         "competence-map",
+        "decision-cost",
         "feed-coverage",
         "fill",
         "heartbeat-table",
         "hog-report",
         "journal-entry",
         "journal-gap",
+        "leverage-ceiling",
+        "main-account-setting",
         "market-anomaly",
         "part-fault",
         "part-health",
         "probe-result",
+        "prompt-score",
         "raw-venue-order-status",
         "replay-mismatch",
         "switch-record",
+        "trade-capital-bounds",
         "trading-halt",
         "usdt-pnl-statement"
       ],
@@ -926,7 +948,6 @@
         "forecast-bias",
         "forecast-trust",
         "knowledge-snapshot",
-        "llm-response",
         "market-data",
         "market-regime",
         "premortem-note",
@@ -936,6 +957,7 @@
         "trade-episode",
         "trade-intent",
         "trade-narrative",
+        "validated-llm-output",
         "verified-snapshot"
       ],
       "produces": [
@@ -970,6 +992,7 @@
       "approved": true,
       "consumes": [
         "bear-exit-plan",
+        "bounded-order",
         "bull-exit-plan",
         "closed-trade",
         "correlation-cluster",
@@ -982,7 +1005,6 @@
         "fill",
         "funding-settlement",
         "journal-entry",
-        "llm-response",
         "market-data",
         "market-regime",
         "near-miss-episode",
@@ -994,7 +1016,6 @@
         "regime-transition-flag",
         "sequence-pattern",
         "shortfall-breakdown",
-        "sized-order",
         "stop-audit",
         "stop-target-plan",
         "symbol-profile",
@@ -1003,6 +1024,7 @@
         "trade-episode",
         "trade-intent",
         "trade-narrative",
+        "validated-llm-output",
         "volatility-forecast"
       ],
       "produces": [
@@ -1050,7 +1072,6 @@
         "available-skill",
         "knowledge-link",
         "llm-request",
-        "llm-response",
         "loaded-skill-section",
         "recalled-episode",
         "research-finding",
@@ -1065,6 +1086,7 @@
         "source-document",
         "stale-knowledge",
         "trade-episode",
+        "validated-llm-output",
         "web-idea"
       ],
       "produces": [
@@ -1108,7 +1130,6 @@
         "human-override",
         "journal-entry",
         "llm-quota-state",
-        "llm-response",
         "llm-spend-state",
         "market-anomaly",
         "market-data",
@@ -1122,7 +1143,8 @@
         "research-finding",
         "survival-tier",
         "trade-intent",
-        "upstream-change"
+        "upstream-change",
+        "validated-llm-output"
       ],
       "produces": [
         "admitted-part",
@@ -1397,6 +1419,123 @@
         "origin": "proposed"
       },
       "peer_group": "segment-bots"
+    },
+    {
+      "id": "capital-desk",
+      "name": "Capital desk",
+      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes — never applies — a rebalance.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "account-balance",
+        "bot-scorecard",
+        "capital-allotment",
+        "capital-utilisation",
+        "instrument-choice",
+        "leverage-ceiling",
+        "locked-allocation",
+        "main-account-setting",
+        "market-data",
+        "money-mode",
+        "trade-capital-bounds",
+        "usdt-pnl-statement"
+      ],
+      "produces": [
+        "alert",
+        "allocation-headroom",
+        "allocation-proposal",
+        "capital-settings-verdict",
+        "capital-utilisation",
+        "journal-entry",
+        "main-account-setting",
+        "paper-currency-rate",
+        "part-health"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "shared",
+      "scope_origin": "user",
+      "rulings": [
+        "RL-028",
+        "RL-040",
+        "RL-041",
+        "RL-051",
+        "RL-053",
+        "RL-054",
+        "RL-055"
+      ],
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
+    },
+    {
+      "id": "llm-foundation",
+      "name": "LLM foundation",
+      "summary": "The layer every LLM-using part calls through. Prompts are versioned and rendered with retrieved context; every answer is checked against its output schema before any part reads it; prompt versions are scored on golden cases and promoted or refused; each part has a token budget and each decision a cost; memory is embedded and retrieved before reasoning (RL-056). llm-services stays the plumbing that places the call.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "closed-trade",
+        "embedding",
+        "golden-case",
+        "journal-entry",
+        "llm-call-record",
+        "llm-part-budget",
+        "llm-quota-state",
+        "llm-request",
+        "llm-response",
+        "llm-spend-state",
+        "prompt-context",
+        "prompt-promotion",
+        "prompt-score",
+        "prompt-template",
+        "prompt-version",
+        "research-finding",
+        "retrieval-hit",
+        "retrieval-query",
+        "retrieval-score",
+        "skill",
+        "source-document",
+        "trade-intent",
+        "usdt-pnl-statement",
+        "validated-llm-output",
+        "verified-snapshot"
+      ],
+      "produces": [
+        "alert",
+        "decision-cost",
+        "embedding",
+        "golden-case",
+        "llm-part-budget",
+        "llm-request",
+        "part-health",
+        "prompt-context",
+        "prompt-promotion",
+        "prompt-score",
+        "prompt-template",
+        "prompt-version",
+        "rendered-llm-request",
+        "retrieval-hit",
+        "retrieval-query",
+        "retrieval-score",
+        "validated-llm-output"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "shared",
+      "scope_origin": "user",
+      "rulings": [
+        "RL-010",
+        "RL-013",
+        "RL-026",
+        "RL-052",
+        "RL-056"
+      ],
+      "contract_recomputed": {
+        "on": "2026-08-20",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     }
   ],
   "state_vocabulary": [
@@ -2823,6 +2962,167 @@
       "description": "Bear bot's outlier rejector found the feature vector far from anything its model has seen; its conviction model abstains. Distinct from the prediction block's forecast-level flag.",
       "origin": "proposed",
       "added": "2026-08-20"
+    },
+    {
+      "id": "main-account-setting",
+      "name": "main account setting",
+      "description": "The main paper account as the user set it: total balance and its currency. Edited in the server settings file, never by a part.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "trade-capital-bounds",
+      "name": "trade capital bounds",
+      "description": "The largest and smallest capital one trade in this segment may use, as the user set them.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "leverage-ceiling",
+      "name": "leverage ceiling",
+      "description": "The highest leverage this segment bot may choose; the bot picks per trade at or under it (RL-053).",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "paper-currency-rate",
+      "name": "paper currency rate",
+      "description": "Live rate from the main account's currency into a segment's quote currency, journalled per conversion (RL-029).",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "allocation-headroom",
+      "name": "allocation headroom",
+      "description": "Main balance minus the sum of segment allocations. Negative means the user has allocated money that does not exist.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "capital-settings-verdict",
+      "name": "capital settings verdict",
+      "description": "Whether the capital settings are consistent: min <= max <= allocation, allocation sum <= main balance, ceiling within the chosen instrument's limit. Failing settings zero the risk limit.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bounded-order",
+      "name": "bounded order",
+      "description": "A sized order after the capital bounds: bumped up to the minimum (RL-054), capped at the maximum. The only order shape execution ever sees.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "capital-utilisation",
+      "name": "capital utilisation",
+      "description": "How much of a segment's allocation is in positions, locked against orders, or free, right now.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "allocation-proposal",
+      "name": "allocation proposal",
+      "description": "A proposed move of allocation between segments with its reason and evidence. Shown on the board; the user edits the file or does not.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "prompt-template",
+      "name": "prompt template",
+      "description": "A drafted prompt with its output schema and the part it serves. Drafted, not yet a version.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "prompt-version",
+      "name": "prompt version",
+      "description": "An immutable, numbered prompt plus output schema that the registry currently serves for one part.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "prompt-promotion",
+      "name": "prompt promotion",
+      "description": "The gate's decision to promote a prompt template to the serving version, or to refuse it, with the scores.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "prompt-context",
+      "name": "prompt context",
+      "description": "Retrieved passages plus the verified market snapshot, assembled for one request.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "rendered-llm-request",
+      "name": "rendered LLM request",
+      "description": "An llm-request with its prompt version and context filled in: what actually goes to the model.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "validated-llm-output",
+      "name": "validated LLM output",
+      "description": "A model answer that passed its output schema. The only LLM output any part reads.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "golden-case",
+      "name": "golden case",
+      "description": "A past request with the answer that turned out right, from a closed trade's outcome.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "prompt-score",
+      "name": "prompt score",
+      "description": "How one prompt version scored across the golden cases: accuracy, schema failures, tokens, latency.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "llm-part-budget",
+      "name": "LLM part budget",
+      "description": "Tokens one part may spend in the window, from its record and the system's allowance.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "decision-cost",
+      "name": "decision cost",
+      "description": "What one trade intent cost in LLM tokens and money, set against what the trade made.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "embedding",
+      "name": "embedding",
+      "description": "A vector for one passage of knowledge, journal or decoded trade, with its source.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "retrieval-query",
+      "name": "retrieval query",
+      "description": "What to look up for one request, derived from the request.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "retrieval-hit",
+      "name": "retrieval hit",
+      "description": "Passages ranked for one query, each with its source and score.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "retrieval-score",
+      "name": "retrieval score",
+      "description": "How useful retrieved passages proved, measured against the prompt score they fed.",
+      "origin": "proposed",
+      "added": "2026-08-20"
     }
   ],
   "features": [
@@ -3406,7 +3706,7 @@
       "category": "skills",
       "consumes": [
         "source-document",
-        "llm-response"
+        "validated-llm-output"
       ],
       "produces": [
         "skill",
@@ -3551,7 +3851,7 @@
       "category": "online-research",
       "consumes": [
         "external-position",
-        "llm-response"
+        "validated-llm-output"
       ],
       "produces": [
         "research-finding",
@@ -3666,7 +3966,8 @@
         "learning-reward",
         "trade-cluster",
         "outcome-significance",
-        "pair-verdict"
+        "pair-verdict",
+        "decision-cost"
       ],
       "produces": [
         "bot-scorecard",
@@ -3760,7 +4061,7 @@
       "consumes": [
         "directional-opinion",
         "trade-episode",
-        "llm-response",
+        "validated-llm-output",
         "decision-rationale",
         "verified-snapshot",
         "counterfactual-outcome",
@@ -3859,7 +4160,7 @@
         "web-idea",
         "trade-episode",
         "bot-scorecard",
-        "llm-response",
+        "validated-llm-output",
         "sentiment-reading",
         "instruction-history",
         "knowledge-link",
@@ -3897,11 +4198,12 @@
       "role": "route each llm-request to the cheapest route that still has allowance",
       "category": "llm-services",
       "consumes": [
-        "llm-request",
+        "rendered-llm-request",
         "llm-quota-state",
         "llm-spend-state",
         "llm-model-choice",
-        "llm-backpressure"
+        "llm-backpressure",
+        "llm-part-budget"
       ],
       "produces": [
         "subscription-llm-request",
@@ -4046,7 +4348,7 @@
       "role": "return the stored answer for a repeated llm-request",
       "category": "llm-services",
       "consumes": [
-        "llm-request",
+        "rendered-llm-request",
         "llm-response"
       ],
       "produces": [
@@ -4149,7 +4451,7 @@
       "category": "autonomous",
       "consumes": [
         "capability-gap",
-        "llm-response",
+        "validated-llm-output",
         "folded-circuit-map"
       ],
       "produces": [
@@ -4763,7 +5065,7 @@
       "role": "address a sized order to the paper book or the live venue, by the money mode",
       "category": "paper-live-trading",
       "consumes": [
-        "sized-order",
+        "bounded-order",
         "money-mode",
         "stamped-order",
         "execution-schedule"
@@ -4840,7 +5142,8 @@
       "consumes": [
         "fill",
         "capital-allotment",
-        "money-mode"
+        "money-mode",
+        "paper-currency-rate"
       ],
       "produces": [
         "account-balance",
@@ -5231,7 +5534,7 @@
       "category": "learning-loop",
       "consumes": [
         "fill",
-        "sized-order",
+        "bounded-order",
         "shortfall-breakdown"
       ],
       "produces": [
@@ -5602,7 +5905,8 @@
       "consumes": [
         "llm-quota-state",
         "llm-spend-state",
-        "survival-tier"
+        "survival-tier",
+        "llm-part-budget"
       ],
       "produces": [
         "llm-backpressure",
@@ -5862,12 +6166,14 @@
     {
       "id": "capital-allotment-reader",
       "name": "Capital allotment reader",
-      "role": "read the paper capital the user assigned this segment (RL-040)",
+      "role": "read this segment's slice of the settings file: allocated balance, min plus max capital per trade, leverage ceiling (RL-051)",
       "category": "risk-capital-allocation",
       "consumes": [],
       "produces": [
         "capital-allotment",
-        "part-health"
+        "leverage-ceiling",
+        "part-health",
+        "trade-capital-bounds"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -5876,17 +6182,22 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "RL-051: one reader for the segment's whole capital slice, not only the allotment"
+      }
     },
     {
       "id": "leverage-selector",
       "name": "Leverage selector",
-      "role": "choose leverage per trade from volatility plus funding (RL-041)",
+      "role": "choose leverage per trade from volatility plus funding (RL-041), never above the user's ceiling (RL-053)",
       "category": "risk-capital-allocation",
       "consumes": [
         "trade-intent",
         "volatility-forecast",
-        "funding-forecast"
+        "funding-forecast",
+        "leverage-ceiling"
       ],
       "produces": [
         "leverage-choice",
@@ -5899,7 +6210,11 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "role_refined": {
+        "on": "2026-08-20",
+        "from": "RL-053: the ceiling is the user's, the choice under it is the bot's"
+      }
     },
     {
       "id": "stop-target-placer",
@@ -5985,7 +6300,8 @@
       "consumes": [
         "trading-halt",
         "policy-decision",
-        "human-override"
+        "human-override",
+        "capital-settings-verdict"
       ],
       "produces": [
         "risk-limit",
@@ -6068,7 +6384,7 @@
       "consumes": [
         "entry-candidate",
         "trade-intent",
-        "sized-order",
+        "bounded-order",
         "order-request",
         "fill"
       ],
@@ -6263,7 +6579,8 @@
         "market-data",
         "capital-allotment",
         "cost-basis",
-        "funding-settlement"
+        "funding-settlement",
+        "paper-currency-rate"
       ],
       "produces": [
         "usdt-pnl-statement",
@@ -6361,7 +6678,17 @@
         "switch-record",
         "account-balance",
         "feed-coverage",
-        "competence-map"
+        "competence-map",
+        "main-account-setting",
+        "capital-allotment",
+        "trade-capital-bounds",
+        "leverage-ceiling",
+        "allocation-headroom",
+        "capital-settings-verdict",
+        "capital-utilisation",
+        "allocation-proposal",
+        "decision-cost",
+        "prompt-score"
       ],
       "produces": [
         "board-snapshot",
@@ -6605,7 +6932,7 @@
       "consumes": [
         "trade-intent",
         "directional-opinion",
-        "llm-response",
+        "validated-llm-output",
         "verified-snapshot",
         "feature-attribution"
       ],
@@ -6631,7 +6958,7 @@
       "consumes": [
         "decision-rationale",
         "trade-episode",
-        "llm-response",
+        "validated-llm-output",
         "knowledge-snapshot",
         "premortem-note",
         "counter-argument",
@@ -6921,7 +7248,7 @@
       "role": "stamp every sized order with a stable client id once, before it can ever be retried",
       "category": "paper-live-trading",
       "consumes": [
-        "sized-order"
+        "bounded-order"
       ],
       "produces": [
         "stamped-order",
@@ -6965,7 +7292,7 @@
       "role": "reserve capital against an order the instant it is sent, so two orders in one tick never spend the same balance",
       "category": "portfolio-state",
       "consumes": [
-        "sized-order",
+        "bounded-order",
         "fill",
         "account-balance"
       ],
@@ -7076,7 +7403,7 @@
       "role": "split a sized order into timed slices capped against recent traded volume",
       "category": "risk-capital-allocation",
       "consumes": [
-        "sized-order",
+        "bounded-order",
         "volatility-forecast",
         "order-book-snapshot"
       ],
@@ -9420,7 +9747,7 @@
       "consumes": [
         "trade-intent",
         "directional-opinion",
-        "llm-response",
+        "validated-llm-output",
         "verified-snapshot"
       ],
       "produces": [
@@ -9445,7 +9772,7 @@
       "consumes": [
         "trade-intent",
         "directional-opinion",
-        "llm-response",
+        "validated-llm-output",
         "verified-snapshot",
         "regime-memory"
       ],
@@ -9821,7 +10148,7 @@
       "consumes": [
         "closed-trade",
         "fill",
-        "sized-order",
+        "bounded-order",
         "order-book-snapshot",
         "market-data"
       ],
@@ -9847,7 +10174,7 @@
         "trade-episode",
         "journal-entry",
         "decision-rationale",
-        "llm-response"
+        "validated-llm-output"
       ],
       "produces": [
         "trade-narrative",
@@ -9976,6 +10303,551 @@
       ],
       "origin": "proposed",
       "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+    },
+    {
+      "id": "main-account-settings-reader",
+      "name": "Main account settings reader",
+      "role": "read the main paper balance plus its currency from the server settings file, reloading when the file changes",
+      "category": "capital-desk",
+      "consumes": [],
+      "produces": [
+        "main-account-setting",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "allocation-conservation-checker",
+      "name": "Allocation conservation checker",
+      "role": "compare the sum of every segment's allocation against the main balance, alerting when the user has allocated more than exists",
+      "category": "capital-desk",
+      "consumes": [
+        "main-account-setting",
+        "capital-allotment"
+      ],
+      "produces": [
+        "allocation-headroom",
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "capital-settings-validator",
+      "name": "Capital settings validator",
+      "role": "judge the settings consistent or not: min at most max, max at most the allocation, ceiling within what the chosen instrument allows",
+      "category": "capital-desk",
+      "consumes": [
+        "main-account-setting",
+        "capital-allotment",
+        "trade-capital-bounds",
+        "leverage-ceiling",
+        "instrument-choice"
+      ],
+      "produces": [
+        "capital-settings-verdict",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "capital-settings-change-recorder",
+      "name": "Capital settings change recorder",
+      "role": "journal every change to a capital setting: which value, old, new, when, so the equity curve can be read against what the user changed",
+      "category": "capital-desk",
+      "consumes": [
+        "main-account-setting",
+        "capital-allotment",
+        "trade-capital-bounds",
+        "leverage-ceiling"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "paper-currency-converter",
+      "name": "Paper currency converter",
+      "role": "convert the main account's currency into each segment's quote currency at the live price, journalling the rate used (RL-029)",
+      "category": "capital-desk",
+      "consumes": [
+        "main-account-setting",
+        "market-data"
+      ],
+      "produces": [
+        "paper-currency-rate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "capital-utilisation-meter",
+      "name": "Capital utilisation meter",
+      "role": "measure how much of a segment's allocation is in positions, locked, or free",
+      "category": "capital-desk",
+      "consumes": [
+        "account-balance",
+        "locked-allocation",
+        "capital-allotment"
+      ],
+      "produces": [
+        "capital-utilisation",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "allocation-rebalance-proposer",
+      "name": "Allocation rebalance proposer",
+      "role": "propose moving allocation toward the segments that earn it, from realised USDT results plus utilisation; proposed only, the user edits the file",
+      "category": "capital-desk",
+      "consumes": [
+        "usdt-pnl-statement",
+        "capital-utilisation",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "allocation-proposal",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "live-balance-divergence-watch",
+      "name": "Live balance divergence watch",
+      "role": "alert when the venue's real balance differs from the allocation the settings promise, once the segment is live",
+      "category": "capital-desk",
+      "consumes": [
+        "account-balance",
+        "capital-allotment",
+        "money-mode"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "trade-capital-bounds-gate",
+      "name": "Trade capital bounds gate",
+      "role": "bump a sized order up to the segment's minimum capital (RL-054) or cap it at the maximum, so execution only ever sees an order inside the user's bounds",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "sized-order",
+        "trade-capital-bounds",
+        "capital-settings-verdict"
+      ],
+      "produces": [
+        "bounded-order",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-template-author",
+      "name": "Prompt template author",
+      "role": "draft a new prompt template for a part from research, skills plus the scores of the current version; proposed, never serving until promoted",
+      "category": "llm-foundation",
+      "consumes": [
+        "research-finding",
+        "skill",
+        "prompt-score",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "prompt-template",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-registry",
+      "name": "Prompt registry",
+      "role": "keep every prompt version by part, serve the promoted one, never lose an old one",
+      "category": "llm-foundation",
+      "consumes": [
+        "prompt-template",
+        "prompt-promotion"
+      ],
+      "produces": [
+        "prompt-version",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "retrieval-querier",
+      "name": "Retrieval querier",
+      "role": "derive what to look up from a request: symbol, setup, regime, question",
+      "category": "llm-foundation",
+      "consumes": [
+        "llm-request"
+      ],
+      "produces": [
+        "retrieval-query",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "knowledge-embedder",
+      "name": "Knowledge embedder",
+      "role": "embed knowledge, journal entries plus skills as they arrive, each with its source",
+      "category": "llm-foundation",
+      "consumes": [
+        "source-document",
+        "journal-entry",
+        "skill"
+      ],
+      "produces": [
+        "embedding",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "retrieval-index",
+      "name": "Retrieval index",
+      "role": "answer a query with the best-ranked passages, re-ranked by how useful past hits proved",
+      "category": "llm-foundation",
+      "consumes": [
+        "embedding",
+        "retrieval-query",
+        "retrieval-score"
+      ],
+      "produces": [
+        "retrieval-hit",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "context-assembler",
+      "name": "Context assembler",
+      "role": "assemble retrieved passages plus the verified snapshot into the context for one request, within the part's budget",
+      "category": "llm-foundation",
+      "consumes": [
+        "retrieval-hit",
+        "verified-snapshot",
+        "llm-part-budget"
+      ],
+      "produces": [
+        "prompt-context",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-renderer",
+      "name": "Prompt renderer",
+      "role": "fill the serving prompt version plus the context into a request: what actually goes to the model",
+      "category": "llm-foundation",
+      "consumes": [
+        "llm-request",
+        "prompt-version",
+        "prompt-context"
+      ],
+      "produces": [
+        "rendered-llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "structured-output-enforcer",
+      "name": "Structured output enforcer",
+      "role": "check every answer against its output schema; pass it on validated, or re-ask once with the failure named",
+      "category": "llm-foundation",
+      "consumes": [
+        "llm-response",
+        "prompt-version"
+      ],
+      "produces": [
+        "validated-llm-output",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "golden-case-keeper",
+      "name": "Golden case keeper",
+      "role": "keep the requests whose answers a closed trade later proved right or wrong, as the cases prompts are scored on",
+      "category": "llm-foundation",
+      "consumes": [
+        "validated-llm-output",
+        "closed-trade"
+      ],
+      "produces": [
+        "golden-case",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-evaluator",
+      "name": "Prompt evaluator",
+      "role": "score a prompt version by replaying it across the golden cases: accuracy, schema failures, tokens, latency",
+      "category": "llm-foundation",
+      "consumes": [
+        "golden-case",
+        "prompt-version",
+        "prompt-template",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "prompt-score",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-promotion-gate",
+      "name": "Prompt promotion gate",
+      "role": "promote a template only when it beats the serving version on the golden cases; refuse otherwise",
+      "category": "llm-foundation",
+      "consumes": [
+        "prompt-score"
+      ],
+      "produces": [
+        "prompt-promotion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "prompt-drift-monitor",
+      "name": "Prompt drift monitor",
+      "role": "alert when the serving version's score falls over time, before the parts reading it go quietly wrong",
+      "category": "llm-foundation",
+      "consumes": [
+        "prompt-score"
+      ],
+      "produces": [
+        "alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "part-token-budgeter",
+      "name": "Part token budgeter",
+      "role": "set how many tokens each part may spend in the window from its record plus the system's allowance",
+      "category": "llm-foundation",
+      "consumes": [
+        "llm-call-record",
+        "llm-spend-state",
+        "llm-quota-state"
+      ],
+      "produces": [
+        "llm-part-budget",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "decision-cost-accountant",
+      "name": "Decision cost accountant",
+      "role": "set what each trade intent cost in tokens plus money against what the trade made",
+      "category": "llm-foundation",
+      "consumes": [
+        "llm-call-record",
+        "trade-intent",
+        "usdt-pnl-statement"
+      ],
+      "produces": [
+        "decision-cost",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+    },
+    {
+      "id": "retrieval-quality-scorer",
+      "name": "Retrieval quality scorer",
+      "role": "measure how useful retrieved passages proved, from the prompt scores they fed",
+      "category": "llm-foundation",
+      "consumes": [
+        "retrieval-hit",
+        "prompt-score"
+      ],
+      "produces": [
+        "retrieval-score",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
     }
   ],
   "control_plane": {
@@ -10005,6 +10877,18 @@
       "note": "Each segment gets its own of every block. Three risk allocators, three portfolios, three ledgers, three feeds, three hypothesis features. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself.",
       "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- three of them, each blind to the other two, would compete for the same RAM and recreate the queueing C-11 exists to prevent. One board, one place to look.",
       "edges": "The 19 edges were accepted provisionally on 2026-08-20, with the user's words: decide them again when the design is locked and implementation starts. flow_origin reads agreed-provisional, never agreed."
+    },
+    "build_order": {
+      "ruling": "RL-050",
+      "given": "2026-08-20",
+      "implement_now": [
+        "futures"
+      ],
+      "skeleton_only": [
+        "spot",
+        "options"
+      ],
+      "note": "Futures is built first and fully. Spot and options keep every block declared (same template, T-1) and get placeholders, not working code, until futures is done."
     }
   },
   "thinking_shape": {
