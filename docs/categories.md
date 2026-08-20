@@ -723,3 +723,76 @@ It is not added as a part, for two reasons. It is not autonomy, and the user's i
 to add to C-21. And the paper's own limits are severe: 36 days, one instrument, VIX 14-22
 throughout, and **38.5% of all profit came from a single day**. Recorded here so the finding
 exists; a part for it is the user's call, not an assumption.
+
+---
+
+# C-08 gains order-flow entropy (2026-08-20)
+
+## What the user asked for
+
+> "add the entropy paper as a part to prediction"
+
+**`arXiv:2512.15720` — "Hidden Order in Trades Predicts the Size of Price Moves",**
+Mainak Singha, Astrophysics Science Division, NASA Goddard Space Flight Center.
+Verified at source; the reel that carried it reported its numbers accurately.
+
+## The three parts
+
+| Part | Its one job |
+|---|---|
+| **Order flow state encoder** | label each second of trade flow as one of fifteen states |
+| **Flow entropy meter** | measure how structured the recent order flow is |
+| **Entropy magnitude forecaster** | forecast how far price moves next from how structured the flow is |
+
+The mechanism, in the paper's own terms: each second is labelled by the sign of the price
+change `{-1,0,+1}` crossed with the volume quintile `{1..5}` — fifteen states. A 15x15
+transition matrix is estimated over a rolling 120-second window, its stationary distribution
+taken by eigendecomposition, and entropy computed as the stationary-weighted average of row
+entropies, normalised by `log 15`. Low entropy means structure: informed traders leaving a
+footprint.
+
+## Why three parts rather than one feature on the existing branch
+
+The volatility branch already here — `volatility-feature-builder` → `realised-vol-regressor` —
+is built on **candles**. Entropy is built on the **tick sequence**, which a candlestick window
+cannot see at any resolution. Folding it into the feature builder would have been making a part
+cleverer so it could also do a second job, which is exactly what T-6 forbids. So it enters as
+its own chain, and its output joins the same data type the other estimators produce.
+
+That makes it the **third independent estimator of the same quantity**, beside the realised-vol
+regressor and the implied surface. Three estimators of one number is not duplication here — it
+is what "replaceable spare part" means. If entropy is better, it wins on measured accuracy and
+the others stay switched off.
+
+## The one thing this part must never do
+
+**It cannot carry direction, and that is a theorem, not a weak result.**
+
+Entropy is invariant under swapping the "buy" and "sell" labels: an informed buyer and an
+informed seller produce the same entropy signature. So the measure detects *that* a large move
+is coming without revealing *which way*. The paper measured 45.0% directional accuracy —
+statistically indistinguishable from chance — and predicted exactly that in advance from the
+symmetry.
+
+The design consequence is hard: **this part produces `volatility-forecast` and never
+`directional-opinion`.** Direction stays where the user put it — bull, bear and profit
+tailgating (RL-023). A part that quietly used a magnitude signal to pick a side would be
+trading on 45% accuracy while believing it had an edge, and nothing downstream would be able
+to tell.
+
+Worth keeping alongside that: in the paper's own trading rule, profit attribution was **87.8%
+from timing, 12.2% from payoff structure, 0.0% from direction.** The value is knowing *when*,
+paired with tight stops.
+
+## Unproven here, and the board should say so
+
+The paper's limits are severe, and its author states them plainly:
+
+- **36 trading days, one instrument** — SPY, an equity ETF. This project trades intraday crypto.
+- **VIX 14-22 throughout.** Behaviour in a high-volatility regime is unknown.
+- **38.5% of all profit came from a single day** (October 29). Concentration, not a distribution.
+- Execution assumed immediate fills at fixed cost.
+
+So it enters as a part like any other: switched off until it earns its way on. The **ablation
+harness** already exists to measure what breaks when a part is switched off, and that is what
+decides whether this one stays — not the paper, and not the fact that the mechanism is elegant.

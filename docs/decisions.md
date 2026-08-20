@@ -218,3 +218,32 @@ the case that scarcity handled binary is scarcity handled badly.
 autonomy, and its own limits are severe -- 36 days, one instrument, 38.5% of profit from a
 single day. Recorded in categories.md so it is not lost. Whether it becomes a part is the
 user's call.
+
+---
+
+## D-008 — Order-flow entropy joins prediction, as magnitude only
+
+**Given:** 2026-08-20
+
+> "add the entropy paper as a part to prediction"
+
+`arXiv:2512.15720`, Mainak Singha, NASA Goddard. Three parts in C-08: an order flow state
+encoder, a flow entropy meter, an entropy magnitude forecaster.
+
+**Why it is a new chain rather than a new feature on the existing volatility branch:** that
+branch reads candles; entropy reads the tick sequence, which a candlestick window cannot see.
+Adding it to the feature builder would have made one part do a second job — T-6. It joins as
+its own chain and produces the same `volatility-forecast` the other estimators produce, which
+makes it the third independent estimator of one quantity and a genuine spare part.
+
+**The constraint that came with it, and it is not negotiable:** entropy is invariant under
+swapping buy and sell labels, so it cannot carry direction. 45.0% directional accuracy is a
+theorem, not a poor result. This part produces `volatility-forecast` and **never**
+`directional-opinion`. Direction remains with bull, bear and profit tailgating (RL-023). The
+failure this prevents is specific: a part quietly picking a side from a magnitude signal would
+be trading at chance while appearing to have an edge.
+
+**Recorded as unproven, deliberately:** 36 days, one equity ETF, VIX 14-22 throughout, and
+38.5% of the paper's profit from one single day. It enters switched off and the ablation
+harness decides whether it earns its place. The paper is a reason to build the part, not
+evidence that it works on intraday crypto.

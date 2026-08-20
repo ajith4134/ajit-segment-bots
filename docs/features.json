@@ -831,6 +831,16 @@
       "id": "folded-circuit-map",
       "name": "folded circuit map",
       "description": "The whole circuit compressed to a readable size: groups folded to one box each, opened only where a question needs the detail."
+    },
+    {
+      "id": "order-flow-state",
+      "name": "order flow state",
+      "description": "One second of trade flow labelled as one of fifteen states: the sign of the price change crossed with the volume quintile."
+    },
+    {
+      "id": "flow-entropy",
+      "name": "flow entropy",
+      "description": "How structured the recent order flow is, on a normalised scale. Low means informed traders are leaving a footprint. Carries no direction, by mathematical necessity."
     }
   ],
   "features": [
@@ -2284,6 +2294,70 @@
       ],
       "origin": "proposed",
       "note": "From WeaveMindAI/weft: any group of nodes folds into one node with a typed interface, so a 100-node system still looks like five boxes, and the AI builder searches the catalogue on demand rather than carrying it in context. This blueprint already has 66 parts and a part-health fan-out nobody can read. A part that must write a new part cannot first read the whole circuit -- so the circuit has to be foldable, or self-building is capped by context rather than by judgement."
+    },
+    {
+      "id": "order-flow-state-encoder",
+      "name": "Order flow state encoder",
+      "role": "label each second of trade flow as one of fifteen states",
+      "category": "prediction",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "order-flow-state",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "From arXiv:2512.15720 (Mainak Singha, NASA Goddard). The state is the sign of the price change {-1,0,+1} crossed with the volume quintile {1..5}, giving fifteen. It reads trades, not candles, which is why this is a new part rather than a change to the kline window builder -- the volatility branch here is built on OHLCV and cannot see the tick sequence at all."
+    },
+    {
+      "id": "flow-entropy-meter",
+      "name": "Flow entropy meter",
+      "role": "measure how structured the recent order flow is",
+      "category": "prediction",
+      "consumes": [
+        "order-flow-state"
+      ],
+      "produces": [
+        "flow-entropy",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "A 15x15 transition matrix estimated over a rolling 120-second window, its stationary distribution taken by eigendecomposition, entropy computed as the stationary-weighted average of row entropies and normalised by log 15. Rows with no observed transitions default to uniform. Separated from the encoder because the state definition and the entropy estimator are two things that will be replaced at different times."
+    },
+    {
+      "id": "entropy-magnitude-forecaster",
+      "name": "Entropy magnitude forecaster",
+      "role": "forecast how far price moves next from how structured the flow is",
+      "category": "prediction",
+      "consumes": [
+        "flow-entropy",
+        "vol-feature-set"
+      ],
+      "produces": [
+        "volatility-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place."
     }
   ],
   "control_plane": {
