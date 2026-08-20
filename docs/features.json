@@ -148,15 +148,20 @@
     {
       "id": "prediction",
       "name": "Prediction",
-      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
+      "summary": "Predicts what the market does next, from candles alone. Built on Kronos, the open-source foundation model for K-line sequences: a tokenizer quantises OHLCV into hierarchical discrete tokens, an autoregressive transformer continues the sequence. Both halves are finetuned on the assets actually traded here.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "price-forecast",
+        "forecast-accuracy",
+        "part-health"
+      ],
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user",
-      "shape": "peer"
+      "scope_origin": "user"
     },
     {
       "id": "online-research",
@@ -251,7 +256,8 @@
         "order-request",
         "fill",
         "position",
-        "research-finding"
+        "research-finding",
+        "forecast-accuracy"
       ],
       "produces": [
         "journal-entry",
@@ -421,9 +427,138 @@
       "id": "llm-response",
       "name": "LLM response",
       "description": "The model's answer, returned to whichever block asked."
+    },
+    {
+      "id": "kline-window",
+      "name": "K-line window",
+      "description": "A fixed-length run of OHLCV candles, the shape the Kronos tokenizer expects. Bounded by the model's context limit."
+    },
+    {
+      "id": "price-forecast",
+      "name": "price forecast",
+      "description": "Predicted candles for the periods ahead, with the model version that produced them."
+    },
+    {
+      "id": "forecast-accuracy",
+      "name": "forecast accuracy",
+      "description": "How a past forecast actually scored against what the market did. A forecast nobody scores is an assertion."
+    },
+    {
+      "id": "finetuned-model",
+      "name": "finetuned model",
+      "description": "Kronos weights adapted to the assets actually traded here, tokenizer included."
+    },
+    {
+      "id": "model-choice",
+      "name": "model choice",
+      "description": "Which Kronos size to run: mini, small or base."
     }
   ],
-  "features": [],
+  "features": [
+    {
+      "id": "kline-window-builder",
+      "name": "K-line window builder",
+      "role": "shape live market data into the fixed candlestick window the model expects",
+      "category": "prediction",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "kline-window",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    },
+    {
+      "id": "kronos-forecaster",
+      "name": "Kronos forecaster",
+      "role": "run the Kronos model over a candlestick window to produce a price forecast",
+      "category": "prediction",
+      "consumes": [
+        "kline-window",
+        "finetuned-model",
+        "model-choice"
+      ],
+      "produces": [
+        "price-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user"
+    },
+    {
+      "id": "kronos-finetuner",
+      "name": "Kronos finetuner",
+      "role": "adapt the Kronos tokenizer plus predictor to the assets actually traded here",
+      "category": "prediction",
+      "consumes": [
+        "kline-window"
+      ],
+      "produces": [
+        "finetuned-model",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user"
+    },
+    {
+      "id": "forecast-scorer",
+      "name": "Forecast scorer",
+      "role": "score each past forecast against what the market actually did",
+      "category": "prediction",
+      "consumes": [
+        "price-forecast",
+        "market-data"
+      ],
+      "produces": [
+        "forecast-accuracy",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    },
+    {
+      "id": "kronos-size-selector",
+      "name": "Kronos size selector",
+      "role": "choose which Kronos model size to run based on measured forecast accuracy",
+      "category": "prediction",
+      "consumes": [
+        "forecast-accuracy"
+      ],
+      "produces": [
+        "model-choice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    }
+  ],
   "control_plane": {
     "driver": "resource-governor",
     "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
@@ -458,5 +593,20 @@
     "given": "2026-08-20",
     "note": "Intelligence, knowledge, prediction, learning loop, hypothesis and the AI brain are peers, side by side. The AI brain is not a container. Each is a block like any other, connected by data.",
     "still_needed": "A one-line job for intelligence, knowledge, prediction and learning loop. Until then they carry no flow rather than an invented one."
-  }
+  },
+  "upstream_dependencies": [
+    {
+      "id": "kronos",
+      "name": "Kronos",
+      "repo": "shiyu-coder/Kronos",
+      "license": "MIT",
+      "paper": "https://arxiv.org/abs/2508.02739",
+      "verified": "2026-08-20 via gh, not from the social post",
+      "stars_at_check": 37616,
+      "forks_at_check": 6254,
+      "last_push": "2026-04-13",
+      "note": "Decoder-only foundation model family for K-line sequences from Tsinghua, accepted to AAAI 2026. Model zoo: Kronos-mini 4.1M params context 2048, Kronos-small 24.7M context 512, Kronos-base 102.3M context 512. Kronos-large 499.2M is NOT open-source. Finetuning scripts released 2025-08-17.",
+      "used_by": "prediction"
+    }
+  ]
 }

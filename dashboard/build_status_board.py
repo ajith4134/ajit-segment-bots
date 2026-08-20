@@ -752,6 +752,60 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
   }}
   .category.proposed .category-origin {{ color: var(--warn); }}
   .category p {{ margin: 0; font-size: .86rem; color: var(--muted); }}
+  .category-scope {{
+    align-self: flex-start;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .62rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: .12rem .35rem;
+  }}
+
+  .table-wrap {{ overflow-x: auto; }}
+  .feature-table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .88rem;
+    min-width: 640px;
+  }}
+  .feature-table th {{
+    text-align: left;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    padding: .5rem .7rem;
+    border-bottom: 1px solid var(--line-strong);
+  }}
+  .feature-table td {{
+    padding: .6rem .7rem;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--muted);
+  }}
+  .feature-table td:first-child {{ color: var(--ink); white-space: nowrap; }}
+  .feature-table .mono {{
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem;
+  }}
+  .origin-tag {{
+    display: inline-block;
+    margin-left: .5rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .6rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    padding: .1rem .3rem;
+    vertical-align: middle;
+  }}
 
   footer {{
     border-top: 1px solid var(--line);

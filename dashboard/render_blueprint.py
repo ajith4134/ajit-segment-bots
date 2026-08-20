@@ -97,11 +97,14 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
     known_features = {entry.get("id") for entry in registry.features}
     vocabulary = set(registry.state_vocabulary)
 
+    # A category's declared contract counts as a producer and a consumer. During the
+    # blueprint phase most blocks have no features yet, and a feature reading from a
+    # block that is declared but not yet built out is correct, not a defect.
     produced: set[str] = set()
     consumed: set[str] = set()
-    for feature in registry.features:
-        produced.update(feature.get("produces", []))
-        consumed.update(feature.get("consumes", []))
+    for source in list(registry.features) + list(registry.categories):
+        produced.update(source.get("produces", []))
+        consumed.update(source.get("consumes", []))
 
     for feature in registry.features:
         name = feature.get("name", feature.get("id", "?"))
@@ -440,74 +443,131 @@ def render_category_list(registry: FeatureRegistry) -> str:
     cards = []
     for category in registry.categories:
         origin = category.get("origin", "unknown")
+        scope = category.get("scope", "")
+        scope_tag = f'<div class="category-scope">{html.escape(scope)}</div>' if scope else ""
         cards.append(
             f'<article class="category {html.escape(origin)}">'
             f'<div class="category-name">{html.escape(category.get("name", category["id"]))}</div>'
             f'<div class="category-origin">{html.escape(origin)}</div>'
+            f"{scope_tag}"
             f'<p>{html.escape(category.get("summary", ""))}</p>'
             f"</article>"
         )
     return f'<div class="category-grid">{"".join(cards)}</div>'
 
 
+def features_in(registry: FeatureRegistry, category_id: str) -> list[dict]:
+    return [f for f in registry.features if f.get("category") == category_id]
+
+
+def render_feature_diagram(registry: FeatureRegistry, category_id: str) -> str:
+    """Inside one block: its own parts, and the data crossing its boundary."""
+    inside = features_in(registry, category_id)
+    if not inside:
+        return ""
+    category = next(c for c in registry.categories if c["id"] == category_id)
+    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
+    own = {f["id"] for f in inside}
+
+    lines = [MERMAID_INIT, "flowchart LR"]
+    lines.append(f'  subgraph inside["Inside {_mermaid_safe(category.get("name", category_id))}"]')
+    for feature in inside:
+        lines.append(f'    {feature["id"]}["{_mermaid_safe(feature.get("name", feature["id"]))}"]')
+    lines.append("  end")
+
+    # The boundary is the block's own declared contract, not whatever happens to be
+    # unconsumed inside it. A type can be read internally AND leave the block --
+    # forecast accuracy feeds the size selector here and still goes to the ledger.
+    external_in = set(category.get("consumes", []))
+    external_out = {t for t in category.get("produces", []) if t != "part-health"}
+
+    for type_id in sorted(external_in):
+        node = f"in_{type_id.replace('-', '_')}"
+        lines.append(f'  {node}[/"{_mermaid_safe(type_names.get(type_id, type_id))} in"/]')
+        for feature in inside:
+            if type_id in feature.get("consumes", []):
+                lines.append(f'  {node} --> {feature["id"]}')
+
+    for type_id in sorted(external_out):
+        node = f"out_{type_id.replace('-', '_')}"
+        lines.append(f'  {node}[/"{_mermaid_safe(type_names.get(type_id, type_id))} out"/]')
+        for feature in inside:
+            if type_id in feature.get("produces", []):
+                lines.append(f'  {feature["id"]} --> {node}')
+
+    for producer in inside:
+        for type_id in producer.get("produces", []):
+            if type_id == "part-health":
+                continue
+            for consumer in inside:
+                if consumer is producer:
+                    continue
+                if type_id in consumer.get("consumes", []):
+                    label = _mermaid_safe(type_names.get(type_id, type_id))
+                    lines.append(f'  {producer["id"]} -- {label} --> {consumer["id"]}')
+
+    return "\n".join(lines)
+
+
+def render_feature_table(registry: FeatureRegistry, category_id: str) -> str:
+    rows = []
+    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
+    for feature in features_in(registry, category_id):
+        reads = ", ".join(type_names.get(t, t) for t in feature.get("consumes", [])) or "—"
+        writes = ", ".join(
+            type_names.get(t, t) for t in feature.get("produces", []) if t != "part-health"
+        ) or "—"
+        rows.append(
+            f'<tr><td><strong>{html.escape(feature.get("name", feature["id"]))}</strong>'
+            f'<span class="origin-tag">{html.escape(feature.get("origin", "?"))}</span></td>'
+            f'<td>{html.escape(feature.get("role", ""))}</td>'
+            f'<td class="mono">{html.escape(reads)}</td>'
+            f'<td class="mono">{html.escape(writes)}</td></tr>'
+        )
+    return (
+        '<div class="table-wrap"><table class="feature-table">'
+        "<thead><tr><th>part</th><th>its one responsibility</th><th>reads</th><th>writes</th></tr></thead>"
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
+def render_deep_dives(registry: FeatureRegistry) -> str:
+    """Each block that has been opened up, as its own mini project."""
+    sections = []
+    for category in registry.categories:
+        if not features_in(registry, category["id"]):
+            continue
+        sections.append(
+            f'<h3 class="plane-head">Inside {html.escape(category.get("name", category["id"]))} — '
+            f'{len(features_in(registry, category["id"]))} parts</h3>'
+            f'<div class="diagram"><pre class="mermaid">'
+            f'{html.escape(render_feature_diagram(registry, category["id"]))}</pre></div>'
+            f'{render_feature_table(registry, category["id"])}'
+        )
+    return "".join(sections)
+
+
 def render_blueprint_section(registry: FeatureRegistry) -> str:
-    """The blueprint's region of the board: the diagram, or an honest gap."""
+    """The blueprint: the blocks, the flow between them, and any block opened up."""
     if not registry.has_categories:
         return (
-            '<div class="empty-frame">'
-            '<div class="headline">Awaiting the foundation blocks</div>'
-            "<p>The setup is ready. <code>docs/features.json</code> is the single source this "
-            "diagram is drawn from, and it holds nothing yet.</p>"
-            "</div>"
+            '<div class="empty-frame"><div class="headline">Awaiting the foundation blocks</div>'
+            "<p>The registry holds nothing yet.</p></div>"
         )
 
-    if not registry.has_features:
-        if not registry.has_declared_flow:
-            return (
-                f'<div class="diagram-meta"><span>{len(registry.categories)} categories</span>'
-                f"<span>flow not declared</span></div>"
-                f'<div class="diagram"><pre class="mermaid">'
-                f"{html.escape(render_category_blocks(registry))}</pre></div>"
-                f'<div class="empty-frame"><div class="headline">Blocks stand, flow not yet drawn</div>'
-                f"<p>Shown without arrows on purpose: which category feeds which has not been said, "
-                f"and an inferred arrow would later be mistaken for a decision that was made.</p></div>"
-                f"{render_category_list(registry)}"
-            )
-
-        gaps = find_flow_gaps(registry)
-        data_edges = [e for e in derive_category_edges(registry) if e[2] != "part-health"]
-        gap_markup = ""
-        if gaps:
-            items = "".join(f"<li>{html.escape(g)}</li>" for g in gaps)
-            gap_markup = (
-                f'<div class="gaps"><div class="gaps-head">{len(gaps)} open gap(s) — '
-                f"not defects, things the user has not said yet</div><ul>{items}</ul></div>"
-            )
+    if not registry.has_declared_flow:
         return (
-            f'<div class="diagram-meta">'
-            f"<span>{len(registry.categories)} categories</span>"
-            f"<span>{len(registry.data_types)} data types</span>"
-            f"<span>{len(data_edges)} data-plane edges</span>"
-            f"<span>0 features described</span>"
-            f"</div>"
-            f'<h3 class="plane-head">Data plane — what moves between the blocks</h3>'
+            f'<div class="diagram-meta"><span>{len(registry.categories)} categories</span>'
+            f"<span>flow not declared</span></div>"
             f'<div class="diagram"><pre class="mermaid">'
-            f"{html.escape(render_data_plane(registry))}</pre></div>"
-            f'<h3 class="plane-head">Recording — everything the ledger keeps</h3>'
-            f'<div class="diagram"><pre class="mermaid">'
-            f"{html.escape(render_recording_plane(registry))}</pre></div>"
-            f'<h3 class="plane-head">Control plane — health out, switching in (T-2)</h3>'
-            f'<div class="diagram"><pre class="mermaid">'
-            f"{html.escape(render_control_plane(registry))}</pre></div>"
-            f"{gap_markup}"
-            f'<div class="empty-frame"><div class="headline">This flow is proposed, not agreed</div>'
-            f"<p>Every edge above was drawn by Claude from what the user described, and each carries "
-            f"<code>flow_origin: proposed</code> in the registry. The six blocks in the grey box were "
-            f"named but not described, so they have no flow at all rather than an invented one.</p></div>"
+            f"{html.escape(render_category_blocks(registry))}</pre></div>"
             f"{render_category_list(registry)}"
         )
 
     violations = find_contract_violations(registry)
+    gaps = find_flow_gaps(registry)
+    data_edges = [e for e in derive_category_edges(registry) if e[2] != "part-health"]
+
     violation_markup = ""
     if violations:
         items = "".join(f"<li>{html.escape(v)}</li>" for v in violations)
@@ -515,16 +575,33 @@ def render_blueprint_section(registry: FeatureRegistry) -> str:
             f'<div class="violations"><div class="violations-head">'
             f"{len(violations)} contract violation(s)</div><ul>{items}</ul></div>"
         )
+    gap_markup = ""
+    if gaps:
+        items = "".join(f"<li>{html.escape(g)}</li>" for g in gaps)
+        gap_markup = (
+            f'<div class="gaps"><div class="gaps-head">{len(gaps)} open gap(s) — '
+            f"not defects, things the user has not said yet</div><ul>{items}</ul></div>"
+        )
 
     return (
         f'<div class="diagram-meta">'
         f"<span>{len(registry.categories)} categories</span>"
-        f"<span>{len(registry.features)} features</span>"
+        f"<span>{len(registry.features)} parts described</span>"
         f"<span>{len(registry.data_types)} data types</span>"
-        f"<span>{count_derived_edges(registry)} derived edges</span>"
+        f"<span>{len(data_edges)} block edges</span>"
         f"</div>"
         f"{violation_markup}"
-        f'<div class="diagram"><pre class="mermaid">{html.escape(render_mermaid_flowchart(registry))}</pre></div>'
+        f'<h3 class="plane-head">Data plane — what moves between the blocks</h3>'
+        f'<div class="diagram"><pre class="mermaid">'
+        f"{html.escape(render_data_plane(registry))}</pre></div>"
+        f'<h3 class="plane-head">Recording — everything the ledger keeps</h3>'
+        f'<div class="diagram"><pre class="mermaid">'
+        f"{html.escape(render_recording_plane(registry))}</pre></div>"
+        f'<h3 class="plane-head">Control plane — health out, switching in (T-2)</h3>'
+        f'<div class="diagram"><pre class="mermaid">'
+        f"{html.escape(render_control_plane(registry))}</pre></div>"
+        f"{render_deep_dives(registry)}"
+        f"{gap_markup}"
         f"{render_category_list(registry)}"
     )
 
