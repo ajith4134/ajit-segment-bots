@@ -1,4 +1,4 @@
-# The part runtime — design
+# The part runtime
 
 **Status:** approved in conversation 2026-08-20. Supersedes nothing; this is the
 first implementation spec in the project.
