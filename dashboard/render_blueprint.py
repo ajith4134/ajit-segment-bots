@@ -243,28 +243,98 @@ def find_flow_gaps(registry: FeatureRegistry) -> list[str]:
     return gaps
 
 
+MERMAID_INIT = (
+    "%%{init: {'flowchart': {'nodeSpacing': 55, 'rankSpacing': 85, 'padding': 14, "
+    "'useMaxWidth': false, 'curve': 'basis'}, 'themeVariables': {'fontSize': '17px'}}}%%"
+)
+
+# Recording is drawn on its own. Seven edges converging on the ledger in the trade
+# diagram made the spine unreadable, and the spine is the thing being judged.
+RECORDING_TYPE = "journal-entry"
+RECORDER = "ledger"
+
+
+def _node(category: dict, indent: str = "  ") -> str:
+    return f'{indent}{category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]'
+
+
 def render_data_plane(registry: FeatureRegistry) -> str:
-    """The data plane: what actually moves between the foundation blocks."""
-    lines = ["flowchart LR"]
-    described = [c for c in registry.categories if c.get("flow_origin") == "proposed"]
+    """The trade spine: what moves between the blocks, with containment shown.
+
+    Only blocks with a drawn edge appear. The ledger's inbound edges live in
+    render_recording_plane and health lives in the control plane, so the blocks
+    whose only traffic is one of those would otherwise float here edgeless.
+    """
+    lines = [MERMAID_INIT, "flowchart LR"]
+    described = {c["id"]: c for c in registry.categories if c.get("flow_origin") == "proposed"}
     awaiting = [c for c in registry.categories if c.get("flow_origin") != "proposed"]
 
-    for category in described:
-        lines.append(f'  {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
+    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
+    edges = [
+        (a, b, ty)
+        for a, b, ty in derive_category_edges(registry)
+        if ty != "part-health" and b != RECORDER and a != RECORDER
+    ]
+    drawn = {a for a, _, _ in edges} | {b for _, b, _ in edges}
+
+    children: dict[str, list[dict]] = {}
+    for cid, category in described.items():
+        parent = category.get("parent")
+        if parent and cid in drawn:
+            children.setdefault(parent, []).append(category)
+    nested = {c["id"] for group in children.values() for c in group}
+
+    for cid, category in described.items():
+        if cid not in drawn or cid in nested:
+            continue
+        held = children.get(cid)
+        if held:
+            # The box is the container; the block's own node inside it is the part
+            # the user named separately, so it gets its own label rather than the
+            # container's repeated back at the reader.
+            box_label = _mermaid_safe(category.get("box_label", category.get("name", cid)))
+            inner = _mermaid_safe(category.get("inner_label", category.get("name", cid)))
+            lines.append(f'  subgraph {cid}_box["{box_label}"]')
+            lines.append(f'    {cid}["{inner}"]')
+            for child in held:
+                lines.append(_node(child, "    "))
+            lines.append("  end")
+        else:
+            lines.append(_node(category))
+
+    for producer_id, consumer_id, type_id in edges:
+        lines.append(f"  {producer_id} -- {_mermaid_safe(type_names.get(type_id, type_id))} --> {consumer_id}")
 
     if awaiting:
-        lines.append('  subgraph undescribed["Named, not yet described - no flow declared"]')
+        lines.append('  subgraph undescribed["Named, not described - no flow declared"]')
         for category in awaiting:
-            lines.append(f'    {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
+            lines.append(_node(category, "    "))
         lines.append("  end")
 
-    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
-    for producer_id, consumer_id, type_id in derive_category_edges(registry):
-        if type_id == "part-health":       # drawn in the control/health plane instead
-            continue
-        label = _mermaid_safe(type_names.get(type_id, type_id))
-        lines.append(f"  {producer_id} -- {label} --> {consumer_id}")
+    return "\n".join(lines)
 
+
+def render_recording_plane(registry: FeatureRegistry) -> str:
+    """Everything the ledger records. Its own diagram so the trade spine stays clear."""
+    lines = [MERMAID_INIT, "flowchart LR"]
+    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
+    inbound = [e for e in derive_category_edges(registry) if e[1] == RECORDER and e[2] != "part-health"]
+    if not inbound:
+        return ""
+
+    lines.append('  subgraph sources["Recorded from"]')
+    for producer_id in sorted({e[0] for e in inbound}):
+        source = next(c for c in registry.categories if c["id"] == producer_id)
+        lines.append(_node(source, "    "))
+    lines.append("  end")
+    lines.append(f'  {RECORDER}["Ledger and audit trail"]')
+
+    for producer_id, _, type_id in inbound:
+        lines.append(f"  {producer_id} -- {_mermaid_safe(type_names.get(type_id, type_id))} --> {RECORDER}")
+
+    gap_label = _mermaid_safe(type_names.get(RECORDING_TYPE, RECORDING_TYPE))
+    lines.append(f'  no_consumer["No consumer yet - the learning loop is undescribed"]')
+    lines.append(f"  {RECORDER} -. {gap_label} .-> no_consumer")
     return "\n".join(lines)
 
 
@@ -278,7 +348,7 @@ def render_control_plane(registry: FeatureRegistry) -> str:
     driver_name = next(
         (c.get("name", c["id"]) for c in registry.categories if c["id"] == driver), driver
     )
-    lines = ["flowchart LR", f'  governor["{_mermaid_safe(driver_name)}"]']
+    lines = [MERMAID_INIT, "flowchart LR", f'  governor["{_mermaid_safe(driver_name)}"]']
     emitters = [c for c in registry.categories if "part-health" in c.get("produces", [])]
 
     lines.append('  subgraph parts["Every other part"]')
@@ -296,7 +366,7 @@ def render_category_blocks(registry: FeatureRegistry) -> str:
     Drawn without edges on purpose: which category feeds which has not been said,
     and an inferred arrow here would later be mistaken for a decision the user made.
     """
-    lines = ["flowchart TB"]
+    lines = [MERMAID_INIT, "flowchart TB"]
     for category in registry.categories:
         label = _mermaid_safe(category.get("name", category["id"]))
         lines.append(f'  {category["id"]}["{label}"]')
@@ -393,6 +463,9 @@ def render_blueprint_section(registry: FeatureRegistry) -> str:
             f'<h3 class="plane-head">Data plane — what moves between the blocks</h3>'
             f'<div class="diagram"><pre class="mermaid">'
             f"{html.escape(render_data_plane(registry))}</pre></div>"
+            f'<h3 class="plane-head">Recording — everything the ledger keeps</h3>'
+            f'<div class="diagram"><pre class="mermaid">'
+            f"{html.escape(render_recording_plane(registry))}</pre></div>"
             f'<h3 class="plane-head">Control plane — health out, switching in (T-2)</h3>'
             f'<div class="diagram"><pre class="mermaid">'
             f"{html.escape(render_control_plane(registry))}</pre></div>"

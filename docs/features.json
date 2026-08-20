@@ -46,7 +46,7 @@
     {
       "id": "opportunity-scanner",
       "name": "Universal opportunity scanner",
-      "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. Does not know whether the money is paper or live.",
+      "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. Lives inside the segment bot, alongside the bull, bear and profit-tailgating bots. Does not know whether the money is paper or live.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -57,12 +57,13 @@
         "entry-candidate",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "parent": "segment-bot"
     },
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "Three bots live inside the segment bot: bull, bear, profit tailgating. Internals detailed at implementation time.",
+      "summary": "The container. Inside it live the universal opportunity scanner and the three bots: bull, bear, profit tailgating. Internals detailed at implementation time.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -73,7 +74,12 @@
         "trade-intent",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "contains": [
+        "opportunity-scanner"
+      ],
+      "box_label": "Segment bot",
+      "inner_label": "Bull / bear / profit tailgating"
     },
     {
       "id": "intelligence",

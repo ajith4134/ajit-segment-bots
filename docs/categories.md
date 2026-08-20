@@ -118,3 +118,27 @@ so the provenance stays visible.
 **Total: 17 foundation categories.** Every future feature belongs to exactly one.
 A feature fitting none means a category is missing, and that is raised with the
 user rather than invented.
+
+---
+
+# Correction 2026-08-20 — the scanner lives inside the segment bot
+
+> "Universal opportunity scanner should be inside the segment bot"
+
+**C-02 is now nested inside C-03.** The segment bot is a container, and inside it
+live four things the user has named:
+
+- the universal opportunity scanner
+- the bull bot
+- the bear bot
+- the profit-tailgating bot
+
+The scanner's own contract is unchanged — it still consumes market data and
+current positions, still produces an entry candidate, and still knows nothing
+about whether the money is paper or live. What changed is where it sits: the
+entry candidate now moves *within* the segment bot rather than into it, and the
+segment bot as a whole is what the rest of the system sees.
+
+In the registry this is `parent: segment-bot` on the scanner and
+`contains: [opportunity-scanner]` on the segment bot. The diagram renders it as a
+box, so containment is visible rather than implied.

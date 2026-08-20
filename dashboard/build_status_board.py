@@ -364,7 +364,7 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     -webkit-font-smoothing: antialiased;
   }}
   .page {{
-    max-width: 1080px;
+    max-width: 1180px;
     margin: 0 auto;
     padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 4vw, 2rem) 5rem;
     display: flex;
@@ -513,10 +513,20 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 3px;
-    padding: 1.25rem;
+    padding: 1.5rem 1.25rem;
     overflow-x: auto;
     box-shadow: var(--shadow);
   }}
+  /* Mermaid shrinks to fit and the labels go to mush. Give it real room and let
+     the container scroll instead of the diagram collapsing. */
+  .diagram svg {{
+    min-width: 780px;
+    height: auto !important;
+    max-width: none !important;
+    display: block;
+    margin: 0 auto;
+  }}
+  .diagram .mermaid {{ margin: 0; }}
   .violations {{
     border: 1px solid var(--fail);
     border-left: 3px solid var(--fail);
