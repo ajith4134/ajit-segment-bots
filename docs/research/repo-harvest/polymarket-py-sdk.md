@@ -30,7 +30,7 @@ Note: `python/ccxt`-style top-level files (`auth.py`, `calls.py`, `rate_limit.py
    first-class part of the signed struct, not an out-of-band tag — attribution survives on-chain.
    Relevant to `order-request`: carrying an attribution/idempotency field inside the signed payload
    itself (not just as a side-channel header) is stronger than ccxt's client-order-id-in-params
-   approach (see `ccxt.md`).
+   approach (see the ccxt harvest note).
 
 3. **Order book walked to resolve a slippage-bounded market price before sizing, with FOK vs FAK
    semantics.** `src/polymarket/_internal/actions/orders/estimate.py:_calculate_buy_market_price` /
@@ -60,7 +60,7 @@ Note: `python/ccxt`-style top-level files (`auth.py`, `calls.py`, `rate_limit.py
    415) and attached to the exception, but nothing loops. Rate-limit state (`Poly-RateLimit-Remaining`,
    `-Reset`, `-Tier`, `-Warning` headers) is parsed every response and pushed to an optional listener
    callback (`_notify_rate_limit_update`, line 376) rather than acted on internally. This is the
-   opposite design choice from ccxt's automatic `fetch2` retry loop (see `ccxt.md` item 2) — worth
+   opposite design choice from ccxt's automatic `fetch2` retry loop (see the ccxt harvest note, item 2) — worth
    flagging explicitly for `order-resubmitter`: deciding *whether* to resubmit is risk/control-plane
    business, not transport plumbing, and Polymarket's SDK keeps that decision one layer up.
 
