@@ -41,7 +41,9 @@
         "order-request",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "opportunity-scanner",
@@ -59,7 +61,9 @@
         "part-health"
       ],
       "flow_origin": "proposed",
-      "parent": "segment-bot"
+      "parent": "segment-bot",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "segment-bot",
@@ -77,10 +81,13 @@
       ],
       "flow_origin": "proposed",
       "contains": [
-        "opportunity-scanner"
+        "opportunity-scanner",
+        "ai-brain"
       ],
       "box_label": "Segment bot",
-      "inner_label": "Bull / bear / profit tailgating"
+      "inner_label": "Bull / bear / profit tailgating",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "intelligence",
@@ -90,7 +97,9 @@
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "learning-loop",
@@ -100,7 +109,9 @@
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "hypothesis",
@@ -115,7 +126,9 @@
         "opportunity-instruction",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "knowledge",
@@ -125,7 +138,9 @@
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "prediction",
@@ -135,7 +150,9 @@
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "online-research",
@@ -148,7 +165,9 @@
         "research-finding",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "llm-services",
@@ -158,7 +177,9 @@
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "resource-governor",
@@ -170,7 +191,9 @@
         "part-health"
       ],
       "produces": [],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "global",
+      "scope_origin": "claude-flagged"
     },
     {
       "id": "market-data-feed",
@@ -183,7 +206,9 @@
         "market-data",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "risk-capital-allocation",
@@ -199,7 +224,9 @@
         "sized-order",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "ledger",
@@ -220,7 +247,9 @@
         "journal-entry",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "portfolio-state",
@@ -236,7 +265,9 @@
         "closed-trade",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "observability",
@@ -248,7 +279,9 @@
         "part-health"
       ],
       "produces": [],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "global",
+      "scope_origin": "claude-flagged"
     },
     {
       "id": "execution-venue-adapter",
@@ -263,17 +296,22 @@
         "fill",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "ai-brain",
       "name": "AI brain",
-      "summary": "Named by the user on 2026-08-20 as a new feature. Contents, placement and flow not yet described.",
+      "summary": "Named by the user as a new feature and placed inside each segment bot, alongside the scanner and the bull, bear and profit-tailgating bots. What it does is not yet described, so it has no flow.",
       "origin": "user",
       "approved": true,
       "consumes": [],
       "produces": [],
-      "flow_origin": "awaiting-description"
+      "flow_origin": "awaiting-description",
+      "parent": "segment-bot",
+      "scope": "per-segment",
+      "scope_origin": "user"
     },
     {
       "id": "closed-trade-decoding",
@@ -288,7 +326,9 @@
         "decoded-trade-instruction",
         "part-health"
       ],
-      "flow_origin": "proposed"
+      "flow_origin": "proposed",
+      "scope": "per-segment",
+      "scope_origin": "user"
     }
   ],
   "state_vocabulary": [
@@ -383,6 +423,12 @@
         "name": "Options"
       }
     ],
-    "origin": "user"
+    "origin": "user",
+    "scope_decision": {
+      "choice": "split",
+      "given": "2026-08-20",
+      "note": "Each segment gets its own of every block. Three risk allocators, three portfolios, three ledgers, three feeds, three hypothesis features. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself.",
+      "flagged": "The hardware resource governor and observability are marked global rather than split, because three governors on one machine, each blind to the other two and competing for the same RAM, is the queueing C-11 exists to prevent. Awaiting the user's confirmation."
+    }
   }
 }

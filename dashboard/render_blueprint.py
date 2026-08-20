@@ -38,6 +38,7 @@ class FeatureRegistry:
     features: list[dict] = field(default_factory=list)
     state_vocabulary: list[str] = field(default_factory=list)
     control_plane: dict = field(default_factory=dict)
+    segments: dict = field(default_factory=dict)
 
     @property
     def has_features(self) -> bool:
@@ -67,6 +68,7 @@ def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
         features=raw.get("features", []),
         state_vocabulary=raw.get("state_vocabulary", []),
         control_plane=raw.get("control_plane", {}),
+        segments=raw.get("segments", {}),
     )
 
 
@@ -259,15 +261,17 @@ def _node(category: dict, indent: str = "  ") -> str:
 
 
 def render_data_plane(registry: FeatureRegistry) -> str:
-    """The trade spine: what moves between the blocks, with containment shown.
+    """The trade spine, wrapped in the segment bot it is instantiated inside.
 
-    Only blocks with a drawn edge appear. The ledger's inbound edges live in
-    render_recording_plane and health lives in the control plane, so the blocks
-    whose only traffic is one of those would otherwise float here edgeless.
+    Every per-segment block sits in one outer box, because the user's decision is
+    that the whole thing is copied per segment rather than shared. Blocks marked
+    global sit outside it. A nested block with no flow is still drawn -- its
+    placement is information even when its behaviour is not yet described.
     """
     lines = [MERMAID_INIT, "flowchart LR"]
     described = {c["id"]: c for c in registry.categories if c.get("flow_origin") == "proposed"}
     awaiting = [c for c in registry.categories if c.get("flow_origin") != "proposed"]
+    by_id = {c["id"]: c for c in registry.categories}
 
     type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
     edges = [
@@ -278,36 +282,54 @@ def render_data_plane(registry: FeatureRegistry) -> str:
     drawn = {a for a, _, _ in edges} | {b for _, b, _ in edges}
 
     children: dict[str, list[dict]] = {}
-    for cid, category in described.items():
+    for cid, category in by_id.items():
         parent = category.get("parent")
-        if parent and cid in drawn:
+        if parent:
             children.setdefault(parent, []).append(category)
     nested = {c["id"] for group in children.values() for c in group}
 
-    for cid, category in described.items():
-        if cid not in drawn or cid in nested:
-            continue
+    segments = registry.segments.get("members", [])
+    segment_names = " / ".join(s.get("name", s["id"]) for s in segments)
+    per_segment = [
+        cid for cid, c in described.items()
+        if c.get("scope") != "global" and (cid in drawn or cid in children) and cid not in nested
+    ]
+
+    def emit(cid: str, indent: str) -> None:
+        category = by_id[cid]
         held = children.get(cid)
         if held:
-            # The box is the container; the block's own node inside it is the part
-            # the user named separately, so it gets its own label rather than the
-            # container's repeated back at the reader.
-            box_label = _mermaid_safe(category.get("box_label", category.get("name", cid)))
+            box = _mermaid_safe(category.get("box_label", category.get("name", cid)))
             inner = _mermaid_safe(category.get("inner_label", category.get("name", cid)))
-            lines.append(f'  subgraph {cid}_box["{box_label}"]')
-            lines.append(f'    {cid}["{inner}"]')
+            lines.append(f'{indent}subgraph {cid}_box["{box}"]')
+            lines.append(f'{indent}  {cid}["{inner}"]')
             for child in held:
-                lines.append(_node(child, "    "))
-            lines.append("  end")
+                label = _mermaid_safe(child.get("name", child["id"]))
+                if child["id"] in drawn:
+                    lines.append(f'{indent}  {child["id"]}["{label}"]')
+                else:
+                    lines.append(f'{indent}  {child["id"]}[/"{label} - not described"/]')
+            lines.append(f"{indent}end")
         else:
-            lines.append(_node(category))
+            lines.append(f'{indent}{cid}["{_mermaid_safe(category.get("name", cid))}"]')
+
+    if per_segment:
+        lines.append(f'  subgraph one_segment["One segment bot - instantiated per segment: {_mermaid_safe(segment_names)}"]')
+        for cid in per_segment:
+            emit(cid, "    ")
+        lines.append("  end")
+
+    for cid, category in described.items():
+        if category.get("scope") == "global" and cid in drawn and cid not in nested:
+            emit(cid, "  ")
 
     for producer_id, consumer_id, type_id in edges:
         lines.append(f"  {producer_id} -- {_mermaid_safe(type_names.get(type_id, type_id))} --> {consumer_id}")
 
-    if awaiting:
+    unplaced = [c for c in awaiting if not c.get("parent")]
+    if unplaced:
         lines.append('  subgraph undescribed["Named, not described - no flow declared"]')
-        for category in awaiting:
+        for category in unplaced:
             lines.append(_node(category, "    "))
         lines.append("  end")
 
