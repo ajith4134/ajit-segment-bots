@@ -129,7 +129,8 @@
         "trade-episode",
         "forecast-accuracy",
         "recalled-episode",
-        "semantic-fact"
+        "semantic-fact",
+        "loaded-skill-section"
       ],
       "produces": [
         "opportunity-instruction",
@@ -275,7 +276,8 @@
         "position",
         "research-finding",
         "forecast-accuracy",
-        "ablation-scorecard"
+        "ablation-scorecard",
+        "skill-usefulness"
       ],
       "produces": [
         "journal-entry",
@@ -367,6 +369,25 @@
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
+    },
+    {
+      "id": "skills",
+      "name": "Skills",
+      "summary": "Reads books, research papers, community chats and anything else, and converts each into a skill the brains load on demand. Distilled into structure -- frameworks, decision rules, anti-patterns -- never a summary. Only the section a question needs is loaded, so the library can be large without costing anything until it is used.",
+      "origin": "user",
+      "approved": true,
+      "scope": "per-segment",
+      "scope_origin": "user",
+      "consumes": [
+        "research-finding",
+        "trade-episode"
+      ],
+      "produces": [
+        "loaded-skill-section",
+        "skill-usefulness",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     }
   ],
   "state_vocabulary": [
@@ -523,6 +544,31 @@
       "id": "ablation-scorecard",
       "name": "ablation scorecard",
       "description": "What measurably broke when each part was switched off, one row per part."
+    },
+    {
+      "id": "source-document",
+      "name": "source document",
+      "description": "A source pulled into text, whatever form it arrived in: book, paper, chat log, page."
+    },
+    {
+      "id": "skill",
+      "name": "skill",
+      "description": "A source distilled into structure -- frameworks, decision rules, anti-patterns -- with the trigger that says when it applies. Never a summary."
+    },
+    {
+      "id": "available-skill",
+      "name": "available skill",
+      "description": "An indexed skill, findable by what it is for rather than by its title."
+    },
+    {
+      "id": "loaded-skill-section",
+      "name": "loaded skill section",
+      "description": "Only the part of a skill the current question needs. This is what lets the library grow without a token cost."
+    },
+    {
+      "id": "skill-usefulness",
+      "name": "skill usefulness",
+      "description": "Whether loading a skill changed the outcome. A skill nobody scores is an assertion."
     }
   ],
   "features": [
@@ -895,7 +941,8 @@
         "decoded-trade-instruction",
         "expectancy-breakdown",
         "recalled-episode",
-        "semantic-fact"
+        "semantic-fact",
+        "loaded-skill-section"
       ],
       "produces": [
         "opportunity-instruction",
@@ -969,6 +1016,112 @@
       ],
       "origin": "proposed",
       "note": "Proves R-02 and T-3 rather than asserting them. It measures only: the governor does the switching, because T-2 forbids a feature reaching into the control plane."
+    },
+    {
+      "id": "source-ingester",
+      "name": "Source ingester",
+      "role": "pull a source into text whatever form it arrived in",
+      "category": "skills",
+      "consumes": [
+        "research-finding"
+      ],
+      "produces": [
+        "source-document",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Books, papers, community chats, pages. The form is the ingester's problem, never the distiller's."
+    },
+    {
+      "id": "skill-distiller",
+      "name": "Skill distiller",
+      "role": "distil a source document into a skill with its trigger described",
+      "category": "skills",
+      "consumes": [
+        "source-document"
+      ],
+      "produces": [
+        "skill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Structure, not a summary: frameworks, decision rules, anti-patterns, per-section files. A summary is what makes an agent hallucinate confidently."
+    },
+    {
+      "id": "skill-index",
+      "name": "Skill index",
+      "role": "hold every skill so one can be found by what it is for",
+      "category": "skills",
+      "consumes": [
+        "skill"
+      ],
+      "produces": [
+        "available-skill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Found by trigger rather than by title, the same reason episodes embed the condition rather than the outcome."
+    },
+    {
+      "id": "skill-loader",
+      "name": "Skill loader",
+      "role": "load only the section of a skill that the current question needs",
+      "category": "skills",
+      "consumes": [
+        "available-skill"
+      ],
+      "produces": [
+        "loaded-skill-section",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "THE mechanism. Procedural playbook rules are capped because they are always injected; a skill escapes that cap by being loaded only when relevant. The two are complementary, not competing."
+    },
+    {
+      "id": "skill-scorer",
+      "name": "Skill scorer",
+      "role": "score whether a loaded skill changed the outcome",
+      "category": "skills",
+      "consumes": [
+        "loaded-skill-section",
+        "trade-episode"
+      ],
+      "produces": [
+        "skill-usefulness",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Lets a skill that never changes anything be retired instead of accumulating."
     }
   ],
   "control_plane": {
@@ -1146,6 +1299,20 @@
       "use": "out of scope",
       "used_by": [],
       "note": "Prediction markets. Only relevant if they enter scope, which they have not."
+    },
+    {
+      "id": "book-to-skill",
+      "name": "book-to-skill",
+      "repo": "virgiliojr94/book-to-skill",
+      "license": "mit",
+      "stars": 23262,
+      "last_push": "2026-08-19",
+      "use": "candidate dependency",
+      "used_by": [
+        "skills"
+      ],
+      "verified": "2026-08-20 via gh \u2014 the post said 16.3k stars, the repo has 23,262",
+      "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     }
   ],
   "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported."

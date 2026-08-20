@@ -247,3 +247,60 @@ consumed by nothing; it now feeds decoding.
 enough to build the rest of the blueprint against, and they are re-opened when
 the design is locked and implementation starts. That re-opening is a scheduled
 step, not a courtesy.
+
+---
+
+# C-20 — Skills (added 2026-08-20)
+
+> "New foundation feature called skills it reads books , research papers ,
+> community chats etc many more and convert them to skills"
+
+Reads books, research papers, community chats and anything else, and converts
+each into a **skill** the brains load on demand.
+
+## Why this is not just another store
+
+The memory tiers (C-07 knowledge) settled a hard constraint: **procedural memory
+is never searched and always injected, so it is a fixed cost on every single scan
+— which is why it must be capped and hold behaviour rather than diagnosis.**
+
+That cap is the problem a skill library solves. A skill is **loaded only when a
+question needs it**, so the library can grow without end while costing nothing
+until it is used. The two are complementary rather than competing:
+
+| | procedural playbook | skill library |
+|---|---|---|
+| when read | every scan, always | only when the trigger matches |
+| size | **capped**, deliberately small | unbounded |
+| holds | the few rules that must always apply | everything worth knowing |
+| cost | fixed, paid every time | paid only on use |
+
+## Structure, not a summary
+
+The reference implementation is explicit about this and it is the part worth
+copying: a skill is **frameworks, decision rules and anti-patterns with
+per-chapter files** — never a summary. A summary is what makes an agent answer
+confidently from nothing. Structure is what lets it answer from the real content.
+
+The same argument as episodic memory embedding the *symptom* rather than the fix:
+a skill is indexed by **what it is for**, not by its title.
+
+## The five parts
+
+| part | its one responsibility |
+|---|---|
+| Source ingester | pull a source into text whatever form it arrived in |
+| Skill distiller | distil a source document into a skill with its trigger described |
+| Skill index | hold every skill so one can be found by what it is for |
+| **Skill loader** | **load only the section of a skill that the current question needs** |
+| Skill scorer | score whether a loaded skill changed the outcome |
+
+The scorer exists so a skill that never changes an outcome can be **retired**
+rather than quietly accumulating. A skill nobody scores is an assertion.
+
+## Reference
+
+`virgiliojr94/book-to-skill` — MIT, **23,262 stars**, pushed 2026-08-19, verified
+with `gh`. The screenshot said 16.3k; the repository has 23,262. It emits the open
+**Agent Skills** `SKILL.md` format, which Claude Code, Copilot CLI and Amp all
+read — so the output is not locked to one host.

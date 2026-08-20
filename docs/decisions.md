@@ -68,3 +68,33 @@ the answer exists later without re-deriving it, not as a caveat on today.
 most useful item in the set, and NautilusTrader from a licence-flagged reference
 to a live one. Backtrader stays deprioritised — for being two years stale, which
 was always a quality objection rather than a legal one.
+
+---
+
+## D-004 — Links become skills, not summaries
+
+**Given:** 2026-08-20, alongside C-20
+
+> "like this example I am give what I expect you do when I give you any links"
+
+**Standing instruction.** When the user sends a link — a paper, a book, a repo, a
+post, a chat log — the deliverable is a **skill**, not a summary and not a
+paragraph of notes.
+
+That means, every time:
+
+1. **Read the source at its own level.** Media, not captions. The
+   `instagram-content` skill's evidence is unambiguous: caption-only assessment
+   produces false conclusions, and it has produced them here already.
+2. **Verify every falsifiable claim** — repos, stars, licences, versions — with
+   `gh` or `curl`, never with a summariser. Star counts in posts are routinely
+   stale, and two have been wrong in this project already.
+3. **Distil into structure**: frameworks, decision rules, anti-patterns, with the
+   trigger that says when it applies. Never a summary — a summary is what makes an
+   agent answer confidently from nothing.
+4. **Say where it lands**, which foundation block it serves, and say plainly when
+   the answer is *nowhere*.
+5. **Publish it as a link**, since the user cannot open files on this server.
+
+This is the same discipline C-20 asks of the bot. The rule is that the project and
+the person building it work the same way.
