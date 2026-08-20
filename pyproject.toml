@@ -33,3 +33,6 @@ markers = [
     "cgroup: places a process in a systemd transient scope and reads its cgroup files",
     "slow: takes more than a second because it forks, kills, or waits on writeback",
 ]
+# Import `runtime` from the repository root rather than from wherever pytest was
+# invoked. Declared here so no test needs a sys.path line of its own.
+pythonpath = ["."]
