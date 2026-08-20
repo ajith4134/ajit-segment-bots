@@ -7,12 +7,15 @@ declarations. A feature never names another feature, so a new part cannot invent
 a private wire to an old one — it attaches to data that already exists, or
 declares data of its own.
 
-That is also what makes the flow checkable. Three violations are detectable
-without knowing anything about what the bot does:
+That is also what makes the flow checkable. These breaches are detectable without
+knowing anything about what the bot does (the rules are in docs/contracts.md):
 
-  dangling input   a feature consumes data no feature produces
-  orphan output    a feature produces data no feature consumes
-  isolated part    a feature neither reads nor feeds anything
+  R-01  dangling input   a feature consumes data no feature produces
+  R-01  orphan output    a feature produces data no feature consumes
+  R-01  isolated part    a feature neither reads nor feeds anything
+  R-01  undeclared type  a feature references a data type nobody declared
+  R-01  homeless part    a feature belongs to no declared category
+  R-02  no switch        a feature cannot be turned off and on
 
 Each is reported as a failing check rather than quietly drawn as a gap.
 """
@@ -83,6 +86,11 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
         if category not in known_categories:
             violations.append(
                 f"{name}: belongs to no declared category — every feature sits in exactly one"
+            )
+        if not feature.get("switchable"):
+            violations.append(
+                f"{name}: declares no execution switch — R-02, every part must be turnable "
+                f"off and on or the resource governor cannot govern it"
             )
         if not reads and not writes:
             violations.append(f"{name}: isolated — neither consumes nor produces anything")

@@ -4,81 +4,143 @@
     "this file and nothing else. Nothing here is invented: categories and features",
     "come from the user, and each carries the origin it came from.",
     "",
-    "THE RULE THAT KEEPS THE FLOW CLEAN AS PARTS ARE ADDED:",
-    "a feature never names another feature. It names only the data it consumes and",
-    "the data it produces. Two features are connected when, and only when, one",
-    "produces a data type the other consumes. A new part therefore cannot invent a",
-    "private wire to an old part -- it can only attach to data that already exists,",
-    "or declare new data of its own. Swap any part for a better one honouring the",
-    "same contract and nothing else in the system changes.",
+    "The rules every part must honour live in docs/contracts.md:",
+    "  R-01  a part names data, never another part. Edges are computed from",
+    "        consumes/produces, so a part can be swapped for a better one and a",
+    "        new part cannot wire itself privately into an old one.",
+    "  R-02  every part has an execution switch. It can be turned off and on, so",
+    "        the resource governor can actually govern.",
     "",
     "categories[]  the foundation blocks. Every feature belongs to exactly one.",
-    "  id, name, summary, origin ('user' | 'proposed')",
+    "  id, name, summary, origin ('user' | 'proposed'), approved",
     "data_types[]  id, name, description -- what actually moves between parts",
-    "features[]    id, name, role, category, consumes[], produces[], replaces?",
+    "features[]    id, name, role, category, consumes[], produces[], switchable,",
+    "              replaces?",
     "",
     "features[] is empty until the user describes them. data_types[] is empty",
     "until the flow between categories is declared. Neither is guessed."
   ],
-
   "categories": [
     {
       "id": "paper-live-trading",
       "name": "Paper trading on live data",
       "summary": "Trading runs on live market data, with a switch between real money and paper money.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "opportunity-scanner",
       "name": "Universal opportunity scanner",
       "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. Does not know whether the money is paper or live.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
       "summary": "Three bots live inside the segment bot: bull, bear, profit tailgating. Internals detailed at implementation time.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "intelligence",
       "name": "Intelligence",
       "summary": "Named by the user; contents not yet described.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "learning-loop",
       "name": "Learning loop",
       "summary": "Named by the user; contents not yet described.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "hypothesis",
       "name": "Hypothesis",
       "summary": "Named by the user; contents not yet described.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "knowledge",
       "name": "Knowledge",
       "summary": "Named by the user; contents not yet described.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "prediction",
       "name": "Prediction",
       "summary": "Named by the user; contents not yet described.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
     },
     {
       "id": "online-research",
       "name": "Online research",
       "summary": "Decoding the portfolios of famous or high-profit crypto traders, to copy their strategy or step up beyond it.",
-      "origin": "user"
+      "origin": "user",
+      "approved": true
+    },
+    {
+      "id": "llm-services",
+      "name": "LLM services",
+      "summary": "Large language models as a first-class part of the system. Named by the user; contents not yet described.",
+      "origin": "user",
+      "approved": true
+    },
+    {
+      "id": "resource-governor",
+      "name": "Hardware resource governor",
+      "summary": "An AI agent that scans the hardware and keeps every other part working without queueing: allocating CPU and RAM, swapping parts fast, turning off a part that is hogging the machine and turning on the part that needs it. This is why R-02 exists -- it cannot turn off a part that has no off switch.",
+      "origin": "user",
+      "approved": true
+    },
+    {
+      "id": "market-data-feed",
+      "name": "Market data feed",
+      "summary": "Exchange connectivity, reconnects, gap detection and symbol normalisation across venues. The substrate the scanner, prediction and paper-fill pricing all read from.",
+      "origin": "proposed",
+      "approved": true
+    },
+    {
+      "id": "risk-capital-allocation",
+      "name": "Risk and capital allocation",
+      "summary": "Position size, leverage, exposure caps, drawdown limits and the kill switch. The bots decide direction; this decides how much, and when to refuse.",
+      "origin": "proposed",
+      "approved": true
+    },
+    {
+      "id": "ledger",
+      "name": "Ledger and audit trail",
+      "summary": "Every scan, decision, order, fill and price recorded. What the learning loop learns from, and what hypothesis and prediction are scored against.",
+      "origin": "proposed",
+      "approved": true
+    },
+    {
+      "id": "portfolio-state",
+      "name": "Portfolio and position state",
+      "summary": "What is held right now, per segment, reconciled against the exchange. The scanner needs to know what is already open before calling a new entry.",
+      "origin": "proposed",
+      "approved": true
+    },
+    {
+      "id": "observability",
+      "name": "Observability",
+      "summary": "Health and state of every part, feeding the dashboard. As a category it forces each part to emit its own state rather than have it inferred later.",
+      "origin": "proposed",
+      "approved": true
+    },
+    {
+      "id": "execution-venue-adapter",
+      "name": "Execution and venue adapter",
+      "summary": "Placing orders for real: partial fills, rejects, retries, rate limits. The user chose it standing on its own rather than nested inside paper/live trading.",
+      "origin": "proposed",
+      "approved": true
     }
   ],
-
   "data_types": [],
-
   "features": []
 }

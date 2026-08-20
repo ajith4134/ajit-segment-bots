@@ -70,3 +70,51 @@ that the three bots are detailed at implementation time. So:
 
 The flow contract is the next thing to establish, and it is the thing the whole
 blueprint is judged on.
+
+---
+
+# Added 2026-08-20, after the nine
+
+## Two more from the user
+
+### C-10 — LLM services
+> "llm s it isalo important catoery"
+
+Large language models as a first-class part of the system. Contents not yet
+described.
+
+### C-11 — Hardware resource governor
+> "ai aent wic scanes te ard ware and elps all te processes oe all te featues to
+> worke fulley wit out que wit allocatin te codes and ram so and swappin tem fast
+> so id any ideal feater is hoging te hardware tis intelleent ai turn off tat and
+> turn on te featue tat needs it"
+
+An AI agent that scans the hardware and keeps every other part working **without
+queueing**: allocating CPU and RAM, swapping parts fast, turning off a part that
+is hogging the machine and turning on the part that needs it.
+
+This category is the reason **R-02** exists (see `contracts.md`). The governor
+cannot turn off a part that has no off switch, so the switch became a rule
+binding every part rather than a feature of this one.
+
+**Open, to settle when this category is detailed:** how the governor learns a
+part's resource appetite — declared by the part, or measured at runtime.
+
+## Six proposed by Claude, approved by the user
+
+Raised because each was structurally absent, not because it seemed nice to have.
+All six were approved on 2026-08-20 and carry `origin: proposed` in the registry
+so the provenance stays visible.
+
+| id | why it was missing |
+|---|---|
+| `market-data-feed` | C-02 monitors every symbol in the segment; that data has to arrive, and prediction and paper-fill pricing drink from the same tap |
+| `risk-capital-allocation` | the three bots decide direction; nothing decided size, leverage, exposure caps, drawdown limits or the kill switch |
+| `ledger` | learning loop, hypothesis and prediction need something to learn from and be scored against |
+| `portfolio-state` | the scanner needs to know what is already open before calling a new entry |
+| `observability` | forces every part to emit its state rather than have it inferred |
+| `execution-venue-adapter` | partial fills, rejects, retries, rate limits. The user chose it standing alone rather than nested inside C-01 |
+
+**Total: 17 foundation categories.** Every future feature belongs to exactly one.
+A feature fitting none means a category is missing, and that is raised with the
+user rather than invented.
