@@ -69,6 +69,42 @@ injected at session start) refine it.
   (Python is what the dashboard tooling already uses), dependency policy,
   where the settings files (RL-055) live on disk.
 
+## How code gets written here — RL-058, and the runtime it produced
+
+**`docs/superpowers/specs/2026-08-20-part-runtime-design.md` is the implementation
+spec.** Read it before writing any part. It decides what a part physically is, where
+its on/off switch sits, how scarcity is answered, and where state lives.
+
+The standard, given by the user on 2026-08-20 (RL-058): this is built the way a
+professional team builds, not the way a personal project is built. No shortcut code.
+No hardcoded values. No placeholders. Real learning in the code. No upper limit on
+lines per file. Intent is established by interview, never by assumption (RL-016).
+
+The decisions that followed from that interview:
+
+| | |
+|---|---|
+| **RL-059** | at most 5 subagents at once, research agents included |
+| **RL-060** | parts that judge carry a learned component; pure transport stays deterministic |
+| **RL-061** | every number is estimated from data or a named setting with provenance — no numeric literals in decision code |
+| **RL-062** | the no-placeholder rule binds futures; spot and options stay honestly empty |
+| **RL-063** | tests run on real captured crypto data, never invented fixtures |
+| **RL-064** | Python core; Rust for hot paths later and only on measurement |
+| **RL-065** | proven libraries for solved problems, own code for the edge, every dependency pinned with a reason |
+| **RL-066** | the transistor is hardware governance: a part is a process, the governor owns the switch, scarcity is never answered by a queue |
+| **RL-067** | what is built matches the diagrams — a part's real consumes and produces equal what the blueprint declares |
+| **RL-068** | build order: substrate, then market-data-feed, then the governor spine, then the futures vertical |
+| **RL-069** | the runtime substrate is off-diagram — its own status-board tile, not a cell on the part monitor |
+
+**Build order matters because no dependency order exists.** 299 of the 321 parts sit
+in one feedback cycle, and the transitive inputs of a paper fill are 306 parts. So no
+part waits for its upstreams: each is built and tested against recorded real data.
+The architecture forces the tape, which is why `market-data-feed` is built first —
+history accrues only in real time and cannot be recovered later.
+
+The research behind the runtime, with citations and its own UNVERIFIED sections, is
+in `~/research/segment-bots-runtime/` (`ajith4134/trading-system-research`).
+
 ## Startup
 
 `~/.bash_aliases` defines a `claude` shell function that runs Claude Code from
