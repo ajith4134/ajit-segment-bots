@@ -33,125 +33,285 @@
       "name": "Paper trading on live data",
       "summary": "Trading runs on live market data, with a switch between real money and paper money.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "sized-order"
+      ],
+      "produces": [
+        "order-request",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "opportunity-scanner",
       "name": "Universal opportunity scanner",
       "summary": "Constantly monitors every symbol in the segment and picks when one should enter trading. Does not know whether the money is paper or live.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "market-data",
+        "position"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
       "summary": "Three bots live inside the segment bot: bull, bear, profit tailgating. Internals detailed at implementation time.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "entry-candidate",
+        "market-data"
+      ],
+      "produces": [
+        "trade-intent",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "intelligence",
       "name": "Intelligence",
       "summary": "Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "learning-loop",
       "name": "Learning loop",
       "summary": "Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "hypothesis",
       "name": "Hypothesis",
       "summary": "Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "knowledge",
       "name": "Knowledge",
       "summary": "Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "prediction",
       "name": "Prediction",
       "summary": "Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "online-research",
       "name": "Online research",
       "summary": "Decoding the portfolios of famous or high-profit crypto traders, to copy their strategy or step up beyond it.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [
+        "research-finding",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "llm-services",
       "name": "LLM services",
       "summary": "Large language models as a first-class part of the system. Named by the user; contents not yet described.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [],
+      "flow_origin": "awaiting-description"
     },
     {
       "id": "resource-governor",
       "name": "Hardware resource governor",
       "summary": "An AI agent that scans the hardware and keeps every other part working without queueing: allocating CPU and RAM, swapping parts fast, turning off a part that is hogging the machine and turning on the part that needs it. This is why R-02 exists -- it cannot turn off a part that has no off switch.",
       "origin": "user",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [],
+      "flow_origin": "proposed"
     },
     {
       "id": "market-data-feed",
       "name": "Market data feed",
       "summary": "Exchange connectivity, reconnects, gap detection and symbol normalisation across venues. The substrate the scanner, prediction and paper-fill pricing all read from.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [],
+      "produces": [
+        "market-data",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "risk-capital-allocation",
       "name": "Risk and capital allocation",
       "summary": "Position size, leverage, exposure caps, drawdown limits and the kill switch. The bots decide direction; this decides how much, and when to refuse.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "trade-intent",
+        "position"
+      ],
+      "produces": [
+        "sized-order",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "ledger",
       "name": "Ledger and audit trail",
       "summary": "Every scan, decision, order, fill and price recorded. What the learning loop learns from, and what hypothesis and prediction are scored against.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "entry-candidate",
+        "trade-intent",
+        "sized-order",
+        "order-request",
+        "fill",
+        "position",
+        "research-finding"
+      ],
+      "produces": [
+        "journal-entry",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "portfolio-state",
       "name": "Portfolio and position state",
       "summary": "What is held right now, per segment, reconciled against the exchange. The scanner needs to know what is already open before calling a new entry.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "fill"
+      ],
+      "produces": [
+        "position",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     },
     {
       "id": "observability",
       "name": "Observability",
       "summary": "Health and state of every part, feeding the dashboard. As a category it forces each part to emit its own state rather than have it inferred later.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [],
+      "flow_origin": "proposed"
     },
     {
       "id": "execution-venue-adapter",
       "name": "Execution and venue adapter",
       "summary": "Placing orders for real: partial fills, rejects, retries, rate limits. The user chose it standing on its own rather than nested inside paper/live trading.",
       "origin": "proposed",
-      "approved": true
+      "approved": true,
+      "consumes": [
+        "order-request"
+      ],
+      "produces": [
+        "fill",
+        "part-health"
+      ],
+      "flow_origin": "proposed"
     }
   ],
   "state_vocabulary": [
     "off",
     "on"
   ],
-  "data_types": [],
-  "features": []
+  "data_types": [
+    {
+      "id": "market-data",
+      "name": "market data",
+      "description": "Live prices, trades and book for every symbol, normalised across venues."
+    },
+    {
+      "id": "entry-candidate",
+      "name": "entry candidate",
+      "description": "A symbol and the moment it should enter trading. Carries nothing about paper or live."
+    },
+    {
+      "id": "trade-intent",
+      "name": "trade intent",
+      "description": "A direction and conviction for a candidate, from the bull, bear and profit-tailgating bots."
+    },
+    {
+      "id": "sized-order",
+      "name": "sized order",
+      "description": "A trade intent with size, leverage and stops applied \u2014 or a refusal, which is also an answer."
+    },
+    {
+      "id": "order-request",
+      "name": "order request",
+      "description": "An order addressed to a destination, after the paper/live switch has chosen one."
+    },
+    {
+      "id": "fill",
+      "name": "fill",
+      "description": "What actually executed, at what price, including partials and rejects."
+    },
+    {
+      "id": "position",
+      "name": "position",
+      "description": "What is held right now, per segment, reconciled against the venue."
+    },
+    {
+      "id": "journal-entry",
+      "name": "journal entry",
+      "description": "An immutable record of something that happened, with the time it happened."
+    },
+    {
+      "id": "research-finding",
+      "name": "research finding",
+      "description": "A decoded strategy or portfolio from a public high-profit trader."
+    },
+    {
+      "id": "part-health",
+      "name": "part health",
+      "description": "A part's own state and health, emitted by the part rather than inferred about it."
+    }
+  ],
+  "features": [],
+  "control_plane": {
+    "driver": "resource-governor",
+    "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+  }
 }

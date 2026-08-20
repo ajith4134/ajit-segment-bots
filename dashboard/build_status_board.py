@@ -24,7 +24,9 @@ from pathlib import Path
 from render_blueprint import (  # same directory as this script, so already importable
     REGISTRY_PATH,
     count_derived_edges,
+    derive_category_edges,
     find_contract_violations,
+    find_flow_gaps,
     load_feature_registry,
     render_blueprint_section,
 )
@@ -134,11 +136,15 @@ def probe_architecture_blueprint() -> ProbeResult:
     if not registry.has_categories:
         return ProbeResult("Architecture blueprint", NOT_BUILT, "no foundation blocks yet", proof)
     if not registry.has_features:
+        if not registry.has_declared_flow:
+            return ProbeResult(
+                "Architecture blueprint", NOT_BUILT,
+                f"{len(registry.categories)} blocks stand, flow not drawn", proof,
+            )
+        edges = len([e for e in derive_category_edges(registry) if e[2] != "part-health"])
         return ProbeResult(
-            "Architecture blueprint",
-            NOT_BUILT,
-            f"{len(registry.categories)} blocks stand, flow not drawn",
-            proof,
+            "Architecture blueprint", NOT_BUILT,
+            f"block flow proposed, {edges} edges, awaiting the user's verdict", proof,
         )
     return ProbeResult(
         "Architecture blueprint",
@@ -202,6 +208,12 @@ def probe_flow_contract() -> ProbeResult:
     violations = find_contract_violations(registry)
     if violations:
         return ProbeResult("Flow contract", FAILING, f"{len(violations)} violation(s)", proof)
+    if not registry.has_features:
+        edges = len([e for e in derive_category_edges(registry) if e[2] != "part-health"])
+        gaps = len(find_flow_gaps(registry))
+        return ProbeResult(
+            "Flow contract", NOT_BUILT, f"{edges} block edges proposed, {gaps} gaps, 0 features", proof
+        )
     return ProbeResult("Flow contract", OK, f"{count_derived_edges(registry)} edges, all resolved", proof)
 
 
@@ -520,6 +532,29 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     margin-bottom: .4rem;
   }}
   .violations ul {{ margin: 0; padding-left: 1.1rem; font-size: .88rem; }}
+
+  .gaps {{
+    border: 1px dashed var(--warn);
+    border-left: 3px solid var(--warn);
+    border-radius: 3px;
+    padding: .85rem 1.05rem;
+  }}
+  .gaps-head {{
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--warn);
+    margin-bottom: .4rem;
+  }}
+  .gaps ul {{ margin: 0; padding-left: 1.1rem; font-size: .88rem; color: var(--muted); }}
+  .plane-head {{
+    font-family: Archivo, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: .95rem;
+    margin: .4rem 0 0;
+    letter-spacing: -.01em;
+  }}
 
   .category-grid {{
     display: grid;

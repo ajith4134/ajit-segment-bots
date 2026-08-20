@@ -37,6 +37,7 @@ class FeatureRegistry:
     data_types: list[dict] = field(default_factory=list)
     features: list[dict] = field(default_factory=list)
     state_vocabulary: list[str] = field(default_factory=list)
+    control_plane: dict = field(default_factory=dict)
 
     @property
     def has_features(self) -> bool:
@@ -48,8 +49,8 @@ class FeatureRegistry:
 
     @property
     def has_declared_flow(self) -> bool:
-        """True once data actually moves between parts, not merely blocks existing."""
-        return bool(self.data_types) and bool(self.features)
+        """True once data actually moves between blocks, not merely blocks existing."""
+        return bool(self.data_types) and any(c.get("produces") for c in self.categories)
 
 
 def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
@@ -65,6 +66,7 @@ def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
         data_types=raw.get("data_types", []),
         features=raw.get("features", []),
         state_vocabulary=raw.get("state_vocabulary", []),
+        control_plane=raw.get("control_plane", {}),
     )
 
 
@@ -191,6 +193,103 @@ def _mermaid_safe(text: str) -> str:
     return text.replace('"', "'").replace("\n", " ").replace("|", "/")
 
 
+
+# ---------------------------------------------------------------------------
+# Category-level flow: the blueprint before features exist.
+#
+# Two planes, because T-2 says the gate is a third terminal. The data plane is
+# what parts consume and produce. The control plane is the governor switching
+# parts, and it is drawn separately so it can never be mistaken for a data edge.
+# ---------------------------------------------------------------------------
+
+
+def derive_category_edges(registry: FeatureRegistry) -> list[tuple[str, str, str]]:
+    """(producer category, consumer category, data type) for every declared connection."""
+    edges = []
+    for producer in registry.categories:
+        for type_id in producer.get("produces", []):
+            for consumer in registry.categories:
+                if consumer is producer:
+                    continue
+                if type_id in consumer.get("consumes", []):
+                    edges.append((producer["id"], consumer["id"], type_id))
+    return edges
+
+
+def find_flow_gaps(registry: FeatureRegistry) -> list[str]:
+    """Where the declared category flow does not close up.
+
+    These are gaps, not violations: a category the user named without describing
+    legitimately has no flow yet. Reported so the hole is visible rather than
+    quietly drawn as a finished picture.
+    """
+    gaps = []
+    produced, consumed = set(), set()
+    for category in registry.categories:
+        produced.update(category.get("produces", []))
+        consumed.update(category.get("consumes", []))
+
+    for category in registry.categories:
+        name = category.get("name", category["id"])
+        if category.get("flow_origin") == "awaiting-description":
+            gaps.append(f"{name}: named but not described — no flow declared")
+            continue
+        for type_id in category.get("consumes", []):
+            if type_id not in produced:
+                gaps.append(f"{name}: consumes '{type_id}' which nothing produces")
+        for type_id in category.get("produces", []):
+            if type_id not in consumed:
+                gaps.append(f"{name}: produces '{type_id}' which nothing yet consumes")
+    return gaps
+
+
+def render_data_plane(registry: FeatureRegistry) -> str:
+    """The data plane: what actually moves between the foundation blocks."""
+    lines = ["flowchart LR"]
+    described = [c for c in registry.categories if c.get("flow_origin") == "proposed"]
+    awaiting = [c for c in registry.categories if c.get("flow_origin") != "proposed"]
+
+    for category in described:
+        lines.append(f'  {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
+
+    if awaiting:
+        lines.append('  subgraph undescribed["Named, not yet described - no flow declared"]')
+        for category in awaiting:
+            lines.append(f'    {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
+        lines.append("  end")
+
+    type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
+    for producer_id, consumer_id, type_id in derive_category_edges(registry):
+        if type_id == "part-health":       # drawn in the control/health plane instead
+            continue
+        label = _mermaid_safe(type_names.get(type_id, type_id))
+        lines.append(f"  {producer_id} -- {label} --> {consumer_id}")
+
+    return "\n".join(lines)
+
+
+def render_control_plane(registry: FeatureRegistry) -> str:
+    """The control plane: health out, switching in. Never a data edge (T-2)."""
+    control = registry.control_plane or {}
+    driver = control.get("driver")
+    if not driver:
+        return ""
+
+    driver_name = next(
+        (c.get("name", c["id"]) for c in registry.categories if c["id"] == driver), driver
+    )
+    lines = ["flowchart LR", f'  governor["{_mermaid_safe(driver_name)}"]']
+    emitters = [c for c in registry.categories if "part-health" in c.get("produces", [])]
+
+    lines.append('  subgraph parts["Every other part"]')
+    for category in emitters:
+        lines.append(f'    {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
+    lines.append("  end")
+    lines.append("  parts -- part health --> governor")
+    lines.append("  governor -. on / off .-> parts")
+    return "\n".join(lines)
+
+
 def render_category_blocks(registry: FeatureRegistry) -> str:
     """The foundation blocks alone, before any feature or flow has been declared.
 
@@ -263,22 +362,45 @@ def render_blueprint_section(registry: FeatureRegistry) -> str:
         )
 
     if not registry.has_features:
+        if not registry.has_declared_flow:
+            return (
+                f'<div class="diagram-meta"><span>{len(registry.categories)} categories</span>'
+                f"<span>flow not declared</span></div>"
+                f'<div class="diagram"><pre class="mermaid">'
+                f"{html.escape(render_category_blocks(registry))}</pre></div>"
+                f'<div class="empty-frame"><div class="headline">Blocks stand, flow not yet drawn</div>'
+                f"<p>Shown without arrows on purpose: which category feeds which has not been said, "
+                f"and an inferred arrow would later be mistaken for a decision that was made.</p></div>"
+                f"{render_category_list(registry)}"
+            )
+
+        gaps = find_flow_gaps(registry)
+        data_edges = [e for e in derive_category_edges(registry) if e[2] != "part-health"]
+        gap_markup = ""
+        if gaps:
+            items = "".join(f"<li>{html.escape(g)}</li>" for g in gaps)
+            gap_markup = (
+                f'<div class="gaps"><div class="gaps-head">{len(gaps)} open gap(s) — '
+                f"not defects, things the user has not said yet</div><ul>{items}</ul></div>"
+            )
         return (
             f'<div class="diagram-meta">'
             f"<span>{len(registry.categories)} categories</span>"
+            f"<span>{len(registry.data_types)} data types</span>"
+            f"<span>{len(data_edges)} data-plane edges</span>"
             f"<span>0 features described</span>"
-            f"<span>flow not declared</span>"
             f"</div>"
+            f'<h3 class="plane-head">Data plane — what moves between the blocks</h3>'
             f'<div class="diagram"><pre class="mermaid">'
-            f"{html.escape(render_category_blocks(registry))}</pre></div>"
-            f'<div class="empty-frame">'
-            f'<div class="headline">Blocks stand, flow not yet drawn</div>'
-            f"<p>These are the foundation blocks. They are shown without arrows on purpose: which "
-            f"category feeds which has not been said yet, and an inferred arrow here would later be "
-            f"mistaken for a decision that was made.</p>"
-            f"<p>The flow is the next thing to establish, and it is what the whole blueprint is "
-            f"judged on.</p>"
-            f"</div>"
+            f"{html.escape(render_data_plane(registry))}</pre></div>"
+            f'<h3 class="plane-head">Control plane — health out, switching in (T-2)</h3>'
+            f'<div class="diagram"><pre class="mermaid">'
+            f"{html.escape(render_control_plane(registry))}</pre></div>"
+            f"{gap_markup}"
+            f'<div class="empty-frame"><div class="headline">This flow is proposed, not agreed</div>'
+            f"<p>Every edge above was drawn by Claude from what the user described, and each carries "
+            f"<code>flow_origin: proposed</code> in the registry. The six blocks in the grey box were "
+            f"named but not described, so they have no flow at all rather than an invented one.</p></div>"
             f"{render_category_list(registry)}"
         )
 
