@@ -31,5 +31,6 @@ keys.txt
 !docs/secrets.md
 dashboard/wiring-explorer.html
 
-# Rendered spec pages: generated from the .md by dashboard/render_spec.py
+# Rendered spec and plan pages: generated from the .md by dashboard/render_spec.py
 docs/superpowers/specs/*.html
+docs/superpowers/plans/*.html
