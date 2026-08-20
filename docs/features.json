@@ -262,7 +262,10 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "part-health"
+        "part-health",
+        "restart-request",
+        "admitted-part",
+        "replacement-plan"
       ],
       "produces": [],
       "flow_origin": "agreed-provisional",
@@ -293,7 +296,8 @@
       "consumes": [
         "trade-intent",
         "position",
-        "exposure-view"
+        "exposure-view",
+        "trading-halt"
       ],
       "produces": [
         "sized-order",
@@ -441,6 +445,35 @@
         "llm-request"
       ],
       "flow_origin": "proposed"
+    },
+    {
+      "id": "autonomous",
+      "name": "Autonomous operation",
+      "summary": "Runs itself with nobody watching, builds its own new parts when it finds a gap, decides inside a named boundary without asking, heals its own breakage. Global: one instance for the whole bot. It never switches a part itself -- it states a need as data and the resource governor acts, which is the only way autonomy and T-2 can both be true.",
+      "origin": "user",
+      "approved": true,
+      "consumes": [
+        "part-health",
+        "market-data",
+        "bot-scorecard",
+        "research-finding",
+        "llm-response",
+        "bot-maturity",
+        "exposure-view",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "restart-request",
+        "admitted-part",
+        "replacement-plan",
+        "trading-halt",
+        "llm-request",
+        "part-health"
+      ],
+      "flow_origin": "proposed",
+      "scope": "global",
+      "scope_origin": "user",
+      "open": "The user gave four jobs and said more is coming: 'andmore i will explann next'. This block is deliberately unfinished, not complete."
     }
   ],
   "state_vocabulary": [
@@ -717,6 +750,51 @@
       "id": "llm-model-choice",
       "name": "LLM model choice",
       "description": "Which language model answers a given class of request. Distinct from model-choice, which sizes a Kronos forecaster."
+    },
+    {
+      "id": "restart-request",
+      "name": "restart request",
+      "description": "A statement that something has stopped that should be running. It asks; only the resource governor acts on it."
+    },
+    {
+      "id": "outage-state",
+      "name": "outage state",
+      "description": "Whether a venue is reachable right now, how long it has been unreachable, what is stale because of it."
+    },
+    {
+      "id": "capability-gap",
+      "name": "capability gap",
+      "description": "Something the circuit cannot yet do, named precisely enough that a part could be written to fill it."
+    },
+    {
+      "id": "proposed-part",
+      "name": "proposed part",
+      "description": "A new part the bot wrote for itself: role, consumes, produces, states. Not yet in the circuit."
+    },
+    {
+      "id": "admitted-part",
+      "name": "admitted part",
+      "description": "A proposed part that passed every contract check. Only this may enter the circuit, which is what keeps self-authoring from becoming self-corrupting."
+    },
+    {
+      "id": "autonomy-envelope",
+      "name": "autonomy envelope",
+      "description": "Which decisions the bot may take without a human, and at what size. The boundary is data in one place, never an assumption spread across parts."
+    },
+    {
+      "id": "trading-halt",
+      "name": "trading halt",
+      "description": "A decision that the whole bot stops trading. Risk allocation owns the kill switch; this is what asks it to be pulled."
+    },
+    {
+      "id": "part-fault",
+      "name": "part fault",
+      "description": "A part has stopped behaving: dead, stalled, or reporting health that its output contradicts."
+    },
+    {
+      "id": "replacement-plan",
+      "name": "replacement plan",
+      "description": "Which admitted part takes over from a faulted one. A plan, not an act -- the governor performs the swap."
     }
   ],
   "features": [
@@ -1810,6 +1888,205 @@
       ],
       "origin": "proposed",
       "note": "One of the three reasons the user's own category summary gives for having a single LLM block: swap models, cap cost, cache. The cheapest call is the one never made, and on a shared subscription allowance that is the difference between a bot that thinks all day and one that stops at noon."
+    },
+    {
+      "id": "unattended-run-warden",
+      "name": "Unattended run warden",
+      "role": "keep the whole system running with nobody watching",
+      "category": "autonomous",
+      "consumes": [
+        "part-health",
+        "part-fault"
+      ],
+      "produces": [
+        "restart-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's first job for this block. Note what it does not do: it produces a restart-request, it does not restart anything. 'If part A needs part B running, that is the governor's problem, expressed through the control plane' -- transistor-rule.md, T-2. A warden that switched parts itself would be the second invisible graph that rule exists to prevent."
+    },
+    {
+      "id": "venue-outage-rider",
+      "name": "Venue outage rider",
+      "role": "carry the bot through an exchange outage without human help",
+      "category": "autonomous",
+      "consumes": [
+        "market-data",
+        "part-health"
+      ],
+      "produces": [
+        "outage-state",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "An outage is the specific unattended failure that loses money rather than merely stopping: positions stay open while the feed is dead. Separated from the warden because riding an outage is judgement about the market, while the warden's job is only that things are running."
+    },
+    {
+      "id": "capability-gap-finder",
+      "name": "Capability gap finder",
+      "role": "find what the circuit cannot yet do",
+      "category": "autonomous",
+      "consumes": [
+        "bot-scorecard",
+        "research-finding",
+        "part-health"
+      ],
+      "produces": [
+        "capability-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "T-6 says grow by adding parts, never by making a part cleverer. Something has to notice which part is missing, or growth is whatever the last idea happened to be. Distinct from hypothesis, which turns closed trades into trading instructions, not into parts."
+    },
+    {
+      "id": "part-author",
+      "name": "Part author",
+      "role": "write a new part that fills a named gap",
+      "category": "autonomous",
+      "consumes": [
+        "capability-gap",
+        "llm-response"
+      ],
+      "produces": [
+        "proposed-part",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's second job: the bot builds its own new parts. It writes to the same part template every other part obeys -- role, consumes, produces, states -- because a self-authored part that could invent its own shape would end the uniformity T-1 exists for. What it produces is proposed, never live."
+    },
+    {
+      "id": "part-admission-gate",
+      "name": "Part admission gate",
+      "role": "admit a proposed part only after it passes every contract",
+      "category": "autonomous",
+      "consumes": [
+        "proposed-part"
+      ],
+      "produces": [
+        "admitted-part",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The brake on the highest-blast-radius capability in this project. A bot that writes its own parts is a bot that can write its own defects, so nothing self-authored reaches the circuit except through here: the same check the pre-commit hook runs, applied to the machine's own output. Without this part, job two is self-corruption with good intentions."
+    },
+    {
+      "id": "autonomy-boundary",
+      "name": "Autonomy boundary",
+      "role": "name which decisions the bot may take without a human",
+      "category": "autonomous",
+      "consumes": [
+        "bot-maturity"
+      ],
+      "produces": [
+        "autonomy-envelope",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The user asked for a bot that decides without asking. That is a boundary, not an absence of one -- and a boundary that lives in one part is a boundary that can be read, changed and audited. Spread across nine parts as an assumption, it could only be discovered after it was crossed. It widens with earned maturity rather than by default."
+    },
+    {
+      "id": "trading-halt-decider",
+      "name": "Trading halt decider",
+      "role": "decide when the whole bot stops trading",
+      "category": "autonomous",
+      "consumes": [
+        "autonomy-envelope",
+        "exposure-view",
+        "outage-state",
+        "regime-break-alert"
+      ],
+      "produces": [
+        "trading-halt",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Deciding without asking has to include deciding to stop, or autonomy is only ever a throttle stuck open. Risk allocation still owns the kill switch and still refuses for its own reasons; this asks it to be pulled, seeing the whole account at once as only a global block can."
+    },
+    {
+      "id": "failing-part-detector",
+      "name": "Failing part detector",
+      "role": "spot a part that has stopped behaving",
+      "category": "autonomous",
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [
+        "part-fault",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The user's fourth job. The hard case is not the dead part, which is obvious -- it is the part still reporting healthy while its output has gone wrong. Rule 8 in the user's own standing rules says a display shows measured state, never asserted state; this is that rule turned on the parts themselves."
+    },
+    {
+      "id": "part-replacement-planner",
+      "name": "Part replacement planner",
+      "role": "choose the replacement for a faulted part",
+      "category": "autonomous",
+      "consumes": [
+        "part-fault",
+        "admitted-part"
+      ],
+      "produces": [
+        "replacement-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Where self-healing meets self-building: the replacement for a faulted part is drawn from what the admission gate has already cleared. It plans; the governor swaps. A planner that performed the swap would be a feature switching a feature, which T-2 forbids however good its reason."
     }
   ],
   "control_plane": {

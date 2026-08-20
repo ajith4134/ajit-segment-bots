@@ -140,3 +140,42 @@ the mechanism without naming a language, and no code was written.
 parts. Fallback is expressed as a *typed request* rather than a switch, because a
 router that turned a caller on would be the exact T-2 breach the transistor rule
 exists to prevent.
+
+---
+
+## D-006 — The bot is autonomous: it runs, builds, decides, heals
+
+**Given:** 2026-08-20
+
+> "i need you to addnew foundation feature call autonous feature"
+
+Asked what the block does, the user chose **all four** jobs — runs itself with no
+human, builds its own new parts, decides without asking, heals its own breakage —
+scoped **global**, one instance for the whole bot. And:
+
+> "andmore i will explann next"
+
+**Recorded as unfinished on purpose.** Four jobs are in. More are the user's to
+give, and nothing is invented to fill the space while waiting.
+
+**What the decision forces on the architecture:** all four jobs want to switch
+parts on and off, which is the one move T-2 forbids to everything except the
+resource governor. The answer is not an exception. Every need becomes data —
+`restart-request`, `replacement-plan`, `admitted-part`, `trading-halt` — and the
+governor or risk allocation acts on it. Autonomy stays visible in the diagram
+instead of running underneath it.
+
+**The blast radius, stated because it is real:** jobs two and three together are a
+system that writes its own parts *and* acts without approval, eventually on live
+capital. That is the user's call, taken deliberately, and it is recorded as taken.
+Two parts exist to keep it a decision rather than a drift: the **part admission
+gate**, which lets nothing self-authored into the circuit until it passes the same
+contract check the pre-commit hook runs, and the **autonomy boundary**, which
+holds what the bot may do unasked in one readable place instead of as an
+assumption spread across nine parts.
+
+**What this changed:** 20 foundation blocks became 21, and two existing blocks
+gained an inbound edge — the resource governor now consumes restart requests,
+admitted parts and replacement plans; risk allocation now consumes a trading
+halt. Those are the only two parts of the system allowed to act on what this
+block decides.

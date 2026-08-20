@@ -523,3 +523,95 @@ Nothing here is code. These are blueprint rows, and the board reports them as
 designed rather than as working. The stack for this block is still undecided --
 the user declined to settle it, so the subscription caller names the mechanism
 without naming a language.
+
+---
+
+# C-21 — Autonomous operation (2026-08-20)
+
+## What the user asked for
+
+> "i need you to addnew foundation feature call autonous feature"
+
+The twenty-first foundation block, and the first one added after the flow closed.
+Asked what the block actually does, the user picked **all four** jobs offered,
+then said:
+
+> "andmore i will explann next"
+
+So this block is recorded as **deliberately unfinished**. Four jobs are in; more
+are coming from the user, and none will be invented in the meantime.
+
+## The four jobs
+
+1. **Runs itself, no human.** Starts, restarts, survives a reboot or a venue
+   outage, keeps going with nobody watching.
+2. **Builds its own new parts.** Finds a gap in the circuit, writes the part that
+   fills it.
+3. **Decides without asking.** Acts inside a boundary it holds itself, rather than
+   waiting on a human.
+4. **Heals its own breakage.** Notices a part that has failed, plans its
+   replacement.
+
+**Scope: global** — the user's choice. One instance for the whole bot, like
+Intelligence (C-04), not one per segment. Autonomy about the system staying alive
+cannot be delegated to three parts that each see a third of it.
+
+## The problem this block creates, and how it is answered
+
+Every one of those four jobs wants to reach for the same forbidden move: **turn a
+part on or off**. Restart it. Swap it. Stand it down. That is precisely T-2 — the
+gate is a third terminal, and only the resource governor drives it.
+
+So no part in this block ever switches anything. Each one **states a need as
+data** and the governor acts:
+
+| The need | The data it becomes | Who acts |
+|---|---|---|
+| something that should be running is not | `restart-request` | resource governor |
+| a faulted part needs replacing | `replacement-plan` | resource governor |
+| a new part is fit to enter the circuit | `admitted-part` | resource governor |
+| the whole bot should stop trading | `trading-halt` | risk allocation, which owns the kill switch |
+
+This is not a workaround for the rule. It is the rule working: the transistor
+document already says *"if part A needs part B running, that is the governor's
+problem, expressed through the control plane."* Autonomy expressed as data stays
+visible in the diagram. Autonomy expressed as a switch would be the second,
+invisible graph the whole architecture exists to prevent.
+
+## The nine parts
+
+| Part | Its one job | Job |
+|---|---|---|
+| **Unattended run warden** | keep the whole system running with nobody watching | 1 |
+| **Venue outage rider** | carry the bot through an exchange outage without human help | 1 |
+| **Capability gap finder** | find what the circuit cannot yet do | 2 |
+| **Part author** | write a new part that fills a named gap | 2 |
+| **Part admission gate** | admit a proposed part only after it passes every contract | 2 |
+| **Autonomy boundary** | name which decisions the bot may take without a human | 3 |
+| **Trading halt decider** | decide when the whole bot stops trading | 3 |
+| **Failing part detector** | spot a part that has stopped behaving | 4 |
+| **Part replacement planner** | choose the replacement for a faulted part | 4 |
+
+## Two brakes, and why they are parts rather than good intentions
+
+**The part admission gate.** A bot that writes its own parts can write its own
+defects. Nothing self-authored enters the circuit except through this gate, which
+runs the same contract check the pre-commit hook runs — applied to the machine's
+own output. Job two without this part is self-corruption with good intentions.
+
+**The autonomy boundary.** "Decides without asking" is a boundary, not the absence
+of one. Held in a single part, it can be read, changed and audited. Spread across
+nine parts as an assumption, it could only ever be discovered *after* it was
+crossed. It widens with earned maturity rather than by default.
+
+Said plainly: jobs 2 and 3 together — a system that writes its own parts and acts
+without approval, eventually on live capital — are the highest blast radius
+anything in this project has. That is the user's call and it is recorded as made.
+These two parts are what keep it a decision rather than a drift.
+
+## What is deliberately not here
+
+- **Nothing is built.** Blueprint rows. The board reports them as designed.
+- **The block is open.** More jobs are coming from the user.
+- **No part names another part.** Not even the replacement planner, which chooses
+  from admitted parts as data, and hands the swap to the governor.
