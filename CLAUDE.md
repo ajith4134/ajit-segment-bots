@@ -65,9 +65,14 @@ injected at session start) refine it.
 - **A design change is a blueprint edit first** (`dashboard/blueprint_edits/`,
   idempotent script + proposal in `docs/proposals/`), checked, committed; code
   follows the registry, never the other way round.
-- Still open, decided when the first part is written: stack and language
-  (Python is what the dashboard tooling already uses), dependency policy,
-  where the settings files (RL-055) live on disk.
+- **Nothing in the runtime spec is open any more** (D-011, 2026-08-20). Stack is
+  **standard CPython 3.14.4** — not the free-threaded build, because five packages
+  including `ta-lib` ship no `cp314t` wheel and this box has no compiler. Structured
+  state is **SQLite** (stdlib, WAL). Settings live at
+  **`~/.config/ajit-segment-bots/settings/`** as TOML, one file per scope, closing
+  RL-055. Durable numeric state is **file-backed `numpy.memmap`**. Every dependency
+  is pinned with a written reason. The numbers behind each are in
+  `measurements/2026-08-20-part-runtime/`, and `.venv` is built on 3.14.4.
 
 ## How code gets written here — RL-058, and the runtime it produced
 
