@@ -54,7 +54,10 @@
       "consumes": [
         "market-data",
         "position",
-        "opportunity-instruction"
+        "opportunity-instruction",
+        "volatility-forecast",
+        "implied-vol-surface",
+        "playbook-rule"
       ],
       "produces": [
         "entry-candidate",
@@ -122,7 +125,11 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "decoded-trade-instruction"
+        "decoded-trade-instruction",
+        "trade-episode",
+        "forecast-accuracy",
+        "recalled-episode",
+        "semantic-fact"
       ],
       "produces": [
         "opportunity-instruction",
@@ -135,15 +142,23 @@
     {
       "id": "knowledge",
       "name": "Knowledge",
-      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
+      "summary": "Three memory tiers that disagree with each other on purpose: semantic facts per symbol upserted under closed-set keys, episodic closed trades appended immutably and keyed on the condition observed, and a procedural playbook that is never searched and always injected. Shape proposed from research, not given by the user.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
+      "consumes": [
+        "journal-entry",
+        "trade-episode",
+        "opportunity-instruction"
+      ],
+      "produces": [
+        "semantic-fact",
+        "recalled-episode",
+        "playbook-rule",
+        "part-health"
+      ],
+      "flow_origin": "proposed",
       "scope": "per-segment",
-      "scope_origin": "user",
-      "shape": "peer"
+      "scope_origin": "user"
     },
     {
       "id": "prediction",
@@ -157,7 +172,9 @@
       "produces": [
         "price-forecast",
         "forecast-accuracy",
-        "part-health"
+        "part-health",
+        "volatility-forecast",
+        "implied-vol-surface"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -257,7 +274,8 @@
         "fill",
         "position",
         "research-finding",
-        "forecast-accuracy"
+        "forecast-accuracy",
+        "ablation-scorecard"
       ],
       "produces": [
         "journal-entry",
@@ -294,7 +312,9 @@
       "consumes": [
         "part-health"
       ],
-      "produces": [],
+      "produces": [
+        "ablation-scorecard"
+      ],
       "flow_origin": "agreed-provisional",
       "scope": "global",
       "scope_origin": "user"
@@ -341,7 +361,8 @@
       ],
       "produces": [
         "decoded-trade-instruction",
-        "part-health"
+        "part-health",
+        "trade-episode"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -452,6 +473,56 @@
       "id": "model-choice",
       "name": "model choice",
       "description": "Which Kronos size to run: mini, small or base."
+    },
+    {
+      "id": "vol-feature-set",
+      "name": "volatility feature set",
+      "description": "The ten realised- and implied-volatility features from the reel, computed for one symbol."
+    },
+    {
+      "id": "volatility-forecast",
+      "name": "volatility forecast",
+      "description": "Forward realised volatility estimated from the feature set. Distinct from a price forecast: it says how much, not which way."
+    },
+    {
+      "id": "implied-vol-surface",
+      "name": "implied volatility surface",
+      "description": "ATM implied vol, the 30-60 term slope and the 25-delta put skew. Only exists where an options venue does."
+    },
+    {
+      "id": "market-regime",
+      "name": "market regime",
+      "description": "Trending, mean-reverting, or mixed, from a Hurst proxy. Mixed is a real answer meaning stand down."
+    },
+    {
+      "id": "trade-episode",
+      "name": "trade episode",
+      "description": "A closed trade keyed on the market condition that was observed, never on the outcome. Immutable."
+    },
+    {
+      "id": "recalled-episode",
+      "name": "recalled episode",
+      "description": "Past episodes matching a condition seen now."
+    },
+    {
+      "id": "semantic-fact",
+      "name": "semantic fact",
+      "description": "A durable fact about one symbol, filed under a closed-set key so a contradiction overwrites by construction."
+    },
+    {
+      "id": "playbook-rule",
+      "name": "playbook rule",
+      "description": "An always-injected, never-searched, capped rule. Behaviour only, never diagnosis."
+    },
+    {
+      "id": "expectancy-breakdown",
+      "name": "expectancy breakdown",
+      "description": "Expected value split into separately measurable factors, so the weakest one is visible rather than the total merely being poor."
+    },
+    {
+      "id": "ablation-scorecard",
+      "name": "ablation scorecard",
+      "description": "What measurably broke when each part was switched off, one row per part."
     }
   ],
   "features": [
@@ -557,6 +628,347 @@
         "on"
       ],
       "origin": "proposed"
+    },
+    {
+      "id": "implied-vol-reader",
+      "name": "Implied volatility reader",
+      "role": "read the option surface into implied volatilities at the strikes that matter",
+      "category": "prediction",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "implied-vol-surface",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Switched off in spot and futures, which have no option surface. This is what R-02's switch is for: the part exists in every segment and only conducts where it can."
+    },
+    {
+      "id": "volatility-feature-builder",
+      "name": "Volatility feature builder",
+      "role": "compute the realised-volatility feature set from a candlestick window",
+      "category": "prediction",
+      "consumes": [
+        "kline-window",
+        "implied-vol-surface"
+      ],
+      "produces": [
+        "vol-feature-set",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "RV 1d/5d/22d, downside semivariance over negative returns only, jump variance as max(RV-BV,0), vol-of-vol, ATM IV, 30-60 term slope, 25-delta put skew, market RV."
+    },
+    {
+      "id": "realised-vol-regressor",
+      "name": "Realised volatility regressor",
+      "role": "estimate forward realised volatility from the feature set",
+      "category": "prediction",
+      "consumes": [
+        "vol-feature-set"
+      ],
+      "produces": [
+        "volatility-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The ten-beta linear model recovered from the reel's final frame."
+    },
+    {
+      "id": "regime-classifier",
+      "name": "Regime classifier",
+      "role": "classify the current regime with a Hurst proxy",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "market-regime",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Below 0.5 mean-reverting, above 0.5 trending, and mixed is a real answer. This is the detector the mean-reversion sheet needed but never named."
+    },
+    {
+      "id": "mean-reversion-detector",
+      "name": "Mean reversion detector",
+      "role": "flag a symbol whose price has deviated far enough from its mean",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data",
+        "market-regime",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Z-score entry above 2, exit below 0.5. Stands down when the regime classifier says trending."
+    },
+    {
+      "id": "volatility-gap-detector",
+      "name": "Volatility gap detector",
+      "role": "flag a symbol where forecast volatility disagrees with the option market",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "volatility-forecast",
+        "implied-vol-surface",
+        "playbook-rule"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    },
+    {
+      "id": "semantic-fact-store",
+      "name": "Semantic fact store",
+      "role": "hold durable per-symbol facts under a closed-set key",
+      "category": "knowledge",
+      "consumes": [
+        "journal-entry"
+      ],
+      "produces": [
+        "semantic-fact",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Closed-set keys so a contradicting fact lands on the same key by construction and overwrites."
+    },
+    {
+      "id": "episodic-trade-store",
+      "name": "Episodic trade store",
+      "role": "keep every closed trade as an immutable episode keyed on the condition observed",
+      "category": "knowledge",
+      "consumes": [
+        "trade-episode"
+      ],
+      "produces": [
+        "recalled-episode",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Append-only, written on close. Embed the condition, never the outcome."
+    },
+    {
+      "id": "procedural-playbook",
+      "name": "Procedural playbook",
+      "role": "hold the capped always-injected rule set that never gets searched",
+      "category": "knowledge",
+      "consumes": [
+        "opportunity-instruction"
+      ],
+      "produces": [
+        "playbook-rule",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Never searched, so it never pollutes recall. A fixed cost every scan, which is why it is capped and holds behaviour rather than diagnosis."
+    },
+    {
+      "id": "trade-episode-encoder",
+      "name": "Trade episode encoder",
+      "role": "encode each closed trade keyed on the market condition that was observed",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "closed-trade",
+        "journal-entry"
+      ],
+      "produces": [
+        "trade-episode",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Key on what was seen, never on what happened. 'Lost 2% on a long' retrieves nothing ever again."
+    },
+    {
+      "id": "lesson-extractor",
+      "name": "Lesson extractor",
+      "role": "turn a trade episode into an instruction the hypothesis feature can work on",
+      "category": "closed-trade-decoding",
+      "consumes": [
+        "trade-episode"
+      ],
+      "produces": [
+        "decoded-trade-instruction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    },
+    {
+      "id": "expectancy-decomposer",
+      "name": "Expectancy decomposer",
+      "role": "decompose expected value into separately measurable factors",
+      "category": "hypothesis",
+      "consumes": [
+        "trade-episode",
+        "forecast-accuracy"
+      ],
+      "produces": [
+        "expectancy-breakdown",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The Drake pattern: a chain of separately estimable factors, so the weakest one is visible rather than the total merely being poor."
+    },
+    {
+      "id": "instruction-writer",
+      "name": "Instruction writer",
+      "role": "write the opportunity instruction the scanner will watch for",
+      "category": "hypothesis",
+      "consumes": [
+        "decoded-trade-instruction",
+        "expectancy-breakdown",
+        "recalled-episode",
+        "semantic-fact"
+      ],
+      "produces": [
+        "opportunity-instruction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed"
+    },
+    {
+      "id": "ccxt-venue-reader",
+      "name": "Venue candle reader",
+      "role": "read live candles from every venue through one unified interface",
+      "category": "market-data-feed",
+      "consumes": [],
+      "produces": [
+        "market-data",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Built on CCXT."
+    },
+    {
+      "id": "ccxt-order-router",
+      "name": "Venue order router",
+      "role": "place each order on its venue through one unified interface",
+      "category": "execution-venue-adapter",
+      "consumes": [
+        "order-request"
+      ],
+      "produces": [
+        "fill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Built on CCXT."
+    },
+    {
+      "id": "ablation-harness",
+      "name": "Ablation harness",
+      "role": "measure what breaks when each part is switched off",
+      "category": "observability",
+      "consumes": [
+        "part-health"
+      ],
+      "produces": [
+        "ablation-scorecard",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "Proves R-02 and T-3 rather than asserting them. It measures only: the governor does the switching, because T-2 forbids a feature reaching into the control plane."
     }
   ],
   "control_plane": {
