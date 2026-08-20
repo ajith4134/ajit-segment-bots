@@ -310,6 +310,181 @@ def run_all_probes() -> list[ProbeResult]:
 
 STATE_CLASS = {OK: "ok", NOT_BUILT: "unbuilt", FAILING: "fail", UNMEASURED: "unmeasured"}
 
+# Diagrams are pan-and-zoom viewports rather than a fixed picture, so a large
+# blueprint can be read close up instead of only seen entire and tiny. Kept as
+# raw constants rather than inline template text: the template runs through
+# .format(), and doubling every brace in a block of JavaScript is how a page
+# stops working for reasons nobody can see.
+
+ZOOM_STYLE = """  .diagram {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    height: clamp(340px, 56vh, 640px);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    touch-action: none;
+    cursor: grab;
+  }
+  .diagram.dragging { cursor: grabbing; }
+  .diagram .mermaid { margin: 0; }
+  .diagram svg { max-width: none !important; display: block; }
+  .zoom-controls {
+    position: absolute;
+    top: .55rem;
+    right: .55rem;
+    display: flex;
+    gap: .3rem;
+    z-index: 3;
+  }
+  .zoom-controls button {
+    font: 500 .78rem/1 "IBM Plex Mono", ui-monospace, monospace;
+    padding: .42rem .58rem;
+    min-width: 2.1rem;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--ink);
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .zoom-controls button:hover { border-color: var(--accent); color: var(--accent); }
+  .zoom-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .zoom-hint {
+    position: absolute;
+    left: .75rem;
+    bottom: .55rem;
+    font: .68rem/1.4 "IBM Plex Mono", ui-monospace, monospace;
+    color: var(--muted);
+    pointer-events: none;
+  }"""
+
+ZOOM_SCRIPT = """<script>
+(function () {
+  var MIN = 0.15, MAX = 10;
+
+  function button(label, title) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    return b;
+  }
+
+  function attach(box) {
+    if (box.dataset.zoomReady === '1') return;
+    var svg = box.querySelector('svg');
+    if (!svg) return;
+    box.dataset.zoomReady = '1';
+
+    var viewBox = svg.viewBox && svg.viewBox.baseVal;
+    var rect = svg.getBoundingClientRect();
+    var nw = (viewBox && viewBox.width) || rect.width || 900;
+    var nh = (viewBox && viewBox.height) || rect.height || 500;
+
+    svg.style.transformOrigin = '0 0';
+    svg.style.position = 'absolute';
+    svg.style.left = '0';
+    svg.style.top = '0';
+    svg.style.width = nw + 'px';
+    svg.style.height = nh + 'px';
+
+    var k = 1, tx = 0, ty = 0;
+
+    function apply() {
+      svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')';
+    }
+
+    function fit() {
+      var r = box.getBoundingClientRect();
+      var scale = Math.min((r.width - 32) / nw, (r.height - 32) / nh);
+      if (!isFinite(scale) || scale <= 0) scale = 1;
+      k = scale;
+      tx = (r.width - nw * k) / 2;
+      ty = (r.height - nh * k) / 2;
+      apply();
+    }
+
+    function zoomAt(cx, cy, factor) {
+      var next = Math.min(MAX, Math.max(MIN, k * factor));
+      tx = cx - (cx - tx) * (next / k);
+      ty = cy - (cy - ty) * (next / k);
+      k = next;
+      apply();
+    }
+
+    box.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var r = box.getBoundingClientRect();
+      zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.14 : 1 / 1.14);
+    }, { passive: false });
+
+    var dragging = false, lastX = 0, lastY = 0;
+    box.addEventListener('pointerdown', function (e) {
+      if (e.target.closest && e.target.closest('.zoom-controls')) return;
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      box.classList.add('dragging');
+      try { box.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    box.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      tx += e.clientX - lastX; ty += e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      apply();
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      box.classList.remove('dragging');
+      try { box.releasePointerCapture(e.pointerId); } catch (err) {}
+    }
+    box.addEventListener('pointerup', endDrag);
+    box.addEventListener('pointercancel', endDrag);
+    box.addEventListener('dblclick', fit);
+
+    var controls = document.createElement('div');
+    controls.className = 'zoom-controls';
+    var out = button('\u2212', 'Zoom out');
+    var into = button('+', 'Zoom in');
+    var whole = button('Fit', 'Fit the whole diagram');
+    out.onclick = function () { var r = box.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 0.8); };
+    into.onclick = function () { var r = box.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.25); };
+    whole.onclick = fit;
+    controls.appendChild(out);
+    controls.appendChild(into);
+    controls.appendChild(whole);
+    box.appendChild(controls);
+
+    var hint = document.createElement('div');
+    hint.className = 'zoom-hint';
+    hint.textContent = 'scroll to zoom \u00b7 drag to pan \u00b7 double-click to fit';
+    box.appendChild(hint);
+
+    fit();
+    window.addEventListener('resize', fit);
+  }
+
+  function scan() {
+    var boxes = document.querySelectorAll('.diagram');
+    for (var i = 0; i < boxes.length; i++) attach(boxes[i]);
+  }
+
+  // Mermaid renders after this script runs, so watch for the SVG appearing and
+  // also poll briefly - an observer alone misses a diagram that is already there.
+  scan();
+  if (window.MutationObserver) {
+    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+  }
+  var tries = 0;
+  var timer = setInterval(function () {
+    scan();
+    if (++tries > 60) clearInterval(timer);
+  }, 250);
+})();
+</script>"""
+
+
 PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -509,24 +684,7 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }}
-  .diagram {{
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 1.5rem 1.25rem;
-    overflow-x: auto;
-    box-shadow: var(--shadow);
-  }}
-  /* Mermaid shrinks to fit and the labels go to mush. Give it real room and let
-     the container scroll instead of the diagram collapsing. */
-  .diagram svg {{
-    min-width: 780px;
-    height: auto !important;
-    max-width: none !important;
-    display: block;
-    margin: 0 auto;
-  }}
-  .diagram .mermaid {{ margin: 0; }}
+{zoom_style}
   .violations {{
     border: 1px solid var(--fail);
     border-left: 3px solid var(--fail);
@@ -635,6 +793,7 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     Regenerate: python3 dashboard/build_status_board.py
   </footer>
 </div>
+{zoom_script}
 """
 
 
@@ -700,6 +859,8 @@ def render_board(results: list[ProbeResult]) -> str:
         measured_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         probe_count=len(results),
         project_home=html.escape(str(PROJECT_HOME)),
+        zoom_style=ZOOM_STYLE,
+        zoom_script=ZOOM_SCRIPT,
         tiles="".join(render_tile(r) for r in results),
     )
 

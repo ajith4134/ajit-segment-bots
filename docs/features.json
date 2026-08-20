@@ -41,7 +41,7 @@
         "order-request",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -60,7 +60,7 @@
         "entry-candidate",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "parent": "segment-bot",
       "scope": "per-segment",
       "scope_origin": "user"
@@ -79,7 +79,7 @@
         "trade-intent",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "contains": [
         "opportunity-scanner",
         "ai-brain"
@@ -92,26 +92,28 @@
     {
       "id": "intelligence",
       "name": "Intelligence",
-      "summary": "Named by the user; contents not yet described.",
+      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
       "origin": "user",
       "approved": true,
       "consumes": [],
       "produces": [],
       "flow_origin": "awaiting-description",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "shape": "peer"
     },
     {
       "id": "learning-loop",
       "name": "Learning loop",
-      "summary": "Named by the user; contents not yet described.",
+      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
       "origin": "user",
       "approved": true,
       "consumes": [],
       "produces": [],
       "flow_origin": "awaiting-description",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "shape": "peer"
     },
     {
       "id": "hypothesis",
@@ -126,33 +128,35 @@
         "opportunity-instruction",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
     {
       "id": "knowledge",
       "name": "Knowledge",
-      "summary": "Named by the user; contents not yet described.",
+      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
       "origin": "user",
       "approved": true,
       "consumes": [],
       "produces": [],
       "flow_origin": "awaiting-description",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "shape": "peer"
     },
     {
       "id": "prediction",
       "name": "Prediction",
-      "summary": "Named by the user; contents not yet described.",
+      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
       "origin": "user",
       "approved": true,
       "consumes": [],
       "produces": [],
       "flow_origin": "awaiting-description",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "shape": "peer"
     },
     {
       "id": "online-research",
@@ -165,21 +169,27 @@
         "research-finding",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
     {
       "id": "llm-services",
       "name": "LLM services",
-      "summary": "Large language models as a first-class part of the system. Named by the user; contents not yet described.",
+      "summary": "Infrastructure first: it makes model calls and returns answers, holds no opinion about trading and decides nothing, so there is one place to swap models, cap cost and cache. A reasoning role of its own is a planned extension, not a gap.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
+      "consumes": [
+        "llm-request"
+      ],
+      "produces": [
+        "llm-response",
+        "part-health"
+      ],
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
-      "scope_origin": "user"
+      "scope_origin": "user",
+      "planned_extension": "Becomes a thinker in its own right once the rest is running \u2014 reasoning about the market rather than only answering other blocks' questions."
     },
     {
       "id": "resource-governor",
@@ -191,7 +201,7 @@
         "part-health"
       ],
       "produces": [],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "global",
       "scope_origin": "user"
     },
@@ -206,7 +216,7 @@
         "market-data",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -224,7 +234,7 @@
         "sized-order",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -247,7 +257,7 @@
         "journal-entry",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -265,7 +275,7 @@
         "closed-trade",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -279,7 +289,7 @@
         "part-health"
       ],
       "produces": [],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "global",
       "scope_origin": "user"
     },
@@ -296,7 +306,7 @@
         "fill",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     },
@@ -316,17 +326,18 @@
     {
       "id": "closed-trade-decoding",
       "name": "Closed trade decoding",
-      "summary": "Decodes finished trades -- winners and losers both -- into instructions, and hands them to the hypothesis feature. The loser is not discarded: its information is what hypothesis works on to turn into an opening profit trade.",
+      "summary": "Decodes finished trades \u2014 winners and losers both \u2014 into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
       "origin": "user",
       "approved": true,
       "consumes": [
-        "closed-trade"
+        "closed-trade",
+        "journal-entry"
       ],
       "produces": [
         "decoded-trade-instruction",
         "part-health"
       ],
-      "flow_origin": "proposed",
+      "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user"
     }
@@ -400,6 +411,16 @@
       "id": "decoded-trade-instruction",
       "name": "decoded trade instruction",
       "description": "What a closed trade taught, drawn from winners and losers alike, expressed as an instruction for the hypothesis feature to work on."
+    },
+    {
+      "id": "llm-request",
+      "name": "LLM request",
+      "description": "A question a block asks a language model. The asking block names this data type, never the LLM block."
+    },
+    {
+      "id": "llm-response",
+      "name": "LLM response",
+      "description": "The model's answer, returned to whichever block asked."
     }
   ],
   "features": [],
@@ -428,7 +449,14 @@
       "choice": "split",
       "given": "2026-08-20",
       "note": "Each segment gets its own of every block. Three risk allocators, three portfolios, three ledgers, three feeds, three hypothesis features. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself.",
-      "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- three of them, each blind to the other two, would compete for the same RAM and recreate the queueing C-11 exists to prevent. One board, one place to look."
+      "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- three of them, each blind to the other two, would compete for the same RAM and recreate the queueing C-11 exists to prevent. One board, one place to look.",
+      "edges": "The 19 edges were accepted provisionally on 2026-08-20, with the user's words: decide them again when the design is locked and implementation starts. flow_origin reads agreed-provisional, never agreed."
     }
+  },
+  "thinking_shape": {
+    "choice": "peers",
+    "given": "2026-08-20",
+    "note": "Intelligence, knowledge, prediction, learning loop, hypothesis and the AI brain are peers, side by side. The AI brain is not a container. Each is a block like any other, connected by data.",
+    "still_needed": "A one-line job for intelligence, knowledge, prediction and learning loop. Until then they carry no flow rather than an invented one."
   }
 }

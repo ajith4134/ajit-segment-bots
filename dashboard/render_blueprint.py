@@ -205,6 +205,14 @@ def _mermaid_safe(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+DESCRIBED_FLOW_ORIGINS = ("proposed", "agreed-provisional")
+
+
+def is_described(category: dict) -> bool:
+    """A block has flow once the user has said enough for one to be drawn."""
+    return category.get("flow_origin") in DESCRIBED_FLOW_ORIGINS
+
+
 def derive_category_edges(registry: FeatureRegistry) -> list[tuple[str, str, str]]:
     """(producer category, consumer category, data type) for every declared connection."""
     edges = []
@@ -233,7 +241,7 @@ def find_flow_gaps(registry: FeatureRegistry) -> list[str]:
 
     for category in registry.categories:
         name = category.get("name", category["id"])
-        if category.get("flow_origin") == "awaiting-description":
+        if not is_described(category):
             gaps.append(f"{name}: named but not described — no flow declared")
             continue
         for type_id in category.get("consumes", []):
@@ -269,7 +277,7 @@ def render_data_plane(registry: FeatureRegistry) -> str:
     placement is information even when its behaviour is not yet described.
     """
     lines = [MERMAID_INIT, "flowchart LR"]
-    described = {c["id"]: c for c in registry.categories if c.get("flow_origin") == "proposed"}
+    described = {c["id"]: c for c in registry.categories if is_described(c)}
     awaiting = [c for c in registry.categories if c.get("flow_origin") != "proposed"]
     by_id = {c["id"]: c for c in registry.categories}
 

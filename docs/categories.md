@@ -203,3 +203,47 @@ the learning loop expressed as data flow rather than as a promise.
   proposed as coming from portfolio state, which knows when a position closes —
   but the ledger is what holds everything that led to it. Which one decoding
   reads from is not decided.
+
+---
+
+# Interview answers 2026-08-20
+
+## The thinking blocks are peers, side by side
+
+Intelligence, knowledge, prediction, learning loop, hypothesis and the AI brain
+are **peers**. The AI brain is not a container and does not absorb the others.
+Each is a block like any other, connected by data.
+
+**Still needed:** a one-line job for intelligence, knowledge, prediction and
+learning loop. Until the user gives it, they carry no flow rather than an
+invented one, and they render in the undescribed box.
+
+## LLM services — utility now, thinker later
+
+Infrastructure first. It makes model calls and returns answers, holds no opinion
+about trading, and decides nothing — so there is one place to swap models, cap
+cost and cache, and it is a genuine spare part. A calling block names the data
+type `llm-request`, never the LLM block itself, which is what keeps T-4 intact.
+
+Its own reasoning role is recorded as a **planned extension**, not as a gap. The
+board currently reports that nothing produces `llm-request` and nothing consumes
+`llm-response` — correct, because no thinking block is described yet to call it.
+
+## Closed-trade decoding reads from both
+
+Portfolio state signals that a position closed; the ledger supplies that trade's
+full history — every scan, intent, sizing and fill that led to it. Decoding sees
+the reasoning, not only the result.
+
+**This closes the last dead end.** `journal-entry` was produced by the ledger and
+consumed by nothing; it now feeds decoding.
+
+## The 19 edges are accepted provisionally
+
+> "option 1 for now we will deside tem aain wen we lock te desi and start
+> implemention pase"
+
+`flow_origin` reads **`agreed-provisional`**, never `agreed`. They are settled
+enough to build the rest of the blueprint against, and they are re-opened when
+the design is locked and implementation starts. That re-opening is a scheduled
+step, not a courtesy.
