@@ -193,7 +193,7 @@
       "produces": [],
       "flow_origin": "proposed",
       "scope": "global",
-      "scope_origin": "claude-flagged"
+      "scope_origin": "user"
     },
     {
       "id": "market-data-feed",
@@ -281,7 +281,7 @@
       "produces": [],
       "flow_origin": "proposed",
       "scope": "global",
-      "scope_origin": "claude-flagged"
+      "scope_origin": "user"
     },
     {
       "id": "execution-venue-adapter",
@@ -428,7 +428,7 @@
       "choice": "split",
       "given": "2026-08-20",
       "note": "Each segment gets its own of every block. Three risk allocators, three portfolios, three ledgers, three feeds, three hypothesis features. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself.",
-      "flagged": "The hardware resource governor and observability are marked global rather than split, because three governors on one machine, each blind to the other two and competing for the same RAM, is the queueing C-11 exists to prevent. Awaiting the user's confirmation."
+      "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- three of them, each blind to the other two, would compete for the same RAM and recreate the queueing C-11 exists to prevent. One board, one place to look."
     }
   }
 }
