@@ -40,3 +40,31 @@ drawings before anything is poured. The user cannot open files on this server, s
 every artefact meant to be seen is published as a browser link — standing, not
 per-request. The status board and the blueprint both live at links, and both stay
 true to what was discussed and to what is actually on the server.
+
+---
+
+## D-003 — Personal project, not distributed: licence is not a constraint
+
+**Given:** 2026-08-20
+
+> "te project w arew buildin is personal project it will not be oted for any one
+> so licenes is not a problem"
+
+**Correct, and it is the reason it is correct that matters:** GPL and LGPL
+obligations attach to **distribution**. Running, modifying and depending on GPL
+code privately, for yourself, triggers nothing. A private GitHub repository is
+not distribution either — it is a backup of your own work.
+
+So Freqtrade, Backtrader, Lumibot (GPL-3.0) and NautilusTrader (LGPL-3.0) are
+available on the same footing as CCXT and Hummingbot. Dependencies are chosen on
+**merit alone** from here.
+
+**The one line worth keeping:** if this ever becomes something distributed — sold,
+published, or shipped to another person — that decision comes back. It does not
+come back for hosting it as a service, because none of these is AGPL. Noted so
+the answer exists later without re-deriving it, not as a caveat on today.
+
+**What this changed:** Freqtrade moved from "careful, copyleft" to the second
+most useful item in the set, and NautilusTrader from a licence-flagged reference
+to a live one. Backtrader stays deprioritised — for being two years stale, which
+was always a quality objection rather than a legal one.
