@@ -81,7 +81,8 @@
         "market-data",
         "bot-scorecard",
         "position",
-        "external-position"
+        "external-position",
+        "price-forecast"
       ],
       "produces": [
         "directional-opinion",
@@ -100,15 +101,29 @@
     {
       "id": "intelligence",
       "name": "Intelligence",
-      "summary": "A peer block, side by side with the AI brain and hypothesis rather than inside either. Named by the user; its one-line job is not yet given, so it has no flow.",
+      "summary": "The one global thinker. Sees all three segments at once where every other thinking block sees only its own: total exposure, decision quality as distinct from outcome, the regime itself breaking, and ideas nobody has tried -- including ones it went looking for on the open web. It advises; every trade decision still belongs to a segment.",
       "origin": "user",
       "approved": true,
-      "consumes": [],
-      "produces": [],
-      "flow_origin": "awaiting-description",
-      "scope": "per-segment",
-      "scope_origin": "user",
-      "shape": "peer"
+      "consumes": [
+        "position",
+        "directional-opinion",
+        "trade-episode",
+        "market-data",
+        "journal-entry",
+        "bot-scorecard",
+        "llm-response"
+      ],
+      "produces": [
+        "exposure-view",
+        "decision-quality-score",
+        "regime-break-alert",
+        "novel-idea",
+        "part-health",
+        "llm-request"
+      ],
+      "flow_origin": "proposed",
+      "scope": "global",
+      "scope_origin": "user"
     },
     {
       "id": "learning-loop",
@@ -119,7 +134,8 @@
       "consumes": [
         "directional-opinion",
         "trade-episode",
-        "vol-feature-set"
+        "vol-feature-set",
+        "decision-quality-score"
       ],
       "produces": [
         "bot-scorecard",
@@ -146,7 +162,9 @@
         "semantic-fact",
         "loaded-skill-section",
         "strategy-gap",
-        "feature-reliability"
+        "feature-reliability",
+        "regime-break-alert",
+        "novel-idea"
       ],
       "produces": [
         "opportunity-instruction",
@@ -191,7 +209,8 @@
         "forecast-accuracy",
         "part-health",
         "volatility-forecast",
-        "implied-vol-surface"
+        "implied-vol-surface",
+        "vol-feature-set"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -204,13 +223,15 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "trade-episode"
+        "trade-episode",
+        "llm-response"
       ],
       "produces": [
         "research-finding",
         "strategy-gap",
         "part-health",
-        "external-position"
+        "external-position",
+        "llm-request"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -271,7 +292,8 @@
       "approved": true,
       "consumes": [
         "trade-intent",
-        "position"
+        "position",
+        "exposure-view"
       ],
       "produces": [
         "sized-order",
@@ -368,7 +390,8 @@
       "consumes": [
         "directional-opinion",
         "market-regime",
-        "bot-maturity"
+        "bot-maturity",
+        "regime-break-alert"
       ],
       "produces": [
         "trade-intent",
@@ -408,12 +431,14 @@
       "scope_origin": "user",
       "consumes": [
         "research-finding",
-        "trade-episode"
+        "trade-episode",
+        "llm-response"
       ],
       "produces": [
         "loaded-skill-section",
         "skill-usefulness",
-        "part-health"
+        "part-health",
+        "llm-request"
       ],
       "flow_origin": "proposed"
     }
@@ -637,6 +662,31 @@
       "id": "stop-adjustment",
       "name": "stop adjustment",
       "description": "A protective stop moved up as a position gains, so a pullback keeps some profit rather than giving it all back."
+    },
+    {
+      "id": "exposure-view",
+      "name": "exposure view",
+      "description": "Total capital at risk across every segment at once. No per-segment block can compute this; that is the point of it."
+    },
+    {
+      "id": "decision-quality-score",
+      "name": "decision quality score",
+      "description": "Whether the reasoning was sound, scored separately from whether the trade won. A win on luck and a loss on a correct call are different events."
+    },
+    {
+      "id": "regime-break-alert",
+      "name": "regime break alert",
+      "description": "The market has changed enough that what was learned no longer applies."
+    },
+    {
+      "id": "web-idea",
+      "name": "web idea",
+      "description": "Something found by looking rather than by being pointed at it."
+    },
+    {
+      "id": "novel-idea",
+      "name": "novel idea",
+      "description": "A strategy nobody here has tried, proposed rather than derived from what already happened."
     }
   ],
   "features": [
@@ -1012,7 +1062,9 @@
         "semantic-fact",
         "loaded-skill-section",
         "strategy-gap",
-        "feature-reliability"
+        "feature-reliability",
+        "regime-break-alert",
+        "novel-idea"
       ],
       "produces": [
         "opportunity-instruction",
@@ -1114,11 +1166,13 @@
       "role": "distil a source document into a skill with its trigger described",
       "category": "skills",
       "consumes": [
-        "source-document"
+        "source-document",
+        "llm-response"
       ],
       "produces": [
         "skill",
-        "part-health"
+        "part-health",
+        "llm-request"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -1239,11 +1293,13 @@
       "role": "infer the strategy behind a tracked trader's position history",
       "category": "online-research",
       "consumes": [
-        "external-position"
+        "external-position",
+        "llm-response"
       ],
       "produces": [
         "research-finding",
-        "part-health"
+        "part-health",
+        "llm-request"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -1284,7 +1340,8 @@
       "consumes": [
         "entry-candidate",
         "market-data",
-        "bot-scorecard"
+        "bot-scorecard",
+        "price-forecast"
       ],
       "produces": [
         "directional-opinion",
@@ -1307,7 +1364,8 @@
       "consumes": [
         "entry-candidate",
         "market-data",
-        "bot-scorecard"
+        "bot-scorecard",
+        "price-forecast"
       ],
       "produces": [
         "directional-opinion",
@@ -1353,7 +1411,8 @@
       "consumes": [
         "directional-opinion",
         "market-regime",
-        "bot-maturity"
+        "bot-maturity",
+        "regime-break-alert"
       ],
       "produces": [
         "trade-intent",
@@ -1440,7 +1499,8 @@
       "role": "graduate a bot out of exploration when its own numbers clear the bar",
       "category": "learning-loop",
       "consumes": [
-        "bot-scorecard"
+        "bot-scorecard",
+        "decision-quality-score"
       ],
       "produces": [
         "bot-maturity",
@@ -1454,6 +1514,117 @@
       ],
       "origin": "user",
       "note": "Bull and bear graduate separately, per segment, on measured edge rather than on a trade count or a date."
+    },
+    {
+      "id": "cross-segment-exposure-watch",
+      "name": "Cross-segment exposure watch",
+      "role": "watch every segment at once to report total capital at risk",
+      "category": "intelligence",
+      "consumes": [
+        "position"
+      ],
+      "produces": [
+        "exposure-view",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "The one thing no per-segment block can do. Closes the hole the user accepted when choosing to split everything: risk allocation now sees the whole, while each segment still decides for itself."
+    },
+    {
+      "id": "decision-quality-critic",
+      "name": "Decision quality critic",
+      "role": "score whether a decision was sound separately from whether it won",
+      "category": "intelligence",
+      "consumes": [
+        "directional-opinion",
+        "trade-episode",
+        "llm-response"
+      ],
+      "produces": [
+        "decision-quality-score",
+        "part-health",
+        "llm-request"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Learning loop scores outcomes. A system that cannot separate a lucky win from a correct call learns the wrong lesson with perfect discipline."
+    },
+    {
+      "id": "regime-break-detector",
+      "name": "Regime break detector",
+      "role": "detect when the market has changed enough that what was learned no longer applies",
+      "category": "intelligence",
+      "consumes": [
+        "market-data",
+        "journal-entry"
+      ],
+      "produces": [
+        "regime-break-alert",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Distinct from the scanner's regime classifier, which labels the current regime. This one watches for the regime itself breaking -- the failure that kills systems that were working."
+    },
+    {
+      "id": "open-web-reader",
+      "name": "Open web reader",
+      "role": "read the open web for ideas nobody pointed it at",
+      "category": "intelligence",
+      "consumes": [],
+      "produces": [
+        "web-idea",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Different from C-09, which decodes named traders, and from C-20's ingester, which distils a source it was handed. This one goes looking."
+    },
+    {
+      "id": "idea-generator",
+      "name": "Idea generator",
+      "role": "propose strategies nobody here has tried",
+      "category": "intelligence",
+      "consumes": [
+        "web-idea",
+        "trade-episode",
+        "bot-scorecard",
+        "llm-response"
+      ],
+      "produces": [
+        "novel-idea",
+        "part-health",
+        "llm-request"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "note": "Hypothesis is reactive by design -- it turns what happened into instructions. This is the generative counterpart."
     }
   ],
   "control_plane": {

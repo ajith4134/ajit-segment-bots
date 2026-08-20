@@ -371,3 +371,62 @@ separately, on their own numbers, not on a trade count or a date.
 **The cost, stated once:** two legs means two sets of fees and, in futures, funding
 on both sides. In a chop both can lose. That is the price of exploration, and it is
 why the phase ends on evidence rather than on a schedule.
+
+---
+
+# C-04 Intelligence — the one global thinker (2026-08-20)
+
+The last block to be described, and the fork was real: by the time the other
+nineteen were done, the obvious territory was taken. Prediction owns what happens
+next, hypothesis owns turning lessons into instructions, knowledge owns memory,
+learning loop owns scorekeeping, the AI brain owns arbitration. Retiring
+intelligence was a live option. It named four things instead, none of which
+anything else owns.
+
+**Global scope.** It joins the resource governor and observability as one of three
+blocks that are not instantiated per segment — and unlike those two, it is a
+thinker. Everything else sees only its own market.
+
+## The five parts
+
+| part | its one responsibility |
+|---|---|
+| Cross-segment exposure watch | watch every segment at once to report total capital at risk |
+| Decision quality critic | score whether a decision was sound separately from whether it won |
+| Regime break detector | detect when the market has changed enough that what was learned no longer applies |
+| Open web reader | read the open web for ideas nobody pointed it at |
+| Idea generator | propose strategies nobody here has tried |
+
+## What each one is actually for
+
+**Cross-segment exposure closes a hole the user knowingly accepted.** Choosing to
+split everything per segment carried a stated cost: nothing could see total
+exposure, so three independent allocators could each stay within their own budget
+while the account as a whole was over-committed. This watch is the fix, and it
+fixes it without breaking the isolation — it *reports* the total to risk
+allocation, which still decides for itself, per segment.
+
+**Decision quality is not outcome.** Learning loop scores what happened. A trade
+can win on luck and lose on a correct call, and a system that cannot tell those
+apart learns the wrong lesson with perfect discipline. This score now also feeds
+the graduation gate, so a bot cannot graduate on a lucky streak.
+
+**Regime break is not regime classification.** The scanner's Hurst classifier
+labels the *current* regime — trending, mean-reverting, mixed. This detector
+watches for the regime itself breaking, which is the failure that kills systems
+that were working right up until they weren't. Its alert reaches both hypothesis,
+which can retire instructions, and the AI brain, which can stand down.
+
+**The open web reader goes looking.** Three blocks now touch outside sources and
+they are genuinely different jobs: C-09 decodes *named* traders, C-20's ingester
+distils a source it was *handed*, and this one searches for ideas nobody pointed
+it at.
+
+**The idea generator is the generative counterpart to hypothesis.** Hypothesis is
+reactive by design — it turns what happened into instructions. Nothing else
+proposes something untried.
+
+## Every block is now described
+
+Twenty foundation blocks, none awaiting a description. What remains open is
+correction, not absence.
