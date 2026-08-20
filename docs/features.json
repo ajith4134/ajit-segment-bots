@@ -37,6 +37,7 @@
       "consumes": [
         "bot-maturity",
         "capital-allotment",
+        "consolidated-price",
         "cost-estimate",
         "delayed-order-request",
         "execution-schedule",
@@ -81,12 +82,16 @@
       "approved": true,
       "consumes": [
         "cointegrated-pair",
+        "consolidated-price",
+        "cross-segment-signal",
         "funding-forecast",
         "implied-vol-surface",
         "liquidation-map",
         "liquidity-grade",
         "market-data",
         "market-regime",
+        "onchain-flow",
+        "options-flow",
         "order-book-snapshot",
         "playbook-rule",
         "position",
@@ -95,6 +100,7 @@
         "sentiment-reading",
         "symbol-profile",
         "symbol-universe",
+        "venue-announcement",
         "volatility-forecast",
         "watch-condition",
         "whale-transfer"
@@ -127,6 +133,7 @@
         "implied-vol-surface",
         "liquidity-grade",
         "market-data",
+        "timed-intent",
         "trade-intent"
       ],
       "produces": [
@@ -156,33 +163,61 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
+        "consolidated-price",
+        "counter-argument",
+        "counterfactual-outcome",
+        "coverage-report",
         "decision-rationale",
         "decoded-trade-instruction",
         "directional-opinion",
+        "feature-attribution",
+        "feed-coverage",
         "feed-gap",
+        "forgetting-report",
+        "funding-forecast",
         "instruction-history",
+        "instruction-scorecard",
         "journal-entry",
+        "knowledge-link",
         "llm-response",
         "loss-cause",
         "market-data",
         "market-event",
+        "model-version",
+        "mutated-hypothesis",
+        "opportunity-instruction",
         "position",
+        "premortem-note",
+        "recalled-episode",
+        "regime-memory",
         "sentiment-reading",
+        "skill-gap",
         "trade-episode",
+        "trade-intent",
+        "venue-announcement",
         "verified-snapshot",
-        "web-idea"
+        "web-idea",
+        "whale-transfer"
       ],
       "produces": [
+        "competence-map",
         "correlation-cluster",
+        "counterfactual-outcome",
+        "coverage-report",
         "cross-segment-lesson",
+        "cross-segment-signal",
         "decision-quality-score",
+        "edge-half-life",
         "exposure-view",
+        "forgetting-report",
         "llm-request",
         "market-anomaly",
         "market-event",
         "novel-idea",
         "part-health",
+        "refutation-verdict",
         "regime-break-alert",
+        "trial-ledger",
         "turbulence-index",
         "web-idea"
       ],
@@ -203,24 +238,52 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
+        "closed-trade",
+        "cost-estimate",
+        "counterfactual-outcome",
+        "coverage-report",
         "decision-quality-score",
         "directional-opinion",
+        "duty-cycle",
         "exit-quality",
+        "feature-attribution",
+        "feature-vector",
         "fill",
         "forecast-accuracy",
+        "forgetting-report",
+        "learning-reward",
+        "market-regime",
+        "model-drift-alert",
+        "model-version",
         "opportunity-instruction",
+        "peak-excursion",
+        "raw-conviction",
+        "refutation-verdict",
+        "retrain-request",
         "sized-order",
         "trade-episode",
+        "trade-intent",
+        "training-label",
+        "trial-ledger",
+        "usdt-pnl-statement",
         "vol-feature-set"
       ],
       "produces": [
         "bot-maturity",
+        "bot-regret",
         "bot-scorecard",
+        "champion-choice",
+        "feature-attribution",
         "feature-reliability",
         "forecast-trust",
         "instruction-scorecard",
+        "learning-reward",
+        "model-version",
         "part-health",
-        "slippage-profile"
+        "retrain-request",
+        "sample-weight",
+        "slippage-profile",
+        "training-label"
       ],
       "flow_origin": "proposed",
       "scope": "per-segment",
@@ -239,33 +302,53 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "candidate-formula",
         "cross-segment-lesson",
         "decoded-trade-instruction",
+        "edge-half-life",
         "exit-quality",
         "expectancy-breakdown",
+        "falsification-criterion",
         "feature-reliability",
         "forecast-accuracy",
         "hypothesis-priority",
+        "hypothesis-regime-tag",
+        "instruction-history",
         "instruction-scorecard",
         "inverted-hypothesis",
+        "kline-window",
+        "knowledge-link",
         "live-vs-replay-gap",
         "loaded-skill-section",
         "loss-cause",
+        "market-regime",
+        "mutated-hypothesis",
         "novel-idea",
+        "novelty-score",
         "recalled-episode",
         "reflection-note",
         "regime-break-alert",
+        "regime-memory",
+        "required-sample-size",
+        "retired-instruction",
         "semantic-fact",
         "strategy-gap",
         "trade-episode",
+        "training-label",
         "winner-pattern"
       ],
       "produces": [
+        "candidate-formula",
         "expectancy-breakdown",
+        "falsification-criterion",
         "hypothesis-priority",
+        "hypothesis-regime-tag",
         "inverted-hypothesis",
+        "mutated-hypothesis",
+        "novelty-score",
         "opportunity-instruction",
         "part-health",
+        "required-sample-size",
         "retired-instruction"
       ],
       "flow_origin": "agreed-provisional",
@@ -284,20 +367,39 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "available-skill",
+        "episode-embedding",
+        "fact-confidence",
+        "fact-provenance",
+        "instruction-history",
         "instruction-scorecard",
         "journal-entry",
+        "knowledge-contradiction",
+        "knowledge-link",
         "market-data",
+        "market-regime",
         "opportunity-instruction",
+        "playbook-rule",
+        "recalled-episode",
+        "research-finding",
         "retired-instruction",
         "semantic-fact",
         "skill-usefulness",
+        "source-document",
         "trade-episode"
       ],
       "produces": [
+        "episode-embedding",
+        "fact-confidence",
+        "fact-provenance",
         "instruction-history",
+        "knowledge-contradiction",
+        "knowledge-link",
+        "knowledge-snapshot",
         "part-health",
         "playbook-rule",
         "recalled-episode",
+        "regime-memory",
         "semantic-fact",
         "stale-knowledge",
         "symbol-profile"
@@ -318,11 +420,14 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "accelerator-slot",
+        "champion-choice",
         "finetuned-model",
         "flow-entropy",
         "forecast-accuracy",
         "forecast-out-of-distribution-flag",
         "forecast-trust",
+        "forgetting-report",
         "implied-vol-surface",
         "kline-window",
         "market-data",
@@ -331,6 +436,8 @@
         "order-book-snapshot",
         "order-flow-state",
         "price-forecast",
+        "retrain-request",
+        "sample-weight",
         "vol-feature-set",
         "volatility-forecast"
       ],
@@ -368,22 +475,33 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "copy-latency",
         "external-position",
         "llm-response",
+        "market-data",
         "research-finding",
+        "skill-gap",
         "symbol-universe",
         "tracked-trader",
-        "trade-episode"
+        "trade-episode",
+        "verified-record",
+        "web-idea"
       ],
       "produces": [
+        "copy-latency",
         "copy-score",
         "external-position",
         "llm-request",
+        "onchain-flow",
+        "options-flow",
         "part-health",
         "research-finding",
         "sentiment-reading",
+        "source-document",
         "strategy-gap",
         "tracked-trader",
+        "venue-announcement",
+        "verified-record",
         "whale-transfer"
       ],
       "flow_origin": "agreed-provisional",
@@ -447,23 +565,38 @@
       "consumes": [
         "admitted-part",
         "conservation-plan",
+        "duty-cycle",
+        "flap-report",
         "hardware-capacity",
         "hog-report",
+        "io-pressure",
+        "market-data",
+        "memory-forecast",
+        "part-fault",
         "part-health",
         "part-priority",
         "part-resource-usage",
         "replacement-plan",
+        "resource-reservation",
+        "restart-budget",
         "restart-request",
         "switch-plan",
         "switch-record"
       ],
       "produces": [
+        "accelerator-slot",
+        "duty-cycle",
+        "flap-report",
         "hardware-capacity",
         "hog-report",
+        "io-pressure",
+        "memory-forecast",
         "part-fault",
         "part-health",
         "part-priority",
         "part-resource-usage",
+        "resource-reservation",
+        "restart-budget",
         "switch-plan",
         "switch-record"
       ],
@@ -483,18 +616,29 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
+        "feed-gap",
+        "hardware-capacity",
+        "key-standing",
         "market-data",
         "order-book-snapshot",
-        "symbol-universe"
+        "stream-plan",
+        "symbol-universe",
+        "venue-rate-budget",
+        "venue-standing"
       ],
       "produces": [
+        "consolidated-price",
+        "feed-coverage",
         "feed-gap",
         "feed-jump",
+        "key-standing",
         "market-data",
         "order-book-snapshot",
         "part-health",
         "price-increment",
-        "symbol-universe"
+        "stream-plan",
+        "symbol-universe",
+        "venue-standing"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -534,13 +678,16 @@
         "position",
         "price-increment",
         "risk-limit",
+        "size-hint",
         "sized-order",
         "slippage-profile",
         "stop-target-plan",
         "symbol-profile",
+        "timed-intent",
         "trade-intent",
         "trading-halt",
         "turbulence-index",
+        "venue-announcement",
         "volatility-forecast"
       ],
       "produces": [
@@ -576,6 +723,7 @@
         "fill",
         "forecast-accuracy",
         "journal-entry",
+        "knowledge-snapshot",
         "market-data",
         "modification-record",
         "opportunity-instruction",
@@ -654,6 +802,8 @@
         "alert",
         "board-link",
         "board-snapshot",
+        "competence-map",
+        "feed-coverage",
         "fill",
         "heartbeat-table",
         "hog-report",
@@ -695,13 +845,15 @@
       "approved": true,
       "consumes": [
         "cancel-decision",
+        "key-standing",
         "market-data",
         "order-book-snapshot",
         "order-reject-reason",
         "order-reprice",
         "order-request",
         "raw-venue-order-status",
-        "venue-rate-budget"
+        "venue-rate-budget",
+        "venue-standing"
       ],
       "produces": [
         "account-balance",
@@ -732,24 +884,44 @@
       "approved": true,
       "consumes": [
         "bot-maturity",
+        "bot-regret",
+        "bot-scorecard",
+        "bot-weight",
+        "calibrated-conviction",
+        "competence-map",
+        "conflict-ruling",
+        "counter-argument",
+        "coverage-report",
         "decision-rationale",
         "directional-opinion",
         "ensemble-forecast",
+        "entry-timing",
+        "feature-attribution",
         "forecast-bias",
         "forecast-trust",
+        "knowledge-snapshot",
         "llm-response",
+        "market-data",
         "market-regime",
+        "premortem-note",
         "regime-break-alert",
+        "regime-memory",
         "trade-episode",
         "trade-intent",
         "verified-snapshot"
       ],
       "produces": [
+        "bot-weight",
+        "conflict-ruling",
+        "counter-argument",
         "decision-rationale",
         "forecast-bias",
         "llm-request",
         "part-health",
+        "premortem-note",
         "reflection-note",
+        "size-hint",
+        "timed-intent",
         "trade-intent"
       ],
       "flow_origin": "proposed",
@@ -801,13 +973,20 @@
       "scope_origin": "user",
       "consumes": [
         "available-skill",
+        "knowledge-link",
+        "llm-request",
         "llm-response",
         "loaded-skill-section",
+        "recalled-episode",
         "research-finding",
         "skill",
+        "skill-backtest",
         "skill-conflict",
+        "skill-gap",
+        "skill-provenance",
         "skill-refresh-request",
         "skill-usefulness",
+        "skill-version",
         "source-document",
         "stale-knowledge",
         "trade-episode",
@@ -819,9 +998,13 @@
         "loaded-skill-section",
         "part-health",
         "skill",
+        "skill-backtest",
         "skill-conflict",
+        "skill-gap",
+        "skill-provenance",
         "skill-refresh-request",
         "skill-usefulness",
+        "skill-version",
         "source-document"
       ],
       "flow_origin": "proposed",
@@ -843,6 +1026,7 @@
         "bot-maturity",
         "bot-scorecard",
         "capability-gap",
+        "competence-map",
         "exposure-view",
         "feed-gap",
         "folded-circuit-map",
@@ -906,13 +1090,17 @@
         "backtest-run",
         "backtest-verdict",
         "cost-estimate",
+        "falsification-criterion",
         "fill-sequence",
         "fillable-size",
         "historical-window",
         "market-data",
         "opportunity-instruction",
+        "refutation-verdict",
+        "required-sample-size",
         "slippage-profile",
         "trade-episode",
+        "trial-ledger",
         "walk-forward-split"
       ],
       "produces": [
@@ -946,6 +1134,7 @@
       "consumes": [
         "bot-scorecard",
         "calibrated-conviction",
+        "champion-choice",
         "entry-candidate",
         "entry-timing",
         "exit-plan",
@@ -954,6 +1143,7 @@
         "funding-forecast",
         "instruction-scorecard",
         "kline-window",
+        "learning-reward",
         "market-data",
         "order-book-snapshot",
         "playbook-rule",
@@ -961,9 +1151,12 @@
         "price-forecast",
         "raw-conviction",
         "regime-break-alert",
+        "retrain-request",
+        "sample-weight",
         "setup-weight",
         "side-candidate",
-        "symbol-profile"
+        "symbol-profile",
+        "training-label"
       ],
       "produces": [
         "calibrated-conviction",
@@ -1003,6 +1196,7 @@
       "consumes": [
         "bot-scorecard",
         "calibrated-conviction",
+        "champion-choice",
         "entry-candidate",
         "entry-timing",
         "exit-plan",
@@ -1011,6 +1205,7 @@
         "funding-forecast",
         "instruction-scorecard",
         "kline-window",
+        "learning-reward",
         "market-data",
         "order-book-snapshot",
         "playbook-rule",
@@ -1018,9 +1213,12 @@
         "price-forecast",
         "raw-conviction",
         "regime-break-alert",
+        "retrain-request",
+        "sample-weight",
         "setup-weight",
         "side-candidate",
-        "symbol-profile"
+        "symbol-profile",
+        "training-label"
       ],
       "produces": [
         "calibrated-conviction",
@@ -1060,6 +1258,8 @@
       "consumes": [
         "bot-scorecard",
         "calibrated-conviction",
+        "champion-choice",
+        "copy-latency",
         "copy-score",
         "crowding-reading",
         "entry-candidate",
@@ -1067,15 +1267,19 @@
         "external-position",
         "follow-candidate",
         "funding-forecast",
+        "learning-reward",
         "market-data",
         "move-remaining",
         "order-book-snapshot",
         "peak-excursion",
         "position",
         "price-forecast",
+        "retrain-request",
+        "sample-weight",
         "sentiment-reading",
         "setup-weight",
-        "symbol-profile"
+        "symbol-profile",
+        "training-label"
       ],
       "produces": [
         "calibrated-conviction",
@@ -2074,6 +2278,286 @@
       "id": "crowding-reading",
       "name": "crowding reading",
       "description": "How crowded the move already is: funding stretch, book one-sidedness, sentiment extreme."
+    },
+    {
+      "id": "refutation-verdict",
+      "name": "refutation verdict",
+      "description": "Whether a claimed edge survived the refutation battery: placebo treatment, random common cause, data-subset, bootstrap. One failure is a hard disqualifier."
+    },
+    {
+      "id": "trial-ledger",
+      "name": "trial ledger",
+      "description": "Every hypothesis, retune or parameter trial ever run on a family, counted, so a reported edge can be deflated by how many tries produced it."
+    },
+    {
+      "id": "forgetting-report",
+      "name": "forgetting report",
+      "description": "How a current model scores on frozen past episodes it once got right, so learning something new is caught overwriting something old."
+    },
+    {
+      "id": "coverage-report",
+      "name": "coverage report",
+      "description": "Realised abstention coverage against the coverage the conformal gate promised, per bot, per window."
+    },
+    {
+      "id": "counterfactual-outcome",
+      "name": "counterfactual outcome",
+      "description": "What the opinion the arbiter did not take would have earned, replayed against the same prices."
+    },
+    {
+      "id": "cross-segment-signal",
+      "name": "cross-segment signal",
+      "description": "A reading from one segment restated for another: a spot whale inflow for the futures sweeper, a basis stretch for the spot bots."
+    },
+    {
+      "id": "competence-map",
+      "name": "competence map",
+      "description": "What the system currently knows it is good at, per setup class, regime plus segment, with how sure it is, from its own measured record."
+    },
+    {
+      "id": "edge-half-life",
+      "name": "edge half-life",
+      "description": "How fast each instruction's measured edge is decaying, stated as a half-life in trades plus in hours."
+    },
+    {
+      "id": "training-label",
+      "name": "training label",
+      "description": "The outcome a closed trade teaches: which barrier hit first, within what horizon, at what return net of cost."
+    },
+    {
+      "id": "sample-weight",
+      "name": "sample weight",
+      "description": "How much one labelled episode should count in training, lower where its holding window overlaps others."
+    },
+    {
+      "id": "retrain-request",
+      "name": "retrain request",
+      "description": "A learned part should refit now, with the reason: drift, forgetting, schedule, or enough new labels."
+    },
+    {
+      "id": "model-version",
+      "name": "model version",
+      "description": "One trained model with its data window, feature list, gate verdicts plus trial count, addressable by id."
+    },
+    {
+      "id": "champion-choice",
+      "name": "champion choice",
+      "description": "Which model version a learned part should serve, chosen by the gate, never by recency."
+    },
+    {
+      "id": "learning-reward",
+      "name": "learning reward",
+      "description": "What a trade earned restated as the reward a learner optimises: net of cost, risk-adjusted, horizon-discounted."
+    },
+    {
+      "id": "feature-attribution",
+      "name": "feature attribution",
+      "description": "How much each feature moved each decision, per model version."
+    },
+    {
+      "id": "bot-regret",
+      "name": "bot regret",
+      "description": "Cumulative regret of the arbiter's choices against the best single bot in hindsight, per regime."
+    },
+    {
+      "id": "candidate-formula",
+      "name": "candidate formula",
+      "description": "A machine-found expression over features that predicted an outcome in sample, awaiting falsification."
+    },
+    {
+      "id": "novelty-score",
+      "name": "novelty score",
+      "description": "How different a hypothesis is from every instruction ever issued, so a rediscovery is not retested as new."
+    },
+    {
+      "id": "falsification-criterion",
+      "name": "falsification criterion",
+      "description": "Written before the test: the result that would refute this hypothesis."
+    },
+    {
+      "id": "required-sample-size",
+      "name": "required sample size",
+      "description": "How many trades an instruction needs before its edge is distinguishable from zero at the stated confidence."
+    },
+    {
+      "id": "mutated-hypothesis",
+      "name": "mutated hypothesis",
+      "description": "A near-miss instruction with one threshold, time-frame or filter varied."
+    },
+    {
+      "id": "hypothesis-regime-tag",
+      "name": "hypothesis regime tag",
+      "description": "The regime a hypothesis was born in, carried with it so it can be retired when that regime ends."
+    },
+    {
+      "id": "knowledge-link",
+      "name": "knowledge link",
+      "description": "An edge between two knowledge items that share a symbol, regime, setup or source."
+    },
+    {
+      "id": "fact-provenance",
+      "name": "fact provenance",
+      "description": "Where a fact came from, when, with what confidence, plus how fast that confidence decays."
+    },
+    {
+      "id": "knowledge-contradiction",
+      "name": "knowledge contradiction",
+      "description": "Two knowledge items that cannot both hold."
+    },
+    {
+      "id": "episode-embedding",
+      "name": "episode embedding",
+      "description": "A vector for an episode's observed condition, never its outcome, for similarity recall."
+    },
+    {
+      "id": "regime-memory",
+      "name": "regime memory",
+      "description": "What worked plus what failed in each regime, summarised from episodes."
+    },
+    {
+      "id": "knowledge-snapshot",
+      "name": "knowledge snapshot",
+      "description": "A hashed snapshot of the whole knowledge state at one moment, so a past decision can be replayed against what was known then."
+    },
+    {
+      "id": "fact-confidence",
+      "name": "fact confidence",
+      "description": "A fact's current confidence after decay along its forgetting curve, restored when re-confirmed."
+    },
+    {
+      "id": "verified-record",
+      "name": "verified record",
+      "description": "A tracked trader's claimed record checked against what chain or venue data actually shows."
+    },
+    {
+      "id": "copy-latency",
+      "name": "copy latency",
+      "description": "How stale an external position is by the time this system sees it, measured."
+    },
+    {
+      "id": "venue-announcement",
+      "name": "venue announcement",
+      "description": "A listing, delisting, maintenance window or rule change a venue published."
+    },
+    {
+      "id": "onchain-flow",
+      "name": "on-chain flow",
+      "description": "Stablecoin mints plus burns, exchange reserve changes, bridge flows: aggregate money moving toward or away from trading."
+    },
+    {
+      "id": "options-flow",
+      "name": "options flow",
+      "description": "Large option block trades: strike, expiry, side, size."
+    },
+    {
+      "id": "io-pressure",
+      "name": "I/O pressure",
+      "description": "How saturated disk plus network are right now, separate from CPU plus RAM."
+    },
+    {
+      "id": "accelerator-slot",
+      "name": "accelerator slot",
+      "description": "A GPU or other accelerator allocation granted to one part for one window, if the machine has one."
+    },
+    {
+      "id": "memory-forecast",
+      "name": "memory forecast",
+      "description": "Minutes until memory runs out at the current growth rate, per part."
+    },
+    {
+      "id": "restart-budget",
+      "name": "restart budget",
+      "description": "How many restarts a part has left in its window before it is held off as crash-looping."
+    },
+    {
+      "id": "duty-cycle",
+      "name": "duty cycle",
+      "description": "The hours each heavy part is allowed to run, so retraining lands in quiet hours."
+    },
+    {
+      "id": "flap-report",
+      "name": "flap report",
+      "description": "A part that has been switched on plus off repeatedly in a short window."
+    },
+    {
+      "id": "resource-reservation",
+      "name": "resource reservation",
+      "description": "A guaranteed floor of CPU plus RAM for a part that must never be starved: the risk gate, the halt path."
+    },
+    {
+      "id": "skill-backtest",
+      "name": "skill backtest",
+      "description": "How a distilled skill's rules would have scored on past episodes, before it is indexed."
+    },
+    {
+      "id": "skill-version",
+      "name": "skill version",
+      "description": "One distillation of a skill with its diff from the previous one."
+    },
+    {
+      "id": "skill-gap",
+      "name": "skill gap",
+      "description": "A question a brain asked for which no skill was found."
+    },
+    {
+      "id": "skill-provenance",
+      "name": "skill provenance",
+      "description": "Source, date, licence plus distiller version of a skill."
+    },
+    {
+      "id": "conflict-ruling",
+      "name": "conflict ruling",
+      "description": "What to do when bull plus bear both hold high conviction on one symbol: straddle, pick, or abstain, per regime plus maturity."
+    },
+    {
+      "id": "bot-weight",
+      "name": "bot weight",
+      "description": "How much the arbiter trusts each bot right now, sampled from its regret record."
+    },
+    {
+      "id": "size-hint",
+      "name": "size hint",
+      "description": "A conviction restated as a capped fraction of capital, for the sizer to cut further, never raise."
+    },
+    {
+      "id": "premortem-note",
+      "name": "premortem note",
+      "description": "Written before the intent leaves: how this trade most plausibly fails."
+    },
+    {
+      "id": "counter-argument",
+      "name": "counter-argument",
+      "description": "The strongest case against an intent, written by a part whose job is to disagree."
+    },
+    {
+      "id": "timed-intent",
+      "name": "timed intent",
+      "description": "A trade intent released at the moment its entry timing named, or dropped at the give-up time."
+    },
+    {
+      "id": "venue-standing",
+      "name": "venue standing",
+      "description": "Whether a venue is currently safe to ask: rate headroom, recent 418/429s, withheld streams, measured latency."
+    },
+    {
+      "id": "key-standing",
+      "name": "key standing",
+      "description": "Whether one API key on one venue is currently safe to use for private calls."
+    },
+    {
+      "id": "consolidated-price",
+      "name": "consolidated price",
+      "description": "One price per symbol from every venue that quotes it, with each venue's weight plus staleness."
+    },
+    {
+      "id": "stream-plan",
+      "name": "stream plan",
+      "description": "Which streams go on which connection to which venue, within measured per-connection plus per-IP limits."
+    },
+    {
+      "id": "feed-coverage",
+      "name": "feed coverage",
+      "description": "Per symbol, which venues currently supply which data, and where nothing does."
     }
   ],
   "features": [
@@ -2105,7 +2589,9 @@
       "consumes": [
         "kline-window",
         "finetuned-model",
-        "model-choice"
+        "model-choice",
+        "champion-choice",
+        "accelerator-slot"
       ],
       "produces": [
         "price-forecast",
@@ -2126,7 +2612,10 @@
       "category": "prediction",
       "consumes": [
         "kline-window",
-        "model-drift-alert"
+        "model-drift-alert",
+        "retrain-request",
+        "sample-weight",
+        "accelerator-slot"
       ],
       "produces": [
         "finetuned-model",
@@ -2309,7 +2798,8 @@
       "consumes": [
         "volatility-forecast",
         "implied-vol-surface",
-        "playbook-rule"
+        "playbook-rule",
+        "options-flow"
       ],
       "produces": [
         "entry-candidate",
@@ -2330,7 +2820,9 @@
       "role": "hold durable per-symbol facts under a closed-set key",
       "category": "knowledge",
       "consumes": [
-        "journal-entry"
+        "journal-entry",
+        "fact-confidence",
+        "knowledge-contradiction"
       ],
       "produces": [
         "semantic-fact",
@@ -2351,7 +2843,8 @@
       "role": "keep every closed trade as an immutable episode keyed on the condition observed",
       "category": "knowledge",
       "consumes": [
-        "trade-episode"
+        "trade-episode",
+        "episode-embedding"
       ],
       "produces": [
         "recalled-episode",
@@ -2482,7 +2975,12 @@
         "inverted-hypothesis",
         "hypothesis-priority",
         "winner-pattern",
-        "reflection-note"
+        "reflection-note",
+        "candidate-formula",
+        "mutated-hypothesis",
+        "falsification-criterion",
+        "knowledge-link",
+        "regime-memory"
       ],
       "produces": [
         "opportunity-instruction",
@@ -2516,7 +3014,10 @@
       "name": "Venue candle reader",
       "role": "read live candles from every venue through one unified interface",
       "category": "market-data-feed",
-      "consumes": [],
+      "consumes": [
+        "stream-plan",
+        "venue-standing"
+      ],
       "produces": [
         "market-data",
         "part-health"
@@ -2539,7 +3040,8 @@
         "order-request",
         "venue-rate-budget",
         "cancel-decision",
-        "order-reprice"
+        "order-reprice",
+        "key-standing"
       ],
       "produces": [
         "raw-venue-order-status",
@@ -2650,7 +3152,10 @@
       "consumes": [
         "skill",
         "skill-conflict",
-        "stale-knowledge"
+        "stale-knowledge",
+        "skill-backtest",
+        "skill-provenance",
+        "skill-version"
       ],
       "produces": [
         "available-skill",
@@ -2705,7 +3210,8 @@
       "category": "skills",
       "consumes": [
         "loaded-skill-section",
-        "trade-episode"
+        "trade-episode",
+        "skill-version"
       ],
       "produces": [
         "skill-usefulness",
@@ -2815,7 +3321,13 @@
         "market-regime",
         "bot-maturity",
         "regime-break-alert",
-        "forecast-bias"
+        "forecast-bias",
+        "competence-map",
+        "coverage-report",
+        "conflict-ruling",
+        "bot-weight",
+        "counter-argument",
+        "regime-memory"
       ],
       "produces": [
         "trade-intent",
@@ -2870,7 +3382,9 @@
       "category": "learning-loop",
       "consumes": [
         "directional-opinion",
-        "trade-episode"
+        "trade-episode",
+        "counterfactual-outcome",
+        "learning-reward"
       ],
       "produces": [
         "bot-scorecard",
@@ -2892,7 +3406,8 @@
       "category": "learning-loop",
       "consumes": [
         "trade-episode",
-        "vol-feature-set"
+        "vol-feature-set",
+        "feature-attribution"
       ],
       "produces": [
         "feature-reliability",
@@ -2914,7 +3429,10 @@
       "category": "learning-loop",
       "consumes": [
         "bot-scorecard",
-        "decision-quality-score"
+        "decision-quality-score",
+        "refutation-verdict",
+        "trial-ledger",
+        "coverage-report"
       ],
       "produces": [
         "bot-maturity",
@@ -2960,7 +3478,10 @@
         "trade-episode",
         "llm-response",
         "decision-rationale",
-        "verified-snapshot"
+        "verified-snapshot",
+        "counterfactual-outcome",
+        "premortem-note",
+        "counter-argument"
       ],
       "produces": [
         "decision-quality-score",
@@ -3026,7 +3547,9 @@
       "name": "Open web reader",
       "role": "read the open web for ideas nobody pointed it at",
       "category": "intelligence",
-      "consumes": [],
+      "consumes": [
+        "skill-gap"
+      ],
       "produces": [
         "web-idea",
         "part-health"
@@ -3051,7 +3574,9 @@
         "bot-scorecard",
         "llm-response",
         "sentiment-reading",
-        "instruction-history"
+        "instruction-history",
+        "knowledge-link",
+        "regime-memory"
       ],
       "produces": [
         "novel-idea",
@@ -3534,7 +4059,8 @@
       "consumes": [
         "autonomy-envelope",
         "trade-intent",
-        "proposed-part"
+        "proposed-part",
+        "competence-map"
       ],
       "produces": [
         "policy-decision",
@@ -3905,7 +4431,11 @@
       "category": "backtesting",
       "consumes": [
         "backtest-result",
-        "backtest-verdict"
+        "backtest-verdict",
+        "refutation-verdict",
+        "trial-ledger",
+        "required-sample-size",
+        "falsification-criterion"
       ],
       "produces": [
         "proven-instruction",
@@ -3998,7 +4528,8 @@
         "money-mode",
         "delayed-order-request",
         "fill-price-estimate",
-        "feed-jump"
+        "feed-jump",
+        "consolidated-price"
       ],
       "produces": [
         "fill",
@@ -4090,7 +4621,10 @@
         "symbol-universe",
         "watch-condition",
         "liquidity-grade",
-        "position"
+        "position",
+        "cross-segment-signal",
+        "venue-announcement",
+        "consolidated-price"
       ],
       "produces": [
         "entry-candidate",
@@ -4184,7 +4718,8 @@
       "category": "opportunity-scanner",
       "consumes": [
         "whale-transfer",
-        "market-data"
+        "market-data",
+        "onchain-flow"
       ],
       "produces": [
         "entry-candidate",
@@ -4253,7 +4788,8 @@
         "trade-intent",
         "market-data",
         "implied-vol-surface",
-        "liquidity-grade"
+        "liquidity-grade",
+        "timed-intent"
       ],
       "produces": [
         "instrument-choice",
@@ -4316,7 +4852,9 @@
       "name": "Market event reader",
       "role": "read scheduled or breaking events that move markets",
       "category": "intelligence",
-      "consumes": [],
+      "consumes": [
+        "venue-announcement"
+      ],
       "produces": [
         "market-event",
         "part-health"
@@ -4337,7 +4875,9 @@
       "category": "intelligence",
       "consumes": [
         "market-data",
-        "feed-gap"
+        "feed-gap",
+        "consolidated-price",
+        "feed-coverage"
       ],
       "produces": [
         "market-anomaly",
@@ -4474,7 +5014,10 @@
       "consumes": [
         "expectancy-breakdown",
         "instruction-scorecard",
-        "exit-quality"
+        "exit-quality",
+        "edge-half-life",
+        "novelty-score",
+        "required-sample-size"
       ],
       "produces": [
         "hypothesis-priority",
@@ -4497,7 +5040,10 @@
       "consumes": [
         "instruction-scorecard",
         "regime-break-alert",
-        "live-vs-replay-gap"
+        "live-vs-replay-gap",
+        "edge-half-life",
+        "hypothesis-regime-tag",
+        "falsification-criterion"
       ],
       "produces": [
         "retired-instruction",
@@ -4564,7 +5110,10 @@
       "consumes": [
         "skill-usefulness",
         "semantic-fact",
-        "instruction-scorecard"
+        "instruction-scorecard",
+        "fact-provenance",
+        "knowledge-contradiction",
+        "fact-confidence"
       ],
       "produces": [
         "stale-knowledge",
@@ -4652,7 +5201,8 @@
       "role": "raise an alert when a forecaster's accuracy decays past its floor",
       "category": "prediction",
       "consumes": [
-        "forecast-accuracy"
+        "forecast-accuracy",
+        "forgetting-report"
       ],
       "produces": [
         "model-drift-alert",
@@ -4675,7 +5225,9 @@
       "consumes": [
         "external-position",
         "tracked-trader",
-        "trade-episode"
+        "trade-episode",
+        "verified-record",
+        "copy-latency"
       ],
       "produces": [
         "copy-score",
@@ -4869,7 +5421,13 @@
         "restart-request",
         "replacement-plan",
         "conservation-plan",
-        "admitted-part"
+        "admitted-part",
+        "io-pressure",
+        "memory-forecast",
+        "restart-budget",
+        "duty-cycle",
+        "flap-report",
+        "resource-reservation"
       ],
       "produces": [
         "switch-plan",
@@ -4932,7 +5490,10 @@
       "name": "Venue trade stream reader",
       "role": "stream live trades as they print",
       "category": "market-data-feed",
-      "consumes": [],
+      "consumes": [
+        "stream-plan",
+        "venue-standing"
+      ],
       "produces": [
         "market-data",
         "part-health"
@@ -4951,7 +5512,10 @@
       "name": "Order book reader",
       "role": "snapshot bids plus asks to depth",
       "category": "market-data-feed",
-      "consumes": [],
+      "consumes": [
+        "stream-plan",
+        "venue-standing"
+      ],
       "produces": [
         "order-book-snapshot",
         "part-health"
@@ -5149,7 +5713,8 @@
       "consumes": [
         "market-event",
         "market-anomaly",
-        "turbulence-index"
+        "turbulence-index",
+        "venue-announcement"
       ],
       "produces": [
         "risk-limit",
@@ -5178,7 +5743,9 @@
         "risk-limit",
         "slippage-profile",
         "locked-allocation",
-        "price-increment"
+        "price-increment",
+        "size-hint",
+        "timed-intent"
       ],
       "produces": [
         "sized-order",
@@ -5279,7 +5846,8 @@
       "consumes": [
         "switch-record",
         "policy-decision",
-        "modification-record"
+        "modification-record",
+        "knowledge-snapshot"
       ],
       "produces": [
         "journal-entry",
@@ -5466,7 +6034,8 @@
         "trading-halt",
         "journal-gap",
         "market-anomaly",
-        "hog-report"
+        "hog-report",
+        "feed-coverage"
       ],
       "produces": [
         "alert",
@@ -5492,7 +6061,9 @@
         "usdt-pnl-statement",
         "alert",
         "switch-record",
-        "account-balance"
+        "account-balance",
+        "feed-coverage",
+        "competence-map"
       ],
       "produces": [
         "board-snapshot",
@@ -5555,7 +6126,9 @@
       "name": "Venue balance reader",
       "role": "fetch the live balance from the venue",
       "category": "execution-venue-adapter",
-      "consumes": [],
+      "consumes": [
+        "key-standing"
+      ],
       "produces": [
         "account-balance",
         "part-health"
@@ -5574,7 +6147,9 @@
       "name": "Venue position reader",
       "role": "fetch what the venue says is held",
       "category": "execution-venue-adapter",
-      "consumes": [],
+      "consumes": [
+        "key-standing"
+      ],
       "produces": [
         "venue-position-report",
         "part-health"
@@ -5659,7 +6234,8 @@
       "role": "count what the venue still allows this window, as a separate weighted budget per endpoint class",
       "category": "execution-venue-adapter",
       "consumes": [
-        "order-request"
+        "order-request",
+        "venue-standing"
       ],
       "produces": [
         "venue-rate-budget",
@@ -5732,7 +6308,8 @@
         "trade-intent",
         "directional-opinion",
         "llm-response",
-        "verified-snapshot"
+        "verified-snapshot",
+        "feature-attribution"
       ],
       "produces": [
         "decision-rationale",
@@ -5756,7 +6333,10 @@
       "consumes": [
         "decision-rationale",
         "trade-episode",
-        "llm-response"
+        "llm-response",
+        "knowledge-snapshot",
+        "premortem-note",
+        "counter-argument"
       ],
       "produces": [
         "reflection-note",
@@ -5862,7 +6442,8 @@
       "role": "fetch the books or papers the web reader pointed at",
       "category": "skills",
       "consumes": [
-        "web-idea"
+        "web-idea",
+        "skill-gap"
       ],
       "produces": [
         "source-document",
@@ -6610,7 +7191,12 @@
         "feature-vector",
         "price-forecast",
         "kline-window",
-        "forecast-out-of-distribution-flag"
+        "forecast-out-of-distribution-flag",
+        "training-label",
+        "sample-weight",
+        "retrain-request",
+        "champion-choice",
+        "learning-reward"
       ],
       "produces": [
         "raw-conviction",
@@ -6842,7 +7428,12 @@
         "feature-vector",
         "price-forecast",
         "kline-window",
-        "forecast-out-of-distribution-flag"
+        "forecast-out-of-distribution-flag",
+        "training-label",
+        "sample-weight",
+        "retrain-request",
+        "champion-choice",
+        "learning-reward"
       ],
       "produces": [
         "raw-conviction",
@@ -7051,7 +7642,8 @@
       "category": "profit-tailgating-bot",
       "consumes": [
         "external-position",
-        "copy-score"
+        "copy-score",
+        "copy-latency"
       ],
       "produces": [
         "follow-candidate",
@@ -7122,7 +7714,12 @@
         "follow-candidate",
         "move-remaining",
         "crowding-reading",
-        "bot-scorecard"
+        "bot-scorecard",
+        "training-label",
+        "sample-weight",
+        "retrain-request",
+        "champion-choice",
+        "learning-reward"
       ],
       "produces": [
         "calibrated-conviction",
@@ -7203,6 +7800,1386 @@
       ],
       "origin": "proposed",
       "evidence": "docs/proposals/three-bots-inside-segment.md"
+    },
+    {
+      "id": "causal-refutation-battery",
+      "name": "Causal refutation battery",
+      "role": "test a claimed edge with placebo treatment, random common cause, data-subset plus bootstrap refutations",
+      "category": "intelligence",
+      "consumes": [
+        "trade-episode",
+        "instruction-scorecard",
+        "feature-attribution"
+      ],
+      "produces": [
+        "refutation-verdict",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "trial-count-accountant",
+      "name": "Trial count accountant",
+      "role": "count every hypothesis, retune plus parameter trial per family so an edge is deflated by how many tries produced it",
+      "category": "intelligence",
+      "consumes": [
+        "opportunity-instruction",
+        "mutated-hypothesis",
+        "model-version"
+      ],
+      "produces": [
+        "trial-ledger",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "forgetting-auditor",
+      "name": "Forgetting auditor",
+      "role": "replay frozen past episodes against the current model to catch new learning overwriting old",
+      "category": "intelligence",
+      "consumes": [
+        "model-version",
+        "recalled-episode",
+        "trade-episode"
+      ],
+      "produces": [
+        "forgetting-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "abstention-coverage-auditor",
+      "name": "Abstention coverage auditor",
+      "role": "measure realised abstention coverage against what the conformal gate promised",
+      "category": "intelligence",
+      "consumes": [
+        "directional-opinion",
+        "trade-episode"
+      ],
+      "produces": [
+        "coverage-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "counterfactual-replayer",
+      "name": "Counterfactual replayer",
+      "role": "replay the opinion the arbiter did not take against the same prices",
+      "category": "intelligence",
+      "consumes": [
+        "directional-opinion",
+        "trade-intent",
+        "market-data",
+        "trade-episode"
+      ],
+      "produces": [
+        "counterfactual-outcome",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "cross-segment-signal-bridge",
+      "name": "Cross-segment signal bridge",
+      "role": "restate a reading from one segment for the sweepers of the other two",
+      "category": "intelligence",
+      "consumes": [
+        "whale-transfer",
+        "market-data",
+        "funding-forecast",
+        "position"
+      ],
+      "produces": [
+        "cross-segment-signal",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "self-model-reporter",
+      "name": "Self-model reporter",
+      "role": "state what the system currently knows it is good at, per setup, regime plus segment, from its own record",
+      "category": "intelligence",
+      "consumes": [
+        "bot-scorecard",
+        "instruction-scorecard",
+        "coverage-report",
+        "forgetting-report"
+      ],
+      "produces": [
+        "competence-map",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "edge-decay-tracker",
+      "name": "Edge decay tracker",
+      "role": "measure how fast each instruction's edge is decaying, as a half-life",
+      "category": "intelligence",
+      "consumes": [
+        "instruction-scorecard",
+        "trade-episode"
+      ],
+      "produces": [
+        "edge-half-life",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "label-builder",
+      "name": "Label builder",
+      "role": "turn each closed trade into a training label: which barrier hit first, within what horizon, at what net return",
+      "category": "learning-loop",
+      "consumes": [
+        "closed-trade",
+        "peak-excursion",
+        "cost-estimate"
+      ],
+      "produces": [
+        "training-label",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "sample-weight-assigner",
+      "name": "Sample weight assigner",
+      "role": "weight each labelled episode down where its holding window overlaps others",
+      "category": "learning-loop",
+      "consumes": [
+        "training-label",
+        "trade-episode"
+      ],
+      "produces": [
+        "sample-weight",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "retrain-scheduler",
+      "name": "Retrain scheduler",
+      "role": "ask a learned part to refit when drift, forgetting, schedule or enough new labels say so",
+      "category": "learning-loop",
+      "consumes": [
+        "model-drift-alert",
+        "forgetting-report",
+        "training-label",
+        "duty-cycle"
+      ],
+      "produces": [
+        "retrain-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "model-registry",
+      "name": "Model registry",
+      "role": "keep every trained model version with its window, features, gate verdicts plus trial count",
+      "category": "learning-loop",
+      "consumes": [
+        "retrain-request",
+        "refutation-verdict",
+        "trial-ledger"
+      ],
+      "produces": [
+        "model-version",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "champion-challenger-gate",
+      "name": "Champion-challenger gate",
+      "role": "choose which model version a learned part serves, by its gate verdicts, never by recency",
+      "category": "learning-loop",
+      "consumes": [
+        "model-version",
+        "refutation-verdict",
+        "trial-ledger",
+        "forgetting-report"
+      ],
+      "produces": [
+        "champion-choice",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "reward-shaper",
+      "name": "Reward shaper",
+      "role": "restate what a trade earned as the reward a learner optimises: net of cost, risk-adjusted, horizon-discounted",
+      "category": "learning-loop",
+      "consumes": [
+        "closed-trade",
+        "usdt-pnl-statement",
+        "peak-excursion"
+      ],
+      "produces": [
+        "learning-reward",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "feature-attribution-tracker",
+      "name": "Feature attribution tracker",
+      "role": "record how much each feature moved each decision, per model version",
+      "category": "learning-loop",
+      "consumes": [
+        "model-version",
+        "feature-vector",
+        "raw-conviction"
+      ],
+      "produces": [
+        "feature-attribution",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "regret-tracker",
+      "name": "Regret tracker",
+      "role": "track the arbiter's cumulative regret against the best single bot in hindsight, per regime",
+      "category": "learning-loop",
+      "consumes": [
+        "trade-intent",
+        "counterfactual-outcome",
+        "trade-episode",
+        "market-regime"
+      ],
+      "produces": [
+        "bot-regret",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "symbolic-hypothesis-miner",
+      "name": "Symbolic hypothesis miner",
+      "role": "search expressions over features by genetic programming for ones that predicted an outcome in sample",
+      "category": "hypothesis",
+      "consumes": [
+        "feature-reliability",
+        "trade-episode",
+        "kline-window",
+        "training-label"
+      ],
+      "produces": [
+        "candidate-formula",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "hypothesis-deduplicator",
+      "name": "Hypothesis deduplicator",
+      "role": "score a hypothesis by how different it is from every instruction ever issued",
+      "category": "hypothesis",
+      "consumes": [
+        "candidate-formula",
+        "mutated-hypothesis",
+        "instruction-history"
+      ],
+      "produces": [
+        "novelty-score",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "hypothesis-falsifier",
+      "name": "Hypothesis falsifier",
+      "role": "write, before any test, the result that would refute the hypothesis",
+      "category": "hypothesis",
+      "consumes": [
+        "candidate-formula",
+        "inverted-hypothesis",
+        "novel-idea"
+      ],
+      "produces": [
+        "falsification-criterion",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "power-estimator",
+      "name": "Power estimator",
+      "role": "compute how many trades an instruction needs before its edge is distinguishable from zero",
+      "category": "hypothesis",
+      "consumes": [
+        "expectancy-breakdown",
+        "candidate-formula"
+      ],
+      "produces": [
+        "required-sample-size",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "hypothesis-mutator",
+      "name": "Hypothesis mutator",
+      "role": "vary one threshold, time-frame or filter of a near-miss instruction",
+      "category": "hypothesis",
+      "consumes": [
+        "instruction-scorecard",
+        "retired-instruction",
+        "instruction-history"
+      ],
+      "produces": [
+        "mutated-hypothesis",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "hypothesis-regime-tagger",
+      "name": "Hypothesis regime tagger",
+      "role": "tag each hypothesis with the regime it was born in",
+      "category": "hypothesis",
+      "consumes": [
+        "candidate-formula",
+        "market-regime"
+      ],
+      "produces": [
+        "hypothesis-regime-tag",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "knowledge-graph-linker",
+      "name": "Knowledge graph linker",
+      "role": "link facts, episodes, instructions plus skills that share a symbol, regime, setup or source",
+      "category": "knowledge",
+      "consumes": [
+        "semantic-fact",
+        "recalled-episode",
+        "instruction-history",
+        "available-skill"
+      ],
+      "produces": [
+        "knowledge-link",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "fact-provenance-tracker",
+      "name": "Fact provenance tracker",
+      "role": "keep where each fact came from, when, at what confidence, plus its decay rate",
+      "category": "knowledge",
+      "consumes": [
+        "semantic-fact",
+        "research-finding",
+        "source-document"
+      ],
+      "produces": [
+        "fact-provenance",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "contradiction-detector",
+      "name": "Contradiction detector",
+      "role": "find two knowledge items that cannot both hold",
+      "category": "knowledge",
+      "consumes": [
+        "semantic-fact",
+        "playbook-rule",
+        "knowledge-link"
+      ],
+      "produces": [
+        "knowledge-contradiction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "episode-embedder",
+      "name": "Episode embedder",
+      "role": "embed an episode's observed condition, never its outcome, for similarity recall",
+      "category": "knowledge",
+      "consumes": [
+        "trade-episode"
+      ],
+      "produces": [
+        "episode-embedding",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "regime-memory-store",
+      "name": "Regime memory store",
+      "role": "summarise what worked plus what failed in each regime from the episodes",
+      "category": "knowledge",
+      "consumes": [
+        "trade-episode",
+        "market-regime",
+        "instruction-scorecard"
+      ],
+      "produces": [
+        "regime-memory",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "knowledge-snapshot-versioner",
+      "name": "Knowledge snapshot versioner",
+      "role": "hash the whole knowledge state at one moment so a past decision can be replayed against what was known then",
+      "category": "knowledge",
+      "consumes": [
+        "semantic-fact",
+        "playbook-rule",
+        "instruction-history",
+        "available-skill"
+      ],
+      "produces": [
+        "knowledge-snapshot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "forgetting-curve-scheduler",
+      "name": "Forgetting curve scheduler",
+      "role": "decay each fact's confidence along its curve, restoring it when re-confirmed",
+      "category": "knowledge",
+      "consumes": [
+        "fact-provenance",
+        "semantic-fact"
+      ],
+      "produces": [
+        "fact-confidence",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "trader-record-verifier",
+      "name": "Trader record verifier",
+      "role": "check a leaderboard's claimed record against what chain or venue data actually shows",
+      "category": "online-research",
+      "consumes": [
+        "tracked-trader",
+        "external-position"
+      ],
+      "produces": [
+        "verified-record",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "copy-latency-estimator",
+      "name": "Copy latency estimator",
+      "role": "measure how stale an external position is by the time this system sees it",
+      "category": "online-research",
+      "consumes": [
+        "external-position",
+        "market-data"
+      ],
+      "produces": [
+        "copy-latency",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "exchange-announcement-reader",
+      "name": "Exchange announcement reader",
+      "role": "read listings, delistings, maintenance windows plus rule changes each venue publishes",
+      "category": "online-research",
+      "consumes": [
+        "symbol-universe"
+      ],
+      "produces": [
+        "venue-announcement",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "onchain-flow-aggregator",
+      "name": "On-chain flow aggregator",
+      "role": "aggregate stablecoin mints, burns, exchange reserves plus bridge flows into money moving toward or away from trading",
+      "category": "online-research",
+      "consumes": [],
+      "produces": [
+        "onchain-flow",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "options-flow-reader",
+      "name": "Options flow reader",
+      "role": "read large option block trades: strike, expiry, side, size",
+      "category": "online-research",
+      "consumes": [
+        "symbol-universe"
+      ],
+      "produces": [
+        "options-flow",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "arxiv-feed-reader",
+      "name": "arXiv feed reader",
+      "role": "read new quantitative-finance papers into source documents",
+      "category": "online-research",
+      "consumes": [
+        "skill-gap"
+      ],
+      "produces": [
+        "source-document",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "github-strategy-miner",
+      "name": "GitHub strategy miner",
+      "role": "read public open-source strategy code for rules worth testing",
+      "category": "online-research",
+      "consumes": [
+        "skill-gap",
+        "web-idea"
+      ],
+      "produces": [
+        "research-finding",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "io-pressure-meter",
+      "name": "I/O pressure meter",
+      "role": "measure disk plus network saturation apart from CPU plus RAM",
+      "category": "resource-governor",
+      "consumes": [],
+      "produces": [
+        "io-pressure",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "accelerator-scheduler",
+      "name": "Accelerator scheduler",
+      "role": "grant GPU or other accelerator slots to parts for a window, when the machine has one",
+      "category": "resource-governor",
+      "consumes": [
+        "hardware-capacity",
+        "part-priority"
+      ],
+      "produces": [
+        "accelerator-slot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "memory-pressure-forecaster",
+      "name": "Memory pressure forecaster",
+      "role": "forecast minutes to memory exhaustion from each part's growth rate",
+      "category": "resource-governor",
+      "consumes": [
+        "part-resource-usage",
+        "hardware-capacity"
+      ],
+      "produces": [
+        "memory-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "part-restart-budgeter",
+      "name": "Part restart budgeter",
+      "role": "hold off a part that is crash-looping once its restart budget for the window is spent",
+      "category": "resource-governor",
+      "consumes": [
+        "restart-request",
+        "part-fault"
+      ],
+      "produces": [
+        "restart-budget",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "duty-cycle-planner",
+      "name": "Duty cycle planner",
+      "role": "plan the hours each heavy part may run so retraining lands in quiet hours",
+      "category": "resource-governor",
+      "consumes": [
+        "part-resource-usage",
+        "market-data"
+      ],
+      "produces": [
+        "duty-cycle",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "switch-oscillation-damper",
+      "name": "Switch oscillation damper",
+      "role": "name a part being switched on plus off repeatedly in a short window",
+      "category": "resource-governor",
+      "consumes": [
+        "switch-record"
+      ],
+      "produces": [
+        "flap-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "resource-reservation-ledger",
+      "name": "Resource reservation ledger",
+      "role": "hold a guaranteed CPU plus RAM floor for parts that must never be starved",
+      "category": "resource-governor",
+      "consumes": [
+        "part-priority",
+        "hardware-capacity"
+      ],
+      "produces": [
+        "resource-reservation",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "skill-tester",
+      "name": "Skill tester",
+      "role": "score a distilled skill's rules on past episodes before it is indexed",
+      "category": "skills",
+      "consumes": [
+        "skill",
+        "recalled-episode",
+        "trade-episode"
+      ],
+      "produces": [
+        "skill-backtest",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "skill-composer",
+      "name": "Skill composer",
+      "role": "combine two skills that answer adjacent questions into one compound procedure",
+      "category": "skills",
+      "consumes": [
+        "skill",
+        "knowledge-link"
+      ],
+      "produces": [
+        "skill",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "skill-version-keeper",
+      "name": "Skill version keeper",
+      "role": "keep every distillation of a skill with its diff from the one before",
+      "category": "skills",
+      "consumes": [
+        "skill"
+      ],
+      "produces": [
+        "skill-version",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "skill-gap-finder",
+      "name": "Skill gap finder",
+      "role": "record every question a brain asked for which no skill was found",
+      "category": "skills",
+      "consumes": [
+        "loaded-skill-section",
+        "llm-request"
+      ],
+      "produces": [
+        "skill-gap",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "video-lecture-reader",
+      "name": "Video lecture reader",
+      "role": "read a trading lecture's transcript plus frames into a source document",
+      "category": "skills",
+      "consumes": [
+        "web-idea"
+      ],
+      "produces": [
+        "source-document",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "skill-provenance-stamper",
+      "name": "Skill provenance stamper",
+      "role": "stamp each skill with source, date, licence plus distiller version",
+      "category": "skills",
+      "consumes": [
+        "skill",
+        "source-document"
+      ],
+      "produces": [
+        "skill-provenance",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "opinion-conflict-resolver",
+      "name": "Opinion conflict resolver",
+      "role": "rule what to do when bull plus bear both hold high conviction on one symbol: straddle, pick, or abstain",
+      "category": "ai-brain",
+      "consumes": [
+        "directional-opinion",
+        "market-regime",
+        "bot-maturity",
+        "regime-memory"
+      ],
+      "produces": [
+        "conflict-ruling",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "bot-weight-sampler",
+      "name": "Bot weight sampler",
+      "role": "sample how much to trust each bot right now from its regret record",
+      "category": "ai-brain",
+      "consumes": [
+        "bot-regret",
+        "bot-scorecard",
+        "market-regime"
+      ],
+      "produces": [
+        "bot-weight",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "size-hint-writer",
+      "name": "Size hint writer",
+      "role": "restate a conviction as a capped fraction of capital the sizer may only cut",
+      "category": "ai-brain",
+      "consumes": [
+        "trade-intent",
+        "calibrated-conviction",
+        "bot-scorecard"
+      ],
+      "produces": [
+        "size-hint",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "premortem-writer",
+      "name": "Premortem writer",
+      "role": "write, before the intent leaves, how this trade most plausibly fails",
+      "category": "ai-brain",
+      "consumes": [
+        "trade-intent",
+        "directional-opinion",
+        "llm-response",
+        "verified-snapshot"
+      ],
+      "produces": [
+        "premortem-note",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "devils-advocate",
+      "name": "Devil's advocate",
+      "role": "write the strongest case against an intent, so an unanswered objection downgrades it",
+      "category": "ai-brain",
+      "consumes": [
+        "trade-intent",
+        "directional-opinion",
+        "llm-response",
+        "verified-snapshot",
+        "regime-memory"
+      ],
+      "produces": [
+        "counter-argument",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "intent-timing-gate",
+      "name": "Intent timing gate",
+      "role": "release an intent at the moment its entry timing named, or drop it at the give-up time",
+      "category": "ai-brain",
+      "consumes": [
+        "trade-intent",
+        "entry-timing",
+        "market-data"
+      ],
+      "produces": [
+        "timed-intent",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+    },
+    {
+      "id": "ban-signal-detector",
+      "name": "Ban signal detector",
+      "role": "read 418s, 429s, retry-after headers plus withheld streams into each venue's current standing",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data",
+        "feed-gap",
+        "venue-rate-budget"
+      ],
+      "produces": [
+        "venue-standing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "venue-pool-rotator",
+      "name": "Venue pool rotator",
+      "role": "spread each request class across every venue that carries the symbol, by standing plus rate headroom, so no one venue is leaned on",
+      "category": "market-data-feed",
+      "consumes": [
+        "symbol-universe",
+        "venue-standing",
+        "venue-rate-budget",
+        "stream-plan"
+      ],
+      "produces": [
+        "market-data",
+        "order-book-snapshot",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "api-key-pool-rotator",
+      "name": "API key pool rotator",
+      "role": "rotate private calls across every key a venue allows, by each key's standing",
+      "category": "market-data-feed",
+      "consumes": [
+        "venue-standing",
+        "key-standing"
+      ],
+      "produces": [
+        "key-standing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "cross-venue-price-consolidator",
+      "name": "Cross-venue price consolidator",
+      "role": "combine every venue's quote for a symbol into one price with each venue's weight plus staleness",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data",
+        "venue-standing"
+      ],
+      "produces": [
+        "consolidated-price",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "stream-budget-planner",
+      "name": "Stream budget planner",
+      "role": "assign streams to connections plus venues within the measured per-connection plus per-IP limits",
+      "category": "market-data-feed",
+      "consumes": [
+        "symbol-universe",
+        "venue-standing",
+        "hardware-capacity"
+      ],
+      "produces": [
+        "stream-plan",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+    },
+    {
+      "id": "feed-coverage-auditor",
+      "name": "Feed coverage auditor",
+      "role": "state per symbol which venues currently supply which data, including where none does",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data",
+        "order-book-snapshot",
+        "symbol-universe",
+        "venue-standing"
+      ],
+      "produces": [
+        "feed-coverage",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
     }
   ],
   "control_plane": {
@@ -7676,5 +9653,11 @@
       "round-trip-trade-matcher, fee-aware-size-solver, fill-cost-downsizer, liquidity-cache-refresher, endpoint-weight-budgeter, fill-price-advantage-scorer": "folded into an existing part's role (role_refined), not a new part",
       "carry-cost-accountant, batch-collateral-locker, order-book-walk-pricer, liquidation-simulator, margin variants": "merged with their duplicates"
     }
+  },
+  "_proposal_2026-08-20_thinking_blocks": {
+    "what": "The eight thinking blocks opened further (intelligence, learning loop, hypothesis, knowledge, online research, resource governor, skills, AI brain), plus feed rotation for RL-049.",
+    "origin": "thinking-block parts proposed by Claude at the user's request; feed rotation parts are RL-049",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-08-20_thinking_blocks_and_feed.py",
+    "rationale": "docs/proposals/thinking-blocks-and-feed-expansion.md"
   }
 }
