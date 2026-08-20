@@ -833,3 +833,84 @@ implemented on crypto: the cost model (SPY's 1.57 bps round-trip does not surviv
 move), whether the second-resolution clock survives under 1m-30m bars, per-symbol volume
 quintiles, the fact that every threshold is *trained* rather than constant, and the
 5-20 bps trailing filter that actually controls how often the part fires.
+
+---
+
+# The six posts' equations, written out (2026-08-20)
+
+## What the user asked for
+
+> "add tem ... i am talkiin about eqution fron first six intaram pot andreels"
+
+The six Instagram posts read earlier carried real formulas. Most of them had
+already become **parts** — the volatility features, the memory tiers, the Hurst
+classifier, the Drake decomposition. What had **not** happened is that the
+equations themselves were never written out: they sat in shorthand inside the
+assessment note, and not one part pointed at them.
+
+That is the same defect already corrected once for order-flow entropy. A part
+built from shorthand is a part that was guessed at.
+
+**`docs/research/equations.md` now holds every one**, each with the part that owns
+it named beside it, and provenance marked on every line — `[post]` for what the
+slides actually taught, `[standard]` for textbook maths the post named without
+writing out, so the two can never be confused.
+
+## Seven parts now point at their own maths
+
+| Part | Gets |
+|---|---|
+| Volatility feature builder | all ten feature formulas |
+| Realised-vol regressor | the ten-term regression |
+| Volatility gap detector | the `E[RV₁₀]` against `IV₃₀` comparison |
+| Mean reversion detector | z-score, thresholds, four failure conditions |
+| Regime classifier | Hurst's three bands |
+| Expectancy decomposer | the Drake decomposition, factor by factor |
+| Forecast scorer | **its scoring protocol**, which it did not have |
+
+## Two things the equations exposed
+
+**Statistical arbitrage had equations but no part.** `Spread = A − βB`,
+Ornstein-Uhlenbeck, ADF/KPSS, Engle-Granger, Johansen — all sitting in the corpus
+with nowhere to live. Two parts now carry them:
+
+- **Cointegration pair finder** — find pairs of symbols whose spread has held
+  together → `cointegrated-pair`
+- **Spread reversion detector** — flag a cointegrated spread that has stretched far
+  enough to snap back → `entry-candidate`
+
+The half-life is the part that decides whether this is usable at all:
+`half-life = ln(2)/κ` turns the reversion speed into a holding period, and a pair
+with a three-day half-life is real and useless to an intraday bot on 1m–30m bars
+(RL-043).
+
+**The forecast scorer had no method.** It scored forecasts with no stated protocol.
+The neural-network sheet supplies one: walk-forward validation, time-based splits
+never random, no look-ahead bias, and out-of-sample evaluation **always net of
+transaction costs**. Recorded as its method rather than as a new part.
+
+## Two constraints that must not be papered over
+
+**Three of the ten volatility features need an options surface.** ATM implied vol,
+term slope and put skew cannot be computed from candles. With spot and futures the
+current focus (RL-039), **those two bots can compute seven of ten** — and the
+regression they run is a different regression from the options bot's. The part has
+to declare which features it actually had, never silently zero the missing ones.
+
+**The annualisation constant is wrong for crypto.** Every realised-vol formula in
+that post annualises by `√252`, the equity trading year. Crypto trades 365 days
+(RL-018, RL-020). The constant has to be restated before any of those numbers mean
+anything — and it is exactly the kind of detail that survives unnoticed when a
+formula is copied as prose instead of written down.
+
+## What deliberately carries no equation
+
+The memory-tier post is structural, not mathematical, and is already the three
+`knowledge` parts. The ten-repositories post carries no maths and lives in
+`upstream_dependencies`. And five of the six equations in the "six equations" post
+— Schrödinger, Riemann, Euler, Einstein, Navier-Stokes — carry nothing usable
+here. Two have real but *indirect* links to finance that **the post never makes**;
+claiming them from it would be dressing up a guess.
+
+Every performance figure in those six posts remains decoration. None appears in the
+equations file.

@@ -247,3 +247,40 @@ be trading at chance while appearing to have an edge.
 38.5% of the paper's profit from one single day. It enters switched off and the ablation
 harness decides whether it earns its place. The paper is a reason to build the part, not
 evidence that it works on intraday crypto.
+
+---
+
+## D-009 — The six posts' equations are written out, not paraphrased
+
+**Given:** 2026-08-20
+
+> "add tem ... i am talkiin about eqution fron first six intaram pot andreels"
+
+The formulas from the six Instagram posts existed only as shorthand inside the
+assessment note, and no part pointed at them. `docs/research/equations.md` now holds
+each one written out, with the owning part named and provenance marked line by line
+— `[post]` for what the slides taught, `[standard]` for textbook maths the post
+named but never wrote, so the two are never confused.
+
+**Seven existing parts** now point at their own maths, including `forecast-scorer`,
+which had been scoring forecasts with no stated protocol at all. Its method is now
+the neural-network sheet's: walk-forward, time-based splits, no look-ahead,
+out-of-sample always net of transaction costs.
+
+**Two parts added**, because the statistical-arbitrage equations had no home:
+`cointegration-pair-finder` and `spread-reversion-detector`. The half-life,
+`ln(2)/κ`, is what decides whether a pair is usable by an intraday bot at all.
+
+**Two constraints surfaced by writing the maths down, both of which prose had
+hidden:**
+
+1. Three of the ten volatility features need an options surface. With spot and
+   futures the focus (RL-039), those bots compute **seven of ten**, and their
+   regression is a different regression. The part declares what it had; it never
+   silently zeroes what it could not compute.
+2. Every realised-vol formula annualises by `√252`, the equity trading year. Crypto
+   trades 365 days. The constant is wrong here and must be restated before any of
+   those numbers mean anything.
+
+Neither would have been caught by copying the formulas as sentences. That is the
+argument for this file existing.

@@ -841,6 +841,11 @@
       "id": "flow-entropy",
       "name": "flow entropy",
       "description": "How structured the recent order flow is, on a normalised scale. Low means informed traders are leaving a footprint. Carries no direction, by mathematical necessity."
+    },
+    {
+      "id": "cointegrated-pair",
+      "name": "cointegrated pair",
+      "description": "Two symbols whose spread A - beta*B has tested stationary, carrying the hedge ratio, the reversion speed and the measured half-life."
     }
   ],
   "features": [
@@ -925,7 +930,8 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "note": " Its scoring protocol is the neural-network best-practice list: walk-forward validation, time-based splits, no look-ahead, out-of-sample evaluation always net of transaction costs. docs/research/equations.md section 4."
     },
     {
       "id": "kronos-size-selector",
@@ -988,7 +994,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "RV 1d/5d/22d, downside semivariance over negative returns only, jump variance as max(RV-BV,0), vol-of-vol, ATM IV, 30-60 term slope, 25-delta put skew, market RV."
+      "note": "RV 1d/5d/22d, downside semivariance over negative returns only, jump variance as max(RV-BV,0), vol-of-vol, ATM IV, 30-60 term slope, 25-delta put skew, market RV. All ten feature formulas, and the fact that features 7-9 need an options surface so spot and futures can only compute seven of them: docs/research/equations.md section 1."
     },
     {
       "id": "realised-vol-regressor",
@@ -1009,7 +1015,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The ten-beta linear model recovered from the reel's final frame."
+      "note": "The ten-beta linear model recovered from the reel's final frame. The ten-term regression written out: docs/research/equations.md section 1."
     },
     {
       "id": "regime-classifier",
@@ -1030,7 +1036,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Below 0.5 mean-reverting, above 0.5 trending, and mixed is a real answer. This is the detector the mean-reversion sheet needed but never named."
+      "note": "Below 0.5 mean-reverting, above 0.5 trending, and mixed is a real answer. This is the detector the mean-reversion sheet needed but never named. The Hurst reading, its three bands, and why mixed is a real answer: docs/research/equations.md section 5."
     },
     {
       "id": "mean-reversion-detector",
@@ -1053,7 +1059,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Z-score entry above 2, exit below 0.5. Stands down when the regime classifier says trending."
+      "note": "Z-score entry above 2, exit below 0.5. Stands down when the regime classifier says trending. Z-score, thresholds, and the four conditions under which mean reversion fails: docs/research/equations.md section 2."
     },
     {
       "id": "volatility-gap-detector",
@@ -1075,7 +1081,8 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "note": " The signal comparison E[RV10] against IV30: docs/research/equations.md section 1."
     },
     {
       "id": "semantic-fact-store",
@@ -1202,7 +1209,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The Drake pattern: a chain of separately estimable factors, so the weakest one is visible rather than the total merely being poor."
+      "note": "The Drake pattern: a chain of separately estimable factors, so the weakest one is visible rather than the total merely being poor. The Drake decomposition it is built on, and the trade expectancy written out factor by factor: docs/research/equations.md section 6."
     },
     {
       "id": "instruction-writer",
@@ -2358,6 +2365,50 @@
       ],
       "origin": "user",
       "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
+    },
+    {
+      "id": "cointegration-pair-finder",
+      "name": "Cointegration pair finder",
+      "role": "find pairs of symbols whose spread has held together",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "market-data",
+        "market-regime"
+      ],
+      "produces": [
+        "cointegrated-pair",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "From the statistical arbitrage reference sheet (p/DbPaMI1ndH2): Spread = A - beta*B, tested with ADF and KPSS, cointegration by Engle-Granger or Johansen. The equations existed in the research corpus with no part to live in, which is what this closes. Equations in docs/research/equations.md section 3."
+    },
+    {
+      "id": "spread-reversion-detector",
+      "name": "Spread reversion detector",
+      "role": "flag a cointegrated spread that has stretched far enough to snap back",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "cointegrated-pair",
+        "market-data"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "note": "The Ornstein-Uhlenbeck process dX = kappa(mu - X)dt + sigma dW says how hard the spread is pulled back, and half-life = ln(2)/kappa turns that into a holding period. That is the filter that decides tradeability here: a pair with a three-day half-life is real and useless to an intraday bot on 1m to 30m bars (RL-043). Separated from the pair finder because finding a relationship and timing its stretch are replaced at different times. Equations in docs/research/equations.md section 3."
     }
   ],
   "control_plane": {
