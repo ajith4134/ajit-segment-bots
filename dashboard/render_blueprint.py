@@ -30,13 +30,22 @@ REGISTRY_PATH = PROJECT_HOME / "docs" / "features.json"
 
 @dataclass
 class FeatureRegistry:
-    stages: list[dict] = field(default_factory=list)
+    categories: list[dict] = field(default_factory=list)
     data_types: list[dict] = field(default_factory=list)
     features: list[dict] = field(default_factory=list)
 
     @property
-    def is_empty(self) -> bool:
-        return not self.features
+    def has_features(self) -> bool:
+        return bool(self.features)
+
+    @property
+    def has_categories(self) -> bool:
+        return bool(self.categories)
+
+    @property
+    def has_declared_flow(self) -> bool:
+        """True once data actually moves between parts, not merely blocks existing."""
+        return bool(self.data_types) and bool(self.features)
 
 
 def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
@@ -48,7 +57,7 @@ def load_feature_registry(path: Path = REGISTRY_PATH) -> FeatureRegistry:
     except json.JSONDecodeError:
         return FeatureRegistry()
     return FeatureRegistry(
-        stages=raw.get("stages", []),
+        categories=raw.get("categories", []),
         data_types=raw.get("data_types", []),
         features=raw.get("features", []),
     )
@@ -64,10 +73,17 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
         produced.update(feature.get("produces", []))
         consumed.update(feature.get("consumes", []))
 
+    known_categories = {entry["id"] for entry in registry.categories}
+
     for feature in registry.features:
         name = feature.get("name", feature.get("id", "?"))
         reads = feature.get("consumes", [])
         writes = feature.get("produces", [])
+        category = feature.get("category", "")
+        if category not in known_categories:
+            violations.append(
+                f"{name}: belongs to no declared category — every feature sits in exactly one"
+            )
         if not reads and not writes:
             violations.append(f"{name}: isolated — neither consumes nor produces anything")
         for type_id in reads:
@@ -106,25 +122,41 @@ def _mermaid_safe(text: str) -> str:
     return text.replace('"', "'").replace("\n", " ").replace("|", "/")
 
 
-def render_mermaid_flowchart(registry: FeatureRegistry) -> str:
-    """Emit the diagram source. Grouped by stage when stages are declared."""
-    lines = ["flowchart LR"]
-    staged = {stage["id"]: [] for stage in registry.stages}
-    unstaged = []
-    for feature in registry.features:
-        target = staged.get(feature.get("stage", ""))
-        (target if target is not None else unstaged).append(feature)
+def render_category_blocks(registry: FeatureRegistry) -> str:
+    """The foundation blocks alone, before any feature or flow has been declared.
 
-    for stage in registry.stages:
-        members = staged[stage["id"]]
+    Drawn without edges on purpose: which category feeds which has not been said,
+    and an inferred arrow here would later be mistaken for a decision the user made.
+    """
+    lines = ["flowchart TB"]
+    for category in registry.categories:
+        label = _mermaid_safe(category.get("name", category["id"]))
+        lines.append(f'  {category["id"]}["{label}"]')
+    return "\n".join(lines)
+
+
+def render_mermaid_flowchart(registry: FeatureRegistry) -> str:
+    """Emit the diagram source. Features grouped into the categories they belong to."""
+    if not registry.has_features:
+        return render_category_blocks(registry)
+
+    lines = ["flowchart LR"]
+    grouped = {category["id"]: [] for category in registry.categories}
+    ungrouped = []
+    for feature in registry.features:
+        target = grouped.get(feature.get("category", ""))
+        (target if target is not None else ungrouped).append(feature)
+
+    for category in registry.categories:
+        members = grouped[category["id"]]
         if not members:
             continue
-        lines.append(f'  subgraph {stage["id"]}["{_mermaid_safe(stage.get("name", stage["id"]))}"]')
+        lines.append(f'  subgraph {category["id"]}["{_mermaid_safe(category.get("name", category["id"]))}"]')
         for feature in members:
             lines.append(f'    {feature["id"]}["{_mermaid_safe(feature.get("name", feature["id"]))}"]')
         lines.append("  end")
 
-    for feature in unstaged:
+    for feature in ungrouped:
         lines.append(f'  {feature["id"]}["{_mermaid_safe(feature.get("name", feature["id"]))}"]')
 
     type_names = {entry["id"]: entry.get("name", entry["id"]) for entry in registry.data_types}
@@ -135,21 +167,50 @@ def render_mermaid_flowchart(registry: FeatureRegistry) -> str:
     return "\n".join(lines)
 
 
+def render_category_list(registry: FeatureRegistry) -> str:
+    """Every foundation block, labelled with where it came from."""
+    cards = []
+    for category in registry.categories:
+        origin = category.get("origin", "unknown")
+        cards.append(
+            f'<article class="category {html.escape(origin)}">'
+            f'<div class="category-name">{html.escape(category.get("name", category["id"]))}</div>'
+            f'<div class="category-origin">{html.escape(origin)}</div>'
+            f'<p>{html.escape(category.get("summary", ""))}</p>'
+            f"</article>"
+        )
+    return f'<div class="category-grid">{"".join(cards)}</div>'
+
+
 def render_blueprint_section(registry: FeatureRegistry) -> str:
     """The blueprint's region of the board: the diagram, or an honest gap."""
-    if registry.is_empty:
+    if not registry.has_categories:
         return (
             '<div class="empty-frame">'
-            '<div class="headline">Awaiting the feature list</div>'
-            "<p>The setup is ready. The registry at <code>docs/features.json</code> is the single "
-            "source this diagram is drawn from, and it is empty because the user has not described "
-            "the features yet.</p>"
-            "<p>Edges here are never hand-drawn. Each feature declares only the data it consumes and "
-            "the data it produces, and a connection exists exactly where one part produces what "
-            "another consumes. A part can therefore be swapped for a better one without touching "
-            "anything else, and a new part cannot wire itself privately into an old one.</p>"
-            "<p>Nothing is placeholdered in the meantime.</p>"
+            '<div class="headline">Awaiting the foundation blocks</div>'
+            "<p>The setup is ready. <code>docs/features.json</code> is the single source this "
+            "diagram is drawn from, and it holds nothing yet.</p>"
             "</div>"
+        )
+
+    if not registry.has_features:
+        return (
+            f'<div class="diagram-meta">'
+            f"<span>{len(registry.categories)} categories</span>"
+            f"<span>0 features described</span>"
+            f"<span>flow not declared</span>"
+            f"</div>"
+            f'<div class="diagram"><pre class="mermaid">'
+            f"{html.escape(render_category_blocks(registry))}</pre></div>"
+            f'<div class="empty-frame">'
+            f'<div class="headline">Blocks stand, flow not yet drawn</div>'
+            f"<p>These are the foundation blocks. They are shown without arrows on purpose: which "
+            f"category feeds which has not been said yet, and an inferred arrow here would later be "
+            f"mistaken for a decision that was made.</p>"
+            f"<p>The flow is the next thing to establish, and it is what the whole blueprint is "
+            f"judged on.</p>"
+            f"</div>"
+            f"{render_category_list(registry)}"
         )
 
     violations = find_contract_violations(registry)
@@ -163,21 +224,22 @@ def render_blueprint_section(registry: FeatureRegistry) -> str:
 
     return (
         f'<div class="diagram-meta">'
+        f"<span>{len(registry.categories)} categories</span>"
         f"<span>{len(registry.features)} features</span>"
         f"<span>{len(registry.data_types)} data types</span>"
         f"<span>{count_derived_edges(registry)} derived edges</span>"
         f"</div>"
         f"{violation_markup}"
         f'<div class="diagram"><pre class="mermaid">{html.escape(render_mermaid_flowchart(registry))}</pre></div>'
+        f"{render_category_list(registry)}"
     )
 
 
 if __name__ == "__main__":
     loaded = load_feature_registry()
-    print(f"features: {len(loaded.features)}  data types: {len(loaded.data_types)}")
+    print(f"categories: {len(loaded.categories)}  features: {len(loaded.features)}  data types: {len(loaded.data_types)}")
     print(f"derived edges: {count_derived_edges(loaded)}")
     for violation in find_contract_violations(loaded):
         print(f"VIOLATION  {violation}")
-    if loaded.features:
-        print()
-        print(render_mermaid_flowchart(loaded))
+    print()
+    print(render_mermaid_flowchart(loaded))

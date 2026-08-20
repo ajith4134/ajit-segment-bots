@@ -131,8 +131,15 @@ def probe_architecture_blueprint() -> ProbeResult:
     registry = load_feature_registry()
     if not REGISTRY_PATH.is_file():
         return ProbeResult("Architecture blueprint", NOT_BUILT, "no registry to draw from", proof)
-    if registry.is_empty:
-        return ProbeResult("Architecture blueprint", NOT_BUILT, "setup ready, no features described", proof)
+    if not registry.has_categories:
+        return ProbeResult("Architecture blueprint", NOT_BUILT, "no foundation blocks yet", proof)
+    if not registry.has_features:
+        return ProbeResult(
+            "Architecture blueprint",
+            NOT_BUILT,
+            f"{len(registry.categories)} blocks stand, flow not drawn",
+            proof,
+        )
     return ProbeResult(
         "Architecture blueprint",
         OK,
@@ -141,13 +148,27 @@ def probe_architecture_blueprint() -> ProbeResult:
     )
 
 
+def probe_declared_categories() -> ProbeResult:
+    """The foundation blocks. Every feature must belong to exactly one of them."""
+    proof = "categories[] in docs/features.json"
+    registry = load_feature_registry()
+    if not registry.has_categories:
+        return ProbeResult("Foundation categories", NOT_BUILT, "none declared", proof)
+    from_user = sum(1 for c in registry.categories if c.get("origin") == "user")
+    proposed = len(registry.categories) - from_user
+    detail = f"{len(registry.categories)} declared, {from_user} from the user"
+    if proposed:
+        detail += f", {proposed} proposed"
+    return ProbeResult("Foundation categories", OK, detail, proof)
+
+
 def probe_defined_features() -> ProbeResult:
     """How many parts the user has described. Empty until they do — never invented."""
-    proof = "python3 dashboard/render_blueprint.py"
+    proof = "features[] in docs/features.json"
     if not REGISTRY_PATH.is_file():
         return ProbeResult("Defined features", NOT_BUILT, "no registry file", proof)
     registry = load_feature_registry()
-    if registry.is_empty:
+    if not registry.has_features:
         return ProbeResult("Defined features", NOT_BUILT, "0 — awaiting the user's list", proof)
     return ProbeResult(
         "Defined features",
@@ -161,8 +182,8 @@ def probe_flow_contract() -> ProbeResult:
     """The hard constraint: the flow must hold together however many parts are added."""
     proof = "find_contract_violations() in dashboard/render_blueprint.py"
     registry = load_feature_registry()
-    if registry.is_empty:
-        return ProbeResult("Flow contract", UNMEASURED, "nothing declared to check", proof)
+    if not registry.has_declared_flow:
+        return ProbeResult("Flow contract", UNMEASURED, "no flow declared between blocks", proof)
     violations = find_contract_violations(registry)
     if violations:
         return ProbeResult("Flow contract", FAILING, f"{len(violations)} violation(s)", proof)
@@ -237,6 +258,7 @@ PROBES = (
     probe_project_instructions,
     probe_claude_startup_directory,
     probe_git_repository,
+    probe_declared_categories,
     probe_defined_features,
     probe_flow_contract,
     probe_running_processes,
@@ -482,6 +504,35 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
     margin-bottom: .4rem;
   }}
   .violations ul {{ margin: 0; padding-left: 1.1rem; font-size: .88rem; }}
+
+  .category-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+    gap: .85rem;
+  }}
+  .category {{
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: .95rem 1.05rem 1.05rem;
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+    box-shadow: var(--shadow);
+  }}
+  .category.proposed {{ border-top-color: var(--warn); border-style: dashed; box-shadow: none; }}
+  .category-name {{ font-weight: 600; font-size: .96rem; }}
+  .category-origin {{
+    align-self: flex-start;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .64rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }}
+  .category.proposed .category-origin {{ color: var(--warn); }}
+  .category p {{ margin: 0; font-size: .86rem; color: var(--muted); }}
 
   footer {{
     border-top: 1px solid var(--line);
