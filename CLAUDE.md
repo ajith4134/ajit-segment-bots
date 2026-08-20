@@ -113,3 +113,22 @@ server does not have; both are installed in `~/.local/pwdeps` and the script
 refuses to run without them. Missing fonts do not error — they paint every glyph
 invisible while every DOM assertion still passes, which is exactly the failure a
 screenshot catches and an assertion does not.
+
+## Wiring explorer
+
+    python3 dashboard/build_wiring_explorer.py
+    dashboard/web/verify_wiring_renders.sh      # proves the page draws, clicks all three views
+
+Regenerates `dashboard/wiring-explorer.html`: every connection between parts, as
+the contract checker sees it. The block-level mermaid planes on the status board
+stay the right picture of the *story*; at 25 blocks and 1 363 part-to-part wires
+a node-link drawing is a hairball, so this page is the tool for *checking*:
+
+- **Matrix** — 25 × 25 blocks, a cell counts the data types flowing row → column.
+  Click a cell for the exact part pairs. Peer blocks (bull, bear, tailgater)
+  must stay empty against each other — a filled cell there paints red (R-03).
+- **Part focus** — one part in the centre, what feeds it left, what it feeds
+  right, wires labelled by data type. Click any part to recentre.
+- **Data type** — who writes it, who reads it.
+
+The checker's verdict and the measurement time are stamped in the header.

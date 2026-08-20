@@ -241,7 +241,11 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bear-feature-vector",
+        "bear-raw-conviction",
         "bot-scorecard",
+        "bull-feature-vector",
+        "bull-raw-conviction",
         "closed-trade",
         "cost-estimate",
         "counterfactual-outcome",
@@ -252,7 +256,6 @@
         "exit-counterfactual",
         "exit-quality",
         "feature-attribution",
-        "feature-vector",
         "fill",
         "forecast-accuracy",
         "forgetting-report",
@@ -265,7 +268,6 @@
         "pair-verdict",
         "peak-excursion",
         "pnl-attribution",
-        "raw-conviction",
         "refutation-verdict",
         "retrain-request",
         "shortfall-breakdown",
@@ -671,11 +673,12 @@
       "approved": true,
       "consumes": [
         "account-balance",
+        "bear-exit-plan",
+        "bull-exit-plan",
         "closed-trade",
         "correlation-cluster",
         "drawdown-episode",
         "excursion-profile",
-        "exit-plan",
         "exposure-view",
         "fill",
         "funding-forecast",
@@ -700,6 +703,7 @@
         "stop-audit",
         "stop-target-plan",
         "symbol-profile",
+        "tail-exit-plan",
         "timed-intent",
         "trade-cluster",
         "trade-intent",
@@ -903,11 +907,14 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bear-calibrated-conviction",
+        "bear-entry-timing",
         "bot-maturity",
         "bot-regret",
         "bot-scorecard",
         "bot-weight",
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
+        "bull-entry-timing",
         "competence-map",
         "conflict-ruling",
         "counter-argument",
@@ -915,7 +922,6 @@
         "decision-rationale",
         "directional-opinion",
         "ensemble-forecast",
-        "entry-timing",
         "feature-attribution",
         "forecast-bias",
         "forecast-trust",
@@ -926,6 +932,7 @@
         "premortem-note",
         "regime-break-alert",
         "regime-memory",
+        "tail-calibrated-conviction",
         "trade-episode",
         "trade-intent",
         "trade-narrative",
@@ -962,6 +969,8 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bear-exit-plan",
+        "bull-exit-plan",
         "closed-trade",
         "correlation-cluster",
         "cost-estimate",
@@ -970,7 +979,6 @@
         "entry-candidate",
         "entry-quality",
         "exit-counterfactual",
-        "exit-plan",
         "fill",
         "funding-settlement",
         "journal-entry",
@@ -990,6 +998,7 @@
         "stop-audit",
         "stop-target-plan",
         "symbol-profile",
+        "tail-exit-plan",
         "trade-cluster",
         "trade-episode",
         "trade-intent",
@@ -1200,14 +1209,18 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
+        "bull-entry-timing",
+        "bull-exit-plan",
+        "bull-feature-out-of-distribution-flag",
+        "bull-feature-vector",
+        "bull-raw-conviction",
+        "bull-setup-weight",
+        "bull-side-candidate",
         "champion-choice",
         "entry-candidate",
         "entry-quality",
-        "entry-timing",
         "excursion-profile",
-        "exit-plan",
-        "feature-vector",
         "forecast-out-of-distribution-flag",
         "funding-forecast",
         "horizon-profile",
@@ -1219,27 +1232,24 @@
         "playbook-rule",
         "position",
         "price-forecast",
-        "raw-conviction",
         "regime-break-alert",
         "retrain-request",
         "sample-weight",
-        "setup-weight",
-        "side-candidate",
         "stop-audit",
         "symbol-profile",
         "training-label"
       ],
       "produces": [
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
+        "bull-entry-timing",
+        "bull-exit-plan",
+        "bull-feature-out-of-distribution-flag",
+        "bull-feature-vector",
+        "bull-raw-conviction",
+        "bull-setup-weight",
+        "bull-side-candidate",
         "directional-opinion",
-        "entry-timing",
-        "exit-plan",
-        "feature-vector",
-        "forecast-out-of-distribution-flag",
-        "part-health",
-        "raw-conviction",
-        "setup-weight",
-        "side-candidate"
+        "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -1256,7 +1266,8 @@
         "on": "2026-08-20",
         "from": "its parts",
         "origin": "proposed"
-      }
+      },
+      "peer_group": "segment-bots"
     },
     {
       "id": "bear-bot",
@@ -1265,15 +1276,19 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "bear-calibrated-conviction",
+        "bear-entry-timing",
+        "bear-exit-plan",
+        "bear-feature-out-of-distribution-flag",
+        "bear-feature-vector",
+        "bear-raw-conviction",
+        "bear-setup-weight",
+        "bear-side-candidate",
         "bot-scorecard",
-        "calibrated-conviction",
         "champion-choice",
         "entry-candidate",
         "entry-quality",
-        "entry-timing",
         "excursion-profile",
-        "exit-plan",
-        "feature-vector",
         "forecast-out-of-distribution-flag",
         "funding-forecast",
         "horizon-profile",
@@ -1285,27 +1300,24 @@
         "playbook-rule",
         "position",
         "price-forecast",
-        "raw-conviction",
         "regime-break-alert",
         "retrain-request",
         "sample-weight",
-        "setup-weight",
-        "side-candidate",
         "stop-audit",
         "symbol-profile",
         "training-label"
       ],
       "produces": [
-        "calibrated-conviction",
+        "bear-calibrated-conviction",
+        "bear-entry-timing",
+        "bear-exit-plan",
+        "bear-feature-out-of-distribution-flag",
+        "bear-feature-vector",
+        "bear-raw-conviction",
+        "bear-setup-weight",
+        "bear-side-candidate",
         "directional-opinion",
-        "entry-timing",
-        "exit-plan",
-        "feature-vector",
-        "forecast-out-of-distribution-flag",
-        "part-health",
-        "raw-conviction",
-        "setup-weight",
-        "side-candidate"
+        "part-health"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -1322,7 +1334,8 @@
         "on": "2026-08-20",
         "from": "its parts",
         "origin": "proposed"
-      }
+      },
+      "peer_group": "segment-bots"
     },
     {
       "id": "profit-tailgating-bot",
@@ -1332,7 +1345,6 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
-        "calibrated-conviction",
         "champion-choice",
         "copy-latency",
         "copy-score",
@@ -1340,7 +1352,6 @@
         "entry-candidate",
         "excursion-profile",
         "exit-counterfactual",
-        "exit-plan",
         "external-position",
         "follow-candidate",
         "funding-forecast",
@@ -1355,19 +1366,21 @@
         "retrain-request",
         "sample-weight",
         "sentiment-reading",
-        "setup-weight",
         "symbol-profile",
+        "tail-calibrated-conviction",
+        "tail-exit-plan",
+        "tail-setup-weight",
         "training-label"
       ],
       "produces": [
-        "calibrated-conviction",
         "crowding-reading",
         "directional-opinion",
-        "exit-plan",
         "follow-candidate",
         "move-remaining",
         "part-health",
-        "setup-weight"
+        "tail-calibrated-conviction",
+        "tail-exit-plan",
+        "tail-setup-weight"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
@@ -1382,7 +1395,8 @@
         "on": "2026-08-20",
         "from": "its parts",
         "origin": "proposed"
-      }
+      },
+      "peer_group": "segment-bots"
     }
   ],
   "state_vocabulary": [
@@ -2308,41 +2322,6 @@
       "description": "A sized order split into timed slices, front-loaded when forecast volatility is high, each slice capped by participation."
     },
     {
-      "id": "setup-weight",
-      "name": "setup weight",
-      "description": "How much one bot trusts each setup class on each time-frame, learned from its own scorecard, applied inside the bot. The scanner never sees it (RL-046)."
-    },
-    {
-      "id": "side-candidate",
-      "name": "side candidate",
-      "description": "An entry candidate one side's bot has kept, with the setup weight it carried."
-    },
-    {
-      "id": "feature-vector",
-      "name": "feature vector",
-      "description": "One bot's own features for one candidate: the numbers its model reads."
-    },
-    {
-      "id": "raw-conviction",
-      "name": "raw conviction",
-      "description": "A learned model's probability that the move goes the bot's way by more than cost within the horizon, before calibration."
-    },
-    {
-      "id": "calibrated-conviction",
-      "name": "calibrated conviction",
-      "description": "A conviction mapped onto the bot's own measured hit-rate, so 0.7 means 70% for this bot."
-    },
-    {
-      "id": "entry-timing",
-      "name": "entry timing",
-      "description": "Now, or wait for the pullback the playbook says comes, with a give-up time."
-    },
-    {
-      "id": "exit-plan",
-      "name": "exit plan",
-      "description": "A bot's proposed target, stop and time-stop for its own candidate. Proposed; the risk gate decides."
-    },
-    {
       "id": "follow-candidate",
       "name": "follow candidate",
       "description": "Something already working that the tailgater may join: a continuation setup, our own winning leg, or a tracked trader's position."
@@ -2711,6 +2690,139 @@
       "id": "replay-mismatch",
       "name": "replay mismatch",
       "description": "A closed trade whose replay from its own journal does not reproduce the ledger's P&L."
+    },
+    {
+      "id": "bull-side-candidate",
+      "name": "Bull bot side candidate",
+      "description": "Bull bot's own. An entry candidate one side's bot has kept, with the setup weight it carried.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-side-candidate",
+      "name": "Bear bot side candidate",
+      "description": "Bear bot's own. An entry candidate one side's bot has kept, with the setup weight it carried.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-feature-vector",
+      "name": "Bull bot feature vector",
+      "description": "Bull bot's own. One bot's own features for one candidate: the numbers its model reads.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-feature-vector",
+      "name": "Bear bot feature vector",
+      "description": "Bear bot's own. One bot's own features for one candidate: the numbers its model reads.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-raw-conviction",
+      "name": "Bull bot raw conviction",
+      "description": "Bull bot's own. A learned model's probability that the move goes the bot's way by more than cost within the horizon, before calibration.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-raw-conviction",
+      "name": "Bear bot raw conviction",
+      "description": "Bear bot's own. A learned model's probability that the move goes the bot's way by more than cost within the horizon, before calibration.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-calibrated-conviction",
+      "name": "Bull bot calibrated conviction",
+      "description": "Bull bot's own. A conviction mapped onto the bot's own measured hit-rate, so 0.7 means 70% for this bot.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-calibrated-conviction",
+      "name": "Bear bot calibrated conviction",
+      "description": "Bear bot's own. A conviction mapped onto the bot's own measured hit-rate, so 0.7 means 70% for this bot.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "tail-calibrated-conviction",
+      "name": "Tailgater calibrated conviction",
+      "description": "Tailgater's own. A conviction mapped onto the bot's own measured hit-rate, so 0.7 means 70% for this bot.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-entry-timing",
+      "name": "Bull bot entry timing",
+      "description": "Bull bot's own. Now, or wait for the pullback the playbook says comes, with a give-up time.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-entry-timing",
+      "name": "Bear bot entry timing",
+      "description": "Bear bot's own. Now, or wait for the pullback the playbook says comes, with a give-up time.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-exit-plan",
+      "name": "Bull bot exit plan",
+      "description": "Bull bot's own. A bot's proposed target, stop and time-stop for its own candidate. Proposed; the risk gate decides.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-exit-plan",
+      "name": "Bear bot exit plan",
+      "description": "Bear bot's own. A bot's proposed target, stop and time-stop for its own candidate. Proposed; the risk gate decides.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "tail-exit-plan",
+      "name": "Tailgater exit plan",
+      "description": "Tailgater's own. A bot's proposed target, stop and time-stop for its own candidate. Proposed; the risk gate decides.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-setup-weight",
+      "name": "Bull bot setup weight",
+      "description": "Bull bot's own. How much one bot trusts each setup class on each time-frame, learned from its own scorecard, applied inside the bot. The scanner never sees it (RL-046).",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-setup-weight",
+      "name": "Bear bot setup weight",
+      "description": "Bear bot's own. How much one bot trusts each setup class on each time-frame, learned from its own scorecard, applied inside the bot. The scanner never sees it (RL-046).",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "tail-setup-weight",
+      "name": "Tailgater setup weight",
+      "description": "Tailgater's own. How much one bot trusts each setup class on each time-frame, learned from its own scorecard, applied inside the bot. The scanner never sees it (RL-046).",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bull-feature-out-of-distribution-flag",
+      "name": "Bull bot feature out-of-distribution flag",
+      "description": "Bull bot's outlier rejector found the feature vector far from anything its model has seen; its conviction model abstains. Distinct from the prediction block's forecast-level flag.",
+      "origin": "proposed",
+      "added": "2026-08-20"
+    },
+    {
+      "id": "bear-feature-out-of-distribution-flag",
+      "name": "Bear bot feature out-of-distribution flag",
+      "description": "Bear bot's outlier rejector found the feature vector far from anything its model has seen; its conviction model abstains. Distinct from the prediction block's forecast-level flag.",
+      "origin": "proposed",
+      "added": "2026-08-20"
     }
   ],
   "features": [
@@ -5799,9 +5911,11 @@
         "volatility-forecast",
         "liquidation-map",
         "symbol-profile",
-        "exit-plan",
         "stop-audit",
-        "excursion-profile"
+        "excursion-profile",
+        "bull-exit-plan",
+        "bear-exit-plan",
+        "tail-exit-plan"
       ],
       "produces": [
         "stop-target-plan",
@@ -7312,10 +7426,10 @@
       "category": "bull-bot",
       "consumes": [
         "entry-candidate",
-        "setup-weight"
+        "bull-setup-weight"
       ],
       "produces": [
-        "side-candidate",
+        "bull-side-candidate",
         "part-health"
       ],
       "switchable": true,
@@ -7325,7 +7439,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-feature-builder",
@@ -7333,14 +7451,14 @@
       "role": "compute this side's own features for a candidate: distance from support or resistance, flow imbalance, VWAP gap, funding sign, burst age, volume against the symbol's hour-norm",
       "category": "bull-bot",
       "consumes": [
-        "side-candidate",
+        "bull-side-candidate",
         "market-data",
         "order-book-snapshot",
         "symbol-profile",
         "funding-forecast"
       ],
       "produces": [
-        "feature-vector",
+        "bull-feature-vector",
         "part-health"
       ],
       "switchable": true,
@@ -7350,7 +7468,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-outlier-rejector",
@@ -7358,10 +7480,10 @@
       "role": "refuse to opine when the feature vector is far from anything the model has seen",
       "category": "bull-bot",
       "consumes": [
-        "feature-vector"
+        "bull-feature-vector"
       ],
       "produces": [
-        "forecast-out-of-distribution-flag",
+        "bull-feature-out-of-distribution-flag",
         "part-health"
       ],
       "switchable": true,
@@ -7371,7 +7493,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI"
+      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-conviction-model",
@@ -7379,7 +7505,7 @@
       "role": "learn the probability that a long move clears cost within the horizon, from the feature vector plus the price forecast",
       "category": "bull-bot",
       "consumes": [
-        "feature-vector",
+        "bull-feature-vector",
         "price-forecast",
         "kline-window",
         "forecast-out-of-distribution-flag",
@@ -7387,10 +7513,11 @@
         "sample-weight",
         "retrain-request",
         "champion-choice",
-        "learning-reward"
+        "learning-reward",
+        "bull-feature-out-of-distribution-flag"
       ],
       "produces": [
-        "raw-conviction",
+        "bull-raw-conviction",
         "part-health"
       ],
       "switchable": true,
@@ -7400,7 +7527,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-conviction-calibrator",
@@ -7408,11 +7539,11 @@
       "role": "map the model's number onto this bot's measured hit-rate",
       "category": "bull-bot",
       "consumes": [
-        "raw-conviction",
+        "bull-raw-conviction",
         "bot-scorecard"
       ],
       "produces": [
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
         "part-health"
       ],
       "switchable": true,
@@ -7422,7 +7553,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-entry-timer",
@@ -7430,14 +7565,14 @@
       "role": "decide now or wait for the pullback, with a give-up time",
       "category": "bull-bot",
       "consumes": [
-        "side-candidate",
+        "bull-side-candidate",
         "market-data",
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
         "playbook-rule",
         "entry-quality"
       ],
       "produces": [
-        "entry-timing",
+        "bull-entry-timing",
         "part-health"
       ],
       "switchable": true,
@@ -7447,7 +7582,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-exit-plan-proposer",
@@ -7455,16 +7594,16 @@
       "role": "propose target, stop plus time-stop for a long candidate from ATR plus structure",
       "category": "bull-bot",
       "consumes": [
-        "side-candidate",
+        "bull-side-candidate",
         "market-data",
         "symbol-profile",
-        "calibrated-conviction",
+        "bull-calibrated-conviction",
         "excursion-profile",
         "horizon-profile",
         "stop-audit"
       ],
       "produces": [
-        "exit-plan",
+        "bull-exit-plan",
         "part-health"
       ],
       "switchable": true,
@@ -7474,7 +7613,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-opinion-composer",
@@ -7482,10 +7625,10 @@
       "role": "pack side, conviction, timing, plan plus feature snapshot into one opinion",
       "category": "bull-bot",
       "consumes": [
-        "calibrated-conviction",
-        "entry-timing",
-        "exit-plan",
-        "feature-vector"
+        "bull-calibrated-conviction",
+        "bull-entry-timing",
+        "bull-exit-plan",
+        "bull-feature-vector"
       ],
       "produces": [
         "directional-opinion",
@@ -7498,7 +7641,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-setup-weight-learner",
@@ -7510,7 +7657,7 @@
         "instruction-scorecard"
       ],
       "produces": [
-        "setup-weight",
+        "bull-setup-weight",
         "part-health"
       ],
       "switchable": true,
@@ -7520,7 +7667,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bull-position-invalidation-watcher",
@@ -7530,7 +7681,7 @@
       "consumes": [
         "position",
         "market-data",
-        "feature-vector",
+        "bull-feature-vector",
         "regime-break-alert"
       ],
       "produces": [
@@ -7544,7 +7695,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-setup-filter",
@@ -7553,10 +7708,10 @@
       "category": "bear-bot",
       "consumes": [
         "entry-candidate",
-        "setup-weight"
+        "bear-setup-weight"
       ],
       "produces": [
-        "side-candidate",
+        "bear-side-candidate",
         "part-health"
       ],
       "switchable": true,
@@ -7566,7 +7721,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-feature-builder",
@@ -7574,14 +7733,14 @@
       "role": "compute this side's own features for a candidate: distance from support or resistance, flow imbalance, VWAP gap, funding sign, burst age, volume against the symbol's hour-norm",
       "category": "bear-bot",
       "consumes": [
-        "side-candidate",
+        "bear-side-candidate",
         "market-data",
         "order-book-snapshot",
         "symbol-profile",
         "funding-forecast"
       ],
       "produces": [
-        "feature-vector",
+        "bear-feature-vector",
         "part-health"
       ],
       "switchable": true,
@@ -7591,7 +7750,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-outlier-rejector",
@@ -7599,10 +7762,10 @@
       "role": "refuse to opine when the feature vector is far from anything the model has seen",
       "category": "bear-bot",
       "consumes": [
-        "feature-vector"
+        "bear-feature-vector"
       ],
       "produces": [
-        "forecast-out-of-distribution-flag",
+        "bear-feature-out-of-distribution-flag",
         "part-health"
       ],
       "switchable": true,
@@ -7612,7 +7775,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI"
+      "evidence": "docs/proposals/three-bots-inside-segment.md; docs/research/repo-harvest/freqtrade.md DI",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-conviction-model",
@@ -7620,7 +7787,7 @@
       "role": "learn the probability that a short move clears cost within the horizon, from the feature vector plus the price forecast",
       "category": "bear-bot",
       "consumes": [
-        "feature-vector",
+        "bear-feature-vector",
         "price-forecast",
         "kline-window",
         "forecast-out-of-distribution-flag",
@@ -7628,10 +7795,11 @@
         "sample-weight",
         "retrain-request",
         "champion-choice",
-        "learning-reward"
+        "learning-reward",
+        "bear-feature-out-of-distribution-flag"
       ],
       "produces": [
-        "raw-conviction",
+        "bear-raw-conviction",
         "part-health"
       ],
       "switchable": true,
@@ -7641,7 +7809,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-conviction-calibrator",
@@ -7649,11 +7821,11 @@
       "role": "map the model's number onto this bot's measured hit-rate",
       "category": "bear-bot",
       "consumes": [
-        "raw-conviction",
+        "bear-raw-conviction",
         "bot-scorecard"
       ],
       "produces": [
-        "calibrated-conviction",
+        "bear-calibrated-conviction",
         "part-health"
       ],
       "switchable": true,
@@ -7663,7 +7835,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-entry-timer",
@@ -7671,14 +7847,14 @@
       "role": "decide now or wait for the pullback, with a give-up time",
       "category": "bear-bot",
       "consumes": [
-        "side-candidate",
+        "bear-side-candidate",
         "market-data",
-        "calibrated-conviction",
+        "bear-calibrated-conviction",
         "playbook-rule",
         "entry-quality"
       ],
       "produces": [
-        "entry-timing",
+        "bear-entry-timing",
         "part-health"
       ],
       "switchable": true,
@@ -7688,7 +7864,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-exit-plan-proposer",
@@ -7696,16 +7876,16 @@
       "role": "propose target, stop plus time-stop for a short candidate from ATR plus structure",
       "category": "bear-bot",
       "consumes": [
-        "side-candidate",
+        "bear-side-candidate",
         "market-data",
         "symbol-profile",
-        "calibrated-conviction",
+        "bear-calibrated-conviction",
         "excursion-profile",
         "horizon-profile",
         "stop-audit"
       ],
       "produces": [
-        "exit-plan",
+        "bear-exit-plan",
         "part-health"
       ],
       "switchable": true,
@@ -7715,7 +7895,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-opinion-composer",
@@ -7723,10 +7907,10 @@
       "role": "pack side, conviction, timing, plan plus feature snapshot into one opinion",
       "category": "bear-bot",
       "consumes": [
-        "calibrated-conviction",
-        "entry-timing",
-        "exit-plan",
-        "feature-vector"
+        "bear-calibrated-conviction",
+        "bear-entry-timing",
+        "bear-exit-plan",
+        "bear-feature-vector"
       ],
       "produces": [
         "directional-opinion",
@@ -7739,7 +7923,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-setup-weight-learner",
@@ -7751,7 +7939,7 @@
         "instruction-scorecard"
       ],
       "produces": [
-        "setup-weight",
+        "bear-setup-weight",
         "part-health"
       ],
       "switchable": true,
@@ -7761,7 +7949,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "bear-position-invalidation-watcher",
@@ -7771,7 +7963,7 @@
       "consumes": [
         "position",
         "market-data",
-        "feature-vector",
+        "bear-feature-vector",
         "regime-break-alert"
       ],
       "produces": [
@@ -7785,7 +7977,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-mover-qualifier",
@@ -7796,7 +7992,7 @@
         "entry-candidate",
         "market-data",
         "symbol-profile",
-        "setup-weight"
+        "tail-setup-weight"
       ],
       "produces": [
         "follow-candidate",
@@ -7809,7 +8005,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-winner-selector",
@@ -7833,7 +8033,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-copy-selector",
@@ -7856,7 +8060,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-move-remaining-estimator",
@@ -7879,7 +8087,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-crowding-detector",
@@ -7903,7 +8115,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-follow-conviction-model",
@@ -7922,7 +8138,7 @@
         "learning-reward"
       ],
       "produces": [
-        "calibrated-conviction",
+        "tail-calibrated-conviction",
         "part-health"
       ],
       "switchable": true,
@@ -7932,7 +8148,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-trailing-exit-planner",
@@ -7947,7 +8167,7 @@
         "excursion-profile"
       ],
       "produces": [
-        "exit-plan",
+        "tail-exit-plan",
         "part-health"
       ],
       "switchable": true,
@@ -7957,7 +8177,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-opinion-composer",
@@ -7965,8 +8189,8 @@
       "role": "pack direction, conviction plus trailing plan into one opinion",
       "category": "profit-tailgating-bot",
       "consumes": [
-        "calibrated-conviction",
-        "exit-plan",
+        "tail-calibrated-conviction",
+        "tail-exit-plan",
         "follow-candidate"
       ],
       "produces": [
@@ -7980,7 +8204,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "tail-setup-weight-learner",
@@ -7991,7 +8219,7 @@
         "bot-scorecard"
       ],
       "produces": [
-        "setup-weight",
+        "tail-setup-weight",
         "part-health"
       ],
       "switchable": true,
@@ -8001,7 +8229,11 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/three-bots-inside-segment.md"
+      "evidence": "docs/proposals/three-bots-inside-segment.md",
+      "wiring_privatised": {
+        "on": "2026-08-20",
+        "why": "RL-048: bots never wire into each other"
+      }
     },
     {
       "id": "causal-refutation-battery",
@@ -8338,8 +8570,10 @@
       "category": "learning-loop",
       "consumes": [
         "model-version",
-        "feature-vector",
-        "raw-conviction"
+        "bull-feature-vector",
+        "bear-feature-vector",
+        "bull-raw-conviction",
+        "bear-raw-conviction"
       ],
       "produces": [
         "feature-attribution",
@@ -9160,8 +9394,10 @@
       "category": "ai-brain",
       "consumes": [
         "trade-intent",
-        "calibrated-conviction",
-        "bot-scorecard"
+        "bot-scorecard",
+        "bull-calibrated-conviction",
+        "bear-calibrated-conviction",
+        "tail-calibrated-conviction"
       ],
       "produces": [
         "size-hint",
@@ -9234,8 +9470,9 @@
       "category": "ai-brain",
       "consumes": [
         "trade-intent",
-        "entry-timing",
-        "market-data"
+        "market-data",
+        "bull-entry-timing",
+        "bear-entry-timing"
       ],
       "produces": [
         "timed-intent",
@@ -9445,7 +9682,9 @@
       "consumes": [
         "closed-trade",
         "market-data",
-        "exit-plan"
+        "bull-exit-plan",
+        "bear-exit-plan",
+        "tail-exit-plan"
       ],
       "produces": [
         "exit-counterfactual",

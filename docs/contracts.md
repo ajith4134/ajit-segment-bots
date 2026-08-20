@@ -59,6 +59,26 @@ refuses a commit that breaks any of them.
 Every part can be turned **off** and **on**. No exceptions, no part that is
 always-on because it happens to be convenient.
 
+---
+
+## R-03 — Peer blocks never wire into each other
+
+Blocks that carry the same `peer_group` in `docs/features.json` are copies of one
+idea that run separately (RL-048: bull bot, bear bot, profit tailgating bot form
+`segment-bots`). A part in one of them never produces a data type a part in a
+sibling consumes. Each bot's internal data is its own type —
+`bull-feature-vector`, `bear-feature-vector` — and only the deliberate merge
+point, `directional-opinion`, is shared.
+
+**Why it exists:** on 2026-08-20 bull and bear were stamped from one template with
+the same type ids, and because edges are computed from types (R-01) the
+derivation drew 46 wires between the two bots that nobody had designed. R-01
+alone cannot see that: every one of those wires was a produced type meeting a
+consumed type. This rule does.
+
+**Checked:** every derived edge whose producer and consumer sit in different
+blocks of one `peer_group` is a violation.
+
 The reasoning is the transistor: a single switch does almost nothing, but the
 composition of many simple on/off gates is what produced all of electronics. The
 same is intended here — the system's behaviour comes from which parts are live at

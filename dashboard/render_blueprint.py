@@ -16,6 +16,7 @@ knowing anything about what the bot does (the rules are in docs/contracts.md):
   R-01  undeclared type  a feature references a data type nobody declared
   R-01  homeless part    a feature belongs to no declared category
   R-02  no switch        a feature cannot be turned off and on
+  R-03  peer wire        a part in one peer block feeds a part in a sibling peer block
 
 Each is reported as a failing check rather than quietly drawn as a gap.
 """
@@ -172,6 +173,22 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
                 violations.append(f"R-01 {name}: produces undeclared data type '{type_id}'")
             elif type_id not in consumed:
                 violations.append(f"R-01 {name}: orphan output — nothing consumes '{type_id}'")
+
+    # R-03 peer blocks never wire into each other. Blocks sharing a peer_group are
+    # separate at runtime (RL-048: bull, bear, tailgater); a data type that one of
+    # them produces and a sibling consumes is a wire the ruling forbids, and the
+    # derivation would draw it silently.
+    peer_group = {c["id"]: c.get("peer_group") for c in registry.categories}
+    category_of = {f.get("id"): f.get("category") for f in registry.features}
+    for producer_id, consumer_id, type_id in derive_edges(registry):
+        if type_id == HEALTH_TYPE:
+            continue
+        pc, cc = category_of.get(producer_id), category_of.get(consumer_id)
+        if pc != cc and peer_group.get(pc) and peer_group.get(pc) == peer_group.get(cc):
+            violations.append(
+                f"R-03 {producer_id} -> {consumer_id} via '{type_id}': peer blocks "
+                f"'{pc}' and '{cc}' are separate at runtime and never wire into each other"
+            )
 
     return violations
 
