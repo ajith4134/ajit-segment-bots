@@ -46,12 +46,28 @@ and everything lives in GitHub (Rule 9).
 
 ## Goal
 
-**NOT YET DEFINED.** The user has not given the goal for this project. Interview
-for it before designing or building anything — do not infer one from the
-directory name.
+Given by the user; `docs/goal.md` is the source of truth and records what was
+actually said. Rulings RL-046..057 (in `~/trading-system/docs/rulings.json`,
+injected at session start) refine it.
 
-Nothing below this line has been decided: stack, language, architecture,
-dependencies, repository. Each is an open question, not a deferred default.
+## Where the project stands — 2026-08-20, RL-057
+
+**Design phase closed. Implementation starts.** The blueprint is
+`docs/features.json`: 321 parts in 27 blocks, every contract holding
+(`python3 dashboard/check_contracts.py`). Build against it; do not redesign it.
+
+- **Build order (RL-050): futures segment bot first, fully.** Spot and options
+  stay skeleton — blocks declared, placeholders, no working code — until futures
+  is done.
+- **Feature by feature (RL-017).** One part at a time. A part climbs
+  `DECLARED → IMPLEMENTED → TESTED → RUNNING` on the part monitor only by the
+  probes that measure it — never inferred upward.
+- **A design change is a blueprint edit first** (`dashboard/blueprint_edits/`,
+  idempotent script + proposal in `docs/proposals/`), checked, committed; code
+  follows the registry, never the other way round.
+- Still open, decided when the first part is written: stack and language
+  (Python is what the dashboard tooling already uses), dependency policy,
+  where the settings files (RL-055) live on disk.
 
 ## Startup
 
