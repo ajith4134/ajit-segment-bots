@@ -167,13 +167,14 @@ def test_reopening_with_a_smaller_shape_refuses(durable_tmp_path):
     assert str(expected_bytes) in message
 
 
-def test_reopening_with_a_different_dtype_of_the_same_total_size_is_not_caught_by_size_alone(
-    durable_tmp_path,
-):
-    # Documented limitation, not a guarantee: the guard compares total byte
-    # counts, and float64[10] and int64[10] both occupy 80 bytes. This test
-    # records that a dtype swap at the same total size passes through the guard
-    # rather than leaving the gap silently untested -- see the task-10 report.
+def test_reopening_with_a_different_dtype_of_the_same_total_size_refuses(durable_tmp_path):
+    # The case a byte-size check alone cannot catch: float64[10] and int64[10]
+    # both occupy 80 bytes, so a size-only guard would let this through and every
+    # value the part reads back would be silent garbage -- worse than the
+    # truncation case, because zeros at least look wrong. The declaration
+    # sidecar written at creation is what closes this.
+    from runtime.numeric_state import NumericStateShapeMismatch
+
     written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
     with open_numeric_state(durable_tmp_path, written_spec) as state:
         state.array[:] = 1.0
@@ -181,8 +182,61 @@ def test_reopening_with_a_different_dtype_of_the_same_total_size_is_not_caught_b
     same_size_different_dtype_spec = NumericStateSpec(
         name="rolling-window", shape=(10,), dtype="int64"
     )
-    with open_numeric_state(durable_tmp_path, same_size_different_dtype_spec) as reopened:
-        assert reopened.array.dtype == numpy.dtype("int64")
+    with pytest.raises(NumericStateShapeMismatch) as failure:
+        open_numeric_state(durable_tmp_path, same_size_different_dtype_spec)
+    message = str(failure.value)
+    assert written_spec.dtype in message
+    assert same_size_different_dtype_spec.dtype in message
+
+
+def test_a_data_file_with_no_sidecar_reopens_under_a_matching_size(durable_tmp_path):
+    # State written before this guard existed has no sidecar. That must not be
+    # treated as a refusal -- it falls back to the size check alone, and a
+    # matching size still opens cleanly.
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 2.5
+        state.record_sequence_stamp(3)
+
+    declaration_path = durable_tmp_path / f"{written_spec.name}.declared.json"
+    declaration_path.unlink()
+
+    with open_numeric_state(durable_tmp_path, written_spec) as reopened:
+        assert bool((reopened.array == 2.5).all())
+        assert reopened.read_sequence_stamp() == 3
+
+
+def test_a_data_file_with_no_sidecar_still_refuses_a_mismatched_size(durable_tmp_path):
+    # The fallback is size-only, not no-guard-at-all: with the sidecar gone, a
+    # genuine size mismatch must still refuse.
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 1.0
+
+    declaration_path = durable_tmp_path / f"{written_spec.name}.declared.json"
+    declaration_path.unlink()
+
+    larger_spec = NumericStateSpec(name="rolling-window", shape=(20,), dtype="float64")
+    with pytest.raises(NumericStateShapeMismatch):
+        open_numeric_state(durable_tmp_path, larger_spec)
+
+
+def test_the_sidecar_is_created_on_first_use_with_what_was_declared(durable_tmp_path):
+    import json
+
+    spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    declaration_path = durable_tmp_path / f"{spec.name}.declared.json"
+    assert not declaration_path.exists()
+
+    with open_numeric_state(durable_tmp_path, spec):
+        pass
+
+    assert declaration_path.exists()
+    declared = json.loads(declaration_path.read_text())
+    assert tuple(declared["shape"]) == spec.shape
+    assert declared["dtype"] == spec.dtype
 
 
 def test_reopening_with_the_matching_spec_still_works_and_data_is_intact(durable_tmp_path):
