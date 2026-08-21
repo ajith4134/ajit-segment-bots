@@ -283,3 +283,333 @@ def test_the_periodic_backstop_runs_on_its_own_clock_without_flagging_a_delivere
     assert changes and changes[0][0].new_value == "2500.0"
     assert len(changes) == 1, "the already-delivered edit must not be reported twice"
     assert overflows == [], "an edit the event stream actually delivered must not read as overflow"
+
+
+# ---------------------------------------------------------------------------
+# Round 2: a raising callback must not silently disable either line of
+# defence, on_overflow must not blame the event stream for a race it won,
+# stop() must survive a failed start(), a standing rejection must not flood,
+# and a newly-appeared file must be as visible as a vanished one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_raising_on_change_does_not_kill_the_watch_and_the_change_is_retried(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    attempts: list[list[SettingsChange]] = []
+
+    def flaky_on_change(changes):
+        attempts.append(changes)
+        if len(attempts) == 1:
+            raise RuntimeError("transient store write failure")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=flaky_on_change,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    try:
+        _write(durable_tmp_path, "2500.0")
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while len(attempts) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert len(attempts) >= 2, "the change was not retried after the callback raised"
+        assert attempts[0][0].new_value == "2500.0"
+        assert attempts[1][0].new_value == "2500.0", "the retry must be the real change, not something else"
+        assert watch._observer.is_alive(), "a raising on_change must not kill the observer thread"
+        assert watch._periodic_thread.is_alive(), "a raising on_change must not kill the backstop thread"
+    finally:
+        watch.stop()
+
+
+@pytest.mark.slow
+def test_a_raising_on_rejection_does_not_kill_the_watch_and_is_retried(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    attempts: list = []
+
+    def flaky_on_rejection(rejection):
+        attempts.append(rejection)
+        if len(attempts) == 1:
+            raise RuntimeError("transient recorder failure")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=flaky_on_rejection, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    try:
+        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while len(attempts) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert len(attempts) >= 2, "the rejection was not retried after the callback raised"
+        assert watch._observer.is_alive(), "a raising on_rejection must not kill the observer thread"
+        assert watch._periodic_thread.is_alive(), "a raising on_rejection must not kill the backstop thread"
+    finally:
+        watch.stop()
+
+
+def test_a_raising_on_overflow_does_not_kill_the_backstop_and_is_retried(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    overflow_attempts: list = []
+    changes: list = []
+
+    def flaky_on_overflow():
+        overflow_attempts.append(True)
+        if len(overflow_attempts) == 1:
+            raise RuntimeError("transient overflow-handler failure")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=changes.append,
+        on_rejection=lambda rejection: None, on_overflow=flaky_on_overflow,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    _write(path.parent, "2500.0")
+    watch._recheck(is_periodic=True)  # on_overflow raises here
+    watch._recheck(is_periodic=True)  # retried: on_overflow succeeds, diff still outstanding
+
+    assert len(overflow_attempts) == 2, "on_overflow must be retried until it stops raising"
+    assert changes, "the real change must still surface once delivery succeeds"
+    assert all(c[0].new_value == "2500.0" for c in changes), "every report must be the real diff"
+
+
+def test_an_in_flight_event_suppresses_overflow_but_the_change_still_reports(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    changes: list = []
+    overflows: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=changes.append,
+        on_rejection=lambda rejection: None, on_overflow=lambda: overflows.append(True),
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    _write(path.parent, "2500.0")
+    # The adversarial ordering: mark the path in flight -- exactly what
+    # on_any_event does, before it ever contends for the lock -- then drive a
+    # periodic pass directly, simulating the backstop's clock winning the race
+    # with the event's own (not-yet-run) recheck.
+    watch._mark_in_flight(path)
+    watch._recheck(is_periodic=True)
+
+    assert overflows == [], "a path with an event already in flight must not be blamed for the stream"
+    assert changes and changes[0][0].new_value == "2500.0", "the real change must still be reported"
+
+
+def test_the_in_flight_mark_clears_once_the_events_own_recheck_runs(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch._mark_in_flight(path)
+    assert watch._is_in_flight(path)
+    watch.recheck_now()  # the non-periodic pass that "owns" resolving this mark
+    assert not watch._is_in_flight(path), "the event's own recheck must clear its mark"
+
+
+def test_stop_after_a_failed_start_does_not_mask_the_real_error(durable_tmp_path):
+    missing = durable_tmp_path / "does-not-exist"
+    watch = SettingsDirectoryWatch(
+        directory=missing, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    with pytest.raises(FileNotFoundError):
+        try:
+            watch.start()
+        finally:
+            # Must not itself raise -- a RuntimeError from a half-started watch
+            # would replace the real FileNotFoundError above with a misleading one.
+            watch.stop()
+
+
+def test_stop_before_start_is_a_safe_no_op(durable_tmp_path):
+    # An object nobody ever start()ed -- e.g. a caller that constructs, decides
+    # against it, and tears down. Neither thread ever ran, so both must already
+    # read as not alive, and stop() must not raise reaching for either.
+    _write(durable_tmp_path, "1000.0")
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.stop()
+    assert not watch._observer.is_alive()
+    assert not watch._periodic_thread.is_alive()
+
+
+def test_stop_is_safe_when_called_twice_after_a_normal_start(durable_tmp_path):
+    _write(durable_tmp_path, "1000.0")
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    watch.stop()
+    watch.stop()  # called twice -- must not raise, must not resurrect anything
+    assert not watch._observer.is_alive()
+    assert not watch._periodic_thread.is_alive()
+
+
+def test_after_stop_neither_thread_is_alive(durable_tmp_path):
+    _write(durable_tmp_path, "1000.0")
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    assert watch._observer.is_alive()
+    assert watch._periodic_thread.is_alive()
+    watch.stop()
+    assert not watch._observer.is_alive(), "stop() must actually end the observer thread"
+    assert not watch._periodic_thread.is_alive(), "stop() must actually end the backstop thread"
+
+
+@pytest.mark.slow
+def test_a_standing_rejection_is_reported_once_not_once_per_tick(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    rejections: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=rejections.append, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    try:
+        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while not rejections and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert rejections, "the broken edit was never reported"
+        # Several backstop ticks over the same standing broken file.
+        time.sleep(RECHECK_INTERVAL_SECONDS * 8)
+    finally:
+        watch.stop()
+
+    assert len(rejections) == 1, "the same broken content must be reported once, not once per tick"
+
+
+def test_editing_into_a_different_broken_state_reports_again(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    rejections: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=rejections.append, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    path.write_text("[main_balance]\nvalue = [1, 2,\n")
+    watch.recheck_now()
+    assert len(rejections) == 1
+    watch.recheck_now()
+    assert len(rejections) == 1, "the identical broken content must not be reported twice"
+
+    path.write_text("this is not toml at all ]][[\n")
+    watch.recheck_now()
+    assert len(rejections) == 2, "a different broken state is a new, reportable rejection"
+
+
+def test_a_recovered_then_re_broken_file_reports_the_rejection_again(durable_tmp_path):
+    path = _write(durable_tmp_path, "1000.0")
+    rejections: list = []
+    changes: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=changes.append,
+        on_rejection=rejections.append, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    path.write_text("[main_balance]\nvalue = [1, 2,\n")
+    watch.recheck_now()
+    assert len(rejections) == 1
+
+    _write(path.parent, "2500.0")  # a real, valid fix
+    watch.recheck_now()
+    assert changes and changes[0][0].new_value == "2500.0"
+
+    path.write_text("[main_balance]\nvalue = [1, 2,\n")  # broken again, same bytes as before
+    watch.recheck_now()
+    assert len(rejections) == 2, "a rejection cleared by a successful edit is reportable again"
+
+
+@pytest.mark.slow
+def test_a_failed_change_delivery_retries_while_a_standing_rejection_does_not(durable_tmp_path):
+    # The deliberate tension fix 1 and fix 4 create, in one test: unconsumed
+    # work is retried until it lands; an already-reported state is not repeated.
+    path = _write(durable_tmp_path, "1000.0")
+    change_attempts: list = []
+    rejections: list = []
+
+    def flaky_on_change(changes):
+        change_attempts.append(changes)
+        if len(change_attempts) == 1:
+            raise RuntimeError("transient failure")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=flaky_on_change,
+        on_rejection=rejections.append, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    try:
+        _write(durable_tmp_path, "2500.0")
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while len(change_attempts) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert len(change_attempts) >= 2, "the change must be retried after the callback failed"
+
+        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while not rejections and time.monotonic() < deadline:
+            time.sleep(0.02)
+        time.sleep(RECHECK_INTERVAL_SECONDS * 8)
+    finally:
+        watch.stop()
+
+    assert len(rejections) == 1, "the rejection must not repeat across the same ticks that retried the change"
+
+
+@pytest.mark.slow
+def test_a_settings_file_appearing_after_start_reports_its_initial_entries(durable_tmp_path):
+    changes: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=changes.append,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch.start()
+    try:
+        _write_by_rename(durable_tmp_path, "1000.0")  # created fresh, after start()
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while not changes and time.monotonic() < deadline:
+            time.sleep(0.02)
+    finally:
+        watch.stop()
+
+    assert changes, "a settings file appearing after start() was not reported"
+    assert changes[0] == [
+        SettingsChange(
+            field="main_balance", old_value="", new_value="1000.0",
+            observed_at_ns=changes[0][0].observed_at_ns,
+        )
+    ]
+
+
+def test_recheck_now_reports_a_newly_discovered_files_entries_as_new(durable_tmp_path):
+    changes: list = []
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=changes.append,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    _write(durable_tmp_path, "1000.0")  # the directory was empty at construction
+    watch.recheck_now()
+
+    assert changes and changes[0][0] == SettingsChange(
+        field="main_balance", old_value="", new_value="1000.0",
+        observed_at_ns=changes[0][0].observed_at_ns,
+    )
