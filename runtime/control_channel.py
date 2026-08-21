@@ -81,7 +81,17 @@ def receive_command(sock: socket.socket) -> tuple[str, dict] | None:
     body = _receive_exactly(sock, length)
     if body is None:
         return None
-    frame = json.loads(body.decode("utf-8"))
+    try:
+        frame = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as failure:
+        raise ControlFrameRefused(
+            f"control frame body is {len(body)} bytes that do not decode as JSON: {failure}"
+        ) from failure
+    if not isinstance(frame, dict):
+        raise ControlFrameRefused(
+            f"control frame body decoded to a JSON {type(frame).__name__}, not the "
+            f"{{\"command\": ..., \"payload\": ...}} object a control frame must be"
+        )
     command = frame.get("command")
     if command not in KNOWN_COMMANDS:
         raise ControlFrameRefused(f"received unknown control command '{command}'")
