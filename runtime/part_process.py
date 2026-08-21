@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from runtime.control_channel import (
     COMMAND_REPORT_HEALTH,
     COMMAND_TURN_OFF,
-    COMMAND_TURN_ON,
     has_pending_command,
     receive_command,
 )
@@ -46,6 +45,25 @@ class PartHealth:
     observed_at_ns: int
 
 
+def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:
+    """How long the loop waits between ticks at a given fraction of full rate.
+
+    Refuses a rate_ratio outside (0, FULL_RATE_RATIO]: zero or negative would
+    divide by zero or run the part backwards, and above full rate is a speed the
+    part never declared. Either is a bug in the caller, not a case to silently
+    clamp -- a silent clamp is exactly how a throttle that does nothing goes
+    unnoticed.
+    """
+    if not (0.0 < rate_ratio <= FULL_RATE_RATIO):
+        raise ValueError(
+            f"rate_ratio must be in (0, {FULL_RATE_RATIO}] -- a fraction of full rate -- "
+            f"got {rate_ratio!r}. 0 or negative divides by zero or inverts the throttle; "
+            f"anything above {FULL_RATE_RATIO} is a rate faster than full, which this part "
+            f"never declared."
+        )
+    return health_interval_seconds / rate_ratio
+
+
 def run_part(
     declaration: PartDeclaration,
     control_socket,
@@ -62,7 +80,7 @@ def run_part(
     """
     last_tick_at = time.monotonic()
     last_health_at = 0.0
-    tick_interval = health_interval_seconds / max(rate_ratio, FULL_RATE_RATIO)
+    tick_interval = compute_tick_interval(health_interval_seconds, rate_ratio)
 
     while True:
         if has_pending_command(control_socket, timeout_seconds=tick_interval):
