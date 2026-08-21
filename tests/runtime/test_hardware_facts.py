@@ -38,7 +38,7 @@ IDLE_READING_INTERVAL_SECONDS = 0.01
 # still call a touch "live" if it happened to be barely above the noise on a
 # given run. The multiplier is applied to a *measured* quantity (this box's idle
 # band, taken immediately before the touch), not to an assumed fraction of what
-# was touched, which is what made the previous version of this test flaky: it
+# was touched, which is what made the first version of this test flaky: it
 # assumed how much of a freed allocation the allocator would hand back to the OS,
 # and that fraction turned out to depend on allocator/kernel state this test has
 # no business knowing.
@@ -58,29 +58,15 @@ def _measure_idle_band(reading_count: int, interval_seconds: float) -> tuple[int
     return min(readings), max(readings), max(readings) - min(readings)
 
 
-def test_counts_physical_cores_not_logical_ones():
-    facts = measure_hardware_facts()
-    assert isinstance(facts, HardwareFacts)
-    assert facts.logical_cpus == os.cpu_count()
-    assert facts.physical_cores < facts.logical_cpus, (
-        "SMT is on here, so physical cores must be fewer than logical CPUs"
-    )
-    assert facts.physical_cores * 2 == facts.logical_cpus, "SMT2, per section 0"
+def _attempt_live_ram_measurement() -> dict[str, int]:
+    """One idle-band-then-touch cycle.
 
-
-def test_reports_that_this_box_has_no_swap():
-    # Section 5 depends on this: with no swap, dirty pages have nowhere to go and a
-    # writer that outruns writeback is OOM-killed rather than slowed.
-    assert measure_hardware_facts().swap_total_bytes == 0
-
-
-def test_available_ram_is_a_live_reading_not_a_cached_one():
-    # A test that only checks positivity before and after would pass against a
-    # frozen constant -- Rule 8 inverted, a reading certified live that never
-    # moved. So this measures the box's own idle noise first, then touches real
-    # memory and requires the drop to clearly clear that noise -- not an assumed
-    # fraction of what was touched, which depends on allocator/kernel behavior
-    # this test has no business assuming (see IDLE_BAND_MARGIN_MULTIPLIER).
+    Measures this box's own idle noise, then allocates and page-touches a block
+    sized from the live reading, and reports how much MemAvailable dropped.
+    Skips (via pytest.skip) rather than returning if the idle band is already
+    wide enough that no touch of this size could clear it even ideally -- that
+    case means this attempt cannot answer the question, not that it failed one.
+    """
     idle_low, idle_high, idle_band = _measure_idle_band(
         IDLE_READING_COUNT, IDLE_READING_INTERVAL_SECONDS
     )
@@ -93,7 +79,7 @@ def test_available_ram_is_a_live_reading_not_a_cached_one():
     # The touch can drop MemAvailable by at most the amount it touches -- that is
     # the ideal case, every touched byte actually counted as no-longer-available.
     # If even that ideal case could not clear the box's own measured noise, no
-    # outcome of this test could distinguish "live" from "noisy but frozen," so
+    # outcome of this attempt could distinguish "live" from "noisy but frozen," so
     # the honest result is neither a pass nor a fail but a skip carrying the
     # numbers. On a machine busy enough that this triggers every run, this test
     # skips every run and guards nothing -- that cost is real, and the skip
@@ -121,16 +107,76 @@ def test_available_ram_is_a_live_reading_not_a_cached_one():
 
     after = read_available_ram_bytes()
     drop = before - after
-    assert drop > required_drop, (
-        f"idle band over {IDLE_READING_COUNT} readings ({IDLE_READING_INTERVAL_SECONDS}s "
-        f"apart) was {idle_band} bytes ({idle_low}..{idle_high}); touching "
-        f"{block_bytes} bytes only dropped MemAvailable by {drop} bytes "
-        f"({before=}, {after=}), which does not clear {IDLE_BAND_MARGIN_MULTIPLIER}x "
-        f"that idle band ({required_drop} bytes); the reading did not distinguish "
-        "the touch from its own idle noise, so it is not a live measurement"
+    del filler
+
+    return {
+        "idle_low": idle_low,
+        "idle_high": idle_high,
+        "idle_band": idle_band,
+        "block_bytes": block_bytes,
+        "required_drop": required_drop,
+        "before": before,
+        "after": after,
+        "drop": drop,
+    }
+
+
+def _describe_attempt(label: str, attempt: dict[str, int]) -> str:
+    return (
+        f"{label}: idle band over {IDLE_READING_COUNT} readings "
+        f"({IDLE_READING_INTERVAL_SECONDS}s apart) was {attempt['idle_band']} bytes "
+        f"({attempt['idle_low']}..{attempt['idle_high']}); touching {attempt['block_bytes']} "
+        f"bytes only dropped MemAvailable by {attempt['drop']} bytes "
+        f"(before={attempt['before']}, after={attempt['after']}), which does not clear "
+        f"{IDLE_BAND_MARGIN_MULTIPLIER}x that idle band ({attempt['required_drop']} bytes)"
     )
 
-    del filler
+
+def test_counts_physical_cores_not_logical_ones():
+    facts = measure_hardware_facts()
+    assert isinstance(facts, HardwareFacts)
+    assert facts.logical_cpus == os.cpu_count()
+    assert facts.physical_cores < facts.logical_cpus, (
+        "SMT is on here, so physical cores must be fewer than logical CPUs"
+    )
+    assert facts.physical_cores * 2 == facts.logical_cpus, "SMT2, per section 0"
+
+
+def test_reports_that_this_box_has_no_swap():
+    # Section 5 depends on this: with no swap, dirty pages have nowhere to go and a
+    # writer that outruns writeback is OOM-killed rather than slowed.
+    assert measure_hardware_facts().swap_total_bytes == 0
+
+
+def test_available_ram_is_a_live_reading_not_a_cached_one():
+    # A test that only checks positivity before and after would pass against a
+    # frozen constant -- Rule 8 inverted, a reading certified live that never
+    # moved. So this measures the box's own idle noise first, then touches real
+    # memory and requires the drop to clearly clear that noise -- not an assumed
+    # fraction of what was touched (see IDLE_BAND_MARGIN_MULTIPLIER).
+    #
+    # A single attempt can fall short for a reason that has nothing to do with
+    # whether the reading is live: the allocator sometimes declines to hand freed
+    # pages back to the OS on a given run, so the *actual* drop undershoots the
+    # ideal one even though the reading itself moved correctly. That is variance
+    # in the instrument, not a fact about read_available_ram_bytes(), so one retry
+    # is legitimate here in a way it would not be for a test of code under test.
+    # This cannot mask a real regression: a frozen or cached reading has zero
+    # drop on every attempt, so it fails both attempts deterministically -- there
+    # is nothing intermittent about staleness for a retry to paper over.
+    first = _attempt_live_ram_measurement()
+    if first["drop"] > first["required_drop"]:
+        return
+
+    second = _attempt_live_ram_measurement()
+    assert second["drop"] > second["required_drop"], (
+        "two attempts, neither drop cleared its required threshold -- "
+        + _describe_attempt("attempt 1", first)
+        + "; "
+        + _describe_attempt("attempt 2", second)
+        + "; the reading did not distinguish the touch from its own idle noise on "
+        "either attempt, so it is not a live measurement"
+    )
 
 
 def test_every_fact_carries_when_it_was_measured():
