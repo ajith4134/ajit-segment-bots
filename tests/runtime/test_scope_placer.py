@@ -83,6 +83,42 @@ def test_refuses_to_report_success_when_the_pid_never_existed():
 
 
 @pytest.mark.cgroup
+def test_refuses_to_report_success_when_busctl_accepts_but_never_moves_the_pid(
+    sleeping_process, monkeypatch
+):
+    # The reproducible version of the production failure: StartTransientUnit
+    # queues an async job and returns rc=0 without the move having happened yet.
+    # /bin/true stands in for busctl here -- a real subprocess that really exits
+    # 0 and really touches nothing -- so the confirmation loop, read_process_cgroup
+    # and PlacementNotConfirmed are all exercised for real against a genuinely
+    # live process that genuinely never moves. Only the argv fed to subprocess.run
+    # is substituted; has_process_landed_in_scope and read_process_cgroup, the
+    # logic actually under test, are untouched.
+    monkeypatch.setattr(
+        "runtime.scope_placer._build_transient_unit_call",
+        lambda pid, scope_name, limits: ["/bin/true"],
+    )
+    scope = f"placer-noop-{os.getpid()}"
+    original_cgroup = read_process_cgroup(sleeping_process.pid)
+
+    with pytest.raises(PlacementNotConfirmed) as refusal:
+        place_process_in_scope(
+            sleeping_process.pid, scope,
+            ScopeLimits(memory_max_bytes=64 * MEGABYTE, cpu_weight=100),
+            confirmation_deadline_seconds=DEADLINE, poll_interval_seconds=POLL,
+        )
+
+    message = str(refusal.value)
+    # rc=0: busctl (here, /bin/true) really was accepted -- that is the whole
+    # point of the module. A regression that trusted this rc would pass silently.
+    assert "busctl returned 0" in message
+    # The cgroup named in the refusal is the process's real, unchanged cgroup --
+    # read independently before the call -- not a placeholder or the new scope.
+    assert original_cgroup in message
+    assert has_process_landed_in_scope(sleeping_process.pid, scope) is False
+
+
+@pytest.mark.cgroup
 @pytest.mark.slow
 def test_placement_is_reliable_and_fast_enough_to_be_on_the_switch_on_path():
     # Section 3 quotes 5.6 ms to place. If this regresses, switch-on regressed.
