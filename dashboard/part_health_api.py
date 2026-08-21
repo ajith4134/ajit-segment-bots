@@ -30,14 +30,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from build_part_monitor import (  # noqa: E402
+from build_part_monitor import measure_parts  # noqa: E402
+from completion import (  # noqa: E402
     DECLARED,
     FAILING,
     IMPLEMENTED,
     RUNNING,
     TESTED,
     UNMEASURED,
-    measure_parts,
+    block_completion,
+    part_is_measured_complete,
 )
 from render_blueprint import find_contract_violations, load_feature_registry  # noqa: E402
 
@@ -79,6 +81,13 @@ def build_board_payload(mode: str = "live") -> dict:
                 "block": feature.get("category", ""),
                 "rung": state.rung,
                 "proof": state.proof,
+                # RL-070's dot: green only when part_is_measured_complete() says so
+                # (dashboard/completion.py, the one place that predicate is decided).
+                # dot_proof mirrors state.proof here -- for a part the rung IS the
+                # completeness evidence -- kept as its own field for symmetry with
+                # the block-level rollup below, whose dot_proof is a different fact.
+                "is_complete": part_is_measured_complete(state),
+                "dot_proof": state.proof,
                 "consumes": feature.get("consumes", []),
                 "produces": feature.get("produces", []),
                 "states": feature.get("states", []),
@@ -94,6 +103,12 @@ def build_board_payload(mode: str = "live") -> dict:
     blocks = []
     for category in registry.categories:
         owned = parts_by_block.get(category["id"], [])
+        owned_states = [by_id[p["id"]] for p in owned]
+        # RL-070: the block's dot is green only when every part in it is green
+        # -- block_completion() is the same rollup build_part_monitor.py's block
+        # header dots and build_status_board.py's block tiles use, so this board
+        # can never silently disagree with those about what "complete" means.
+        block_is_complete, block_dot_proof = block_completion(owned_states)
         blocks.append(
             {
                 "id": category["id"],
@@ -107,6 +122,8 @@ def build_board_payload(mode: str = "live") -> dict:
                 "state": summarise_block_state([p["rung"] for p in owned]),
                 "n_parts": len(owned),
                 "n_built": len([p for p in owned if p["rung"] in BUILT_RUNGS]),
+                "is_complete": block_is_complete,
+                "dot_proof": block_dot_proof,
             }
         )
 

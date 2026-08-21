@@ -32,6 +32,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from completion import (
+    DECLARED,
+    FAILING,
+    IMPLEMENTED,
+    LADDER,
+    PartState,
+    RUNG_MEANING,
+    RUNNING,
+    TESTED,
+    UNMEASURED,
+    block_completion,
+    part_is_measured_complete,
+)
 from render_blueprint import FeatureRegistry, find_contract_violations, load_feature_registry
 
 HERE = Path(__file__).resolve().parent
@@ -43,35 +56,6 @@ OUT = HERE / "part-monitor.html"
 # must never mistake its own source for the bot's.
 EXCLUDED_DIRS = {".git", "docs", "dashboard", "__pycache__", ".githooks"}
 SOURCE_SUFFIXES = {".py", ".ts", ".js", ".rs", ".go", ".java", ".kt", ".rb", ".cpp", ".c", ".mjs"}
-
-# Rungs, lowest first. The order is the ladder.
-DECLARED = "DECLARED"
-IMPLEMENTED = "IMPLEMENTED"
-TESTED = "TESTED"
-RUNNING = "RUNNING"
-FAILING = "FAILING"
-UNMEASURED = "NOT MEASURED"
-
-LADDER = (DECLARED, IMPLEMENTED, TESTED, RUNNING)
-
-RUNG_MEANING = {
-    DECLARED: "in the blueprint, contract intact, no code",
-    IMPLEMENTED: "a source file named for this part exists",
-    TESTED: "a test file naming this part exists",
-    RUNNING: "the part reports a live heartbeat",
-    FAILING: "a probe ran and the part is broken",
-    UNMEASURED: "no probe could run for this part",
-}
-
-
-@dataclass
-class PartState:
-    part_id: str
-    name: str
-    role: str
-    category: str
-    rung: str
-    proof: str
 
 
 def find_source_files() -> list[Path]:
@@ -265,37 +249,6 @@ def measure_parts() -> list[PartState]:
     """
     states, _wiring = _measure_build_state()
     return states
-
-
-def part_is_measured_complete(state: PartState) -> bool:
-    """RL-070: a part's dot is green only when it has climbed to TESTED (a source
-    file AND a test file naming it -- the same probes that drive the IMPLEMENTED
-    and TESTED rungs) with nothing the contract or wiring checks found wrong with
-    it. FAILING never reaches TESTED here (parts_in_violation and the wiring
-    check both override the rung before this is asked), so this is never checked
-    against a part that is both TESTED and broken.
-
-    RUNNING also counts: the dot answers "is this built?", not "is this running
-    right now?" -- a fully built part that is currently stopped must not read as
-    unfinished, which is why RUNNING stays a separate rung the dot does not report.
-    """
-    return state.rung in (TESTED, RUNNING)
-
-
-def block_completion(owned: list[PartState]) -> tuple[bool, str]:
-    """RL-070: a block's dot is green only when every part in it is green.
-
-    Never green by inference -- a block with no parts declared yet is red, not
-    vacuously complete, because "no parts exist" is not the same fact as
-    "every part is finished".
-    """
-    if not owned:
-        return False, "no parts declared for this block yet"
-    complete = [s for s in owned if part_is_measured_complete(s)]
-    if len(complete) == len(owned):
-        return True, f"{len(complete)} of {len(owned)} parts are TESTED (source file + test file)"
-    unfinished = [s.name for s in owned if not part_is_measured_complete(s)]
-    return False, f"{len(complete)} of {len(owned)} parts are TESTED; not yet: {', '.join(unfinished)}"
 
 
 def read_last_commit() -> str:

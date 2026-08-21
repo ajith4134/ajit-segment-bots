@@ -80,7 +80,9 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, mono
 .panel { background: var(--panel); border: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 9px; }
 .panel-head { display: flex; flex-direction: column; gap: 6px; }
 .panel-title { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.panel-title-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .panel-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.panel-dot-proof { margin: 0; font: 400 10px/1.4 "IBM Plex Mono", monospace; color: var(--faint); }
 .panel-meta { display: flex; align-items: center; gap: 8px; }
 .scope { font: 400 10px/1 "IBM Plex Mono", monospace; color: var(--faint); white-space: nowrap; }
 .meter { flex: 1; height: 5px; background: var(--sunk); border: 1px solid var(--border); }
@@ -88,6 +90,17 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, mono
 .meter-num { font: 400 10px/1 "IBM Plex Mono", monospace; color: var(--faint); font-variant-numeric: tabular-nums; }
 .panel-summary { margin: 0; font-size: 12px; color: var(--muted); }
 .empty { font: 400 11px/1.5 "IBM Plex Mono", monospace; color: var(--faint); padding: 8px 0; }
+
+/* ---- RL-070 completion dots ----
+   Colour is never the only channel: complete is a FILLED disc, unfinished is a
+   HOLLOW ring, so the state still reads with colour removed (roughly 8% of men
+   cannot reliably separate red from green). The glyph itself carries the shape;
+   font-variant-numeric keeps both circle characters the same visual weight. */
+.completion-dot {
+  font: 400 12px/1 "IBM Plex Mono", monospace; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.completion-dot.complete { text-shadow: 0 0 1px currentColor; }
 
 /* ---- cells ---- */
 .cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
@@ -97,11 +110,12 @@ code, .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, mono
 }
 .cell:hover { border-color: var(--accent); }
 .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cell-top { display: flex; align-items: flex-start; gap: 5px; }
 .cell-name { font-size: 11.5px; line-height: 1.3; }
 .cell-rung { font: 500 9px/1 "IBM Plex Mono", monospace; letter-spacing: 0.08em; }
 .cell-detail { grid-column: 1 / -1; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
 .detail-role { font-size: 11px; color: var(--text); }
-.detail-proof { font: 400 10px/1.45 "IBM Plex Mono", monospace; color: var(--muted); }
+.detail-proof { font: 400 10px/1.45 "IBM Plex Mono", monospace; color: var(--muted); display: flex; align-items: flex-start; gap: 4px; }
 .detail-io { font: 400 10px/1.45 "IBM Plex Mono", monospace; color: var(--faint); }
 .io-label { color: var(--accent); margin-right: 5px; }
 

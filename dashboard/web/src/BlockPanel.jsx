@@ -5,6 +5,7 @@
 // state, a dead panel does not discredit a live one beside it.
 import { T, rung } from './theme.js'
 import PartCell from './PartCell.jsx'
+import CompletionDot from './CompletionDot.jsx'
 
 export default function BlockPanel({ block, parts }) {
   const r = rung(block.state)
@@ -14,9 +15,16 @@ export default function BlockPanel({ block, parts }) {
     <section className="panel">
       <header className="panel-head">
         <div className="panel-title">
-          <h3>{block.name}</h3>
+          <div className="panel-title-name">
+            <CompletionDot isComplete={block.is_complete} />
+            <h3>{block.name}</h3>
+          </div>
           <span className="badge" style={{ color: r.color, borderColor: r.color }}>{block.state}</span>
         </div>
+        {/* RL-070: green only when every part below is green -- one red part keeps
+            the block red. Shown inline, the same as scope and summary, rather than
+            behind a click -- nothing else on this panel is hidden either. */}
+        <p className="panel-dot-proof">{block.dot_proof}</p>
         <div className="panel-meta">
           <span className="scope">{block.scope || 'scope not set'}</span>
           <div className="meter"><div className="meter-fill" style={{ width: `${pct}%`, background: r.color }} /></div>

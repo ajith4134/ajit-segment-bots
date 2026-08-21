@@ -23,3 +23,20 @@ export const RUNGS = {
 }
 
 export const rung = (name) => RUNGS[name] || RUNGS['NOT MEASURED']
+
+// RL-070's dot: green when measured complete (part_is_measured_complete /
+// block_completion in dashboard/completion.py, the one place that predicate
+// is decided), red otherwise -- red covers both "not started" and "built but
+// unprobed" on purpose, and the proof beside the dot is what tells them apart.
+//
+// Colour alone is the single worst choice here -- roughly 8% of men cannot
+// reliably separate red from green -- so completeness is carried in a second,
+// non-colour channel too: a filled disc for complete, a hollow ring for
+// unfinished. The shapes differ enough to read in greyscale even with the
+// colour stripped out entirely.
+export const COMPLETION_DOT = {
+  true: { color: '#57D9A3', label: 'complete', glyph: '●' },  // ● filled
+  false: { color: '#D45B54', label: 'unfinished', glyph: '○' }, // ○ hollow
+}
+
+export const completionDot = (isComplete) => COMPLETION_DOT[isComplete ? 'true' : 'false']

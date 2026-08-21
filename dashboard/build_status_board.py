@@ -310,25 +310,23 @@ def collect_block_completion_results() -> list[ProbeResult]:
 
     Reuses dashboard/build_part_monitor.py's own probes rather than
     re-measuring: measure_parts() already folds RL-067's wiring check and the
-    contract checker into each part's rung, and block_completion() is the same
-    function that colours the part monitor's block header dots -- so this board
-    and that one can never silently disagree about what "complete" means.
+    contract checker into each part's rung. block_completion() itself comes
+    from dashboard/completion.py -- the single definition RL-070 requires,
+    also imported by build_part_monitor.py and part_health_api.py -- so this
+    board, the part monitor, and the React board can never silently disagree
+    about what "complete" means.
 
     Guarded on import the same way collect_substrate_results guards runtime/:
     a board build must still succeed, with a tile that says so, if
-    dashboard/build_part_monitor.py cannot be imported.
+    dashboard/build_part_monitor.py or dashboard/completion.py cannot be
+    imported.
     """
     dashboard_directory = str(Path(__file__).resolve().parent)
     if dashboard_directory not in sys.path:
         sys.path.insert(0, dashboard_directory)
     try:
-        from build_part_monitor import (
-            RUNNING as PART_RUNNING,
-            TESTED as PART_TESTED,
-            block_completion,
-            category_lookup,
-            measure_parts,
-        )
+        from build_part_monitor import category_lookup, measure_parts
+        from completion import RUNNING as PART_RUNNING, TESTED as PART_TESTED, block_completion
     except ImportError as failure:
         return [
             ProbeResult(
