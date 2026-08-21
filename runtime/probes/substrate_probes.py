@@ -164,6 +164,19 @@ def probe_blas_is_pinned() -> SubstrateProbeResult:
     except Exception as failure:  # threadpoolctl inspects loaded C libraries by name
         return SubstrateProbeResult(label, NOT_MEASURED, f"threadpool_info() raised: {failure}", proof)
 
+    if not pools:
+        # "every one of zero pools is pinned" is vacuously true and not a reading --
+        # nothing has imported a BLAS library into this process yet, so the question
+        # has no live subject. This is not a failure and the caps are not broken; a
+        # process that goes on to import numpy is the one this tile is measuring.
+        return SubstrateProbeResult(
+            label,
+            NOT_MEASURED,
+            "0 pools reported -- no BLAS library is loaded in this process, so there is "
+            "nothing to speak for",
+            proof,
+        )
+
     pinned_thread_count = int(SINGLE_THREAD)
     unpinned = [pool for pool in pools if pool.get("num_threads") != pinned_thread_count]
     if unpinned:

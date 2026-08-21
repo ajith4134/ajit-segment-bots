@@ -63,3 +63,16 @@ def test_a_probe_that_cannot_establish_its_fact_says_so_rather_than_guessing(mon
     result = probe_settings_are_readable()
     assert result.state in {"NOT MEASURED", "NOT BUILT"}
     assert result.state != "OK"
+
+
+def test_zero_blas_pools_is_not_measured_rather_than_a_vacuous_ok(monkeypatch):
+    # "every one of zero pools is pinned" is true of an empty set but measures
+    # nothing -- no BLAS library is loaded, so the question has no live subject.
+    # A green OK here would be exactly the Rule 8 failure: a reassuring tile
+    # standing in for a reading that never happened.
+    import threadpoolctl
+
+    monkeypatch.setattr(threadpoolctl, "threadpool_info", lambda: [])
+    result = probe_blas_is_pinned()
+    assert result.state == "NOT MEASURED"
+    assert result.state != "OK"
