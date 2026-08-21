@@ -1,0 +1,38 @@
+[project]
+name = "ajit-segment-bots"
+version = "0.1.0"
+description = "Crypto segment trading bots. Every part is a transistor."
+requires-python = "==3.14.*"
+
+# Every entry is pinned exact and carries why it was admitted (RL-065).
+# The interpreter is the standard build, not free-threaded: spec section 15.1.
+dependencies = [
+    # Numeric arrays and the memmap-backed durable state of section 15.4.
+    # 2.5.2 is the version measured in the spec; OpenBLAS 0.3.34 ships with it,
+    # which is the release where the pthread_atfork deadlock of numpy#30092 is fixed.
+    "numpy==2.5.2",
+    # The only way to verify a live BLAS thread count. Without it, section 7's
+    # claim that BLAS is pinned to one thread per part cannot be made under Rule 0.
+    "threadpoolctl==3.6.0",
+    # inotify for the settings directory (section 15.3). Its Linux wheel is pure
+    # Python via ctypes, so it needs no C compiler -- which matters on this box.
+    "watchdog==6.0.0",
+]
+
+[project.optional-dependencies]
+# Test runner. Pure Python, so no ABI question.
+test = ["pytest==9.1.1"]
+# Renders a spec or a board to a page. Pure Python.
+docs = ["markdown-it-py==4.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A test that measures memory or durability must say which filesystem it ran on.
+# Marked tests place a real process under a real cgroup limit and are slower.
+markers = [
+    "cgroup: places a process in a systemd transient scope and reads its cgroup files",
+    "slow: takes more than a second because it forks, kills, or waits on writeback",
+]
+# Import `runtime` from the repository root rather than from wherever pytest was
+# invoked. Declared here so no test needs a sys.path line of its own.
+pythonpath = ["."]

@@ -1,0 +1,43 @@
+# ajit-segment-bots -- runtime substrate settings.
+#
+# Copy to ~/.config/ajit-segment-bots/settings/runtime.toml and edit there.
+# This file is the template and the schema; the live values live on the machine,
+# outside every repository. No API keys or secrets belong here -- see docs/secrets.md.
+#
+# Every entry carries value, unit and note. The note is yours: who changed it and
+# why. RL-061 refuses a number that cannot say where it came from.
+
+[writeback_interval]
+value = 8388608
+unit  = "bytes"
+note  = "operator, 2026-08-20: a stream writer forces writeback and drops its cache every 8 MiB. Measured on ext4 under MemoryMax=200M: never fsyncing is OOM-killed, fsync alone survives pinned at the 200 MB ceiling, fsync plus FADV_DONTNEED holds the same 500 MB write at a 16 MB peak."
+
+[placement_confirmation_deadline]
+value = 0.5
+unit  = "seconds"
+note  = "operator, 2026-08-20: how long gate-actuator waits for a placed PID to appear in its scope before calling it a fault. Placement measured at a 5.7 ms median and 6.9 ms p95 over 87 of 88 successes, so this is roughly 70x the p95."
+
+[placement_confirmation_poll_interval]
+value = 0.002
+unit  = "seconds"
+note  = "operator, 2026-08-20: how often to re-read /proc/<pid>/cgroup while waiting. Below the 5.7 ms median so a normal placement is confirmed on the second or third look."
+
+[store_busy_timeout]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-20: SQLite WAL permits one writer per file. Measured with this unset a second writer fails instantly with 'database is locked'; set, it waits 2.54 s and succeeds. Parts must never carry their own retry loop for this."
+
+[fork_thread_ceiling]
+value = 1
+unit  = "kernel threads"
+note  = "operator, 2026-08-20: the forkserver refuses to fork above this, read from field 20 of /proc/self/stat. Measured: with the BLAS caps unset, import numpy alone puts 12 kernel threads in the process while threading.active_count() still reports 1."
+
+[part_health_interval]
+value = 1.0
+unit  = "seconds"
+note  = "operator, 2026-08-20: how often a part emits part-health while on. Intraday bars at 1m/5m/15m/30m need about one message a second, so this matches the slowest thing worth noticing."
+
+[settings_recheck_interval]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-21: SettingsDirectoryWatch's periodic backstop -- it re-reads the whole settings directory on this cadence regardless of what any inotify event announced. Measured directly: watchdog==6.0.0's own C shim discards the kernel's IN_Q_OVERFLOW marker (wd == -1) before it ever reaches a handler, so nothing built on it can react to a real, reproduced overflow (a raw 49152-event burst against this box's max_queued_events=16384 produced one). This periodic re-read is the actual guarantee instead, and the cost of getting this number wrong is exactly the worst-case staleness of an operator's capital-bound edit sitting unreported: too high risks the board showing a stale main_balance or leverage_ceiling for that long; too low is still cheap, since parsing a 6-entry settings file measured at roughly 225 microseconds, so even this cadence is negligible CPU."

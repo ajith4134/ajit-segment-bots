@@ -62,7 +62,7 @@ docs/proposals/part-declarations.md         proposal for the blueprint edit in T
 dashboard/blueprint_edits/apply_2026-08-20_part_declarations.py
 dashboard/render_blueprint.py               MODIFY: required fields + two new checks
 dashboard/build_status_board.py             MODIFY: the substrate tile
-tests/runtime/
+tests/runtime/                              no __init__.py: it would shadow runtime/
     test_interpreter_is_standard_build.py
     test_storage_facts.py
     test_hardware_facts.py
@@ -95,7 +95,6 @@ Tasks 1–3 come first because everything downstream needs them: the interpreter
 **Files:**
 - Create: `pyproject.toml`
 - Create: `runtime/__init__.py`
-- Create: `tests/runtime/__init__.py`
 - Test: `tests/runtime/test_interpreter_is_standard_build.py`
 
 **Interfaces:**
@@ -182,6 +181,9 @@ markers = [
     "cgroup: places a process in a systemd transient scope and reads its cgroup files",
     "slow: takes more than a second because it forks, kills, or waits on writeback",
 ]
+# Import `runtime` from the repository root rather than from wherever pytest was
+# invoked. Declared here so no test needs a sys.path line of its own.
+pythonpath = ["."]
 ```
 
 `runtime/__init__.py`:
@@ -196,7 +198,12 @@ runtime/probes/substrate_probes.py and its tile on the status board.
 """
 ```
 
-`tests/runtime/__init__.py`: empty file.
+**`tests/runtime/` gets no `__init__.py`.** The test package and the package under test are both
+called `runtime`. With an `__init__.py` present pytest puts `tests/` on `sys.path`, and `import
+runtime` then resolves to `tests/runtime/` — the tests shadow the code they are testing. Without
+it, pytest inserts `tests/runtime/` itself, which holds no `runtime` module, so the import falls
+through to the real package. `pythonpath = ["."]` in the pytest config below is what makes that
+import declared rather than an accident of the working directory.
 
 - [ ] **Step 4: Install the dependencies**
 
@@ -213,7 +220,7 @@ Expected: PASS, 3 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml runtime/__init__.py tests/runtime/__init__.py \
+git add pyproject.toml runtime/__init__.py \
         tests/runtime/test_interpreter_is_standard_build.py
 git commit -m "Phase 0 skeleton: pinned deps with reasons, and a guard on the interpreter
 
