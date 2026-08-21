@@ -251,3 +251,122 @@ def test_reopening_with_the_matching_spec_still_works_and_data_is_intact(durable
     with open_numeric_state(durable_tmp_path, matching_spec) as reopened:
         assert bool((reopened.array == 3.5).all())
         assert reopened.read_sequence_stamp() == 2
+
+
+def test_a_data_file_with_no_sidecar_gets_one_healed_and_is_then_guarded(durable_tmp_path):
+    # Window 1: a sidecar written only after the data file leaves a kill window
+    # where data exists with no sidecar, and every later open used to take the
+    # "missing sidecar -> size-only" path forever. Healing on reopen closes it:
+    # the very next open must both create the sidecar and be guarded by it.
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 1.0
+
+    declaration_path = durable_tmp_path / f"{written_spec.name}.declared.json"
+    declaration_path.unlink()
+    assert not declaration_path.exists()
+
+    with open_numeric_state(durable_tmp_path, written_spec):
+        pass
+    assert declaration_path.exists(), "the missing sidecar was not healed on reopen"
+
+    same_size_different_dtype_spec = NumericStateSpec(
+        name="rolling-window", shape=(10,), dtype="int64"
+    )
+    with pytest.raises(NumericStateShapeMismatch):
+        open_numeric_state(durable_tmp_path, same_size_different_dtype_spec)
+
+
+def test_a_zero_byte_sidecar_refuses_with_the_named_exception_not_a_decoder_error(
+    durable_tmp_path,
+):
+    # Window 2: Path.write_text truncates before writing, so a kill mid-write
+    # used to leave a 0-byte sidecar that exists but cannot be parsed -- and
+    # json.loads("") raises json.JSONDecodeError, which a caller catching
+    # NumericStateShapeMismatch does not catch. The atomic write should make
+    # this unreachable; this test is what would catch it if it were not.
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, spec) as state:
+        state.array[:] = 1.0
+
+    declaration_path = durable_tmp_path / f"{spec.name}.declared.json"
+    declaration_path.write_text("")
+
+    with pytest.raises(NumericStateShapeMismatch):
+        open_numeric_state(durable_tmp_path, spec)
+
+
+def test_a_sidecar_holding_text_that_is_not_json_refuses_with_the_named_exception(
+    durable_tmp_path,
+):
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, spec) as state:
+        state.array[:] = 1.0
+
+    declaration_path = durable_tmp_path / f"{spec.name}.declared.json"
+    declaration_path.write_text("not json at all {")
+
+    with pytest.raises(NumericStateShapeMismatch):
+        open_numeric_state(durable_tmp_path, spec)
+
+
+def test_a_sidecar_with_no_data_file_opens_cleanly_when_the_spec_agrees(durable_tmp_path):
+    # The surviving state from writing the sidecar before the data file: a kill
+    # in that window leaves a sidecar with no data. The next open under an
+    # agreeing spec must proceed and create the data file.
+    import json
+
+    spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    declaration_path = durable_tmp_path / f"{spec.name}.declared.json"
+    declaration_path.write_text(json.dumps({"shape": list(spec.shape), "dtype": spec.dtype}))
+    data_path = durable_tmp_path / f"{spec.name}.f64"
+    assert not data_path.exists()
+
+    with open_numeric_state(durable_tmp_path, spec) as state:
+        state.array[:] = 4.0
+    assert data_path.exists()
+
+    with open_numeric_state(durable_tmp_path, spec) as reopened:
+        assert bool((reopened.array == 4.0).all())
+
+
+def test_a_sidecar_with_no_data_file_refuses_when_the_spec_disagrees(durable_tmp_path):
+    import json
+
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    declaration_path = durable_tmp_path / f"{written_spec.name}.declared.json"
+    declaration_path.write_text(
+        json.dumps({"shape": list(written_spec.shape), "dtype": written_spec.dtype})
+    )
+    data_path = durable_tmp_path / f"{written_spec.name}.f64"
+
+    different_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="int64")
+    with pytest.raises(NumericStateShapeMismatch):
+        open_numeric_state(durable_tmp_path, different_spec)
+    assert not data_path.exists(), "the data file must not be created after a refusal"
+
+
+def test_no_temporary_declaration_file_is_left_behind(durable_tmp_path):
+    spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, spec) as state:  # fresh creation
+        state.array[:] = 1.0
+    with open_numeric_state(durable_tmp_path, spec):  # ordinary reopen, verified
+        pass
+
+    declaration_path = durable_tmp_path / f"{spec.name}.declared.json"
+    declaration_path.unlink()
+    with open_numeric_state(durable_tmp_path, spec):  # healed reopen
+        pass
+
+    leftover_temporary_files = [
+        entry.name for entry in durable_tmp_path.iterdir() if entry.name.endswith(".tmp")
+    ]
+    assert leftover_temporary_files == []

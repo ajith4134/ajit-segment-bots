@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pathlib
 from dataclasses import dataclass
 
@@ -41,6 +42,13 @@ NO_STAMP_RECORDED = 0
 # (a file truncated or corrupted by something outside this module).
 DECLARATION_SUFFIX = ".declared.json"
 
+# Written to first, then renamed over the real sidecar with os.replace, which is
+# atomic on the same filesystem. A reader never sees a torn or empty declaration
+# this way -- Path.write_text truncates the file it opens, so writing straight to
+# DECLARATION_SUFFIX would leave a real window where a kill mid-write leaves a
+# 0-byte file that exists but cannot be parsed.
+TEMPORARY_DECLARATION_SUFFIX = ".tmp"
+
 
 class NumericStateShapeMismatch(RuntimeError):
     """An existing file disagrees with what the spec now declares.
@@ -55,6 +63,10 @@ class NumericStateShapeMismatch(RuntimeError):
     garbage. Either is the same quiet corruption has_state_gap exists to catch
     on the other side of a crash, arriving instead through a redeploy that
     changed a shape or a dtype.
+
+    Also raised, rather than a bare decoder error, when the declaration sidecar
+    exists but cannot be read as one -- the atomic write below should make that
+    unreachable, but a reader fails closed with the right type regardless.
     """
 
 
@@ -112,11 +124,60 @@ class NumericState:
         self.close()
 
 
+def _expected_data_byte_count(spec: NumericStateSpec) -> int:
+    return numpy.dtype(spec.dtype).itemsize * math.prod(spec.shape)
+
+
+def _write_declaration_atomically(declaration_path: pathlib.Path, spec: NumericStateSpec) -> None:
+    """Write the sidecar so a reader never sees it torn or empty.
+
+    Written to a temporary file in the same directory first, then moved into
+    place with os.replace, which is atomic on the same filesystem: the final
+    name either shows the complete write or is untouched, never a partial one.
+    """
+    temporary_path = declaration_path.parent / f"{declaration_path.name}{TEMPORARY_DECLARATION_SUFFIX}"
+    temporary_path.write_text(json.dumps({"shape": list(spec.shape), "dtype": spec.dtype}))
+    os.replace(temporary_path, declaration_path)
+
+
+def _verify_declaration_matches(declaration_path: pathlib.Path, spec: NumericStateSpec) -> None:
+    """Refuse, with this module's own exception, rather than let a reader see
+    a decoder error for a sidecar the atomic write should make unreachable.
+    """
+    try:
+        declared = json.loads(declaration_path.read_text())
+        declared_shape = tuple(declared["shape"])
+        declared_dtype = declared["dtype"]
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as unreadable:
+        raise NumericStateShapeMismatch(
+            f"{declaration_path} could not be read as a declaration ({unreadable}). "
+            f"The sidecar beside a part's numeric state must hold its declared shape "
+            f"and dtype; one that cannot be read is refused rather than silently "
+            f"reinterpreted or replaced."
+        ) from unreadable
+    if declared_shape != spec.shape or declared_dtype != spec.dtype:
+        raise NumericStateShapeMismatch(
+            f"{declaration_path} declares shape={declared_shape} dtype={declared_dtype}, "
+            f"but spec {spec.name} asks for shape={spec.shape} dtype={spec.dtype}. "
+            f"Resizing or retyping a part's numeric state is a deliberate migration, not "
+            f"something that happens by opening it under a different spec."
+        )
+
+
 def open_numeric_state(directory: pathlib.Path, spec: NumericStateSpec) -> NumericState:
     """Map a part's numeric state, creating it on first use.
 
     Turning a part on is ordinary startup: remap, and carry on. There is no restore
     path because startup already is one (section 4).
+
+    The declaration sidecar is written before the data file, not after: the state
+    that survives a kill mid-creation is then a sidecar with no data, which the
+    next open verifies and creates the data file under -- never data with no
+    sidecar, which is the unguarded case. A data file that already exists with no
+    sidecar is instead healed once the size check on it has passed: this blesses
+    the first spec a pre-guard file happens to be reopened under, which is no
+    weaker than the size-only fallback it replaces, and every open after that one
+    is guarded. That trade is deliberate.
     """
     directory = require_durable_directory(pathlib.Path(directory))
     directory.mkdir(parents=True, exist_ok=True)
@@ -132,7 +193,7 @@ def open_numeric_state(directory: pathlib.Path, spec: NumericStateSpec) -> Numer
 
     data_exists = data_path.exists()
     if data_exists:
-        expected_bytes = numpy.dtype(spec.dtype).itemsize * math.prod(spec.shape)
+        expected_bytes = _expected_data_byte_count(spec)
         actual_bytes = data_path.stat().st_size
         if actual_bytes != expected_bytes:
             raise NumericStateShapeMismatch(
@@ -142,21 +203,14 @@ def open_numeric_state(directory: pathlib.Path, spec: NumericStateSpec) -> Numer
                 f"that happens by opening it under a different spec."
             )
 
-        # A missing sidecar is not a refusal -- it means this state was written
-        # before the guard existed, and the size check above is all there is to
-        # fall back on. That costs nothing on data the sidecar was there for.
-        if declaration_path.exists():
-            declared = json.loads(declaration_path.read_text())
-            declared_shape = tuple(declared["shape"])
-            declared_dtype = declared["dtype"]
-            if declared_shape != spec.shape or declared_dtype != spec.dtype:
-                raise NumericStateShapeMismatch(
-                    f"{declaration_path} declares shape={declared_shape} "
-                    f"dtype={declared_dtype}, but spec {spec.name} asks for "
-                    f"shape={spec.shape} dtype={spec.dtype}. Resizing or retyping a "
-                    f"part's numeric state is a deliberate migration, not something "
-                    f"that happens by opening it under a different spec."
-                )
+    if declaration_path.exists():
+        _verify_declaration_matches(declaration_path, spec)
+    else:
+        # Neither missing state (data_exists is False, ordinary fresh creation)
+        # nor a stranded one (data_exists is True, the size check above already
+        # passed) is a refusal here -- both are the sanctioned paths the two
+        # window fixes above exist to route through this single write.
+        _write_declaration_atomically(declaration_path, spec)
 
     mode = "r+" if data_exists else "w+"
     array = numpy.memmap(data_path, dtype=spec.dtype, mode=mode, shape=spec.shape)
@@ -164,8 +218,6 @@ def open_numeric_state(directory: pathlib.Path, spec: NumericStateSpec) -> Numer
     stamp = numpy.memmap(stamp_path, dtype=STAMP_DTYPE, mode=stamp_mode, shape=(1,))
     if stamp_mode == "w+":
         stamp[0] = NO_STAMP_RECORDED
-    if mode == "w+":
-        declaration_path.write_text(json.dumps({"shape": list(spec.shape), "dtype": spec.dtype}))
     return NumericState(array=array, stamp=stamp)
 
 
