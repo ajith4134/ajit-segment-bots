@@ -74,6 +74,29 @@ scaffolding to add later.
 trades aggregated per 100 ms — and there is no `@trade` equivalent. This is a
 fidelity limit, not a configuration choice, and §7 says what follows from it.
 
+**The `TRADIFI_PERPETUAL` trap, measured 2026-08-21.** Binance USDⓈ-M now lists
+**169 tokenised traditional-finance perpetuals** — equities and indices — beside
+the crypto ones. ccxt marks them `swap`, `active`, quote `USDT`, exactly like a
+crypto perpetual, and they are distinguishable only by
+`info.contractType == "TRADIFI_PERPETUAL"`.
+
+The obvious filter is wrong. Measured on the live venue:
+
+| filter | count | what it is |
+|---|---|---|
+| `swap and quote == USDT and active` | **696** | includes 169 tokenised equities |
+| `contractType == PERPETUAL and status == TRADING` | **570** | crypto perpetuals, all quotes |
+| the same, `quote == USDT` | 527 | crypto USDT perpetuals |
+
+A naive symbol catalogue would have this **crypto** segment bot capturing, and
+later trading, tokenised stocks — outside the segment entirely, on a venue that
+offers no signal that anything is amiss. `status == SETTLING` (126 symbols) must
+be excluded for the separate reason that those are on their way to delisting.
+
+So the symbol filter is a stated rule, not an idiom: **`contractType` is
+`PERPETUAL` and `status` is `TRADING`.** The adapter owns this, because it is
+exactly the venue-specific knowledge §3.1 says lives there and nowhere else.
+
 ### 1.2 Bybit v5 linear
 
 | Fact | Value | Consequence |

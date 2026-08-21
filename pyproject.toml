@@ -17,6 +17,27 @@ dependencies = [
     # inotify for the settings directory (section 15.3). Its Linux wheel is pure
     # Python via ctypes, so it needs no C compiler -- which matters on this box.
     "watchdog==6.0.0",
+    # Public REST across venues: symbol catalogues and depth snapshots (phase 1
+    # spec section 3). Admitted for its breadth rather than for these two calls --
+    # the user's condition on phase 1 is that a third venue be cheap to add, and
+    # ccxt already speaks 100+ of them, so venue three is an adapter over an
+    # exchange it already knows instead of a new HTTP client written by hand.
+    # Its websocket half has been free and open-source since 1.95 (verified: the
+    # project's own statement, plus `import ccxt.pro` against a real install), so
+    # no paid licence is implied by this line.
+    # It costs 23 transitive packages, including cryptography that a public-only
+    # phase never signs anything with. That is the price of the breadth above and
+    # is recorded here rather than discovered later. Every one resolved to a
+    # cp314 binary wheel -- this box has no compiler, so a source build would
+    # have failed rather than silently succeeded.
+    "ccxt==4.5.75",
+    # The stream half is deliberately NOT ccxt's. The tape records raw venue
+    # payloads rather than a library's normalisation (spec section 2.2), and the
+    # sequence-continuity check is this project's own job because Bybit's own
+    # reference SDK does not implement one at all (spec section 6). Both need the
+    # bytes as they arrived, which a normalising client does not preserve.
+    # Pure-Python wheel, so no compiler.
+    "websockets==17.0.1",
 ]
 
 [project.optional-dependencies]
