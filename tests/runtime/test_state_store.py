@@ -46,8 +46,27 @@ def _repository() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def test_an_appended_entry_comes_back_with_everything_it_was_given(durable_tmp_path):
-    connection = open_store(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+@pytest.fixture
+def opened_stores():
+    """Every connection a test opens through this call, closed on teardown either
+    way -- the same discipline control_socket_pair uses for sockets in
+    test_control_channel.py, adapted to a factory because store parameters (path,
+    durability) vary per call rather than being fixed for the whole test.
+    """
+    connections = []
+
+    def _open_store(path, durability, busy_timeout_seconds):
+        connection = open_store(path, durability, busy_timeout_seconds)
+        connections.append(connection)
+        return connection
+
+    yield _open_store
+    for connection in connections:
+        connection.close()
+
+
+def test_an_appended_entry_comes_back_with_everything_it_was_given(durable_tmp_path, opened_stores):
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
     before = time.time_ns()
     entry_id = append_journal_entry(
         connection, "market-data-feed", "switch-record", "on", "gate-actuator"
@@ -63,8 +82,8 @@ def test_an_appended_entry_comes_back_with_everything_it_was_given(durable_tmp_p
     )
 
 
-def test_the_window_query_excludes_what_falls_outside_it(durable_tmp_path):
-    connection = open_store(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+def test_the_window_query_excludes_what_falls_outside_it(durable_tmp_path, opened_stores):
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
     append_journal_entry(connection, "part", "kind", "early", "test")
     time.sleep(0.01)
     boundary = time.time_ns()
@@ -75,25 +94,25 @@ def test_the_window_query_excludes_what_falls_outside_it(durable_tmp_path):
     assert [entry.payload for entry in later] == ["late"]
 
 
-def test_it_is_in_write_ahead_logging_mode(durable_tmp_path):
-    connection = open_store(durable_tmp_path / "journal.db", StoreDurability.LEDGER, BUSY_TIMEOUT)
+def test_it_is_in_write_ahead_logging_mode(durable_tmp_path, opened_stores):
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.LEDGER, BUSY_TIMEOUT)
     assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
 
-def test_a_ledger_syncs_fully_and_a_record_store_does_not(durable_tmp_path):
-    ledger = open_store(durable_tmp_path / "ledger.db", StoreDurability.LEDGER, BUSY_TIMEOUT)
-    record = open_store(durable_tmp_path / "record.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+def test_a_ledger_syncs_fully_and_a_record_store_does_not(durable_tmp_path, opened_stores):
+    ledger = opened_stores(durable_tmp_path / "ledger.db", StoreDurability.LEDGER, BUSY_TIMEOUT)
+    record = opened_stores(durable_tmp_path / "record.db", StoreDurability.RECORD, BUSY_TIMEOUT)
     assert ledger.execute("PRAGMA synchronous").fetchone()[0] == 2   # FULL
     assert record.execute("PRAGMA synchronous").fetchone()[0] == 1   # NORMAL
 
 
-def test_a_second_writer_waits_rather_than_failing(durable_tmp_path):
+def test_a_second_writer_waits_rather_than_failing(durable_tmp_path, opened_stores):
     # Measured in section 15.2: with busy_timeout unset a second writer fails
     # instantly with 'database is locked'; set, it waits and succeeds. Parts must
     # never carry their own retry loop for this.
     path = durable_tmp_path / "journal.db"
-    first = open_store(path, StoreDurability.RECORD, BUSY_TIMEOUT)
-    second = open_store(path, StoreDurability.RECORD, BUSY_TIMEOUT)
+    first = opened_stores(path, StoreDurability.RECORD, BUSY_TIMEOUT)
+    second = opened_stores(path, StoreDurability.RECORD, BUSY_TIMEOUT)
     first.execute("BEGIN IMMEDIATE")
     append_journal_entry(first, "part", "kind", "held", "test")
     first.execute("COMMIT")
@@ -102,7 +121,7 @@ def test_a_second_writer_waits_rather_than_failing(durable_tmp_path):
 
 
 @pytest.mark.slow
-def test_committed_rows_survive_the_writer_being_sigkilled(durable_tmp_path):
+def test_committed_rows_survive_the_writer_being_sigkilled(durable_tmp_path, opened_stores):
     # This is the crash-only requirement, and the only test here that really matters.
     path = durable_tmp_path / "journal.db"
     count = 200
@@ -110,19 +129,22 @@ def test_committed_rows_survive_the_writer_being_sigkilled(durable_tmp_path):
         [sys.executable, "-c", _writer_script(path, count, _repository())],
         stdout=subprocess.PIPE, text=True,
     )
-    assert writer.stdout.readline().strip() == "COMMITTED"
-    os.kill(writer.pid, signal.SIGKILL)
-    writer.wait()
+    try:
+        assert writer.stdout.readline().strip() == "COMMITTED"
+        os.kill(writer.pid, signal.SIGKILL)
+        writer.wait()
+    finally:
+        writer.stdout.close()
 
-    reopened = open_store(path, StoreDurability.LEDGER, BUSY_TIMEOUT)
+    reopened = opened_stores(path, StoreDurability.LEDGER, BUSY_TIMEOUT)
     survived = read_entries_in_window(reopened, "writer-part", 0, time.time_ns())
     assert len(survived) == count, f"{len(survived)} of {count} committed rows survived SIGKILL"
 
 
-def test_the_current_setting_and_when_it_last_changed_are_both_answerable(durable_tmp_path):
+def test_the_current_setting_and_when_it_last_changed_are_both_answerable(durable_tmp_path, opened_stores):
     # RL-055's board question, answered from the journal rather than from mtime or
     # git log -- both of which lie for the reasons section 15.3 records.
-    connection = open_store(durable_tmp_path / "changes.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+    connection = opened_stores(durable_tmp_path / "changes.db", StoreDurability.RECORD, BUSY_TIMEOUT)
     assert read_current_setting_and_change_time(connection, "main_balance") is None
 
     record_setting_change(connection, "main_balance", "0.0", "1000.0")
