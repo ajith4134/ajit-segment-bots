@@ -27,11 +27,12 @@ from __future__ import annotations
 import html
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from render_blueprint import find_contract_violations, load_feature_registry
+from render_blueprint import FeatureRegistry, find_contract_violations, load_feature_registry
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
@@ -92,6 +93,20 @@ def name_variants(part_id: str) -> set[str]:
     return {part_id, "_".join(words), camel, camel[:1].upper() + camel[1:]}
 
 
+def find_implementation_file(part_id: str, sources: list[Path]) -> Path | None:
+    """The one non-test source file whose name matches this part, if any.
+
+    Shared by probe_part_rung (how far up the ladder) and the wiring check below
+    (what the part actually built) -- one definition of "this part's file",
+    rather than two that could quietly disagree about which file a part is.
+    """
+    variants = name_variants(part_id)
+    hits = [p for p in sources if any(v in p.stem for v in variants)]
+    tests = [p for p in hits if "test" in p.name.lower() or "test" in str(p.parent).lower()]
+    impls = [p for p in hits if p not in tests]
+    return impls[0] if impls else None
+
+
 def probe_part_rung(part_id: str, sources: list[Path]) -> tuple[str, str]:
     """How far up the ladder this part actually is, and the evidence for saying so.
 
@@ -104,11 +119,11 @@ def probe_part_rung(part_id: str, sources: list[Path]) -> tuple[str, str]:
         return DECLARED, "no source file on disk matches this part's name"
 
     tests = [p for p in hits if "test" in p.name.lower() or "test" in str(p.parent).lower()]
-    impls = [p for p in hits if p not in tests]
+    impl = find_implementation_file(part_id, sources)
 
-    if not impls:
+    if impl is None:
         return DECLARED, f"only test files found ({tests[0].relative_to(PROJECT)}), no implementation"
-    where = impls[0].relative_to(PROJECT)
+    where = impl.relative_to(PROJECT)
     if tests:
         return TESTED, f"{where} plus test {tests[0].relative_to(PROJECT)}"
     return IMPLEMENTED, f"{where}, no test file naming this part"
@@ -131,14 +146,104 @@ def parts_in_violation(registry) -> dict[str, str]:
     return broken
 
 
-def measure_parts() -> list[PartState]:
+def _part_declaration_module():
+    """runtime.part_declaration, imported defensively.
+
+    RL-070's wiring check must say so rather than take the whole board generation
+    down if the runtime package is not importable -- the same guard
+    build_status_board.py's collect_substrate_results already applies to the same
+    package, for the same reason.
+    """
+    project_root = str(PROJECT)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from runtime import part_declaration
+
+    return part_declaration
+
+
+@dataclass
+class WiringCheck:
+    """What the built-vs-blueprint wiring probe found (RL-067, RL-070).
+
+    checked_part_ids -- every part that has a source file, and so was actually
+    compared. mismatches -- part_id -> proof naming both sides, for a part whose
+    own module disagrees with the blueprint or cannot state its wiring at all
+    (never green by inference: a part that cannot be checked is not the same as
+    a part that agrees). unavailable -- set only when the whole check could not
+    run, so that failure is never silently indistinguishable from "0 mismatches".
+    """
+
+    checked_part_ids: tuple[str, ...]
+    mismatches: dict[str, str]
+    unavailable: str | None = None
+
+
+def check_wiring_against_blueprint(registry: FeatureRegistry, sources: list[Path]) -> WiringCheck:
+    """RL-067: does a built part's real consumes/produces match docs/features.json?
+
+    Checked only for parts with a source file -- a part with no code cannot
+    disagree with the blueprint, it is simply DECLARED, which is not a defect.
+    A built part states its real wiring as a module-level PART_DECLARATION,
+    read WITHOUT importing or executing the part's file --
+    runtime.part_declaration.read_declaration_from_source parses it with `ast`
+    instead. Generating a dashboard must never run part code: once real parts
+    exist, importing one to read its wiring would run whatever that part's
+    import does (a socket, a thread, a forkserver) on every board build, and a
+    part that hangs or crashes on import would take the board generator down
+    with it -- exactly when a broken part most needs to be seen. The static
+    reader returns the same PartDeclaration shape the blueprint side already
+    uses (load_declaration_from_blueprint), so the two sides are still compared
+    as one type.
+
+    Today no part has a source file, so checked_part_ids is empty and
+    mismatches is empty too -- that is "nothing to compare", not "everything
+    agrees", and the caller is expected to print the distinction rather than
+    read an empty dict as a clean bill of health.
+    """
+    try:
+        part_declaration = _part_declaration_module()
+    except ImportError as failure:
+        return WiringCheck((), {}, unavailable=f"runtime.part_declaration not importable: {failure}")
+
+    checked: list[str] = []
+    mismatches: dict[str, str] = {}
+    for feature in registry.features:
+        part_id = feature["id"]
+        source_path = find_implementation_file(part_id, sources)
+        if source_path is None:
+            continue
+        checked.append(part_id)
+        where = source_path.relative_to(PROJECT)
+        try:
+            declared = part_declaration.load_declaration_from_blueprint(part_id)
+            built = part_declaration.read_declaration_from_source(source_path)
+        except Exception as failure:  # a part that cannot be read is unverifiable, not healthy
+            mismatches[part_id] = (
+                f"{part_id}: {where} has no verifiable wiring "
+                f"({type(failure).__name__}: {failure})"
+            )
+            continue
+        if built.consumes != declared.consumes or built.produces != declared.produces:
+            mismatches[part_id] = (
+                f"{part_id}: blueprint declares consumes={list(declared.consumes)} "
+                f"produces={list(declared.produces)}; {where} declares "
+                f"consumes={list(built.consumes)} produces={list(built.produces)}"
+            )
+    return WiringCheck(tuple(checked), mismatches)
+
+
+def _measure_build_state() -> tuple[list[PartState], WiringCheck]:
     registry = load_feature_registry()
     sources = find_source_files()
     broken = parts_in_violation(registry)
+    wiring = check_wiring_against_blueprint(registry, sources)
     states = []
     for feature in registry.features:
         rung, proof = probe_part_rung(feature["id"], sources)
-        if feature["id"] in broken:
+        if feature["id"] in wiring.mismatches:
+            rung, proof = FAILING, wiring.mismatches[feature["id"]]
+        elif feature["id"] in broken:
             rung, proof = FAILING, broken[feature["id"]]
         states.append(
             PartState(
@@ -150,7 +255,47 @@ def measure_parts() -> list[PartState]:
                 proof=proof,
             )
         )
+    return states, wiring
+
+
+def measure_parts() -> list[PartState]:
+    """Every part's state. Kept as its own entry point -- dashboard/part_health_api.py
+    imports this directly and does not need the wiring detail alongside it, since
+    a wiring mismatch already surfaces as that part's FAILING rung and proof.
+    """
+    states, _wiring = _measure_build_state()
     return states
+
+
+def part_is_measured_complete(state: PartState) -> bool:
+    """RL-070: a part's dot is green only when it has climbed to TESTED (a source
+    file AND a test file naming it -- the same probes that drive the IMPLEMENTED
+    and TESTED rungs) with nothing the contract or wiring checks found wrong with
+    it. FAILING never reaches TESTED here (parts_in_violation and the wiring
+    check both override the rung before this is asked), so this is never checked
+    against a part that is both TESTED and broken.
+
+    RUNNING also counts: the dot answers "is this built?", not "is this running
+    right now?" -- a fully built part that is currently stopped must not read as
+    unfinished, which is why RUNNING stays a separate rung the dot does not report.
+    """
+    return state.rung in (TESTED, RUNNING)
+
+
+def block_completion(owned: list[PartState]) -> tuple[bool, str]:
+    """RL-070: a block's dot is green only when every part in it is green.
+
+    Never green by inference -- a block with no parts declared yet is red, not
+    vacuously complete, because "no parts exist" is not the same fact as
+    "every part is finished".
+    """
+    if not owned:
+        return False, "no parts declared for this block yet"
+    complete = [s for s in owned if part_is_measured_complete(s)]
+    if len(complete) == len(owned):
+        return True, f"{len(complete)} of {len(owned)} parts are TESTED (source file + test file)"
+    unfinished = [s.name for s in owned if not part_is_measured_complete(s)]
+    return False, f"{len(complete)} of {len(owned)} parts are TESTED; not yet: {', '.join(unfinished)}"
 
 
 def read_last_commit() -> str:
@@ -177,11 +322,25 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
+def render_dot(is_complete: bool, proof: str) -> str:
+    """RL-070's summary layer: one dot, green only when measured complete, with
+    its proof carried in the title so the colour is never asserted without it
+    (Rule 8) -- hover reads the same fact the colour is claiming.
+    """
+    label = "complete" if is_complete else "unfinished"
+    return (
+        f'<span class="dot dot-{"green" if is_complete else "red"}" '
+        f'title="{label}: {esc(proof)}" aria-label="{label}"></span>'
+    )
+
+
 def render_cell(state: PartState) -> str:
+    is_complete = part_is_measured_complete(state)
     return (
         f'<div class="cell rung-{slug(state.rung)}" '
         f'title="{esc(state.name)} — {esc(state.rung)} — {esc(state.proof)}">'
-        f'<span class="cell-name">{esc(state.name)}</span>'
+        f'<span class="cell-top">{render_dot(is_complete, state.proof)}'
+        f'<span class="cell-name">{esc(state.name)}</span></span>'
         f'<span class="cell-rung">{esc(state.rung)}</span>'
         f"</div>"
     )
@@ -191,11 +350,16 @@ def render_block(category: dict, states: list[PartState]) -> str:
     total = len(states)
     built = len([s for s in states if s.rung in (IMPLEMENTED, TESTED, RUNNING)])
     pct = round(100 * built / total) if total else 0
+    is_complete, dot_proof = block_completion(states)
     cells = "".join(render_cell(s) for s in states)
     return f"""
     <section class="block">
       <header class="block-head">
-        <h3>{esc(category.get("name", category["id"]))}</h3>
+        <div class="block-title">
+          {render_dot(is_complete, dot_proof)}
+          <h3>{esc(category.get("name", category["id"]))}</h3>
+        </div>
+        <p class="block-dot-proof">{esc(dot_proof)}</p>
         <div class="block-meter" role="img"
              aria-label="{built} of {total} parts past declared">
           <div class="meter-track"><div class="meter-fill" style="width:{pct}%"></div></div>
@@ -206,11 +370,44 @@ def render_block(category: dict, states: list[PartState]) -> str:
     </section>"""
 
 
+def render_wiring_check_note(wiring: WiringCheck) -> str:
+    """RL-067: the artefact carries this probe's own proof, not just the code that
+    ran it (Rule 8) -- including the honest-empty case, where the note must say
+    there was nothing built to compare rather than let a reader infer agreement
+    from an empty mismatch list.
+    """
+    if wiring.unavailable:
+        detail = f"unavailable — {esc(wiring.unavailable)}"
+    elif not wiring.checked_part_ids:
+        detail = (
+            "0 parts have a source file yet, so there is nothing built to compare "
+            "against the blueprint — not zero mismatches, nothing to check"
+        )
+    else:
+        detail = (
+            f"{len(wiring.checked_part_ids)} built part(s) compared against "
+            f"docs/features.json, {len(wiring.mismatches)} mismatch(ed)"
+        )
+    return (
+        '<div class="wiring-check">'
+        "<p class=\"note\"><b>Wiring vs blueprint (RL-067):</b> "
+        f"{detail}. Every part with a source file has its consumes/produces read statically "
+        "from its own PART_DECLARATION (parsed with ast, never imported) and compared against "
+        "docs/features.json — check_wiring_against_blueprint() in this file.</p>"
+        "</div>"
+    )
+
+
 def render_page() -> str:
-    states = measure_parts()
+    states, wiring = _measure_build_state()
     categories = category_lookup()
     stamped = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     commit = read_last_commit()
+
+    green_parts = len([s for s in states if part_is_measured_complete(s)])
+    green_blocks = sum(
+        1 for cid in categories if block_completion([s for s in states if s.category == cid])[0]
+    )
 
     counts = {rung: len([s for s in states if s.rung == rung]) for rung in LADDER}
     n_failing = len([s for s in states if s.rung == FAILING])
@@ -344,9 +541,21 @@ def render_page() -> str:
   .cells {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(8.2rem,1fr)); gap:3px; }}
   .cell {{ border:1px solid var(--rule); border-left-width:3px; background:var(--sunk);
           padding:0.4rem 0.5rem; display:flex; flex-direction:column; gap:0.1rem; min-height:3.1rem; }}
+  .cell-top {{ display:flex; align-items:flex-start; gap:0.32rem; }}
   .cell-name {{ font-size:0.72rem; line-height:1.25; }}
   .cell-rung {{ font-family:"IBM Plex Mono",monospace; font-size:0.6rem; letter-spacing:0.07em;
                color:var(--faint); }}
+
+  .dot {{ display:inline-block; width:0.6rem; height:0.6rem; border-radius:50%;
+         flex:none; margin-top:0.15rem; border:1px solid var(--rule); }}
+  .dot-green {{ background:var(--running); border-color:var(--running); }}
+  .dot-red   {{ background:var(--failing); border-color:var(--failing); }}
+  .dots-legend {{ background:var(--panel); border:1px solid var(--rule); padding:1rem 1.15rem;
+                 display:flex; flex-direction:column; gap:0.45rem; }}
+  .block-title {{ display:flex; align-items:center; gap:0.45rem; }}
+  .block-dot-proof {{ margin:0; font-size:0.68rem; color:var(--faint); line-height:1.35; }}
+  .wiring-check {{ background:var(--panel); border:1px solid var(--rule);
+                   border-left:3px solid var(--implemented); padding:0.85rem 1.05rem; }}
 
   .rung-declared    {{ border-left-color:var(--declared); }}
   .rung-implemented {{ border-left-color:var(--implemented); }}
@@ -390,6 +599,8 @@ def render_page() -> str:
     <div class="stat"><span class="val">{len(categories)}</span><span class="lab">blocks</span></div>
     <div class="stat"><span class="val">{past_declared}</span><span class="lab">past declared</span></div>
     <div class="stat"><span class="val">{overall}%</span><span class="lab">built</span></div>
+    <div class="stat"><span class="val">{green_parts}/{total}</span><span class="lab">parts green</span></div>
+    <div class="stat"><span class="val">{green_blocks}/{len(categories)}</span><span class="lab">blocks green</span></div>
   </div>
 
   <div class="overall">
@@ -401,11 +612,27 @@ def render_page() -> str:
   <div class="legend">
     {ladder_rows}
     {unreached}
-    <p class="note">FAILING is wired to the contract checker: any part it names renders red
-      here. It was tested by breaking a real part and watching this board go red, then
-      restoring it — a board with no way to show red has never been tested against a
-      failure.</p>
+    <p class="note">FAILING is wired to the contract checker and the wiring check below: any
+      part either names renders red here. It was tested by breaking a real part and watching
+      this board go red, then restoring it — a board with no way to show red has never been
+      tested against a failure.</p>
   </div>
+
+  <div class="dots-legend">
+    <div class="legend-row"><span class="dot dot-green"></span><b>GREEN</b>
+      <span>measured complete — TESTED (source file and a test naming it), nothing the
+        contract or wiring checks found wrong</span>
+      <span class="legend-count">{green_parts}</span></div>
+    <div class="legend-row"><span class="dot dot-red"></span><b>RED</b>
+      <span>not proven complete — covers both genuinely unfinished and built-but-unprobed;
+        which one it is stays in the proof beside the dot, not the colour</span>
+      <span class="legend-count">{total - green_parts}</span></div>
+    <p class="note">A block's dot (RL-070) is green only when every part in it is green — one
+      red part keeps its block red. RUNNING is a separate rung and is not what the dot reports:
+      a fully built, currently stopped part still reads green.</p>
+  </div>
+
+  {render_wiring_check_note(wiring)}
 
   <div class="grid">{blocks_html}</div>
   {empty_note}
@@ -425,12 +652,33 @@ def write_part_monitor() -> Path:
 
 
 if __name__ == "__main__":
-    states = measure_parts()
+    states, wiring = _measure_build_state()
     for rung in (*LADDER, FAILING, UNMEASURED):
         n = len([s for s in states if s.rung == rung])
         print(f"{rung:<13} {n:>3}")
     for s in states:
         if s.rung == FAILING:
             print(f"  RED  {s.part_id}: {s.proof}")
+
+    if wiring.unavailable:
+        print(f"\nwiring vs blueprint (RL-067): unavailable — {wiring.unavailable}")
+    elif not wiring.checked_part_ids:
+        print("\nwiring vs blueprint (RL-067): 0 parts have a source file — nothing to compare yet")
+    else:
+        print(
+            f"\nwiring vs blueprint (RL-067): checked {len(wiring.checked_part_ids)} built "
+            f"part(s), {len(wiring.mismatches)} mismatch(ed)"
+        )
+
+    green_parts = len([s for s in states if part_is_measured_complete(s)])
+    categories = category_lookup()
+    green_blocks = sum(
+        1 for cid in categories if block_completion([s for s in states if s.category == cid])[0]
+    )
+    print(
+        f"\ndots (RL-070): {green_parts}/{len(states)} parts green, "
+        f"{green_blocks}/{len(categories)} blocks green"
+    )
+
     path = write_part_monitor()
     print(f"\nwrote {path}")

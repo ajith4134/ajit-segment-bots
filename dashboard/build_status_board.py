@@ -304,6 +304,59 @@ PROBES = (
 )
 
 
+def collect_block_completion_results() -> list[ProbeResult]:
+    """RL-070: one tile per foundation block (category), green only when every
+    part inside it is measured complete.
+
+    Reuses dashboard/build_part_monitor.py's own probes rather than
+    re-measuring: measure_parts() already folds RL-067's wiring check and the
+    contract checker into each part's rung, and block_completion() is the same
+    function that colours the part monitor's block header dots -- so this board
+    and that one can never silently disagree about what "complete" means.
+
+    Guarded on import the same way collect_substrate_results guards runtime/:
+    a board build must still succeed, with a tile that says so, if
+    dashboard/build_part_monitor.py cannot be imported.
+    """
+    dashboard_directory = str(Path(__file__).resolve().parent)
+    if dashboard_directory not in sys.path:
+        sys.path.insert(0, dashboard_directory)
+    try:
+        from build_part_monitor import (
+            RUNNING as PART_RUNNING,
+            TESTED as PART_TESTED,
+            block_completion,
+            category_lookup,
+            measure_parts,
+        )
+    except ImportError as failure:
+        return [
+            ProbeResult(
+                "Foundation feature completeness",
+                UNMEASURED,
+                "build_part_monitor not importable",
+                f"import build_part_monitor: {failure}",
+            )
+        ]
+
+    states = measure_parts()
+    categories = category_lookup()
+    results = []
+    for category_id, category in categories.items():
+        owned = [state for state in states if state.category == category_id]
+        is_complete, proof = block_completion(owned)
+        results.append(
+            ProbeResult(
+                label=category.get("name", category_id),
+                state=OK if is_complete else FAILING,
+                value=f"{len([s for s in owned if s.rung in (PART_TESTED, PART_RUNNING)])} "
+                f"of {len(owned)} parts TESTED",
+                proof=proof,
+            )
+        )
+    return results
+
+
 def collect_substrate_results() -> list[ProbeResult]:
     """The substrate's own probes (RL-069, Task 14), adapted into this board's tiles.
 
@@ -672,7 +725,13 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
   .tile.unbuilt {{ background: none; border-style: dashed; box-shadow: none; }}
   .tile.unmeasured {{ background: none; border-style: dashed; box-shadow: none; }}
 
-  .tile-label {{ font-weight: 600; font-size: .96rem; }}
+  .tile-label {{ font-weight: 600; font-size: .96rem; display: flex; align-items: center; gap: .5rem; }}
+  .dot {{
+    display: inline-block; width: .6rem; height: .6rem; border-radius: 50%;
+    flex: none; border: 1px solid var(--line-strong);
+  }}
+  .dot-green {{ background: var(--accent); border-color: var(--accent); }}
+  .dot-red {{ background: var(--fail); border-color: var(--fail); }}
   .tile-state {{
     align-self: flex-start;
     font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -884,6 +943,17 @@ PAGE_TEMPLATE = """<title>Segment Bots Status Board</title>
   </section>
 
   <section>
+    <h2>Foundation feature completeness — a dot per block (RL-070)</h2>
+    <p>Green only when every part in that block has climbed to TESTED (a source file and a
+    test naming it) and neither the contract checker nor the built-vs-blueprint wiring check
+    (RL-067) named it. Red covers both genuinely unfinished and built-but-unprobed on purpose
+    — the distinction lives in the proof under each tile, not in the colour. Per-part dots are
+    on the part monitor; this is the block-level rollup. Measured by
+    dashboard/build_part_monitor.py's block_completion(), reused here rather than re-computed.</p>
+    <div class="grid">{block_tiles}</div>
+  </section>
+
+  <section>
     <h2>Part runtime substrate — off-diagram (RL-069)</h2>
     <p>The blueprint above describes the circuit; this is the silicon underneath it.
     Not a part, never a cell on the part monitor — measured here instead, by the
@@ -906,6 +976,22 @@ def render_tile(result: ProbeResult) -> str:
         f'<article class="tile {STATE_CLASS[result.state]}">'
         f'<div class="tile-label">{html.escape(result.label)}</div>'
         f'<div class="tile-state">{html.escape(result.state)}</div>'
+        f'<div class="tile-value">{html.escape(result.value)}</div>'
+        f'<div class="tile-proof">{html.escape(result.proof)}</div>'
+        f"</article>"
+    )
+
+
+def render_dot_tile(result: ProbeResult) -> str:
+    """RL-070's two-colour dot, on the same tile shape the rest of the board
+    uses. OK carries the green dot, everything else (never inferred green)
+    carries red -- the proof underneath is what tells red apart from red.
+    """
+    is_complete = result.state == OK
+    dot = f'<span class="dot dot-{"green" if is_complete else "red"}"></span>'
+    return (
+        f'<article class="tile {STATE_CLASS[result.state]}">'
+        f'<div class="tile-label">{dot}{html.escape(result.label)}</div>'
         f'<div class="tile-value">{html.escape(result.value)}</div>'
         f'<div class="tile-proof">{html.escape(result.proof)}</div>'
         f"</article>"
@@ -955,12 +1041,18 @@ def compose_verdict(results: list[ProbeResult]) -> str:
     return f"{stage} Anything unmeasured reads as its own state below, never as healthy."
 
 
-def render_board(results: list[ProbeResult]) -> str:
+def render_board(results: list[ProbeResult], block_results: list[ProbeResult]) -> str:
     # run_all_probes() appends the substrate's results after every PROBES-derived
     # one (collect_substrate_results, above), always in that order -- so this is
     # the split point between the two tile groups, not a guess about where they
     # start. It gives the substrate its own heading without SubstrateProbeResult
     # ever needing to say "I am off-diagram" about itself.
+    #
+    # block_results (RL-070) is kept out of results/compose_verdict/render_tally
+    # on purpose: its FAILING is "not yet measured complete", which is the
+    # correct, expected reading for a blueprint that is not built yet -- folding
+    # it into the top verdict's failure count would read as broken probes on a
+    # board that has none, exactly the false alarm Rule 8 exists to prevent.
     base_results = results[: len(PROBES)]
     substrate_results = results[len(PROBES) :]
     return PAGE_TEMPLATE.format(
@@ -973,16 +1065,22 @@ def render_board(results: list[ProbeResult]) -> str:
         zoom_style=ZOOM_STYLE,
         zoom_script=ZOOM_SCRIPT,
         tiles="".join(render_tile(r) for r in base_results),
+        block_tiles="".join(render_dot_tile(r) for r in block_results),
         substrate_tiles="".join(render_tile(r) for r in substrate_results),
     )
 
 
 def write_board() -> Path:
     results = run_all_probes()
+    block_results = collect_block_completion_results()
     BOARD_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BOARD_PATH.write_text(render_board(results))
+    BOARD_PATH.write_text(render_board(results, block_results))
     for result in results:
         print(f"{result.state:<13} {result.label:<26} {result.value}")
+    n_green = sum(1 for r in block_results if r.state == OK)
+    print(f"\nblock dots (RL-070): {n_green} of {len(block_results)} blocks green")
+    for result in block_results:
+        print(f"  {'GREEN' if result.state == OK else 'RED  '} {result.label}: {result.proof}")
     print(f"\nwrote {BOARD_PATH}")
     return BOARD_PATH
 
