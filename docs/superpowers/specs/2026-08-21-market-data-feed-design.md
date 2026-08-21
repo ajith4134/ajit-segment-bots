@@ -75,27 +75,57 @@ trades aggregated per 100 ms — and there is no `@trade` equivalent. This is a
 fidelity limit, not a configuration choice, and §7 says what follows from it.
 
 **The `TRADIFI_PERPETUAL` trap, measured 2026-08-21.** Binance USDⓈ-M now lists
-**169 tokenised traditional-finance perpetuals** — equities and indices — beside
-the crypto ones. ccxt marks them `swap`, `active`, quote `USDT`, exactly like a
-crypto perpetual, and they are distinguishable only by
-`info.contractType == "TRADIFI_PERPETUAL"`.
+**~170 contracts Binance's own field calls `TRADIFI`** — traditional finance —
+in the same API response as the crypto perpetuals. They are quoted in USDT and
+ccxt marks them `swap` and `active`, exactly like a crypto perpetual. What they
+actually are is visible only in the symbols:
 
-The obvious filter is wrong. Measured on the live venue:
+```
+TRADIFI_PERPETUAL   AAPLUSDT, AMZNUSDT, AMDUSDT, ASMLUSDT, ANTHROPICUSDT …
+PERPETUAL           1000PEPEUSDT, 1000BONKUSDT, 1000SHIBUSDT, 1000FLOKIUSDT …
+```
 
-| filter | count | what it is |
-|---|---|---|
-| `swap and quote == USDT and active` | **696** | includes 169 tokenised equities |
-| `contractType == PERPETUAL and status == TRADING` | **570** | crypto perpetuals, all quotes |
-| the same, `quote == USDT` | 527 | crypto USDT perpetuals |
+`AAPLUSDT` is a share tokenised and traded as a perpetual future. Nothing about
+the venue's response distinguishes it from a coin except `info.contractType`.
 
-A naive symbol catalogue would have this **crypto** segment bot capturing, and
-later trading, tokenised stocks — outside the segment entirely, on a venue that
-offers no signal that anything is amiss. `status == SETTLING` (126 symbols) must
-be excluded for the separate reason that those are on their way to delisting.
+**Ruling, 2026-08-21, from the user: capture them, do not exclude them.** The
+asymmetry decides it. Capture is irreversible — a day of `AAPLUSDT` not written
+today is gone permanently, and §0's whole argument is that history accrues only
+in real time. Trading is entirely reversible — a filter applied whenever a bot
+actually places an order, at no cost and with nothing lost.
 
-So the symbol filter is a stated rule, not an idiom: **`contractType` is
-`PERPETUAL` and `status` is `TRADING`.** The adapter owns this, because it is
-exactly the venue-specific knowledge §3.1 says lives there and nowhere else.
+So the catalogue includes every contract type the venue lists, and **each symbol
+carries its `contract_type` through the tape** so a later phase can separate them
+without re-reading the venue. What is *tradeable* is a separate decision, taken
+when there is something to trade, and it is not this phase's to make. RL-006
+scopes the project to crypto; capturing a tokenised share is not trading one.
+
+`status == SETTLING` (126 symbols) is still excluded, for the unrelated reason
+that those contracts are on their way to delisting — that is not a segment
+judgement, it is a symbol that will stop existing.
+
+What the venue actually holds, measured live:
+
+| set | count |
+|---|---|
+| `contractType == PERPETUAL`, `status == TRADING` — crypto perpetuals | **570** |
+| the same, `quote == USDT` | 527 |
+| `contractType == TRADIFI_PERPETUAL`, `status == TRADING` | **~170** |
+| `status == SETTLING` — excluded, on their way to delisting | 126 |
+
+The counts matter because they size the connection budget of §4.2, and because
+the difference between them is exactly the thing no naive filter reports: a
+symbol set of 696 and a symbol set of 570 look equally plausible from outside.
+
+**The count moved while it was being measured** — 169 on one call, 170 minutes
+later on the next, as a listing appeared. That is the argument for §4.1 in one
+observation: the symbol set is read from the venue on an interval and is never a
+list written into code, because it is stale the moment it is written.
+
+So the symbol filter is a stated rule, not an idiom: **`status` is `TRADING`,
+every `contractType` kept, and the contract type recorded against the symbol.**
+The adapter owns this, because it is exactly the venue-specific knowledge §3.1
+says lives there and nowhere else.
 
 ### 1.2 Bybit v5 linear
 

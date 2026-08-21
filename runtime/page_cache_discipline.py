@@ -46,7 +46,25 @@ class CacheReleasingWriter:
     'writeback_interval'), never a literal here -- RL-061.
     """
 
-    def __init__(self, path: pathlib.Path, writeback_interval_bytes: int) -> None:
+    def __init__(
+        self,
+        path: pathlib.Path,
+        writeback_interval_bytes: int,
+        append: bool = False,
+    ) -> None:
+        """Open a stream for writing, releasing its page cache as it goes.
+
+        append=False truncates, which is right for a file written once. append=True
+        continues an existing file, which is what a tape needs: a part is SIGKILLed
+        as the ordinary way of switching it off (section 4), so a tape writer that
+        truncated on open would erase the day's capture every time its part
+        restarted. That is not a hypothetical -- restart is the normal path.
+
+        When appending, the byte counters start at the file's existing size, because
+        posix_fadvise takes absolute file offsets: counting from zero on a resumed
+        file would hand the kernel the wrong range and release pages belonging to
+        data this writer never wrote.
+        """
         path = pathlib.Path(path)
         require_durable_directory(path.parent)
         if writeback_interval_bytes <= 0:
@@ -56,10 +74,11 @@ class CacheReleasingWriter:
             )
         self._path = path
         self._interval = writeback_interval_bytes
-        self._handle = open(path, "wb")
+        already_on_disk = path.stat().st_size if append and path.exists() else 0
+        self._handle = open(path, "ab" if append else "wb")
         self._descriptor = self._handle.fileno()
-        self._bytes_written = 0
-        self._released_to = 0
+        self._bytes_written = already_on_disk
+        self._released_to = already_on_disk
 
     @property
     def path(self) -> pathlib.Path:
