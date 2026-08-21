@@ -8,6 +8,7 @@ admit twice the work the machine can actually do.
 import mmap
 import os
 import pathlib
+import time
 
 from runtime.hardware_facts import (
     HardwareFacts,
@@ -23,12 +24,36 @@ from runtime.hardware_facts import (
 # hundred MiB, which is easily distinguished from background churn.
 AVAILABLE_RAM_TOUCH_DIVISOR = 64
 
-# A one-sided bound: the drop only has to be a meaningful fraction of what was
-# touched, not all of it, since other processes' concurrent allocation and
-# reclaim add noise in both directions. This is the same shape as Task 8's
-# cadence test -- a lower bound robust to timing/scheduling jitter, not an
-# exact-equality check.
-MEANINGFUL_DROP_FRACTION = 0.5
+# How many idle readings establish this box's own noise band, and how far apart.
+# 20 readings at 10ms apart is a ~0.2s window -- long enough to see the same kind
+# of background churn (page cache reclaim, other processes) the touch will
+# compete with, short enough that the test stays fast.
+IDLE_READING_COUNT = 20
+IDLE_READING_INTERVAL_SECONDS = 0.01
+
+# The drop from a deliberate touch must clear the box's own measured idle noise
+# by an unambiguous multiple, not merely exceed it -- a margin of exactly 1x would
+# still call a touch "live" if it happened to be barely above the noise on a
+# given run. The multiplier is applied to a *measured* quantity (this box's idle
+# band, taken immediately before the touch), not to an assumed fraction of what
+# was touched, which is what made the previous version of this test flaky: it
+# assumed how much of a freed allocation the allocator would hand back to the OS,
+# and that fraction turned out to depend on allocator/kernel state this test has
+# no business knowing.
+IDLE_BAND_MARGIN_MULTIPLIER = 10
+
+
+def _measure_idle_band(reading_count: int, interval_seconds: float) -> tuple[int, int, int]:
+    """How much read_available_ram_bytes() moves on its own, with nothing touched.
+
+    Returns (low, high, band) over `reading_count` readings spaced
+    `interval_seconds` apart.
+    """
+    readings = []
+    for _ in range(reading_count):
+        readings.append(read_available_ram_bytes())
+        time.sleep(interval_seconds)
+    return min(readings), max(readings), max(readings) - min(readings)
 
 
 def test_counts_physical_cores_not_logical_ones():
@@ -50,8 +75,14 @@ def test_reports_that_this_box_has_no_swap():
 def test_available_ram_is_a_live_reading_not_a_cached_one():
     # A test that only checks positivity before and after would pass against a
     # frozen constant -- Rule 8 inverted, a reading certified live that never
-    # moved. So this touches real memory and requires MemAvailable to actually
-    # reflect it.
+    # moved. So this measures the box's own idle noise first, then touches real
+    # memory and requires the drop to clearly clear that noise -- not an assumed
+    # fraction of what was touched, which depends on allocator/kernel behavior
+    # this test has no business assuming (see IDLE_BAND_MARGIN_MULTIPLIER).
+    idle_low, idle_high, idle_band = _measure_idle_band(
+        IDLE_READING_COUNT, IDLE_READING_INTERVAL_SECONDS
+    )
+
     before = read_available_ram_bytes()
     assert before > 0
 
@@ -68,10 +99,14 @@ def test_available_ram_is_a_live_reading_not_a_cached_one():
 
     after = read_available_ram_bytes()
     drop = before - after
-    assert drop > block_bytes * MEANINGFUL_DROP_FRACTION, (
-        f"touched {block_bytes} bytes but MemAvailable only dropped by {drop} "
-        f"bytes ({before=}, {after=}); the reading did not reflect what was "
-        "actually touched, so it is not a live measurement"
+    required_drop = idle_band * IDLE_BAND_MARGIN_MULTIPLIER
+    assert drop > required_drop, (
+        f"idle band over {IDLE_READING_COUNT} readings ({IDLE_READING_INTERVAL_SECONDS}s "
+        f"apart) was {idle_band} bytes ({idle_low}..{idle_high}); touching "
+        f"{block_bytes} bytes only dropped MemAvailable by {drop} bytes "
+        f"({before=}, {after=}), which does not clear {IDLE_BAND_MARGIN_MULTIPLIER}x "
+        f"that idle band ({required_drop} bytes); the reading did not distinguish "
+        "the touch from its own idle noise, so it is not a live measurement"
     )
 
     del filler
