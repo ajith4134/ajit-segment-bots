@@ -83,7 +83,14 @@ REQUIRED_FEATURE_FIELDS = (
     "switchable",
     "off_releases_resources",
     "states",
+    "resource_class",
+    "rate_risk",
+    "skipped_tick_effect",
 )
+
+KNOWN_RESOURCE_CLASSES = frozenset({"io-bound", "compute-bound", "bandwidth-bound"})
+KNOWN_RATE_RISKS = frozenset({"latency-only", "changes-the-answer"})
+KNOWN_SKIPPED_TICK_EFFECTS = frozenset({"delays", "corrupts"})
 
 
 def find_contract_violations(registry: FeatureRegistry) -> list[str]:
@@ -152,6 +159,28 @@ def find_contract_violations(registry: FeatureRegistry) -> list[str]:
                     f"T-5 {name}: state '{state}' is outside the declared vocabulary — a new state is "
                     f"named and added deliberately, never smuggled in"
                 )
+
+        # T-1 / section 7: every part declares how the governor should allocate to it.
+        resource_class = feature.get("resource_class")
+        if resource_class not in KNOWN_RESOURCE_CLASSES:
+            violations.append(
+                f"T-1 {name}: resource_class '{resource_class}' is outside the declared "
+                f"vocabulary {sorted(KNOWN_RESOURCE_CLASSES)} — the governor cannot allocate "
+                f"to a part that has not said what kind of work it is"
+            )
+
+        # Section 6: both facts, or the part cannot be reasoned about for throttling.
+        rate_risk = feature.get("rate_risk")
+        skipped_tick_effect = feature.get("skipped_tick_effect")
+        if rate_risk not in KNOWN_RATE_RISKS or skipped_tick_effect not in KNOWN_SKIPPED_TICK_EFFECTS:
+            violations.append(
+                f"T-1 {name}: rate_risk '{rate_risk}' and skipped_tick_effect "
+                f"'{skipped_tick_effect}' must both come from "
+                f"{sorted(KNOWN_RATE_RISKS)} and {sorted(KNOWN_SKIPPED_TICK_EFFECTS)}. "
+                f"A part may enter a rate ladder only if a lower rate changes when its "
+                f"answer arrives and never what it is, and only if a skipped tick delays "
+                f"rather than corrupts. Undeclared is not throttleable."
+            )
 
         # T-6 one part, one responsibility (the checkable symptom only)
         role = feature.get("role", "")

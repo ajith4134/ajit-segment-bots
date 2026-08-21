@@ -53,7 +53,6 @@ def test_both_together_are_still_refused():
     ) is False
 
 
-@pytest.mark.xfail(reason="the three declarations land in Task 13", strict=True)
 def test_a_declaration_loaded_from_the_blueprint_matches_what_the_blueprint_says():
     # RL-067: what is built matches the diagrams. A part's real consumes and
     # produces equal what features.json declares, or the probe in Task 14 fails.

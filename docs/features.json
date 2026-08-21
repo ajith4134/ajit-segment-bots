@@ -3144,7 +3144,10 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "kronos-forecaster",
@@ -3168,7 +3171,10 @@
         "off",
         "on"
       ],
-      "origin": "user"
+      "origin": "user",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "kronos-finetuner",
@@ -3203,7 +3209,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "forecast-scorer",
@@ -3225,7 +3234,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": " Its scoring protocol is the neural-network best-practice list: walk-forward validation, time-based splits, no look-ahead, out-of-sample evaluation always net of transaction costs. docs/research/equations.md section 4."
+      "note": " Its scoring protocol is the neural-network best-practice list: walk-forward validation, time-based splits, no look-ahead, out-of-sample evaluation always net of transaction costs. docs/research/equations.md section 4.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "kronos-size-selector",
@@ -3245,7 +3257,10 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "implied-vol-reader",
@@ -3266,7 +3281,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Switched off in spot and futures, which have no option surface. This is what R-02's switch is for: the part exists in every segment and only conducts where it can."
+      "note": "Switched off in spot and futures, which have no option surface. This is what R-02's switch is for: the part exists in every segment and only conducts where it can.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "volatility-feature-builder",
@@ -3288,7 +3306,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "RV 1d/5d/22d, downside semivariance over negative returns only, jump variance as max(RV-BV,0), vol-of-vol, ATM IV, 30-60 term slope, 25-delta put skew, market RV. All ten feature formulas, and the fact that features 7-9 need an options surface so spot and futures can only compute seven of them: docs/research/equations.md section 1."
+      "note": "RV 1d/5d/22d, downside semivariance over negative returns only, jump variance as max(RV-BV,0), vol-of-vol, ATM IV, 30-60 term slope, 25-delta put skew, market RV. All ten feature formulas, and the fact that features 7-9 need an options surface so spot and futures can only compute seven of them: docs/research/equations.md section 1.",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "realised-vol-regressor",
@@ -3309,7 +3330,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The ten-beta linear model recovered from the reel's final frame. The ten-term regression written out: docs/research/equations.md section 1."
+      "note": "The ten-beta linear model recovered from the reel's final frame. The ten-term regression written out: docs/research/equations.md section 1.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "regime-classifier",
@@ -3330,7 +3354,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Below 0.5 mean-reverting, above 0.5 trending, and mixed is a real answer. This is the detector the mean-reversion sheet needed but never named. The Hurst reading, its three bands, and why mixed is a real answer: docs/research/equations.md section 5."
+      "note": "Below 0.5 mean-reverting, above 0.5 trending, and mixed is a real answer. This is the detector the mean-reversion sheet needed but never named. The Hurst reading, its three bands, and why mixed is a real answer: docs/research/equations.md section 5.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "mean-reversion-detector",
@@ -3353,7 +3380,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Z-score entry above 2, exit below 0.5. Stands down when the regime classifier says trending. Z-score, thresholds, and the four conditions under which mean reversion fails: docs/research/equations.md section 2."
+      "note": "Z-score entry above 2, exit below 0.5. Stands down when the regime classifier says trending. Z-score, thresholds, and the four conditions under which mean reversion fails: docs/research/equations.md section 2.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "volatility-gap-detector",
@@ -3377,7 +3407,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": " The signal comparison E[RV10] against IV30: docs/research/equations.md section 1."
+      "note": " The signal comparison E[RV10] against IV30: docs/research/equations.md section 1.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "semantic-fact-store",
@@ -3400,7 +3433,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Closed-set keys so a contradicting fact lands on the same key by construction and overwrites."
+      "note": "Closed-set keys so a contradicting fact lands on the same key by construction and overwrites.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "episodic-trade-store",
@@ -3422,7 +3458,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Append-only, written on close. Embed the condition, never the outcome."
+      "note": "Append-only, written on close. Embed the condition, never the outcome.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "procedural-playbook",
@@ -3455,7 +3494,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trade-episode-encoder",
@@ -3483,7 +3525,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Key on what was seen, never on what happened. 'Lost 2% on a long' retrieves nothing ever again."
+      "note": "Key on what was seen, never on what happened. 'Lost 2% on a long' retrieves nothing ever again.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "lesson-extractor",
@@ -3507,7 +3552,10 @@
         "off",
         "on"
       ],
-      "origin": "proposed"
+      "origin": "proposed",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "expectancy-decomposer",
@@ -3531,7 +3579,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The Drake pattern: a chain of separately estimable factors, so the weakest one is visible rather than the total merely being poor. The Drake decomposition it is built on, and the trade expectancy written out factor by factor: docs/research/equations.md section 6."
+      "note": "The Drake pattern: a chain of separately estimable factors, so the weakest one is visible rather than the total merely being poor. The Drake decomposition it is built on, and the trade expectancy written out factor by factor: docs/research/equations.md section 6.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "instruction-writer",
@@ -3585,7 +3636,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "ccxt-venue-reader",
@@ -3607,7 +3661,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Built on CCXT."
+      "note": "Built on CCXT.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "ccxt-order-router",
@@ -3643,7 +3700,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "ablation-harness",
@@ -3664,7 +3724,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Proves R-02 and T-3 rather than asserting them. It measures only: the governor does the switching, because T-2 forbids a feature reaching into the control plane."
+      "note": "Proves R-02 and T-3 rather than asserting them. It measures only: the governor does the switching, because T-2 forbids a feature reaching into the control plane.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "source-ingester",
@@ -3697,7 +3760,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-distiller",
@@ -3720,7 +3786,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "Structure, not a summary: frameworks, decision rules, anti-patterns, per-section files. A summary is what makes an agent hallucinate confidently."
+      "note": "Structure, not a summary: frameworks, decision rules, anti-patterns, per-section files. A summary is what makes an agent hallucinate confidently.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-index",
@@ -3758,7 +3827,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-loader",
@@ -3779,7 +3851,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "THE mechanism. Procedural playbook rules are capped because they are always injected; a skill escapes that cap by being loaded only when relevant. The two are complementary, not competing."
+      "note": "THE mechanism. Procedural playbook rules are capped because they are always injected; a skill escapes that cap by being loaded only when relevant. The two are complementary, not competing.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-scorer",
@@ -3802,7 +3877,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Lets a skill that never changes anything be retired instead of accumulating."
+      "note": "Lets a skill that never changes anything be retired instead of accumulating.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "leaderboard-reader",
@@ -3821,7 +3899,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Binance and Bybit publish these with official APIs. A front door, so no bot-detection evasion is needed or wanted."
+      "note": "Binance and Bybit publish these with official APIs. A front door, so no bot-detection evasion is needed or wanted.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "onchain-position-reader",
@@ -3842,7 +3923,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Etherscan, Dune, DeBank, Arkham. Typed data that survives a redesign, unlike scraped HTML."
+      "note": "Etherscan, Dune, DeBank, Arkham. Typed data that survives a redesign, unlike scraped HTML.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "strategy-decoder",
@@ -3865,7 +3949,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The 'decode' half of the user's words. Position history over time, not a single snapshot."
+      "note": "The 'decode' half of the user's words. Position history over time, not a single snapshot.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "edge-comparator",
@@ -3887,7 +3974,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The 'or step up into us' half. Copying is the floor; the gap is where the value is."
+      "note": "The 'or step up into us' half. Copying is the floor; the gap is where the value is.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "opinion-arbiter",
@@ -3929,7 +4019,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "profit-lock",
@@ -3952,7 +4045,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "Lives in risk, not in a bot, deliberately. It defends every open position whoever opened it -- if it sat inside the tailgater then a bull-opened trade would lose protection the moment that bot was switched off, and R-02 says every part can be switched off."
+      "note": "Lives in risk, not in a bot, deliberately. It defends every open position whoever opened it -- if it sat inside the tailgater then a bull-opened trade would lose protection the moment that bot was switched off, and R-02 says every part can be switched off.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bot-scorekeeper",
@@ -3980,7 +4076,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "Pairs each opinion with what the trade actually did. This is what the bots learn from."
+      "note": "Pairs each opinion with what the trade actually did. This is what the bots learn from.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "feature-reliability-scorer",
@@ -4003,7 +4102,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's scorekeeping idea, moved out of the tailgater: it runs after trades close, not during them."
+      "note": "The user's scorekeeping idea, moved out of the tailgater: it runs after trades close, not during them.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "edge-graduation-gate",
@@ -4030,7 +4132,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "Bull and bear graduate separately, per segment, on measured edge rather than on a trade count or a date."
+      "note": "Bull and bear graduate separately, per segment, on measured edge rather than on a trade count or a date.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "cross-segment-exposure-watch",
@@ -4051,7 +4156,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The one thing no per-segment block can do. Closes the hole the user accepted when choosing to split everything: risk allocation now sees the whole, while each segment still decides for itself."
+      "note": "The one thing no per-segment block can do. Closes the hole the user accepted when choosing to split everything: risk allocation now sees the whole, while each segment still decides for itself.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "decision-quality-critic",
@@ -4094,7 +4202,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "regime-break-detector",
@@ -4128,7 +4239,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "open-web-reader",
@@ -4149,7 +4263,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "Different from C-09, which decodes named traders, and from C-20's ingester, which distils a source it was handed. This one goes looking."
+      "note": "Different from C-09, which decodes named traders, and from C-20's ingester, which distils a source it was handed. This one goes looking.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "idea-generator",
@@ -4190,7 +4307,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "llm-request-router",
@@ -4232,7 +4352,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "subscription-session-caller",
@@ -4254,7 +4377,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's Claude Pro/Max subscription used as the model backend, so reasoning costs allowance rather than per-token API money. Measured 2026-08-20 on this server: a headless call returned in 2.4s with the answer intact, so the mechanism is proven rather than assumed."
+      "note": "The user's Claude Pro/Max subscription used as the model backend, so reasoning costs allowance rather than per-token API money. Measured 2026-08-20 on this server: a headless call returned in 2.4s with the answer intact, so the mechanism is proven rather than assumed.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "metered-api-caller",
@@ -4276,7 +4402,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The fallback the user chose for a spent subscription allowance: keep thinking on a paid cloud key rather than queue or go dark. Which providers hold those keys is not decided here, and no key is written into this repository -- see docs/secrets.md."
+      "note": "The fallback the user chose for a spent subscription allowance: keep thinking on a paid cloud key rather than queue or go dark. Which providers hold those keys is not decided here, and no key is written into this repository -- see docs/secrets.md.",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "subscription-quota-watch",
@@ -4297,7 +4426,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "A bot running 24/7 shares one allowance with every interactive session on the same account. Without this part the router cannot know when to fall back, and the first symptom would be brains failing silently mid-session."
+      "note": "A bot running 24/7 shares one allowance with every interactive session on the same account. Without this part the router cannot know when to fall back, and the first symptom would be brains failing silently mid-session.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "paid-spend-ledger",
@@ -4318,7 +4450,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The fallback turns a fixed subscription into a variable bill. This is the part that makes that bill a measured number the router can act on, instead of a surprise at the end of a month."
+      "note": "The fallback turns a fixed subscription into a variable bill. This is the part that makes that bill a measured number the router can act on, instead of a surprise at the end of a month.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "llm-model-picker",
@@ -4340,7 +4475,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's instruction for now: on the subscription account pick a model that is fast and costs little allowance. OPEN QUESTION the user left open deliberately -- once the whole bot is built, every model is to be experimented on. Because the choice lives in this one part, that experiment is a swap of this part, never an edit to a caller."
+      "note": "The user's instruction for now: on the subscription account pick a model that is fast and costs little allowance. OPEN QUESTION the user left open deliberately -- once the whole bot is built, every model is to be experimented on. Because the choice lives in this one part, that experiment is a swap of this part, never an edit to a caller.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "llm-response-cache",
@@ -4362,7 +4500,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "One of the three reasons the user's own category summary gives for having a single LLM block: swap models, cap cost, cache. The cheapest call is the one never made, and on a shared subscription allowance that is the difference between a bot that thinks all day and one that stops at noon."
+      "note": "One of the three reasons the user's own category summary gives for having a single LLM block: swap models, cap cost, cache. The cheapest call is the one never made, and on a shared subscription allowance that is the difference between a bot that thinks all day and one that stops at noon.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "unattended-run-warden",
@@ -4384,7 +4525,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's first job for this block. Note what it does not do: it produces a restart-request, it does not restart anything. 'If part A needs part B running, that is the governor's problem, expressed through the control plane' -- transistor-rule.md, T-2. A warden that switched parts itself would be the second invisible graph that rule exists to prevent."
+      "note": "The user's first job for this block. Note what it does not do: it produces a restart-request, it does not restart anything. 'If part A needs part B running, that is the governor's problem, expressed through the control plane' -- transistor-rule.md, T-2. A warden that switched parts itself would be the second invisible graph that rule exists to prevent.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-outage-rider",
@@ -4418,7 +4562,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "capability-gap-finder",
@@ -4442,7 +4589,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "T-6 says grow by adding parts, never by making a part cleverer. Something has to notice which part is missing, or growth is whatever the last idea happened to be. Distinct from hypothesis, which turns closed trades into trading instructions, not into parts."
+      "note": "T-6 says grow by adding parts, never by making a part cleverer. Something has to notice which part is missing, or growth is whatever the last idea happened to be. Distinct from hypothesis, which turns closed trades into trading instructions, not into parts.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "part-author",
@@ -4466,7 +4616,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's second job: the bot builds its own new parts. It writes to the same part template every other part obeys -- role, consumes, produces, states -- because a self-authored part that could invent its own shape would end the uniformity T-1 exists for. What it produces is proposed, never live."
+      "note": "The user's second job: the bot builds its own new parts. It writes to the same part template every other part obeys -- role, consumes, produces, states -- because a self-authored part that could invent its own shape would end the uniformity T-1 exists for. What it produces is proposed, never live.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "part-admission-gate",
@@ -4489,7 +4642,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The brake on the highest-blast-radius capability in this project. A bot that writes its own parts is a bot that can write its own defects, so nothing self-authored reaches the circuit except through here: the same check the pre-commit hook runs, applied to the machine's own output. Without this part, job two is self-corruption with good intentions."
+      "note": "The brake on the highest-blast-radius capability in this project. A bot that writes its own parts is a bot that can write its own defects, so nothing self-authored reaches the circuit except through here: the same check the pre-commit hook runs, applied to the machine's own output. Without this part, job two is self-corruption with good intentions.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "autonomy-boundary",
@@ -4512,7 +4668,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The user asked for a bot that decides without asking. That is a boundary, not an absence of one -- and a boundary that lives in one part is a boundary that can be read, changed and audited. Spread across nine parts as an assumption, it could only be discovered after it was crossed. It widens with earned maturity rather than by default."
+      "note": "The user asked for a bot that decides without asking. That is a boundary, not an absence of one -- and a boundary that lives in one part is a boundary that can be read, changed and audited. Spread across nine parts as an assumption, it could only be discovered after it was crossed. It widens with earned maturity rather than by default.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trading-halt-decider",
@@ -4551,7 +4710,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "failing-part-detector",
@@ -4572,7 +4734,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The user's fourth job. The hard case is not the dead part, which is obvious -- it is the part still reporting healthy while its output has gone wrong. Rule 8 in the user's own standing rules says a display shows measured state, never asserted state; this is that rule turned on the parts themselves."
+      "note": "The user's fourth job. The hard case is not the dead part, which is obvious -- it is the part still reporting healthy while its output has gone wrong. Rule 8 in the user's own standing rules says a display shows measured state, never asserted state; this is that rule turned on the parts themselves.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "part-replacement-planner",
@@ -4594,7 +4759,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Where self-healing meets self-building: the replacement for a faulted part is drawn from what the admission gate has already cleared. It plans; the governor swaps. A planner that performed the swap would be a feature switching a feature, which T-2 forbids however good its reason."
+      "note": "Where self-healing meets self-building: the replacement for a faulted part is drawn from what the admission gate has already cleared. It plans; the governor swaps. A planner that performed the swap would be a feature switching a feature, which T-2 forbids however good its reason.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "survival-tier-monitor",
@@ -4617,7 +4785,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Drawn from Conway-Research/automaton (src/survival/monitor.ts, low-compute.ts, read 2026-08-20). Its lesson is that scarcity is graded, never binary: high / normal / low_compute / critical / dead, each with different behaviour, and every transition recorded. Note what this is NOT: a part state. T-5 keeps states off/on, so the tier is data a part produces, which is also what lets any part read it without knowing who computed it."
+      "note": "Drawn from Conway-Research/automaton (src/survival/monitor.ts, low-compute.ts, read 2026-08-20). Its lesson is that scarcity is graded, never binary: high / normal / low_compute / critical / dead, each with different behaviour, and every transition recorded. Note what this is NOT: a part state. T-5 keeps states off/on, so the tier is data a part produces, which is also what lets any part read it without knowing who computed it.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "conservation-planner",
@@ -4638,7 +4809,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The automaton's answer to running low is not to stop -- it downgrades to a cheaper model, slows its heartbeat, sheds non-essential tasks, and keeps living. It also holds a one-hour grace period at zero before declaring death, so funding has time to arrive. Both are anti-flap: a threshold crossed for a second is not a death. The plan is data; the governor still performs the shedding."
+      "note": "The automaton's answer to running low is not to stop -- it downgrades to a cheaper model, slows its heartbeat, sheds non-essential tasks, and keeps living. It also holds a one-hour grace period at zero before declaring death, so funding has time to arrive. Both are anti-flap: a threshold crossed for a second is not a death. The plan is data; the governor still performs the shedding.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "autonomy-policy-engine",
@@ -4662,7 +4836,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From automaton src/agent/policy-engine.ts: every tool call passes one engine, rules sorted by priority, FIRST DENY WINS, and each decision is journalled with the rule ids and an args hash. It upgrades the autonomy boundary from a stated limit into an enforced one. Its sharpest idea is authority by trigger: an act the heartbeat started gets the LOWEST authority, below one the creator asked for -- exactly right for a bot that runs 24/7 unattended."
+      "note": "From automaton src/agent/policy-engine.ts: every tool call passes one engine, rules sorted by priority, FIRST DENY WINS, and each decision is journalled with the rule ids and an args hash. It upgrades the autonomy boundary from a stated limit into an enforced one. Its sharpest idea is authority by trigger: an act the heartbeat started gets the LOWEST authority, below one the creator asked for -- exactly right for a bot that runs 24/7 unattended.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "self-modification-journal",
@@ -4684,7 +4861,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From automaton src/self-mod/audit-log.ts -- append-only, with the diff and a reversible flag, so the creator can see everything the agent changed about itself. The admission gate says what may enter the circuit; this says what actually did. Without it, self-building is unauditable, and an unauditable change is indistinguishable from a defect nobody noticed."
+      "note": "From automaton src/self-mod/audit-log.ts -- append-only, with the diff and a reversible flag, so the creator can see everything the agent changed about itself. The admission gate says what may enter the circuit; this says what actually did. Without it, self-building is unauditable, and an unauditable change is indistinguishable from a defect nobody noticed.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "no-progress-detector",
@@ -4706,7 +4886,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From automaton src/agent/loop-detector.ts: three identical calls is a loop and gets blocked; a repeated pattern of calls gets one warning then enforcement. It also keeps a list of idle-only tools -- checking a balance is not progress. This is the unattended failure that looks healthiest: every part reporting fine, the machine busy, nothing actually advancing. Rule 8 in the user's own rules, applied to activity rather than to status."
+      "note": "From automaton src/agent/loop-detector.ts: three identical calls is a loop and gets blocked; a repeated pattern of calls gets one warning then enforcement. It also keeps a list of idle-only tools -- checking a balance is not progress. This is the unattended failure that looks healthiest: every part reporting fine, the machine busy, nothing actually advancing. Rule 8 in the user's own rules, applied to activity rather than to status.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "upstream-improvement-watch",
@@ -4728,7 +4911,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From automaton src/self-mod/upstream.ts, which fetches its own git origin, counts how many commits it is behind, and reads the per-commit diffs so the agent can decide whether to take them. Note where it sends them here: an upstream change is a PROPOSAL, so it goes to the same admission gate as anything the bot writes itself. Nothing enters the circuit unchecked because it came from outside."
+      "note": "From automaton src/self-mod/upstream.ts, which fetches its own git origin, counts how many commits it is behind, and reads the per-commit diffs so the agent can decide whether to take them. Note where it sends them here: an upstream change is a PROPOSAL, so it goes to the same admission gate as anything the bot writes itself. Nothing enters the circuit unchecked because it came from outside.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "folded-circuit-view",
@@ -4749,7 +4935,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From WeaveMindAI/weft: any group of nodes folds into one node with a typed interface, so a 100-node system still looks like five boxes, and the AI builder searches the catalogue on demand rather than carrying it in context. This blueprint already has 66 parts and a part-health fan-out nobody can read. A part that must write a new part cannot first read the whole circuit -- so the circuit has to be foldable, or self-building is capped by context rather than by judgement."
+      "note": "From WeaveMindAI/weft: any group of nodes folds into one node with a typed interface, so a 100-node system still looks like five boxes, and the AI builder searches the catalogue on demand rather than carrying it in context. This blueprint already has 66 parts and a part-health fan-out nobody can read. A part that must write a new part cannot first read the whole circuit -- so the circuit has to be foldable, or self-building is capped by context rather than by judgement.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-flow-state-encoder",
@@ -4782,7 +4971,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "flow-entropy-meter",
@@ -4803,7 +4995,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "A 15x15 transition matrix estimated over a rolling 120-second window, its stationary distribution taken by eigendecomposition, entropy computed as the stationary-weighted average of row entropies and normalised by log 15. Rows with no observed transitions default to uniform. Separated from the encoder because the state definition and the entropy estimator are two things that will be replaced at different times. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
+      "note": "A 15x15 transition matrix estimated over a rolling 120-second window, its stationary distribution taken by eigendecomposition, entropy computed as the stationary-weighted average of row entropies and normalised by log 15. Rows with no observed transitions default to uniform. Separated from the encoder because the state definition and the entropy estimator are two things that will be replaced at different times. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md.",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "entropy-magnitude-forecaster",
@@ -4825,7 +5020,10 @@
         "on"
       ],
       "origin": "user",
-      "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md."
+      "note": "The third independent estimator of the same quantity, beside the realised-vol regressor and the implied surface -- which is what makes it a spare part rather than a rewrite. IT MUST NEVER PRODUCE A DIRECTIONAL OPINION. Entropy is invariant under swapping buy and sell labels, so it cannot carry direction: the paper measured 45.0% directional accuracy, indistinguishable from chance, and that is a theorem rather than a weak result. Direction stays with bull, bear and profit tailgating. Unproven here: 36 days on one equity ETF, VIX 14-22 throughout, 38.5% of the paper's profit from a single day. The ablation harness decides whether it earns its place. Full specification, every equation and every threshold: docs/research/order-flow-entropy.md.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "cointegration-pair-finder",
@@ -4847,7 +5045,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "From the statistical arbitrage reference sheet (p/DbPaMI1ndH2): Spread = A - beta*B, tested with ADF and KPSS, cointegration by Engle-Granger or Johansen. The equations existed in the research corpus with no part to live in, which is what this closes. Equations in docs/research/equations.md section 3."
+      "note": "From the statistical arbitrage reference sheet (p/DbPaMI1ndH2): Spread = A - beta*B, tested with ADF and KPSS, cointegration by Engle-Granger or Johansen. The equations existed in the research corpus with no part to live in, which is what this closes. Equations in docs/research/equations.md section 3.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "spread-reversion-detector",
@@ -4869,7 +5070,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The Ornstein-Uhlenbeck process dX = kappa(mu - X)dt + sigma dW says how hard the spread is pulled back, and half-life = ln(2)/kappa turns that into a holding period. That is the filter that decides tradeability here: a pair with a three-day half-life is real and useless to an intraday bot on 1m to 30m bars (RL-043). Separated from the pair finder because finding a relationship and timing its stretch are replaced at different times. Equations in docs/research/equations.md section 3."
+      "note": "The Ornstein-Uhlenbeck process dX = kappa(mu - X)dt + sigma dW says how hard the spread is pulled back, and half-life = ln(2)/kappa turns that into a holding period. That is the filter that decides tradeability here: a pair with a three-day half-life is real and useless to an intraday bot on 1m to 30m bars (RL-043). Separated from the pair finder because finding a relationship and timing its stretch are replaced at different times. Equations in docs/research/equations.md section 3.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "historical-bar-store",
@@ -4890,7 +5094,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "C-01 runs on live data by the user's decision (RL-024), which means nothing in the system currently keeps the past. A replay needs it, so this part is what makes backtesting possible at all rather than an assumption that history is lying around somewhere."
+      "note": "C-01 runs on live data by the user's decision (RL-024), which means nothing in the system currently keeps the past. A replay needs it, so this part is what makes backtesting possible at all rather than an assumption that history is lying around somewhere.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "walk-forward-splitter",
@@ -4911,7 +5118,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The protocol both research sources independently insist on: the neural-network sheet gives walk-forward validation with time-based splits and never random ones, and arXiv:2512.15720 runs 10 days training against 5 days testing across five non-overlapping folds with thresholds frozen after training. A random split on a time series leaks the future into the past, and the backtest that results is a lie with a Sharpe ratio attached."
+      "note": "The protocol both research sources independently insist on: the neural-network sheet gives walk-forward validation with time-based splits and never random ones, and arXiv:2512.15720 runs 10 days training against 5 days testing across five non-overlapping folds with thresholds frozen after training. A random split on a time series leaks the future into the past, and the backtest that results is a lie with a Sharpe ratio attached.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "execution-cost-model",
@@ -4945,7 +5155,10 @@
           },
           "origin": "proposed"
         }
-      ]
+      ],
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "instruction-replayer",
@@ -4970,7 +5183,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The engine. It takes what hypothesis wrote and runs it against the past, charging every fill. Five of the ten repositories the user was shown are backtesting frameworks -- vectorbt for sweeping thousands of parameter sets, NautilusTrader for an event-driven core built for correctness -- so this part has strong prior art and is a candidate for a dependency rather than a rewrite."
+      "note": "The engine. It takes what hypothesis wrote and runs it against the past, charging every fill. Five of the ten repositories the user was shown are backtesting frameworks -- vectorbt for sweeping thousands of parameter sets, NautilusTrader for an event-driven core built for correctness -- so this part has strong prior art and is a candidate for a dependency rather than a rewrite.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "lookahead-auditor",
@@ -4991,7 +5207,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "A backtest cannot fail loudly. It returns a number either way, and a number from a leaking replay looks exactly like a number from a sound one -- which is why this is a part rather than a habit. It checks the three leaks that flatter a result: information from after the bar, windows that overlap between training and test, and a symbol universe chosen with hindsight."
+      "note": "A backtest cannot fail loudly. It returns a number either way, and a number from a leaking replay looks exactly like a number from a sound one -- which is why this is a part rather than a habit. It checks the three leaks that flatter a result: information from after the bar, windows that overlap between training and test, and a symbol universe chosen with hindsight.",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "backtest-scorer",
@@ -5012,7 +5231,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "Reports per fold, never pooled only, and reports how concentrated the profit was across days. The entropy paper is the worked example of why: pooled it looks like +1,126 bps, and one single day carried 38.5% of it. A pooled number hides the thing that decides whether an edge is real or was one lucky afternoon."
+      "note": "Reports per fold, never pooled only, and reports how concentrated the profit was across days. The entropy paper is the worked example of why: pooled it looks like +1,126 bps, and one single day carried 38.5% of it. A pooled number hides the thing that decides whether an edge is real or was one lucky afternoon.",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "instruction-promotion-gate",
@@ -5038,7 +5260,10 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "This is what makes the block a gate rather than a report. The scanner is given proven-instruction, never a raw one, so an untested idea cannot reach live scanning by anyone forgetting to check. It is the same shape as the edge graduation gate that already governs bots -- earn the promotion, do not assume it. Reversible if the user would rather backtesting only advised: point the scanner back at opportunity-instruction."
+      "note": "This is what makes the block a gate rather than a report. The scanner is given proven-instruction, never a raw one, so an untested idea cannot reach live scanning by anyone forgetting to check. It is the same shape as the edge graduation gate that already governs bots -- earn the promotion, do not assume it. Reversible if the user would rather backtesting only advised: point the scanner back at opportunity-instruction.",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "money-mode-reader",
@@ -5057,7 +5282,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-destination-router",
@@ -5081,7 +5309,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "stop-order-manager",
@@ -5104,7 +5335,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "paper-fill-simulator",
@@ -5132,7 +5366,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "paper-account-keeper",
@@ -5156,7 +5393,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "live-switch-guard",
@@ -5178,7 +5418,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "watch-condition-compiler",
@@ -5200,7 +5443,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "universal-symbol-sweeper",
@@ -5228,7 +5474,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "liquidity-grader",
@@ -5254,7 +5503,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "docs/research/repo-harvest/freqtrade.md VolumePairList FtTTLCache"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "momentum-burst-detector",
@@ -5277,7 +5529,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "funding-skew-detector",
@@ -5300,7 +5555,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "whale-flow-detector",
@@ -5323,7 +5581,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "liquidation-cascade-detector",
@@ -5345,7 +5606,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "sentiment-shift-detector",
@@ -5368,7 +5632,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "instrument-selector",
@@ -5393,7 +5660,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "cross-segment-lesson-bridge",
@@ -5415,7 +5685,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "correlation-cluster-mapper",
@@ -5436,7 +5709,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "market-event-reader",
@@ -5457,7 +5733,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "market-anomaly-detector",
@@ -5481,7 +5760,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "instruction-performance-tracker",
@@ -5503,7 +5785,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "forecast-trust-learner",
@@ -5525,7 +5810,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "slippage-learner",
@@ -5552,7 +5840,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "docs/research/repo-harvest/qlib.md price_advantage"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "exit-timing-learner",
@@ -5575,7 +5866,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "loss-inverter",
@@ -5597,7 +5891,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "hypothesis-ranker",
@@ -5623,7 +5920,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "instruction-retirer",
@@ -5649,7 +5949,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "symbol-profile-store",
@@ -5671,7 +5974,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "instruction-archive",
@@ -5693,7 +5999,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "knowledge-pruner",
@@ -5719,7 +6028,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "funding-rate-forecaster",
@@ -5740,7 +6052,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "liquidation-cluster-mapper",
@@ -5762,7 +6077,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "forecast-ensembler",
@@ -5786,7 +6104,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "model-drift-monitor",
@@ -5808,7 +6129,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "copy-worthiness-scorer",
@@ -5833,7 +6157,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "whale-transfer-reader",
@@ -5852,7 +6179,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "social-sentiment-reader",
@@ -5873,7 +6203,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "local-model-caller",
@@ -5895,7 +6228,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "llm-backpressure-gauge",
@@ -5919,7 +6255,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "hardware-scanner",
@@ -5938,7 +6277,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "part-appetite-meter",
@@ -5959,7 +6301,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "hog-detector",
@@ -5981,7 +6326,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "part-priority-reader",
@@ -6000,7 +6348,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "switching-planner",
@@ -6034,7 +6385,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "gate-actuator",
@@ -6055,7 +6409,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "off-state-verifier",
@@ -6077,7 +6434,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "venue-trade-stream-reader",
@@ -6099,7 +6459,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-book-reader",
@@ -6121,7 +6484,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "symbol-catalogue-reader",
@@ -6140,7 +6506,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "feed-gap-detector",
@@ -6161,7 +6530,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "capital-allotment-reader",
@@ -6186,7 +6558,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "RL-051: one reader for the segment's whole capital slice, not only the allotment"
-      }
+      },
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "leverage-selector",
@@ -6214,7 +6589,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "RL-053: the ceiling is the user's, the choice under it is the bot's"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "stop-target-placer",
@@ -6243,7 +6621,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "exposure-limiter",
@@ -6267,7 +6648,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "drawdown-breaker",
@@ -6290,7 +6674,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "halt-enforcer",
@@ -6314,7 +6701,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "event-risk-limiter",
@@ -6339,7 +6729,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "position-sizer",
@@ -6374,7 +6767,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "docs/research/repo-harvest/lean.md GetAmountToOrder; vectorbt.md buy_nb downsize"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trade-lifecycle-recorder",
@@ -6399,7 +6795,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "position-recorder",
@@ -6422,7 +6821,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "learning-recorder",
@@ -6448,7 +6850,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "control-recorder",
@@ -6472,7 +6877,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "journal-integrity-checker",
@@ -6494,7 +6902,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "fill-reconciler",
@@ -6516,7 +6927,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "position-close-detector",
@@ -6543,7 +6957,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "docs/research/repo-harvest/vectorbt.md get_exit_trades_nb FIFO lot matching"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "peak-excursion-tracker",
@@ -6566,7 +6983,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "usdt-pnl-accountant",
@@ -6593,7 +7013,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "heartbeat-collector",
@@ -6614,7 +7037,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "probe-runner",
@@ -6636,7 +7062,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "alert-raiser",
@@ -6663,7 +7092,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "board-snapshot-builder",
@@ -6701,7 +7133,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "board-publisher",
@@ -6722,7 +7157,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "stale-board-watch",
@@ -6744,7 +7182,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-balance-reader",
@@ -6765,7 +7206,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-position-reader",
@@ -6786,7 +7230,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-state-poller",
@@ -6807,7 +7254,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-reject-classifier",
@@ -6828,7 +7278,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "order-resubmitter",
@@ -6851,7 +7304,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-rate-budgeter",
@@ -6877,7 +7333,10 @@
       "role_refined": {
         "on": "2026-08-20",
         "from": "docs/research/repo-harvest/hummingbot.md RATE_LIMITS per-endpoint weights; ccxt.md leaky bucket"
-      }
+      },
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "exploration-pair-opener",
@@ -6900,7 +7359,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "forecast-bias-weigher",
@@ -6922,7 +7384,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "intent-explainer",
@@ -6948,7 +7413,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "brain-self-reflector",
@@ -6976,7 +7444,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "loss-cause-classifier",
@@ -7002,7 +7473,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "winner-pattern-miner",
@@ -7025,7 +7499,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "exit-quality-scorer",
@@ -7047,7 +7524,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "community-chat-reader",
@@ -7066,7 +7546,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "book-and-paper-fetcher",
@@ -7088,7 +7571,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-conflict-detector",
@@ -7109,7 +7595,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-refresher",
@@ -7131,7 +7620,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "human-override-reader",
@@ -7150,7 +7642,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "live-vs-replay-reconciler",
@@ -7172,7 +7667,10 @@
         "on"
       ],
       "origin": "proposed",
-      "proposed": "2026-08-20"
+      "proposed": "2026-08-20",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "book-walk-fill-pricer",
@@ -7194,7 +7692,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/hummingbot.md OrderBook.simulate_buy; polymarket-py-sdk.md _calculate_buy_market_price"
+      "evidence": "docs/research/repo-harvest/hummingbot.md OrderBook.simulate_buy; polymarket-py-sdk.md _calculate_buy_market_price",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-latency-simulator",
@@ -7216,7 +7717,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/nautilus_trader.md crates/execution/src/models/latency.rs"
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md crates/execution/src/models/latency.rs",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "paper-liquidation-simulator",
@@ -7240,7 +7744,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/jesse.md _check_for_liquidations; nautilus_trader.md process_liquidations"
+      "evidence": "docs/research/repo-harvest/jesse.md _check_for_liquidations; nautilus_trader.md process_liquidations",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-idempotency-stamper",
@@ -7261,7 +7768,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/ccxt.md binance.py newClientOrderId"
+      "evidence": "docs/research/repo-harvest/ccxt.md binance.py newClientOrderId",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "liquidation-price-tracker",
@@ -7284,7 +7794,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/octobot.md LinearPosition.update_isolated_liquidation_price; jesse.md Position.liquidation_price"
+      "evidence": "docs/research/repo-harvest/octobot.md LinearPosition.update_isolated_liquidation_price; jesse.md Position.liquidation_price",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "fund-lock-ledger",
@@ -7307,7 +7820,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.lock; hummingbot.md BudgetChecker.adjust_candidates"
+      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.lock; hummingbot.md BudgetChecker.adjust_candidates",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "cost-basis-tracker",
@@ -7328,7 +7844,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/FinRL.md avg_buy_price incremental update"
+      "evidence": "docs/research/repo-harvest/FinRL.md avg_buy_price incremental update",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "margin-liquidation-watch",
@@ -7352,7 +7871,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/nautilus_trader.md exchange.rs process_liquidations"
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md exchange.rs process_liquidations",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "stop-frequency-breaker",
@@ -7373,7 +7895,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/freqtrade.md plugins/protections/stoploss_guard.py"
+      "evidence": "docs/research/repo-harvest/freqtrade.md plugins/protections/stoploss_guard.py",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "exit-order-chainer",
@@ -7395,7 +7920,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/tensortrade.md risk_managed_order OrderSpec attach"
+      "evidence": "docs/research/repo-harvest/tensortrade.md risk_managed_order OrderSpec attach",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "participation-capped-order-splitter",
@@ -7418,7 +7946,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/qlib.md ACStrategy.generate_trade_decision; Exchange._clip_amount_by_volume"
+      "evidence": "docs/research/repo-harvest/qlib.md ACStrategy.generate_trade_decision; Exchange._clip_amount_by_volume",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-order-status-translator",
@@ -7440,7 +7971,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/lumibot.md order.py STATUS_ALIAS_MAP; hummingbot.md order-state machine"
+      "evidence": "docs/research/repo-harvest/lumibot.md order.py STATUS_ALIAS_MAP; hummingbot.md order-state machine",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "order-not-found-debouncer",
@@ -7461,7 +7995,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/hummingbot.md ClientOrderTracker.process_order_not_found"
+      "evidence": "docs/research/repo-harvest/hummingbot.md ClientOrderTracker.process_order_not_found",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "resting-order-cancel-policy",
@@ -7483,7 +8020,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/octobot.md orders/cancel_policies/"
+      "evidence": "docs/research/repo-harvest/octobot.md orders/cancel_policies/",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "limit-price-walker",
@@ -7506,7 +8046,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/lumibot.md smart_limit_utils.build_price_ladder"
+      "evidence": "docs/research/repo-harvest/lumibot.md smart_limit_utils.build_price_ladder",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tick-size-resolver",
@@ -7528,7 +8071,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/lumibot.md infer_tick_size; lean.md RoundOrderPrices"
+      "evidence": "docs/research/repo-harvest/lumibot.md infer_tick_size; lean.md RoundOrderPrices",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "feed-jump-detector",
@@ -7549,7 +8095,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/jesse.md _get_fixed_jumped_candle"
+      "evidence": "docs/research/repo-harvest/jesse.md _get_fixed_jumped_candle",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "funding-settlement-recorder",
@@ -7572,7 +8121,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/nautilus_trader.md settle_funding_rate; backtrader.md CommInfoBase.get_credit_interest"
+      "evidence": "docs/research/repo-harvest/nautilus_trader.md settle_funding_rate; backtrader.md CommInfoBase.get_credit_interest",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "drawdown-episode-tracker",
@@ -7593,7 +8145,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/vectorbt.md generic/drawdowns.py; backtrader.md DrawDown.next streak"
+      "evidence": "docs/research/repo-harvest/vectorbt.md generic/drawdowns.py; backtrader.md DrawDown.next streak",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "fund-conservation-auditor",
@@ -7615,7 +8170,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.transfer lhs/rhs assertion"
+      "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.transfer lhs/rhs assertion",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "clock-skew-monitor",
@@ -7636,7 +8194,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/ccxt.md binance -1021 InvalidNonce"
+      "evidence": "docs/research/repo-harvest/ccxt.md binance -1021 InvalidNonce",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "intra-bar-fill-sequencer",
@@ -7658,7 +8219,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/jesse.md _sort_execution_orders"
+      "evidence": "docs/research/repo-harvest/jesse.md _sort_execution_orders",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "fill-volume-capper",
@@ -7679,7 +8243,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/backtrader.md fillers.FixedBarPerc"
+      "evidence": "docs/research/repo-harvest/backtrader.md fillers.FixedBarPerc",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "forecast-distribution-gate",
@@ -7702,7 +8269,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/freqtrade.md freqai dissimilarity index (DI) pipeline"
+      "evidence": "docs/research/repo-harvest/freqtrade.md freqai dissimilarity index (DI) pipeline",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "turbulence-index-gauge",
@@ -7723,7 +8293,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/FinRL.md FeatureEngineer.calculate_turbulence (Mahalanobis)"
+      "evidence": "docs/research/repo-harvest/FinRL.md FeatureEngineer.calculate_turbulence (Mahalanobis)",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "ground-truth-snapshot-builder",
@@ -7744,7 +8317,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/research/repo-harvest/TradingAgents.md dataflows/market_data_validator.py"
+      "evidence": "docs/research/repo-harvest/TradingAgents.md dataflows/market_data_validator.py",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-setup-filter",
@@ -7770,7 +8346,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-feature-builder",
@@ -7799,7 +8378,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-outlier-rejector",
@@ -7824,7 +8406,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-conviction-model",
@@ -7858,7 +8443,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bull-conviction-calibrator",
@@ -7884,7 +8472,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bull-entry-timer",
@@ -7913,7 +8504,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-exit-plan-proposer",
@@ -7944,7 +8538,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-opinion-composer",
@@ -7972,7 +8569,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bull-setup-weight-learner",
@@ -7998,7 +8598,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bull-position-invalidation-watcher",
@@ -8026,7 +8629,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-setup-filter",
@@ -8052,7 +8658,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-feature-builder",
@@ -8081,7 +8690,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-outlier-rejector",
@@ -8106,7 +8718,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-conviction-model",
@@ -8140,7 +8755,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bear-conviction-calibrator",
@@ -8166,7 +8784,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bear-entry-timer",
@@ -8195,7 +8816,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-exit-plan-proposer",
@@ -8226,7 +8850,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-opinion-composer",
@@ -8254,7 +8881,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bear-setup-weight-learner",
@@ -8280,7 +8910,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "bear-position-invalidation-watcher",
@@ -8308,7 +8941,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tail-mover-qualifier",
@@ -8336,7 +8972,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tail-winner-selector",
@@ -8364,7 +9003,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "tail-copy-selector",
@@ -8391,7 +9033,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "tail-move-remaining-estimator",
@@ -8418,7 +9063,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "tail-crowding-detector",
@@ -8446,7 +9094,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tail-follow-conviction-model",
@@ -8479,7 +9130,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "tail-trailing-exit-planner",
@@ -8508,7 +9162,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "tail-opinion-composer",
@@ -8535,7 +9192,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tail-setup-weight-learner",
@@ -8560,7 +9220,10 @@
       "wiring_privatised": {
         "on": "2026-08-20",
         "why": "RL-048: bots never wire into each other"
-      }
+      },
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "causal-refutation-battery",
@@ -8583,7 +9246,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trial-count-accountant",
@@ -8607,7 +9273,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "forgetting-auditor",
@@ -8630,7 +9299,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "abstention-coverage-auditor",
@@ -8653,7 +9325,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "counterfactual-replayer",
@@ -8677,7 +9352,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "cross-segment-signal-bridge",
@@ -8701,7 +9379,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "self-model-reporter",
@@ -8725,7 +9406,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "edge-decay-tracker",
@@ -8747,7 +9431,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "label-builder",
@@ -8770,7 +9457,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "sample-weight-assigner",
@@ -8792,7 +9482,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "retrain-scheduler",
@@ -8816,7 +9509,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "model-registry",
@@ -8839,7 +9535,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "champion-challenger-gate",
@@ -8863,7 +9562,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "reward-shaper",
@@ -8888,7 +9590,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "feature-attribution-tracker",
@@ -8913,7 +9618,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "regret-tracker",
@@ -8937,7 +9645,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "symbolic-hypothesis-miner",
@@ -8961,7 +9672,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "hypothesis-deduplicator",
@@ -8984,7 +9698,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "hypothesis-falsifier",
@@ -9007,7 +9724,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "power-estimator",
@@ -9029,7 +9749,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "hypothesis-mutator",
@@ -9053,7 +9776,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "hypothesis-regime-tagger",
@@ -9075,7 +9801,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "knowledge-graph-linker",
@@ -9099,7 +9828,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "fact-provenance-tracker",
@@ -9122,7 +9854,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "contradiction-detector",
@@ -9145,7 +9880,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "episode-embedder",
@@ -9166,7 +9904,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "regime-memory-store",
@@ -9190,7 +9931,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "knowledge-snapshot-versioner",
@@ -9214,7 +9958,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "forgetting-curve-scheduler",
@@ -9236,7 +9983,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trader-record-verifier",
@@ -9258,7 +10008,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "copy-latency-estimator",
@@ -9280,7 +10033,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "exchange-announcement-reader",
@@ -9301,7 +10057,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "onchain-flow-aggregator",
@@ -9320,7 +10079,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "options-flow-reader",
@@ -9341,7 +10103,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "arxiv-feed-reader",
@@ -9362,7 +10127,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "github-strategy-miner",
@@ -9384,7 +10152,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "io-pressure-meter",
@@ -9403,7 +10174,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "accelerator-scheduler",
@@ -9425,7 +10199,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "memory-pressure-forecaster",
@@ -9447,7 +10224,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "part-restart-budgeter",
@@ -9469,7 +10249,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "duty-cycle-planner",
@@ -9491,7 +10274,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "switch-oscillation-damper",
@@ -9512,7 +10298,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "resource-reservation-ledger",
@@ -9534,7 +10323,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-tester",
@@ -9557,7 +10349,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-composer",
@@ -9579,7 +10374,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-version-keeper",
@@ -9600,7 +10398,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "skill-gap-finder",
@@ -9622,7 +10423,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "video-lecture-reader",
@@ -9643,7 +10447,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "skill-provenance-stamper",
@@ -9665,7 +10472,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "opinion-conflict-resolver",
@@ -9689,7 +10499,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "bot-weight-sampler",
@@ -9712,7 +10525,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "size-hint-writer",
@@ -9737,7 +10553,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "premortem-writer",
@@ -9762,7 +10581,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "devils-advocate",
@@ -9788,7 +10610,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "intent-timing-gate",
@@ -9812,7 +10637,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md"
+      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "ban-signal-detector",
@@ -9835,7 +10663,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "venue-pool-rotator",
@@ -9860,7 +10691,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "api-key-pool-rotator",
@@ -9882,7 +10716,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "cross-venue-price-consolidator",
@@ -9904,7 +10741,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "stream-budget-planner",
@@ -9927,7 +10767,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "feed-coverage-auditor",
@@ -9951,7 +10794,10 @@
         "on"
       ],
       "origin": "user",
-      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md"
+      "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "pnl-attributor",
@@ -9976,7 +10822,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "entry-quality-scorer",
@@ -9999,7 +10848,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "exit-counterfactual-replayer",
@@ -10024,7 +10876,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "holding-horizon-profiler",
@@ -10046,7 +10901,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trade-cluster-detector",
@@ -10068,7 +10926,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "luck-skill-separator",
@@ -10091,7 +10952,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "near-miss-recorder",
@@ -10115,7 +10979,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "regime-transition-tagger",
@@ -10138,7 +11005,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "shortfall-decomposer",
@@ -10163,7 +11033,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trade-narrative-writer",
@@ -10188,7 +11061,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "sequence-pattern-miner",
@@ -10210,7 +11086,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "stop-placement-auditor",
@@ -10234,7 +11113,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "excursion-profiler",
@@ -10256,7 +11138,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "exploration-pair-decoder",
@@ -10279,7 +11164,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "trade-replay-verifier",
@@ -10302,7 +11190,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/closed-trade-decoding-expansion.md"
+      "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "main-account-settings-reader",
@@ -10321,7 +11212,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "allocation-conservation-checker",
@@ -10344,7 +11238,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "capital-settings-validator",
@@ -10369,7 +11266,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "capital-settings-change-recorder",
@@ -10393,7 +11293,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "paper-currency-converter",
@@ -10415,7 +11318,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "capital-utilisation-meter",
@@ -10438,7 +11344,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "allocation-rebalance-proposer",
@@ -10461,7 +11370,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "live-balance-divergence-watch",
@@ -10484,7 +11396,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "trade-capital-bounds-gate",
@@ -10507,7 +11422,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "prompt-template-author",
@@ -10532,7 +11450,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "prompt-registry",
@@ -10554,7 +11475,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "retrieval-querier",
@@ -10575,7 +11499,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "knowledge-embedder",
@@ -10598,7 +11525,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "retrieval-index",
@@ -10621,7 +11551,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "context-assembler",
@@ -10644,7 +11577,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "prompt-renderer",
@@ -10667,7 +11603,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "structured-output-enforcer",
@@ -10690,7 +11629,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "golden-case-keeper",
@@ -10712,7 +11654,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "prompt-evaluator",
@@ -10737,7 +11682,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "prompt-promotion-gate",
@@ -10758,7 +11706,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "prompt-drift-monitor",
@@ -10779,7 +11730,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "part-token-budgeter",
@@ -10802,7 +11756,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "decision-cost-accountant",
@@ -10825,7 +11782,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     },
     {
       "id": "retrieval-quality-scorer",
@@ -10847,7 +11807,10 @@
         "on"
       ],
       "origin": "proposed",
-      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md"
+      "evidence": "docs/proposals/capital-desk-and-llm-foundation.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
