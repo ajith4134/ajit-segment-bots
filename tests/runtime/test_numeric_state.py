@@ -47,9 +47,12 @@ def _write_then_kill(directory, seed: int, stamp: int, flush: bool) -> None:
         maybe_flush="state.force_writeback()" if flush else "",
     )
     child = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
-    assert child.stdout.readline().strip() == "WRITTEN"
-    os.kill(child.pid, signal.SIGKILL)
-    child.wait()
+    try:
+        assert child.stdout.readline().strip() == "WRITTEN"
+        os.kill(child.pid, signal.SIGKILL)
+        child.wait()
+    finally:
+        child.stdout.close()
 
 
 def test_state_round_trips_within_one_process(durable_tmp_path):
@@ -90,9 +93,11 @@ def test_repeated_off_and_on_cycles_do_not_leak_descriptors_or_mappings(durable_
     # many mappings without exiting. The governor must never do this, and this test
     # is what would catch it if something did.
     def counts() -> tuple[int, int]:
+        with open("/proc/self/maps") as maps_file:
+            mapping_count = len(maps_file.read().splitlines())
         return (
             len(os.listdir("/proc/self/fd")),
-            len(open("/proc/self/maps").read().splitlines()),
+            mapping_count,
         )
 
     for _ in range(20):
