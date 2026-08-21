@@ -98,26 +98,62 @@ read) is safe to throttle. The edit script forces both to the catch-all
 regardless of their token match, with the reasoning above inline as a comment.
 
 **What the danger-word pass actually covered, and what it missed.** Every
-row-1 and row-2 candidate's role text was grepped against a list of words that
-would signal an active, real-time invariant rather than a passive record:
-`lock`, `reserve`, `instant`, `immediate`, `exclusive`, `concurrent`, `race`,
-`invariant`, `guarantee`, `must`, `never`, `idempotent`, `double`, `zero the`,
-`refuse`, `halt`, `kill`, `starve`, `atomic`, `sequence`, `hash chain`,
-`corrupt`, `consistent`, `spent`, `one at a time`. Fourteen matches came back
-across the whole registry (three of them — `skill-scorer`,
-`skill-version-keeper`, `skill-provenance-stamper` — are the substring `kill`
-inside the word `skill`, not a real hit). Of the eleven real matches, two
-(`fund-lock-ledger`, `resource-reservation-ledger`) are the forced exceptions
-above. Of the remaining nine, seven were judged correctly on the first pass and
-are addressed below under "kept throttleable on purpose"; **two —
-`leverage-selector` (`never`) and `tail-trailing-exit-planner` (`never`) — were
-judged safe on the first pass and were wrong.** Both make a live decision in
-the trade path, not an after-the-fact record, and the grep surfacing the word
-`never` in their role text was exactly the signal that should have caught them;
-it was read and dismissed instead of applied. See "Three corrections after an
-independent audit" below — this is not a hypothetical, it is what actually
-happened and was caught on review, and the fix is committed as a second,
-separate blueprint edit rather than folded silently into this one.
+row-1 and row-2 candidate's role text was grepped, case-insensitive, against
+this exact word list — reproduce it and this is what comes back, not a
+recollection of it:
+
+```
+lock, reserve, instant, immediate, exclusive, concurrent, race, invariant,
+guarantee, must, never, idempotent, double, zero the, refuse, halt, kill,
+starve, atomic, sequence, hash chain, corrupt, consistent, spent,
+one at a time, before it
+```
+
+Fourteen matches came back across the whole registry:
+
+| id | row | matched words |
+|---|---|---|
+| `skill-scorer` | row 2 | `kill` *(substring of "skill", not a real hit)* |
+| `skill-version-keeper` | row 1 | `kill` *(substring of "skill", not a real hit)* |
+| `skill-provenance-stamper` | row 1 | `kill` *(substring of "skill", not a real hit)* |
+| `fund-lock-ledger` | forced exception | `instant`, `never`, `reserve` |
+| `resource-reservation-ledger` | forced exception | `guarantee`, `must`, `never`, `starve` |
+| `leverage-selector` | row 2 | `never` — **misjudged, now corrected** |
+| `tail-trailing-exit-planner` | row 2 | `never` — **misjudged, now corrected** |
+| `survival-tier-monitor` | row 1 | `must`, `before it` |
+| `lookahead-auditor` | row 1 | `refuse` |
+| `journal-integrity-checker` | row 1 | `hash chain`, `sequence` |
+| `order-reject-classifier` | row 2 | `refuse` |
+| `funding-settlement-recorder` | row 1 | `idempotent` |
+| `power-estimator` | row 2 | `before it` |
+| `prompt-registry` | row 1 | `never` |
+
+Three are the substring `kill` inside the word `skill`, not a real hit — eleven
+real matches. Two of those eleven (`fund-lock-ledger`,
+`resource-reservation-ledger`) are the forced exceptions above. Of the
+remaining nine, **two — `leverage-selector` (`never`) and
+`tail-trailing-exit-planner` (`never`) — were judged safe on the first pass and
+were wrong.** Both make a live decision in the trade path, not an
+after-the-fact record, and the grep surfacing the word `never` in their role
+text was exactly the signal that should have caught them; it was read and
+dismissed instead of applied. See "Three corrections after an independent
+audit" below — this is not a hypothetical, it is what actually happened and
+was caught on review, and the fix is committed as a second, separate blueprint
+edit rather than folded silently into this one.
+
+The remaining **seven** were judged correctly on the first pass, and are
+addressed right here — not deferred to the "kept throttleable on purpose"
+section further down, which names four different parts found by a separate
+audit (see that section's own note):
+`survival-tier-monitor` and `lookahead-auditor` grade or audit something
+already decided elsewhere, not a live position; `journal-integrity-checker`
+and `funding-settlement-recorder` are, respectively, an audit of entries
+already written and an event whose role text says it is idempotent by
+construction; `order-reject-classifier` classifies an order the venue already
+refused; `power-estimator` computes a statistical sample-size question for
+experiment design, not a trade decision; `prompt-registry` keeps prompt
+versions after a separate part (`prompt-promotion-gate`) has already decided
+which one serves.
 
 **What the pass could not have caught at all.** `forecast-distribution-gate`
 does not contain any of the words above — its role text is "flag a forecast
@@ -191,11 +227,16 @@ correcting a default, done as a small, named, idempotent script instead of an
 untracked edit to `docs/features.json` so the change is reviewable and
 re-runnable rather than silent.
 
-## Four parts examined and kept throttleable on purpose
+## Four more parts, from a second and separate audit, kept throttleable on purpose
 
-These four matched the same shapes the misjudged pair did, were checked
-against the live-decision-versus-after-the-fact rule, and stayed as declared —
-named here so the boundary reads as drawn on purpose rather than assumed:
+These four are **not** among the seven named above — they were found by a
+different audit. The danger-word grep above covers only the 101 parts this
+edit marked throttleable that also happened to trip one of its 26 words; it
+is not a review of every throttleable part. Separately, an independent full
+read of *all* 101 throttleable parts against the live-decision-versus-after-
+the-fact rule (the audit that also found the three corrections above) checked
+these four by name and confirmed them — named here so the boundary reads as
+drawn on purpose rather than assumed:
 
 - **`control-recorder`** — journals gate flips, policy rulings and
   self-modifications after they happen; nothing reads it to decide what to do
