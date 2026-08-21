@@ -356,3 +356,43 @@ generalises — no part writes state under `/tmp`.
 
 **What is now closed:** RL-055, open since the design phase. **What is now open:**
 nothing in the runtime spec. Phase 0 can start.
+
+---
+
+## 2026-08-21 — RL-070: a dot per feature, and the wiring is checked against the diagram
+
+**The user's rule, given during phase 1 setup:** every foundational feature and
+its internal features carry a **green dot when completely built** and a **red dot
+when unfinished**, so what is done and what is left is readable at a glance. And
+the diagram is checked — the connections a built part actually has must be the
+connections the diagram declares.
+
+**What a dot means here**, because Rule 8 still binds and a dot must not assert
+what nothing measured:
+
+- A **block** is a foundational feature; the **parts** inside it are its internal
+  features. Both get a dot.
+- **Green** means measured complete: the part has a source file *and* a test that
+  names it, both found by the probes that already drive the part monitor. A block
+  is green only when every part in it is green — one red part keeps its block red.
+- **Red** means not proven complete. That deliberately covers two cases — genuinely
+  unfinished, and built-but-unprobed — because the dot answers *is this done?* and
+  the honest answer to both is no. Which of the two it is stays visible in the
+  proof beside the dot, so the distinction Rule 8 protects is not lost, it is just
+  not carried by the colour.
+- **Nothing is ever green by inference.** A dot with no probe behind it is red.
+- `RUNNING` stays a separate rung and is not what the dot reports: a part can be
+  completely built and not currently running, and colouring that red would make
+  the board lie whenever the system is stopped.
+
+**The wiring half:** `check_contracts.py` today checks what the blueprint
+*declares* against itself. RL-067 asks a different question — whether what is
+*built* matches it. So a part that has code carries a probe comparing its real
+consumes and produces against the blueprint's, and a mismatch paints the part red
+and names both sides. Today no part is implemented, so that probe has nothing to
+compare and says so rather than reporting agreement it never checked.
+
+**Cost if wrong:** a two-colour dot is coarser than the four rungs the part monitor
+already shows, and someone reading only the dots cannot tell "not started" from
+"built but untested". The rungs remain on the same board underneath, so nothing is
+removed — the dots are a summary layer over measurements that already exist.
