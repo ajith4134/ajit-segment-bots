@@ -54,15 +54,23 @@ def test_places_a_process_and_the_limits_are_really_in_effect(sleeping_process):
     in_effect = read_scope_limits_in_effect(directory)
     assert in_effect["memory.max"] == str(256 * MEGABYTE)
     assert in_effect["cpu.weight"] == "137"
+    # pids is one of the three controllers actually delegated on this box
+    # (cpu, memory, pids), so this is a real, checkable limit, not a fiction.
+    assert in_effect["pids.max"] == "64"
     # The per-part scarcity signal section 5 depends on. The system-wide 'full' line
     # is zero by definition, so only the per-cgroup file is usable.
     assert "full" in in_effect["cpu.pressure"]
 
 
 @pytest.mark.cgroup
-def test_refuses_to_report_success_when_the_process_never_arrives():
-    # A PID that has already exited is the reproducible version of the failure that
-    # was observed once: the call is accepted, the move never happens.
+def test_refuses_to_report_success_when_the_pid_never_existed():
+    # A PID that has already exited is a *different* failure from the one this
+    # module exists to catch: busctl rejects it synchronously (a nonzero rc,
+    # verified by hand: rc=1, "Call failed: ... No such process"), and no unit
+    # is ever created. This is the reproducible-but-different case -- confirmation
+    # here is refusing on a real, current absence of the process, which is why the
+    # assertion below names "no longer exists" rather than the generic "/proc"
+    # substring every PlacementNotConfirmed message shares.
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
     with pytest.raises(PlacementNotConfirmed) as refusal:
@@ -71,7 +79,7 @@ def test_refuses_to_report_success_when_the_process_never_arrives():
             ScopeLimits(memory_max_bytes=64 * MEGABYTE, cpu_weight=100),
             confirmation_deadline_seconds=DEADLINE, poll_interval_seconds=POLL,
         )
-    assert "/proc" in str(refusal.value)
+    assert "no longer exists" in str(refusal.value)
 
 
 @pytest.mark.cgroup

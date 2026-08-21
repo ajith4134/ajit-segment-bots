@@ -110,6 +110,10 @@ def place_process_in_scope(
     call = _build_transient_unit_call(pid, scope_name, limits)
     completed = subprocess.run(call, capture_output=True, text=True)
 
+    # completed.returncode is deliberately never inspected to short-circuit this
+    # loop -- including on a synchronous busctl failure -- because trusting rc for
+    # an early exit is exactly the shortcut this module exists to refuse. The full
+    # deadline is paid every time; only /proc decides.
     deadline = time.monotonic() + confirmation_deadline_seconds
     while time.monotonic() < deadline:
         if has_process_landed_in_scope(pid, scope_name):
