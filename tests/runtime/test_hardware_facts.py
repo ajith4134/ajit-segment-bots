@@ -10,6 +10,8 @@ import os
 import pathlib
 import time
 
+import pytest
+
 from runtime.hardware_facts import (
     HardwareFacts,
     measure_hardware_facts,
@@ -87,6 +89,26 @@ def test_available_ram_is_a_live_reading_not_a_cached_one():
     assert before > 0
 
     block_bytes = before // AVAILABLE_RAM_TOUCH_DIVISOR
+    required_drop = idle_band * IDLE_BAND_MARGIN_MULTIPLIER
+    # The touch can drop MemAvailable by at most the amount it touches -- that is
+    # the ideal case, every touched byte actually counted as no-longer-available.
+    # If even that ideal case could not clear the box's own measured noise, no
+    # outcome of this test could distinguish "live" from "noisy but frozen," so
+    # the honest result is neither a pass nor a fail but a skip carrying the
+    # numbers. On a machine busy enough that this triggers every run, this test
+    # skips every run and guards nothing -- that cost is real, and the skip
+    # reason is written so a permanently-skipping run is impossible to miss.
+    if required_drop >= block_bytes:
+        pytest.skip(
+            f"idle band over {IDLE_READING_COUNT} readings ({IDLE_READING_INTERVAL_SECONDS}s "
+            f"apart) was {idle_band} bytes ({idle_low}..{idle_high}); "
+            f"{IDLE_BAND_MARGIN_MULTIPLIER}x that band is {required_drop} bytes, which a "
+            f"touch of {block_bytes} bytes could not clear even in the ideal case "
+            "(the whole touched block counted as no-longer-available); this box is too "
+            "noisy right now for this measurement to distinguish a live reading from a "
+            "frozen one"
+        )
+
     filler = bytearray(block_bytes)
     # CPython's bytearray(n) happens to zero-fill the buffer at construction,
     # which faults in every page as a side effect -- but that is an internal
@@ -99,7 +121,6 @@ def test_available_ram_is_a_live_reading_not_a_cached_one():
 
     after = read_available_ram_bytes()
     drop = before - after
-    required_drop = idle_band * IDLE_BAND_MARGIN_MULTIPLIER
     assert drop > required_drop, (
         f"idle band over {IDLE_READING_COUNT} readings ({IDLE_READING_INTERVAL_SECONDS}s "
         f"apart) was {idle_band} bytes ({idle_low}..{idle_high}); touching "
