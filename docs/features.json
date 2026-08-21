@@ -6591,8 +6591,8 @@
         "from": "RL-053: the ceiling is the user's, the choice under it is the bot's"
       },
       "resource_class": "compute-bound",
-      "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "stop-target-placer",
@@ -8271,8 +8271,8 @@
       "origin": "proposed",
       "evidence": "docs/research/repo-harvest/freqtrade.md freqai dissimilarity index (DI) pipeline",
       "resource_class": "compute-bound",
-      "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "turbulence-index-gauge",
@@ -9164,8 +9164,8 @@
         "why": "RL-048: bots never wire into each other"
       },
       "resource_class": "compute-bound",
-      "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "tail-opinion-composer",

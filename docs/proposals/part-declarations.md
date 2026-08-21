@@ -97,13 +97,40 @@ word `ledger` in this registry covers both shapes, and only the passive one
 read) is safe to throttle. The edit script forces both to the catch-all
 regardless of their token match, with the reasoning above inline as a comment.
 
-Every other row-1 and row-2 candidate was checked against its role text for the
-same class of danger — words like `lock`, `reserve`, `instant`, `never`,
-`starve`, `atomic`, `sequence`, `hash chain`, `double` — and none of the
-remaining matches control a live trading invariant the way these two do; the
-ones that came up (`journal-integrity-checker`, `funding-settlement-recorder`,
-`lookahead-auditor`) are either idempotent by construction or audit an offline
-replay, not a live position.
+**What the danger-word pass actually covered, and what it missed.** Every
+row-1 and row-2 candidate's role text was grepped against a list of words that
+would signal an active, real-time invariant rather than a passive record:
+`lock`, `reserve`, `instant`, `immediate`, `exclusive`, `concurrent`, `race`,
+`invariant`, `guarantee`, `must`, `never`, `idempotent`, `double`, `zero the`,
+`refuse`, `halt`, `kill`, `starve`, `atomic`, `sequence`, `hash chain`,
+`corrupt`, `consistent`, `spent`, `one at a time`. Fourteen matches came back
+across the whole registry (three of them — `skill-scorer`,
+`skill-version-keeper`, `skill-provenance-stamper` — are the substring `kill`
+inside the word `skill`, not a real hit). Of the eleven real matches, two
+(`fund-lock-ledger`, `resource-reservation-ledger`) are the forced exceptions
+above. Of the remaining nine, seven were judged correctly on the first pass and
+are addressed below under "kept throttleable on purpose"; **two —
+`leverage-selector` (`never`) and `tail-trailing-exit-planner` (`never`) — were
+judged safe on the first pass and were wrong.** Both make a live decision in
+the trade path, not an after-the-fact record, and the grep surfacing the word
+`never` in their role text was exactly the signal that should have caught them;
+it was read and dismissed instead of applied. See "Three corrections after an
+independent audit" below — this is not a hypothetical, it is what actually
+happened and was caught on review, and the fix is committed as a second,
+separate blueprint edit rather than folded silently into this one.
+
+**What the pass could not have caught at all.** `forecast-distribution-gate`
+does not contain any of the words above — its role text is "flag a forecast
+whose input features sit far from anything the model trained on", which reads
+as ordinary model-quality language, not as guarding a live decision. A
+keyword pass over role text cannot catch a danger that isn't spelled out in the
+role text; it was found only by an independent full read of all 101
+throttleable parts, not by any grep this document ran. That is a real limit of
+the method used here, stated plainly rather than papered over: a keyword scan
+finds the words it is told to look for, and a part whose risk lives in what its
+output is used for rather than in how its own role sentence is phrased will
+slip past it. The three corrections below close every instance that review
+found; they are not proof no others remain.
 
 One deliberate omission: the token `watch` was left out of every vocabulary
 entirely. `margin-liquidation-watch` "zero[s] the limit when balance plus
@@ -113,6 +140,76 @@ report-shaped. Rather than special-case every `watch`-named part individually,
 the whole token stays out of the vocabulary, and every `watch`-named part falls
 to the catch-all. That is the conservative direction to fall in.
 
+## The rule for the next correction: live decision, or after the fact
+
+The audit that found the two misjudgements above and the one the keyword pass
+could not have found reduces to one test, and it is the test to apply the next
+time a part's default is reviewed rather than re-deriving one from scratch:
+
+**A part making a live decision in the trade path is not throttleable. A part
+recording or auditing something that already happened is.**
+
+"Live decision in the trade path" means: the part's output changes what a
+later part does to size, place, hold, or protect a position, and a stale input
+changes that output's *content* rather than only its arrival time — exactly
+§6(a)'s test, restated at the level of a single part's job rather than its
+name. "Recording or auditing after the fact" means: the part's job is to keep,
+score, or check something that has already been decided elsewhere; running it
+a tick later changes when the record lands, never what actually happened in
+the trade path it is describing.
+
+## Three corrections after an independent audit
+
+An independent audit of all 101 parts this edit marked throttleable — not a
+keyword grep, a full read of each one's role against the rule above — found
+three that fail it. `dashboard/blueprint_edits/apply_2026-08-20_correct_live_decision_parts.py`
+overwrites their `rate_risk` and `skipped_tick_effect` to the restrictive pair
+(`resource_class` is untouched — this is a throttle-safety correction, not an
+allocation one):
+
+- **`leverage-selector`** — "choose leverage per trade from volatility plus
+  funding, never above the user's ceiling". Stale volatility sizes leverage
+  against out-of-date risk: that changes the answer, not merely when it
+  arrives. It is the recursive-indicator failure this document already uses
+  as its worked example (§ "Why the pair is not redundant"), applied to this
+  part's own inputs rather than to an indicator's.
+- **`tail-trailing-exit-planner`** — "trail a stop below the last higher low,
+  tightening as the move ages". A stop left un-tightened through a fast move
+  is a corrupted stop, not a late one.
+- **`forecast-distribution-gate`** — "flag a forecast whose input features sit
+  far from anything the model trained on". Throttling a safety gate widens the
+  window an out-of-distribution forecast passes through unchecked — the gate's
+  whole job is to not let that through, on time, and a slower gate is exactly
+  the failure it exists to prevent.
+
+Unlike `apply_2026-08-20_part_declarations.py`, which sets a field only if
+absent, the correction script **overwrites** these three ids unconditionally.
+That is the correct behaviour here, not a departure from the idempotence rule
+stated below: this is precisely the "one-line hand edit... as each part is
+actually [reviewed]" the next section describes as the intended process for
+correcting a default, done as a small, named, idempotent script instead of an
+untracked edit to `docs/features.json` so the change is reviewable and
+re-runnable rather than silent.
+
+## Four parts examined and kept throttleable on purpose
+
+These four matched the same shapes the misjudged pair did, were checked
+against the live-decision-versus-after-the-fact rule, and stayed as declared —
+named here so the boundary reads as drawn on purpose rather than assumed:
+
+- **`control-recorder`** — journals gate flips, policy rulings and
+  self-modifications after they happen; nothing reads it to decide what to do
+  next in the trade path.
+- **`model-registry`** — keeps trained model versions with their gate
+  verdicts; a version already exists and is already gated before this part
+  records it.
+- **`abstention-coverage-auditor`** — measures realised abstention coverage
+  against a promise already made; the promise, not this measurement, governs
+  the live decision.
+- **`stop-placement-auditor`** — judges, after a trade has closed, whether its
+  stop was too tight, too wide, or right; the stop itself was already placed
+  and already hit by the time this part runs.
+
 ## This is a starting position, not a measurement
 
 **Every one of these 321 defaults is an argued guess, not a probe result.**
@@ -121,11 +218,16 @@ name and role say about its shape, checked by hand against the failure modes
 that would be dangerous to get wrong in the throttleable direction. Rule 8
 applies to this document as much as to any board: a default is a position taken
 so the checker has something to enforce, and it is corrected **part by part, as
-each part is actually built and measured** — not batch-revised, and never
-re-derived from a bigger table. When a part's real behaviour is measured and
-disagrees with its default, the fix is a one-line hand edit to that part's three
-fields in `docs/features.json`, which this script will never overwrite (see
-below), not a rerun of this classifier.
+each part is actually built and reviewed or measured** — not batch-revised, and
+never re-derived from a bigger table. When a part's real behaviour disagrees
+with its default, the fix is a one-line correction to that part's `rate_risk`
+and `skipped_tick_effect` (or `resource_class`, if that is what turned out
+wrong), delivered as a small, named, idempotent script the same shape as
+`apply_2026-08-20_correct_live_decision_parts.py` above — never a rerun of the
+classifier, and never a silent hand edit to `docs/features.json` outside of
+one. `apply_2026-08-20_part_declarations.py` itself will never overwrite a
+field once set, on any part, forever; a correction script is a second,
+separate, explicit statement about specific ids, not a re-defaulting.
 
 **The catch-all (163 of 321 parts, more than half) is deliberately the most
 restrictive combination available**: `compute-bound` / `changes-the-answer` /
