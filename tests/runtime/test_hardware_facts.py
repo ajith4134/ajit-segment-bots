@@ -246,6 +246,23 @@ def test_a_missing_meminfo_field_names_itself_rather_than_a_bare_keyerror(
     assert str(fake_meminfo) in str(excinfo.value)
 
 
+def test_a_missing_swap_total_field_names_itself_rather_than_reading_as_zero_swap(
+    durable_tmp_path, monkeypatch
+):
+    # swap=0B must mean "this box measured zero swap," never "the field was
+    # absent" -- those are different facts, and page_cache_discipline's
+    # docstring argument depends on telling them apart. A silent .get(..., 0)
+    # would collapse "no swap" and "unmeasured" into the same number.
+    fake_meminfo = durable_tmp_path / "meminfo"
+    fake_meminfo.write_text("MemTotal:       30791696 kB\nMemAvailable:   20000000 kB\n")
+    monkeypatch.setattr(hardware_facts, "MEMINFO_PATH", fake_meminfo)
+
+    with pytest.raises(MeminfoFieldMissing) as excinfo:
+        measure_hardware_facts()
+
+    assert "SwapTotal" in str(excinfo.value)
+
+
 def test_available_ram_is_a_live_reading_not_a_cached_one():
     # A test that only checks positivity before and after would pass against a
     # frozen constant -- Rule 8 inverted, a reading certified live that never

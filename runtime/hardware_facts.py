@@ -137,7 +137,7 @@ def measure_hardware_facts() -> HardwareFacts:
         logical_cpus=os.cpu_count(),
         total_ram_bytes=_require_meminfo_field(meminfo, "MemTotal") * KIBIBYTE,
         available_ram_bytes=_require_meminfo_field(meminfo, "MemAvailable") * KIBIBYTE,
-        swap_total_bytes=meminfo.get("SwapTotal", 0) * KIBIBYTE,
+        swap_total_bytes=_require_meminfo_field(meminfo, "SwapTotal") * KIBIBYTE,
         numa_nodes=numa_node_count or None,
         measured_at_ns=time.time_ns(),
     )

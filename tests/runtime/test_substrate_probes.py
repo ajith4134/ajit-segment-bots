@@ -78,6 +78,29 @@ def test_zero_blas_pools_is_not_measured_rather_than_a_vacuous_ok(monkeypatch):
     assert result.state != "OK"
 
 
+def test_capacity_with_an_unmeasured_field_is_not_measured_rather_than_a_green_none(
+    monkeypatch,
+):
+    # A topology-less box (a container, an old kernel): count_physical_cores()
+    # returns None, never a guessed number. A tile reporting OK over that None
+    # is exactly the Rule 8 failure this probe exists to refuse --
+    # "physical_cores=None" is a fact nobody measured, not a healthy reading.
+    import runtime.hardware_facts as hardware_facts
+
+    monkeypatch.setattr(hardware_facts, "count_physical_cores", lambda: None)
+    result = probe_measured_capacity()
+    assert result.state == "NOT MEASURED"
+    assert result.state != "OK"
+    assert "physical_cores" in result.value
+
+
+def test_capacity_with_every_field_measured_is_ok():
+    result = probe_measured_capacity()
+    # This box (section 0) does publish full topology, so a healthy run here
+    # must still reach OK -- the fix must not turn every reading NOT MEASURED.
+    assert result.state == "OK"
+
+
 def test_the_interpreter_probe_says_so_when_pyproject_is_unreadable(monkeypatch):
     # RL-061: the interpreter probe's OK/FAILING threshold is sourced from
     # pyproject.toml's own requires-python, not a literal in this module. If

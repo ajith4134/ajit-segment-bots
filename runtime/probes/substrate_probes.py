@@ -297,7 +297,16 @@ def probe_settings_are_readable() -> SubstrateProbeResult:
 
 
 def probe_measured_capacity() -> SubstrateProbeResult:
-    """What does the kernel say this machine has, right now?"""
+    """What does the kernel say this machine has, right now?
+
+    Rule 8: a partial reading is more useful than a bare refusal, but only while
+    its state stays honest. physical_cores, logical_cpus, and numa_nodes each
+    come back None when hardware_facts could not measure them (no cpuinfo
+    topology, no NUMA sysfs tree) -- and a tile that reported OK over a None
+    would be a number nobody measured wearing the shape of one. So this still
+    reports every field it read, but the state is NOT MEASURED, naming which
+    fields were unmeasurable, whenever any of the three is None.
+    """
     label = "Measured capacity"
     proof = "/proc/cpuinfo, /proc/meminfo (hardware_facts.measure_hardware_facts)"
     try:
@@ -307,8 +316,26 @@ def probe_measured_capacity() -> SubstrateProbeResult:
 
     value = (
         f"physical_cores={facts.physical_cores}, logical_cpus={facts.logical_cpus}, "
-        f"ram={facts.total_ram_bytes}B, swap={facts.swap_total_bytes}B"
+        f"numa_nodes={facts.numa_nodes}, ram={facts.total_ram_bytes}B, "
+        f"swap={facts.swap_total_bytes}B"
     )
+    unmeasured_fields = [
+        field_name
+        for field_name, field_value in (
+            ("physical_cores", facts.physical_cores),
+            ("logical_cpus", facts.logical_cpus),
+            ("numa_nodes", facts.numa_nodes),
+        )
+        if field_value is None
+    ]
+    if unmeasured_fields:
+        return SubstrateProbeResult(
+            label,
+            NOT_MEASURED,
+            f"{', '.join(unmeasured_fields)} could not be measured on this machine; "
+            f"{value}",
+            proof,
+        )
     return SubstrateProbeResult(label, OK, value, proof)
 
 
