@@ -38,6 +38,15 @@ Rule 8 wants that timestamp to come from a probe rather than an assertion. So:
             contends for the lock -- and a periodic pass finding a diff on a marked
             path reports the change without calling on_overflow. Only the event's
             own recheck clears the mark, once it has actually looked at that path.
+            No mark can protect the window before it exists, though: on_any_event
+            only runs once watchdog's own dispatcher thread has pulled the raw
+            kernel event off its queue, and a periodic tick landing in that
+            (normally microsecond) gap can still legitimately call on_overflow for
+            an edit an event was, in fact, already on its way to deliver. That is a
+            false positive only -- on_change is never duplicated or dropped by it --
+            and shrinks toward zero as recheck_interval_seconds grows relative to
+            dispatch latency, which is the case the real setting (seconds, not
+            milliseconds) is chosen for.
   reliably  a callback can raise -- a transient store write failing is exactly the
             kind of thing capital-settings-change-recorder will do -- and no
             exception from on_change, on_rejection or on_overflow is allowed to
@@ -172,19 +181,43 @@ class SettingsDirectoryWatch:
         self._recheck_interval_seconds = recheck_interval_seconds
 
         self._known: dict[pathlib.Path, LastKnownGoodSettings] = {}
-        # The last document each path's callbacks were actually, successfully
+        # The last document each path's on_change was actually, successfully
         # handed -- distinct from LastKnownGoodSettings.current, which advances
-        # on every successful parse regardless of whether delivery succeeded.
-        # This is what makes an unconsumed change retried rather than lost.
+        # on every successful parse regardless of whether delivery succeeded,
+        # and distinct from "absent from this dict", which means nothing has
+        # EVER been delivered for this path (see _delivered_baseline_for --
+        # collapsing that into "compare against current" is what dropped a
+        # newly discovered file's content for good the first time its own
+        # delivery failed).
         self._last_delivered: dict[pathlib.Path, SettingsDocument] = {}
+        # Paths whose on_overflow call failed on a periodic pass that found a
+        # real diff. Tracked separately from _last_delivered because the two
+        # callbacks answer different questions -- "what changed" and "did the
+        # stream lie" -- and a failure of one must not cause the other, which
+        # may already have succeeded, to be redelivered.
+        self._pending_overflow: set[pathlib.Path] = set()
         # The content digest of the last rejection actually reported for a path,
         # so a standing broken file is reported once, not once per recheck.
         self._last_reported_rejection_digest: dict[pathlib.Path, str] = {}
 
-        # Guards self._known / self._last_delivered / the rejection digests
-        # against the observer thread and the periodic thread both wanting to
-        # recheck at once. Reentrant so a callback invoked from inside a recheck
-        # may itself call recheck_now() without deadlocking.
+        # Guards self._known / self._last_delivered / self._pending_overflow /
+        # the rejection digests against the observer thread and the periodic
+        # thread both wanting to recheck at once. Reentrant so a callback
+        # invoked from inside a recheck may itself call recheck_now() without
+        # deadlocking.
+        #
+        # Held across every callback a recheck invokes, deliberately:
+        # correctness over liveness. The periodic backstop and an event's own
+        # delivery share this lock, so a callback that runs long stalls
+        # whichever of the two is not already holding it -- a real latency
+        # cost -- rather than risk a torn read of _known/_last_delivered mid
+        # callback. Not revisited without a measured reason to.
+        #
+        # Not supported: calling stop() from inside a callback this watch
+        # itself invoked, on the thread running that callback -- it would try
+        # to join the very thread it is running on. The callback contract is
+        # to report outward, not to reach back into the watch, so this is
+        # deferred rather than guarded against.
         self._lock = threading.RLock()
         # A separate, cheap lock for the in-flight set: the handler must be able
         # to mark a path before it ever contends for self._lock, which a recheck
@@ -271,6 +304,18 @@ class SettingsDirectoryWatch:
         with self._in_flight_lock:
             self._in_flight.discard(path)
 
+    def _clear_in_flight_not_among(self, visited: set[pathlib.Path]) -> None:
+        """Drop any in-flight mark for a path this recheck never actually
+        looked at. Every path _recheck's own loops visit already clears its
+        own mark individually (see _deliver_diff); this is the sweep for a
+        path that exists in neither loop -- created and deleted again before
+        the triggered recheck's own directory listing ran -- so the mark does
+        not silently outlive the event that set it, which would suppress
+        on_overflow for that path forever, including if the name is reused.
+        """
+        with self._in_flight_lock:
+            self._in_flight.intersection_update(visited)
+
     def _recheck(self, *, is_periodic: bool) -> None:
         """Re-read every settings file and report what actually moved."""
         with self._lock:
@@ -279,8 +324,18 @@ class SettingsDirectoryWatch:
                 self._recheck_present_path(path, is_periodic=is_periodic)
             # A path _known still remembers but the directory no longer lists is
             # a settings file that vanished -- renamed away, or deleted outright.
-            for path in sorted(set(self._known) - current_paths):
+            known_paths = set(self._known)
+            for path in sorted(known_paths - current_paths):
                 self._recheck_vanished_path(path, is_periodic=is_periodic)
+            if not is_periodic:
+                # A path can be marked in flight for an event whose file is
+                # already gone again (created and deleted) before this very
+                # recheck's own glob ran -- neither loop above ever visits it,
+                # so nothing above clears its mark. This pass is still what
+                # resolves it: there is nothing left to report, but leaving the
+                # mark set would silently suppress on_overflow for that path
+                # forever, including if the name is reused later.
+                self._clear_in_flight_not_among(current_paths | known_paths)
 
     def _recheck_present_path(self, path: pathlib.Path, *, is_periodic: bool) -> None:
         settings = self._known.get(path)
@@ -294,7 +349,7 @@ class SettingsDirectoryWatch:
                 self._clear_in_flight(path)
             return
         self._last_reported_rejection_digest.pop(path, None)
-        previous = self._last_delivered.get(path, settings.current)
+        previous = self._delivered_baseline_for(path, settings.current)
         self._deliver_diff(path, previous, settings.current, is_periodic=is_periodic)
 
     def _discover_new_path(self, path: pathlib.Path, *, is_periodic: bool) -> None:
@@ -313,18 +368,41 @@ class SettingsDirectoryWatch:
                 self._clear_in_flight(path)
             return
         self._known[path] = settings
-        nothing_yet = _empty_document_sharing_identity_with(settings.current)
-        self._deliver_diff(path, nothing_yet, settings.current, is_periodic=is_periodic)
+        previous = self._delivered_baseline_for(path, settings.current)
+        self._deliver_diff(path, previous, settings.current, is_periodic=is_periodic)
 
     def _recheck_vanished_path(self, path: pathlib.Path, *, is_periodic: bool) -> None:
         settings = self._known[path]
-        previous = self._last_delivered.get(path, settings.current)
+        previous = self._delivered_baseline_for(path, settings.current)
         nothing_left = _empty_document_sharing_identity_with(previous)
-        delivered = self._deliver_diff(path, previous, nothing_left, is_periodic=is_periodic)
-        if delivered:
+        change_delivered = self._deliver_diff(path, previous, nothing_left, is_periodic=is_periodic)
+        # Forgetting the path is gated on the overflow signal too, not only the
+        # removal itself: if on_overflow is still owed for this path, it must
+        # stay reachable through this same loop on the next pass, or nothing
+        # would ever call _deliver_diff for it again to retry that signal.
+        if change_delivered and path not in self._pending_overflow:
             self._known.pop(path, None)
             self._last_delivered.pop(path, None)
             self._last_reported_rejection_digest.pop(path, None)
+
+    def _delivered_baseline_for(
+        self, path: pathlib.Path, current: SettingsDocument
+    ) -> SettingsDocument:
+        """What a diff for this path is measured against.
+
+        self._last_delivered[path] if on_change has actually taken something
+        for this path before; an EMPTY document if nothing ever has. Never
+        `current` itself as a fallback -- previous == candidate on a path that
+        was never delivered is not the same state as previous == candidate on
+        one that was, and collapsing them made a newly discovered file's
+        content vanish for good the first time its own delivery failed: the
+        diff went trivially empty and stayed that way, since nothing else ever
+        changed the file again.
+        """
+        delivered = self._last_delivered.get(path)
+        if delivered is not None:
+            return delivered
+        return _empty_document_sharing_identity_with(current)
 
     def _deliver_diff(
         self,
@@ -336,36 +414,48 @@ class SettingsDirectoryWatch:
     ) -> bool:
         """Diff two parses and hand the result to the callbacks it earns.
 
-        Bookkeeping (self._last_delivered) only advances once every callback the
-        diff triggers has returned without raising -- a broken consumer leaves
-        the identical diff in place to be recomputed and retried on the next
-        pass, on whichever thread runs it, rather than dropped. on_overflow
-        fires only on a periodic pass finding a diff on a path with no event
-        outstanding: a marked-in-flight path means the backstop simply won the
-        race with an event's own delivery, not that the stream lied.
+        on_change and on_overflow are tracked, and retried, independently --
+        they answer different questions ("what changed" and "did the event
+        stream lie about it"), so a failure of one must never cause the other,
+        which may already have succeeded, to be redelivered. self._last_delivered
+        only advances once on_change itself has returned without raising, and
+        self._pending_overflow only clears once on_overflow has.
+
+        on_overflow is owed on a periodic pass that finds a diff on a path
+        with no event outstanding (a marked-in-flight path means the backstop
+        simply won the race with an event's own delivery, not that the stream
+        lied), or on ANY pass -- periodic or not -- retrying a signal an
+        earlier attempt failed to deliver.
 
         Only a non-periodic pass ever clears an in-flight mark -- it is the
         pass an event's own dispatch actually triggered, so reaching this path
         is what resolves that specific outstanding event, whether or not this
         particular call finds anything left to report.
+
+        Returns whether the CONTENT diff (on_change) was delivered; a caller
+        that wants to know whether the path can be fully forgotten must also
+        check self._pending_overflow.
         """
         changes = compare_settings_documents(previous, candidate)
-        if not changes:
-            if not is_periodic:
-                self._clear_in_flight(path)
-            return True
 
-        signal_overflow = is_periodic and not self._is_in_flight(path)
-        delivered = True
-        if signal_overflow:
-            delivered = self._safely_call(self._on_overflow) and delivered
-        delivered = self._safely_call(self._on_change, changes) and delivered
+        change_delivered = True
+        if changes:
+            change_delivered = self._safely_call(self._on_change, changes)
+            if change_delivered:
+                self._last_delivered[path] = candidate
+
+        overflow_owed = (
+            is_periodic and changes and not self._is_in_flight(path)
+        ) or path in self._pending_overflow
+        if overflow_owed:
+            if self._safely_call(self._on_overflow):
+                self._pending_overflow.discard(path)
+            else:
+                self._pending_overflow.add(path)
 
         if not is_periodic:
             self._clear_in_flight(path)
-        if delivered:
-            self._last_delivered[path] = candidate
-        return delivered
+        return change_delivered
 
     def _report_rejection_if_new(self, path: pathlib.Path, rejection: SettingsRejection) -> None:
         """Report a rejection once per distinct broken state, not once per look.

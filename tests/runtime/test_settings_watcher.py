@@ -43,10 +43,23 @@ def _write_by_rename(directory, balance: str):
     same directory, then os.replace() over the target. This swaps the inode --
     unlike _write(), which truncates and rewrites the same one in place.
     """
+    return _write_raw_by_rename(directory, TEMPLATE.format(balance=balance))
+
+
+def _write_raw_by_rename(directory, content: str):
+    """Same atomic swap as _write_by_rename, for content that need not parse --
+    used for broken-edit tests against a live, running watch. path.write_text()
+    truncates before it writes, and a background thread polling fast enough can
+    read the file in between: an empty file is valid, empty TOML, so a plain
+    in-place write can produce a real, spurious "every entry removed" diff
+    purely from the timing of the read, independent of anything this module
+    does. os.replace() is atomic at the filesystem level -- no reader ever sees
+    a partial file -- which is exactly why the module watches for it.
+    """
     path = directory / "main-account.toml"
     fd, tmp_name = tempfile.mkstemp(dir=directory, suffix=".tmp")
     with os.fdopen(fd, "w") as handle:
-        handle.write(TEMPLATE.format(balance=balance))
+        handle.write(content)
     os.replace(tmp_name, path)
     return path
 
@@ -99,7 +112,7 @@ def test_an_edit_over_ssh_wakes_the_watch_and_reports_the_change(durable_tmp_pat
     )
     watch.start()
     try:
-        _write(durable_tmp_path, "2500.0")
+        _write_by_rename(durable_tmp_path, "2500.0")
         deadline = time.monotonic() + SETTLE_SECONDS
         while not seen and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -177,7 +190,7 @@ def test_a_broken_edit_reports_a_rejection_and_does_not_report_a_change(durable_
     )
     watch.start()
     try:
-        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        _write_raw_by_rename(path.parent, "[main_balance]\nvalue = [1, 2,\n")
         deadline = time.monotonic() + SETTLE_SECONDS
         while not rejections and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -258,17 +271,37 @@ def test_the_periodic_backstop_runs_on_its_own_clock_without_flagging_a_delivere
     # running: an edit inotify actually delivers must be reported once, as a
     # plain change, and several backstop ticks afterward must not relabel it
     # (or anything else) as overflow.
+    #
+    # This is the one test in the file that needs a wider interval than
+    # RECHECK_INTERVAL_SECONDS. The in-flight mark is set inside on_any_event,
+    # which only runs once watchdog's own dispatcher thread has pulled the raw
+    # kernel event off the queue -- there is real, if normally sub-millisecond,
+    # latency between os.replace() landing on disk and that dispatch actually
+    # happening. A periodic tick landing in that specific window would find the
+    # real diff before any mark exists to suppress it, and -- correctly, if
+    # eagerly -- report it as an overflow; that is a narrower, earlier race
+    # than the one the mark is built to solve (an event already marked racing
+    # the lock), and no mark can protect a window that starts before the mark
+    # is set. It cost one flake at RECHECK_INTERVAL_SECONDS=0.05 across ~110
+    # runs, entirely from squeezing a 50ms clock this close to microsecond-scale
+    # dispatch latency; nothing about the content delivery was ever wrong in any
+    # of those runs (on_change fired exactly once, with the real value, every
+    # time). A wide interval here, rather than a chase for a guarantee no
+    # periodic-poll design can make against an async notifier, is what actually
+    # matches production, where the real setting (5.0s) makes this collision
+    # negligible.
+    generous_interval_seconds = RECHECK_INTERVAL_SECONDS * 10
     _write(durable_tmp_path, "1000.0")
     changes: list = []
     overflows: list = []
     watch = SettingsDirectoryWatch(
         directory=durable_tmp_path, on_change=changes.append,
         on_rejection=lambda rejection: None, on_overflow=lambda: overflows.append(True),
-        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+        recheck_interval_seconds=generous_interval_seconds,
     )
     watch.start()
     try:
-        _write(durable_tmp_path, "2500.0")
+        _write_by_rename(durable_tmp_path, "2500.0")
         deadline = time.monotonic() + SETTLE_SECONDS
         while not changes and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -276,7 +309,7 @@ def test_the_periodic_backstop_runs_on_its_own_clock_without_flagging_a_delivere
         # settled. Correctness here does not depend on timing: once _known is
         # in sync, every subsequent periodic pass finds zero diff regardless of
         # how many ticks land, so this cannot flake into a false pass.
-        time.sleep(RECHECK_INTERVAL_SECONDS * 5)
+        time.sleep(generous_interval_seconds * 2)
     finally:
         watch.stop()
 
@@ -310,12 +343,15 @@ def test_a_raising_on_change_does_not_kill_the_watch_and_the_change_is_retried(d
     )
     watch.start()
     try:
-        _write(durable_tmp_path, "2500.0")
+        _write_by_rename(durable_tmp_path, "2500.0")
         deadline = time.monotonic() + SETTLE_SECONDS
         while len(attempts) < 2 and time.monotonic() < deadline:
             time.sleep(0.02)
+        # Several more backstop ticks after the retry succeeded: once delivered,
+        # the identical diff must not surface a third time.
+        time.sleep(RECHECK_INTERVAL_SECONDS * 5)
 
-        assert len(attempts) >= 2, "the change was not retried after the callback raised"
+        assert len(attempts) == 2, "the change must be retried exactly once, not lost or duplicated"
         assert attempts[0][0].new_value == "2500.0"
         assert attempts[1][0].new_value == "2500.0", "the retry must be the real change, not something else"
         assert watch._observer.is_alive(), "a raising on_change must not kill the observer thread"
@@ -341,19 +377,28 @@ def test_a_raising_on_rejection_does_not_kill_the_watch_and_is_retried(durable_t
     )
     watch.start()
     try:
-        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        _write_raw_by_rename(path.parent, "[main_balance]\nvalue = [1, 2,\n")
         deadline = time.monotonic() + SETTLE_SECONDS
         while len(attempts) < 2 and time.monotonic() < deadline:
             time.sleep(0.02)
+        # Several more ticks over the same standing (now successfully reported)
+        # rejection: it must not be reported a third time.
+        time.sleep(RECHECK_INTERVAL_SECONDS * 5)
 
-        assert len(attempts) >= 2, "the rejection was not retried after the callback raised"
+        assert len(attempts) == 2, "the rejection must be retried exactly once, not lost or repeated"
         assert watch._observer.is_alive(), "a raising on_rejection must not kill the observer thread"
         assert watch._periodic_thread.is_alive(), "a raising on_rejection must not kill the backstop thread"
     finally:
         watch.stop()
 
 
-def test_a_raising_on_overflow_does_not_kill_the_backstop_and_is_retried(durable_tmp_path):
+def test_a_raising_on_overflow_is_retried_without_duplicating_the_change(durable_tmp_path):
+    # on_overflow and on_change answer different questions ("did the stream
+    # lie?" vs "what changed?") and must be retried independently: a failure of
+    # ONE must not cause the OTHER -- which already succeeded -- to be
+    # redelivered. Pins the exact count on both sides, not just their content,
+    # since a duplicate on_change here is a duplicate journal entry against
+    # real capital.
     path = _write(durable_tmp_path, "1000.0")
     overflow_attempts: list = []
     changes: list = []
@@ -369,12 +414,13 @@ def test_a_raising_on_overflow_does_not_kill_the_backstop_and_is_retried(durable
         recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
     )
     _write(path.parent, "2500.0")
-    watch._recheck(is_periodic=True)  # on_overflow raises here
-    watch._recheck(is_periodic=True)  # retried: on_overflow succeeds, diff still outstanding
+    watch._recheck(is_periodic=True)  # on_overflow raises; on_change succeeds
+    watch._recheck(is_periodic=True)  # retry: on_overflow succeeds; no new diff to report
+    watch._recheck(is_periodic=True)  # a third pass: nothing outstanding on either side now
 
     assert len(overflow_attempts) == 2, "on_overflow must be retried until it stops raising"
-    assert changes, "the real change must still surface once delivery succeeds"
-    assert all(c[0].new_value == "2500.0" for c in changes), "every report must be the real diff"
+    assert len(changes) == 1, "on_change must not be redelivered just because on_overflow failed"
+    assert changes[0][0].new_value == "2500.0"
 
 
 def test_an_in_flight_event_suppresses_overflow_but_the_change_still_reports(durable_tmp_path):
@@ -395,7 +441,8 @@ def test_an_in_flight_event_suppresses_overflow_but_the_change_still_reports(dur
     watch._recheck(is_periodic=True)
 
     assert overflows == [], "a path with an event already in flight must not be blamed for the stream"
-    assert changes and changes[0][0].new_value == "2500.0", "the real change must still be reported"
+    assert len(changes) == 1, "the real change must be reported exactly once"
+    assert changes[0][0].new_value == "2500.0"
 
 
 def test_the_in_flight_mark_clears_once_the_events_own_recheck_runs(durable_tmp_path):
@@ -482,7 +529,7 @@ def test_a_standing_rejection_is_reported_once_not_once_per_tick(durable_tmp_pat
     )
     watch.start()
     try:
-        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        _write_raw_by_rename(path.parent, "[main_balance]\nvalue = [1, 2,\n")
         deadline = time.monotonic() + SETTLE_SECONDS
         while not rejections and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -556,13 +603,12 @@ def test_a_failed_change_delivery_retries_while_a_standing_rejection_does_not(du
     )
     watch.start()
     try:
-        _write(durable_tmp_path, "2500.0")
+        _write_by_rename(durable_tmp_path, "2500.0")
         deadline = time.monotonic() + SETTLE_SECONDS
         while len(change_attempts) < 2 and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert len(change_attempts) >= 2, "the change must be retried after the callback failed"
 
-        path.write_text("[main_balance]\nvalue = [1, 2,\n")
+        _write_raw_by_rename(path.parent, "[main_balance]\nvalue = [1, 2,\n")
         deadline = time.monotonic() + SETTLE_SECONDS
         while not rejections and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -570,6 +616,7 @@ def test_a_failed_change_delivery_retries_while_a_standing_rejection_does_not(du
     finally:
         watch.stop()
 
+    assert len(change_attempts) == 2, "the change must be retried exactly once, not lost or duplicated"
     assert len(rejections) == 1, "the rejection must not repeat across the same ticks that retried the change"
 
 
@@ -587,10 +634,13 @@ def test_a_settings_file_appearing_after_start_reports_its_initial_entries(durab
         deadline = time.monotonic() + SETTLE_SECONDS
         while not changes and time.monotonic() < deadline:
             time.sleep(0.02)
+        # Several more backstop ticks over the now-delivered new file: it must
+        # not be reported a second time.
+        time.sleep(RECHECK_INTERVAL_SECONDS * 5)
     finally:
         watch.stop()
 
-    assert changes, "a settings file appearing after start() was not reported"
+    assert len(changes) == 1, "a settings file appearing after start() must be reported exactly once"
     assert changes[0] == [
         SettingsChange(
             field="main_balance", old_value="", new_value="1000.0",
@@ -608,8 +658,101 @@ def test_recheck_now_reports_a_newly_discovered_files_entries_as_new(durable_tmp
     )
     _write(durable_tmp_path, "1000.0")  # the directory was empty at construction
     watch.recheck_now()
+    watch.recheck_now()  # nothing changed on disk -- must not be reported a second time
 
-    assert changes and changes[0][0] == SettingsChange(
+    assert len(changes) == 1, "a newly discovered file's entries must be reported exactly once"
+    assert changes[0][0] == SettingsChange(
         field="main_balance", old_value="", new_value="1000.0",
         observed_at_ns=changes[0][0].observed_at_ns,
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 3: "unconsumed until delivered" must not collapse into "never
+# delivered reads as already equal", and on_change/on_overflow must be
+# retried independently rather than as one bundled unit.
+# ---------------------------------------------------------------------------
+
+
+def test_a_newly_discovered_files_content_is_retried_if_its_first_delivery_fails(durable_tmp_path):
+    # The specific silence this closes: previous == candidate is not the same
+    # state as "nothing has ever been delivered for this path". Falling back
+    # to the current content when nothing has been delivered yet would make
+    # the diff trivially empty and drop the file's real, still-present initial
+    # content permanently after exactly one failed attempt.
+    attempts: list = []
+
+    def flaky_on_change(changes):
+        attempts.append(changes)
+        if len(attempts) == 1:
+            raise RuntimeError("transient failure on the first delivery")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=flaky_on_change,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    _write(durable_tmp_path, "1000.0")  # a file appearing fresh; nothing else on disk changes below
+
+    watch.recheck_now()  # first look: on_change raises, nothing consumed yet
+    assert len(attempts) == 1
+    assert attempts[0][0].new_value == "1000.0"
+
+    watch.recheck_now()  # nothing on disk changed -- the same initial content must be retried
+    assert len(attempts) == 2, "the file's initial content must be retried, not silently dropped"
+    assert attempts[1][0].new_value == "1000.0", "the retry must be the real initial content"
+    assert attempts[1][0].old_value == "", "the retry is still a change from nothing, not from itself"
+
+    watch.recheck_now()  # a third look: already delivered, must not fire again
+    assert len(attempts) == 2, "once delivered, the same content must not be redelivered"
+
+
+def test_a_vanished_files_content_is_retried_if_its_first_removal_delivery_fails(durable_tmp_path):
+    # The same fix, the other direction: a file present at construction (so
+    # its content is already "delivered") that vanishes must have its removal
+    # retried if on_change fails, using the correct baseline (what was
+    # delivered), not silently drop the removal either.
+    path = _write(durable_tmp_path, "1000.0")
+    attempts: list = []
+
+    def flaky_on_change(changes):
+        attempts.append(changes)
+        if len(attempts) == 1:
+            raise RuntimeError("transient failure on the removal delivery")
+
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=flaky_on_change,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    path.unlink()
+
+    watch.recheck_now()  # first look: on_change raises, the removal is not yet consumed
+    assert len(attempts) == 1
+    assert attempts[0][0].old_value == "1000.0"
+    assert attempts[0][0].new_value == ""
+
+    watch.recheck_now()  # still gone -- the same removal must be retried, not dropped
+    assert len(attempts) == 2, "the removal must be retried, not silently dropped"
+    assert attempts[1][0].old_value == "1000.0"
+    assert attempts[1][0].new_value == ""
+
+    watch.recheck_now()  # already delivered -- nothing left to report
+    assert len(attempts) == 2, "once the removal is delivered, it must not be redelivered"
+
+
+def test_an_in_flight_mark_for_a_path_that_no_longer_exists_does_not_leak(durable_tmp_path):
+    # A file created and deleted before the triggered recheck's own glob runs
+    # is in neither the present-path loop nor the vanished-path loop, so
+    # nothing would ever individually clear its mark. A guard that silently
+    # disables the signal it protects is worse than the race it fixed.
+    ghost = durable_tmp_path / "ghost.toml"
+    watch = SettingsDirectoryWatch(
+        directory=durable_tmp_path, on_change=lambda changes: None,
+        on_rejection=lambda rejection: None, on_overflow=lambda: None,
+        recheck_interval_seconds=RECHECK_INTERVAL_SECONDS,
+    )
+    watch._mark_in_flight(ghost)
+    assert watch._is_in_flight(ghost)
+    watch.recheck_now()  # ghost is in neither current_paths nor self._known
+    assert not watch._is_in_flight(ghost), "a mark for a path nobody ever revisits must not leak"
