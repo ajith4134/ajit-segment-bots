@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from runtime.control_channel import (
     COMMAND_REPORT_HEALTH,
     COMMAND_TURN_OFF,
+    ControlFrameRefused,
     has_pending_command,
     receive_command,
 )
@@ -36,13 +37,23 @@ FULL_RATE_RATIO = 1.0
 
 @dataclass(frozen=True)
 class PartHealth:
-    """What a part says about itself, with the two facts section 6 requires."""
+    """What a part says about itself, with the two facts section 6 requires.
+
+    refused_control_frame carries the reason for the most recent control frame
+    this part refused since its last health report, or None if it refused none.
+    A part must not go quiet about a frame it refused -- health is the one
+    outward channel it already has, so a refusal rides on it rather than being
+    swallowed where only a crash would have shown it (the composition gap this
+    field closes: receive_command already refuses a malformed frame instead of
+    raising past run_part, but nothing carried that refusal to the governor).
+    """
 
     part_id: str
     state: str
     rate_ratio: float
     staleness_seconds: float
     observed_at_ns: int
+    refused_control_frame: str | None = None
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:
@@ -81,19 +92,33 @@ def run_part(
     last_tick_at = time.monotonic()
     last_health_at = 0.0
     tick_interval = compute_tick_interval(health_interval_seconds, rate_ratio)
+    # The reason for the most recent control frame this part refused since its
+    # last health report. A frame this part refuses is a fact the governor needs,
+    # not a crash for it to infer one from -- so it rides the next health report
+    # rather than being swallowed here.
+    refused_control_frame: str | None = None
 
     while True:
         if has_pending_command(control_socket, timeout_seconds=tick_interval):
-            frame = receive_command(control_socket)
-            if frame is None:
-                # The governor closed the socket. A part whose governor is gone turns
-                # off rather than running unsupervised.
-                return EXIT_CONTROL_CHANNEL_CLOSED
-            command, _payload = frame
-            if command == COMMAND_TURN_OFF:
-                return EXIT_SWITCHED_OFF
-            if command == COMMAND_REPORT_HEALTH:
-                last_health_at = 0.0  # force one out on the next pass
+            try:
+                frame = receive_command(control_socket)
+            except ControlFrameRefused as refusal:
+                # A malformed or unknown frame is a fact about one command, not a
+                # reason for the part itself to exit -- the loop continues, and the
+                # refusal surfaces through health rather than through a crash the
+                # governor would otherwise have to read a refused frame as.
+                refused_control_frame = str(refusal)
+                last_health_at = 0.0  # force a health report that carries it
+            else:
+                if frame is None:
+                    # The governor closed the socket. A part whose governor is gone
+                    # turns off rather than running unsupervised.
+                    return EXIT_CONTROL_CHANNEL_CLOSED
+                command, _payload = frame
+                if command == COMMAND_TURN_OFF:
+                    return EXIT_SWITCHED_OFF
+                if command == COMMAND_REPORT_HEALTH:
+                    last_health_at = 0.0  # force one out on the next pass
 
         do_one_tick()
         now = time.monotonic()
@@ -108,6 +133,8 @@ def run_part(
                     rate_ratio=rate_ratio,
                     staleness_seconds=staleness,
                     observed_at_ns=time.time_ns(),
+                    refused_control_frame=refused_control_frame,
                 )
             )
             last_health_at = now
+            refused_control_frame = None

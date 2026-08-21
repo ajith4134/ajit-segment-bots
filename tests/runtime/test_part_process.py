@@ -7,6 +7,7 @@ phase 2.
 """
 
 import os
+import struct
 import time
 
 import pytest
@@ -15,6 +16,8 @@ from runtime.control_channel import COMMAND_TURN_OFF, create_control_socket_pair
 from runtime.forkserver_launcher import spawn_part, start_forkserver
 from runtime.part_declaration import PartDeclaration, RateRisk, ResourceClass, SkippedTickEffect
 from runtime.part_process import FULL_RATE_RATIO, PartHealth, compute_tick_interval, run_part
+
+_LENGTH_PREFIX = struct.Struct("!I")
 
 HEALTH_INTERVAL = 0.05
 
@@ -70,12 +73,14 @@ def run_counting_part(control_socket, health_queue, tick_queue) -> None:
     )
 
 
-def run_throttled_counting_part(control_socket, tick_timestamp_queue, rate_ratio) -> None:
+def run_throttled_counting_part(control_socket, tick_timestamp_queue, rate_ratio, health_queue) -> None:
     """Module-level on purpose: forkserver pickles the target by qualified name.
 
     Records when each tick actually happened rather than how many, so the test
     can measure the real gap between ticks instead of trusting the arithmetic
-    that produced the interval in isolation.
+    that produced the interval in isolation. Also emits health onto health_queue
+    -- degradation must be visible, so a throttled part's own reported rate_ratio
+    has to be inspected too, not only the timing of its ticks.
     """
 
     def do_one_tick() -> None:
@@ -85,7 +90,7 @@ def run_throttled_counting_part(control_socket, tick_timestamp_queue, rate_ratio
         declaration=_declaration(),
         control_socket=control_socket,
         do_one_tick=do_one_tick,
-        emit_health=lambda health: None,
+        emit_health=health_queue.put,
         health_interval_seconds=HEALTH_INTERVAL,
         rate_ratio=rate_ratio,
     )
@@ -138,6 +143,63 @@ def test_the_process_is_gone_after_off_so_its_memory_is_back():
     part_end.close()
 
 
+def test_a_garbage_control_frame_does_not_kill_the_part_and_shows_up_in_its_health():
+    # The cross-task gap: receive_command already refuses a malformed frame
+    # (ControlFrameRefused) instead of raising a JSON decode error past its own
+    # boundary, but nothing in run_part ever caught it -- so the refusal escaped
+    # the loop and terminated the part anyway. Reproduced directly against a real
+    # socketpair before this fix: the part thread died and the refusal was the
+    # uncaught exception, not a value on health.
+    context = start_forkserver(preload_modules=("numpy",))
+    governor_end, part_end = create_control_socket_pair()
+    health_queue, tick_queue = context.Queue(), context.Queue()
+
+    process = spawn_part(
+        context, entry_point=run_counting_part,
+        arguments=(part_end, health_queue, tick_queue), thread_ceiling=1,
+    )
+    assert tick_queue.get(timeout=10) >= 1
+
+    # A frame whose body is not JSON: 4-byte length prefix, then garbage bytes.
+    garbage_body = b"this is not json!"
+    governor_end.sendall(_LENGTH_PREFIX.pack(len(garbage_body)) + garbage_body)
+
+    # The part must still be alive and still ticking after the refusal -- a dead
+    # process would never put another tick on the queue.
+    assert tick_queue.get(timeout=10) >= 1
+    assert process.is_alive() is True
+
+    # The refusal must be visible on health, not silently swallowed. This
+    # unthrottled part emits health on every tick, most of it with
+    # refused_control_frame=None (there is no way to know in advance whether
+    # the report carrying the refusal lands before or after an innocent one
+    # already in flight when the garbage frame was sent), so this scans the
+    # health this part actually produced for the one report that does carry a
+    # refusal, rather than assuming it is the very next item -- and fails
+    # loudly, not by hanging, if none ever does.
+    deadline = time.monotonic() + 10
+    refusing_health = None
+    while time.monotonic() < deadline:
+        health = health_queue.get(timeout=max(0.1, deadline - time.monotonic()))
+        assert isinstance(health, PartHealth)
+        if health.refused_control_frame is not None:
+            refusing_health = health
+            break
+
+    assert refusing_health is not None, "no health report ever carried the refusal"
+    assert f"{len(garbage_body)} bytes" in refusing_health.refused_control_frame
+    assert "JSON" in refusing_health.refused_control_frame
+
+    # And the part still turns off cleanly on a real command afterward.
+    send_command(governor_end, COMMAND_TURN_OFF, {"reason": "test"})
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    assert process.is_alive() is False
+
+    governor_end.close()
+    part_end.close()
+
+
 QUARTER_RATE = 0.25
 TICKS_TO_OBSERVE = 3
 # How much of a real gap the loop's own overhead (scheduling, the select() call
@@ -157,13 +219,20 @@ def test_a_throttled_part_ticks_no_faster_than_its_computed_interval():
     # assert an upper bound here.
     context = start_forkserver(preload_modules=("numpy",))
     governor_end, part_end = create_control_socket_pair()
-    timestamp_queue = context.Queue()
+    timestamp_queue, health_queue = context.Queue(), context.Queue()
 
     process = spawn_part(
         context, entry_point=run_throttled_counting_part,
-        arguments=(part_end, timestamp_queue, QUARTER_RATE), thread_ceiling=1,
+        arguments=(part_end, timestamp_queue, QUARTER_RATE, health_queue), thread_ceiling=1,
     )
     timestamps = [timestamp_queue.get(timeout=10) for _ in range(TICKS_TO_OBSERVE)]
+
+    # Section 6, Rule 8: degradation must be visible on the board, not only
+    # reachable by timing the ticks by hand. A quarter-rate part must say so on
+    # its own health report -- the exact value, not merely a number in (0, 1].
+    health = health_queue.get(timeout=10)
+    assert isinstance(health, PartHealth)
+    assert health.rate_ratio == QUARTER_RATE
 
     send_command(governor_end, COMMAND_TURN_OFF, {"reason": "test"})
     process.join(timeout=10)
