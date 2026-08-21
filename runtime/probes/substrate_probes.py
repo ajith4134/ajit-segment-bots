@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 import sysconfig
+import tomllib
 from dataclasses import dataclass
 
 from runtime.forkserver_launcher import SINGLE_THREAD, read_kernel_thread_count
@@ -43,12 +45,49 @@ NOT_BUILT = "NOT BUILT"
 FAILING = "FAILING"
 NOT_MEASURED = "NOT MEASURED"
 
-_STANDARD_BUILD_VERSION = (3, 14)
+# runtime/probes/substrate_probes.py -> runtime/probes -> runtime -> repository root.
+PYPROJECT_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
 # The filename this probe's own state-store reading and writes under, inside the
 # runtime's own state directory. A fixed, stable name so repeated probe runs read
 # and extend the same store rather than scattering one file per run.
 _PROBE_STORE_FILENAME = "substrate-probe.sqlite3"
+
+
+class _PinnedVersionUnreadable(Exception):
+    """pyproject.toml's own requires-python could not be read or parsed."""
+
+
+def _read_pinned_interpreter_version() -> tuple[int, int]:
+    """The (major, minor) this project actually pins, read from pyproject.toml's
+    own requires-python rather than duplicated as a literal in this module.
+
+    RL-061: probe_interpreter_build's OK/FAILING threshold is a number in decision
+    code, so it has to carry its provenance -- and the one place that provenance
+    can come from without inventing a second source of truth is the same
+    requires-python D-011 and section 15.1 already pin this project to. If this
+    file and pyproject.toml ever disagree, that disagreement should be visible on
+    the tile rather than silently resolved by whichever one got hardcoded here.
+    """
+    try:
+        body = PYPROJECT_PATH.read_text()
+    except OSError as failure:
+        raise _PinnedVersionUnreadable(f"{PYPROJECT_PATH} could not be read: {failure}") from failure
+    try:
+        document = tomllib.loads(body)
+    except tomllib.TOMLDecodeError as failure:
+        raise _PinnedVersionUnreadable(f"{PYPROJECT_PATH} is not valid TOML: {failure}") from failure
+
+    requires_python = document.get("project", {}).get("requires-python")
+    if not requires_python:
+        raise _PinnedVersionUnreadable(f"{PYPROJECT_PATH} declares no [project] requires-python")
+
+    match = re.search(r"(\d+)\.(\d+)", requires_python)
+    if not match:
+        raise _PinnedVersionUnreadable(
+            f"{PYPROJECT_PATH} requires-python {requires_python!r} names no major.minor version"
+        )
+    return (int(match.group(1)), int(match.group(2)))
 
 
 @dataclass(frozen=True)
@@ -86,9 +125,12 @@ def _read_runtime_setting(name: str) -> object:
 
 
 def probe_interpreter_build() -> SubstrateProbeResult:
-    """Is this the standard CPython build section 15.1 chose, and is it 3.14?"""
+    """Is this the standard CPython build section 15.1 chose, at the version pinned?"""
     label = "Interpreter build"
-    proof = "python -c \"import sysconfig; sysconfig.get_config_var('Py_GIL_DISABLED')\""
+    proof = (
+        "python -c \"import sysconfig; sysconfig.get_config_var('Py_GIL_DISABLED')\"; "
+        f"requires-python in {PYPROJECT_PATH}"
+    )
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     gil_disabled = sysconfig.get_config_var("Py_GIL_DISABLED")
 
@@ -104,11 +146,22 @@ def probe_interpreter_build() -> SubstrateProbeResult:
             f"standard build because five pinned packages ship no cp314t wheel",
             proof,
         )
-    if sys.version_info[:2] != _STANDARD_BUILD_VERSION:
+
+    try:
+        pinned_major, pinned_minor = _read_pinned_interpreter_version()
+    except _PinnedVersionUnreadable as failure:
+        return SubstrateProbeResult(label, NOT_MEASURED, str(failure), proof)
+
+    if sys.version_info[:2] != (pinned_major, pinned_minor):
         return SubstrateProbeResult(
-            label, FAILING, f"standard build but python {version}, spec section 15.1 pins 3.14", proof
+            label,
+            FAILING,
+            f"standard build but python {version}, pyproject.toml pins {pinned_major}.{pinned_minor}",
+            proof,
         )
-    return SubstrateProbeResult(label, OK, f"standard build, python {version}", proof)
+    return SubstrateProbeResult(
+        label, OK, f"standard build, python {version}, matches pyproject.toml's {pinned_major}.{pinned_minor} pin", proof
+    )
 
 
 def probe_forkserver_is_forkable() -> SubstrateProbeResult:

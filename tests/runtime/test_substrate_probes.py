@@ -76,3 +76,26 @@ def test_zero_blas_pools_is_not_measured_rather_than_a_vacuous_ok(monkeypatch):
     result = probe_blas_is_pinned()
     assert result.state == "NOT MEASURED"
     assert result.state != "OK"
+
+
+def test_the_interpreter_probe_says_so_when_pyproject_is_unreadable(monkeypatch):
+    # RL-061: the interpreter probe's OK/FAILING threshold is sourced from
+    # pyproject.toml's own requires-python, not a literal in this module. If
+    # that source cannot be read, the probe must not fall back to a guess.
+    import runtime.probes.substrate_probes as probes
+
+    monkeypatch.setattr(probes, "PYPROJECT_PATH", probes.pathlib.Path("/nonexistent/pyproject.toml"))
+    result = probe_interpreter_build()
+    assert result.state == "NOT MEASURED"
+
+
+def test_the_interpreter_probe_fails_when_the_running_version_disagrees_with_the_pin(monkeypatch):
+    # If pyproject.toml and the running interpreter ever disagree, the probe
+    # must say so rather than silently testing a different version than the
+    # project actually pins.
+    import runtime.probes.substrate_probes as probes
+
+    monkeypatch.setattr(probes, "_read_pinned_interpreter_version", lambda: (2, 7))
+    result = probe_interpreter_build()
+    assert result.state == "FAILING"
+    assert "2.7" in result.value
