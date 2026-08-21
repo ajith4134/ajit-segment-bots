@@ -5,6 +5,9 @@
 Only latency-risk-only on both may be throttled. Everything else gets a floor.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from runtime.part_declaration import (
@@ -15,6 +18,20 @@ from runtime.part_declaration import (
     load_declaration_from_blueprint,
     may_enter_rate_ladder,
 )
+
+DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "dashboard"
+
+
+def _import_render_blueprint():
+    """Import dashboard/render_blueprint.py the way running it directly would:
+    its own directory on sys.path first, matching tests/dashboard's own import
+    setup for the same reason -- it is a standalone script, not a package member.
+    """
+    if str(DASHBOARD_DIR) not in sys.path:
+        sys.path.insert(0, str(DASHBOARD_DIR))
+    import render_blueprint
+
+    return render_blueprint
 
 
 def _declare(rate_risk: RateRisk, effect: SkippedTickEffect) -> PartDeclaration:
@@ -64,3 +81,18 @@ def test_a_declaration_loaded_from_the_blueprint_matches_what_the_blueprint_says
 def test_loading_a_part_that_is_not_in_the_blueprint_refuses():
     with pytest.raises(KeyError):
         load_declaration_from_blueprint("a-part-nobody-declared")
+
+
+def test_the_three_vocabularies_agree_with_the_contract_checkers_own_copy():
+    # Each of resource_class, rate_risk, and skipped_tick_effect is declared
+    # twice: once as a StrEnum here, once as a frozenset in
+    # dashboard/render_blueprint.py, which check_contracts.py uses to validate
+    # every part in the blueprint. Nothing pins the two copies equal today --
+    # they agree because a reviewer checked by hand, and a divergence would be
+    # silent because the checker that is supposed to refuse a bad commit would
+    # itself be reading a stale vocabulary.
+    render_blueprint = _import_render_blueprint()
+
+    assert {member.value for member in ResourceClass} == render_blueprint.KNOWN_RESOURCE_CLASSES
+    assert {member.value for member in RateRisk} == render_blueprint.KNOWN_RATE_RISKS
+    assert {member.value for member in SkippedTickEffect} == render_blueprint.KNOWN_SKIPPED_TICK_EFFECTS
