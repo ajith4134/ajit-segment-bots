@@ -119,3 +119,81 @@ def test_it_refuses_a_directory_whose_pages_are_memory(tmp_path):
 
     with pytest.raises(VolatileStorageRefused):
         open_numeric_state(tmp_path, SPEC)
+
+
+def test_reopening_with_a_larger_shape_refuses(durable_tmp_path):
+    # numpy's own r+ mode would silently extend the file with zero bytes here --
+    # exactly the quiet corruption has_state_gap exists to catch on the other
+    # side of a crash. Reopening under a bigger spec must fail closed instead.
+    import math
+
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 1.0
+
+    larger_spec = NumericStateSpec(name="rolling-window", shape=(20,), dtype="float64")
+    with pytest.raises(NumericStateShapeMismatch) as failure:
+        open_numeric_state(durable_tmp_path, larger_spec)
+
+    actual_bytes = numpy.dtype(written_spec.dtype).itemsize * math.prod(written_spec.shape)
+    expected_bytes = numpy.dtype(larger_spec.dtype).itemsize * math.prod(larger_spec.shape)
+    message = str(failure.value)
+    assert str(actual_bytes) in message
+    assert str(expected_bytes) in message
+
+
+def test_reopening_with_a_smaller_shape_refuses(durable_tmp_path):
+    # numpy's own r+ mode would silently map only a truncated subset here. The
+    # rest of what was written would still be on disk but invisible -- the same
+    # class of quiet corruption as the larger-shape case, from the other side.
+    import math
+
+    from runtime.numeric_state import NumericStateShapeMismatch
+
+    written_spec = NumericStateSpec(name="rolling-window", shape=(20,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 1.0
+
+    smaller_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with pytest.raises(NumericStateShapeMismatch) as failure:
+        open_numeric_state(durable_tmp_path, smaller_spec)
+
+    actual_bytes = numpy.dtype(written_spec.dtype).itemsize * math.prod(written_spec.shape)
+    expected_bytes = numpy.dtype(smaller_spec.dtype).itemsize * math.prod(smaller_spec.shape)
+    message = str(failure.value)
+    assert str(actual_bytes) in message
+    assert str(expected_bytes) in message
+
+
+def test_reopening_with_a_different_dtype_of_the_same_total_size_is_not_caught_by_size_alone(
+    durable_tmp_path,
+):
+    # Documented limitation, not a guarantee: the guard compares total byte
+    # counts, and float64[10] and int64[10] both occupy 80 bytes. This test
+    # records that a dtype swap at the same total size passes through the guard
+    # rather than leaving the gap silently untested -- see the task-10 report.
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 1.0
+
+    same_size_different_dtype_spec = NumericStateSpec(
+        name="rolling-window", shape=(10,), dtype="int64"
+    )
+    with open_numeric_state(durable_tmp_path, same_size_different_dtype_spec) as reopened:
+        assert reopened.array.dtype == numpy.dtype("int64")
+
+
+def test_reopening_with_the_matching_spec_still_works_and_data_is_intact(durable_tmp_path):
+    # The guard must not break the ordinary path: reopening under the same shape
+    # and dtype the state was written under has to succeed exactly as before.
+    written_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, written_spec) as state:
+        state.array[:] = 3.5
+        state.record_sequence_stamp(2)
+
+    matching_spec = NumericStateSpec(name="rolling-window", shape=(10,), dtype="float64")
+    with open_numeric_state(durable_tmp_path, matching_spec) as reopened:
+        assert bool((reopened.array == 3.5).all())
+        assert reopened.read_sequence_stamp() == 2

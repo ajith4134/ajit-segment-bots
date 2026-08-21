@@ -18,6 +18,7 @@ never exits. The governor must not do that.
 
 from __future__ import annotations
 
+import math
 import pathlib
 from dataclasses import dataclass
 
@@ -31,6 +32,19 @@ STAMP_DTYPE = "int64"
 STAMP_SUFFIX = ".stamp"
 DATA_SUFFIX = ".f64"
 NO_STAMP_RECORDED = 0
+
+
+class NumericStateShapeMismatch(RuntimeError):
+    """An existing file's on-disk size disagrees with what the spec now declares.
+
+    Resizing a part's numeric state -- a rolling window growing, a learned
+    parameter block changing shape -- is a deliberate migration, never something
+    that happens by opening the file under a different spec. numpy.memmap would
+    otherwise do it silently: 'r+' mode zero-pads a file that is too small and
+    happily maps only a truncated subset of one that is too large. Either is the
+    same quiet corruption has_state_gap exists to catch on the other side of a
+    crash, arriving instead through a redeploy that changed a shape.
+    """
 
 
 @dataclass(frozen=True)
@@ -103,6 +117,17 @@ def open_numeric_state(directory: pathlib.Path, spec: NumericStateSpec) -> Numer
             f"{spec.name} declares dtype {spec.dtype}, which holds Python objects. "
             f"An array of pointers into one process's heap cannot be shared or made durable."
         )
+
+    if data_path.exists():
+        expected_bytes = numpy.dtype(spec.dtype).itemsize * math.prod(spec.shape)
+        actual_bytes = data_path.stat().st_size
+        if actual_bytes != expected_bytes:
+            raise NumericStateShapeMismatch(
+                f"{data_path} holds {actual_bytes} bytes, but spec {spec.name} "
+                f"(shape={spec.shape}, dtype={spec.dtype}) implies {expected_bytes} bytes. "
+                f"Resizing a part's numeric state is a deliberate migration, not something "
+                f"that happens by opening it under a different spec."
+            )
 
     mode = "r+" if data_path.exists() else "w+"
     array = numpy.memmap(data_path, dtype=spec.dtype, mode=mode, shape=spec.shape)
