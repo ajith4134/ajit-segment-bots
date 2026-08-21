@@ -94,6 +94,52 @@ def test_the_window_query_excludes_what_falls_outside_it(durable_tmp_path, opene
     assert [entry.payload for entry in later] == ["late"]
 
 
+def test_a_window_query_returns_only_the_requested_part_s_entries(durable_tmp_path, opened_stores):
+    # The whole reason SQLite won over LMDB (section 15.2) is this query. A query
+    # that dropped the part_id predicate would still pass a count-only assertion
+    # if both parts wrote the same number of rows, so this checks part_id itself.
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+    before = time.time_ns()
+    append_journal_entry(connection, "part-one", "kind", "one-a", "test")
+    append_journal_entry(connection, "part-two", "kind", "two-a", "test")
+    append_journal_entry(connection, "part-one", "kind", "one-b", "test")
+    after = time.time_ns()
+
+    entries = read_entries_in_window(connection, "part-one", before, after)
+
+    assert [entry.part_id for entry in entries] == ["part-one", "part-one"]
+    assert [entry.payload for entry in entries] == ["one-a", "one-b"]
+
+
+def test_both_window_boundaries_are_inclusive(durable_tmp_path, opened_stores):
+    # start_ns >= ... <= end_ns in the implementation -- both ends inclusive. Read
+    # the real stored recorded_at_ns values back rather than computing timestamps,
+    # so the test pins actual stored values and needs no sleep to separate entries.
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+    append_journal_entry(connection, "part", "kind", "first", "test")
+    append_journal_entry(connection, "part", "kind", "middle", "test")
+    append_journal_entry(connection, "part", "kind", "last", "test")
+
+    written = read_entries_in_window(connection, "part", 0, time.time_ns())
+    first_entry, last_entry = written[0], written[-1]
+
+    from_first_boundary = read_entries_in_window(
+        connection, "part", first_entry.recorded_at_ns, time.time_ns()
+    )
+    assert first_entry.entry_id in {entry.entry_id for entry in from_first_boundary}
+
+    up_to_last_boundary = read_entries_in_window(connection, "part", 0, last_entry.recorded_at_ns)
+    assert last_entry.entry_id in {entry.entry_id for entry in up_to_last_boundary}
+
+
+def test_an_empty_window_returns_an_empty_list(durable_tmp_path, opened_stores):
+    connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.RECORD, BUSY_TIMEOUT)
+    before_anything_was_written = time.time_ns()
+    append_journal_entry(connection, "part", "kind", "payload", "test")
+
+    assert read_entries_in_window(connection, "part", 0, before_anything_was_written) == []
+
+
 def test_it_is_in_write_ahead_logging_mode(durable_tmp_path, opened_stores):
     connection = opened_stores(durable_tmp_path / "journal.db", StoreDurability.LEDGER, BUSY_TIMEOUT)
     assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
