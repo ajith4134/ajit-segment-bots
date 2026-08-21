@@ -161,6 +161,31 @@ a stall before it is stale relative to the fastest thing worth noticing. `1.0` s
 matches that, rather than the much slower cadence a purely capital-facing part
 could get away with.
 
+### `settings_recheck_interval`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `5.0` |
+| Read by | `SettingsDirectoryWatch` (`runtime/settings_watcher.py`), and downstream through it `capital-settings-change-recorder` |
+| The bound | how often the watch re-reads the whole settings directory on its own clock, independent of any inotify event — the worst-case staleness of a dropped or coalesced settings edit before this backstop catches it |
+
+`inotify(7)` documents `IN_Q_OVERFLOW` for a dropped event, but measured directly
+against this project's pinned `watchdog==6.0.0`: its own C shim discards that
+marker (`wd == -1`) before it ever becomes an observable event, so nothing built
+on the library can react to the kernel's own signal — confirmed by forcing a real
+overflow with a raw 49152-event burst against this box's
+`max_queued_events=16384`, which produced one, and then confirming the same burst
+run through the real, wired watch never triggered it. The periodic re-read is the
+actual guarantee instead: a document already in sync produces no diff, so any
+diff this pass finds is proof, not a guess, that no event reported it first —
+that is when `on_overflow` fires, alongside `on_change` reporting the real diff.
+Measured: parsing a 6-entry settings file costs about 225 microseconds, so
+rereading the whole directory at this cadence is negligible CPU. `5.0` s is the
+cost of getting this number wrong made explicit: it is how long an operator's
+edit to `main_balance` or `leverage_ceiling` — real capital bounds, RL-055 — could
+sit unreported if its inotify event never arrived.
+
 ---
 
 ## `main-account.toml` — the capital scope (RL-055's actual subject)

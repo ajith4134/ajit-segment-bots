@@ -36,3 +36,8 @@ note  = "operator, 2026-08-20: the forkserver refuses to fork above this, read f
 value = 1.0
 unit  = "seconds"
 note  = "operator, 2026-08-20: how often a part emits part-health while on. Intraday bars at 1m/5m/15m/30m need about one message a second, so this matches the slowest thing worth noticing."
+
+[settings_recheck_interval]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-21: SettingsDirectoryWatch's periodic backstop -- it re-reads the whole settings directory on this cadence regardless of what any inotify event announced. Measured directly: watchdog==6.0.0's own C shim discards the kernel's IN_Q_OVERFLOW marker (wd == -1) before it ever reaches a handler, so nothing built on it can react to a real, reproduced overflow (a raw 49152-event burst against this box's max_queued_events=16384 produced one). This periodic re-read is the actual guarantee instead, and the cost of getting this number wrong is exactly the worst-case staleness of an operator's capital-bound edit sitting unreported: too high risks the board showing a stale main_balance or leverage_ceiling for that long; too low is still cheap, since parsing a 6-entry settings file measured at roughly 225 microseconds, so even this cadence is negligible CPU."
