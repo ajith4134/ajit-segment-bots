@@ -78,7 +78,19 @@ def name_variants(part_id: str) -> set[str]:
 
 
 def is_test_file(path: Path) -> bool:
-    return "test" in path.name.lower() or "test" in str(path.parent).lower()
+    """A test file, by directory or by filename convention -- never by substring.
+
+    Substring matching was the rule until 2026-08-22, when the backtesting block
+    landed: every file under parts/backtesting/ was classified as a test because
+    "backtesting" contains "test", so all ten parts reported DECLARED with their
+    own implementations listed as their tests. The same bug made skill_tester.py
+    invisible to itself. What identifies a test here is a directory named tests or
+    a file named test_x / x_test, and both are exact.
+    """
+    name = path.name.lower()
+    if name.startswith("test_") or name.removesuffix(path.suffix).endswith("_test"):
+        return True
+    return any(part.lower() in {"test", "tests"} for part in path.parts)
 
 
 def find_test_files(part_id: str, sources: list[Path]) -> list[Path]:
@@ -132,8 +144,7 @@ def find_implementation_file(part_id: str, sources: list[Path]) -> Path | None:
     """
     variants = name_variants(part_id)
     hits = [p for p in sources if any(v in p.stem for v in variants)]
-    tests = [p for p in hits if "test" in p.name.lower() or "test" in str(p.parent).lower()]
-    impls = [p for p in hits if p not in tests]
+    impls = [p for p in hits if not is_test_file(p)]
     if not impls:
         return None
     # An exact stem wins over a substring. Without this, counterfactual-replayer
