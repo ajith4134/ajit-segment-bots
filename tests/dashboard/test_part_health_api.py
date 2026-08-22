@@ -20,9 +20,48 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent.parent
 DASHBOARD_DIR = PROJECT / "dashboard"
 
-SUBJECT_PART_ID = "kline-window-builder"
-SUBJECT_CONSUMES = ("market-data",)
-SUBJECT_PRODUCES = ("kline-window", "part-health")
+def _an_unbuilt_part():
+    """A part that is still DECLARED, chosen from the blueprint at run time.
+
+    Pinned to a name, this test went stale the moment that part was actually
+    built -- the scratch files stopped controlling its rung and the assertions
+    inverted. Choosing at run time means it keeps testing the mechanism for as
+    long as anything is unbuilt, and fails honestly once nothing is.
+    """
+    if str(DASHBOARD_DIR) not in sys.path:
+        sys.path.insert(0, str(DASHBOARD_DIR))
+    import part_health_api
+
+    payload = part_health_api.build_board_payload("live")
+    for block in payload["blocks"]:
+        # DECLARED specifically, not merely incomplete: a part with a source
+        # file but no test falls back to IMPLEMENTED when the scratch files go,
+        # and this test asserts it falls all the way back to DECLARED.
+        unbuilt = [
+            part
+            for part in payload["parts"]
+            if part["block"] == block["id"] and part["rung"] == "DECLARED"
+        ]
+        # A block with more than one unbuilt part, so turning one green leaves
+        # the block red -- which is the thing this file exists to check.
+        if len(unbuilt) > 1:
+            return unbuilt[0]["id"]
+    raise AssertionError(
+        "every part is built, so this test can no longer distinguish a green dot "
+        "from a vacuous one; replace it with one that does"
+    )
+
+
+def _blueprint_declaration(part_id: str):
+    """The part's real consumes and produces.
+
+    Written into the scratch file rather than a fixed pair, so the wiring check
+    sees a declaration that matches the blueprint. A mismatched one makes the
+    part FAILING, which is a different verdict from the one this file tests.
+    """
+    from runtime.part_declaration import load_declaration_from_blueprint
+
+    return load_declaration_from_blueprint(part_id)
 
 
 def _import_part_health_api():
@@ -40,9 +79,11 @@ def scratch_part_files():
     test_build_part_monitor.py's, kept separate rather than shared because
     the two files exercise different modules and must not become coupled.
     """
+    part_id = _an_unbuilt_part()
+    declaration = _blueprint_declaration(part_id)
     scratch_dir = PROJECT / "rl070_scratch_part_health_api"
     scratch_dir.mkdir(exist_ok=True)
-    module_name = "rl070_scratch_ph_kline_window_builder"
+    module_name = f"rl070_scratch_ph_{part_id.replace('-', '_')}"
     source_path = scratch_dir / f"{module_name}.py"
     test_path = scratch_dir / f"test_{module_name}.py"
     test_path.write_text("def test_scratch_placeholder():\n    assert True\n")
@@ -50,16 +91,16 @@ def scratch_part_files():
         "from runtime.part_declaration import PartDeclaration\n"
         "\n"
         "PART_DECLARATION = PartDeclaration(\n"
-        f"    part_id={SUBJECT_PART_ID!r},\n"
-        f"    consumes={SUBJECT_CONSUMES!r},\n"
-        f"    produces={SUBJECT_PRODUCES!r},\n"
-        '    resource_class="bandwidth-bound",\n'
-        '    rate_risk="changes-the-answer",\n'
-        '    skipped_tick_effect="corrupts",\n'
+        f"    part_id={part_id!r},\n"
+        f"    consumes={declaration.consumes!r},\n"
+        f"    produces={declaration.produces!r},\n"
+        f"    resource_class={declaration.resource_class.value!r},\n"
+        f"    rate_risk={declaration.rate_risk.value!r},\n"
+        f"    skipped_tick_effect={declaration.skipped_tick_effect.value!r},\n"
         ")\n"
     )
     try:
-        yield source_path
+        yield part_id, source_path
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
@@ -108,10 +149,11 @@ def test_payload_reuses_completion_py_rather_than_reimplementing_it():
 def test_a_built_and_tested_part_turns_its_dot_green_while_its_block_stays_red(
     scratch_part_files,
 ):
+    part_id, _ = scratch_part_files
     part_health_api = _import_part_health_api()
     payload = part_health_api.build_board_payload("live")
 
-    subject = next(p for p in payload["parts"] if p["id"] == SUBJECT_PART_ID)
+    subject = next(p for p in payload["parts"] if p["id"] == part_id)
     assert subject["is_complete"] is True
     assert subject["rung"] == "TESTED"
 
@@ -123,16 +165,17 @@ def test_a_built_and_tested_part_turns_its_dot_green_while_its_block_stays_red(
 
 
 def test_removing_the_scratch_files_turns_the_part_dot_red_again(scratch_part_files):
+    part_id, source_path = scratch_part_files
     part_health_api = _import_part_health_api()
     payload = part_health_api.build_board_payload("live")
-    subject = next(p for p in payload["parts"] if p["id"] == SUBJECT_PART_ID)
+    subject = next(p for p in payload["parts"] if p["id"] == part_id)
     assert subject["is_complete"] is True
 
-    scratch_part_files.unlink()
-    (scratch_part_files.parent / f"test_{scratch_part_files.stem}.py").unlink()
+    source_path.unlink()
+    (source_path.parent / f"test_{source_path.stem}.py").unlink()
 
     payload = part_health_api.build_board_payload("live")
-    subject = next(p for p in payload["parts"] if p["id"] == SUBJECT_PART_ID)
+    subject = next(p for p in payload["parts"] if p["id"] == part_id)
     assert subject["is_complete"] is False
     assert subject["rung"] == "DECLARED"
 
