@@ -124,12 +124,20 @@ class CointegrationPairFinder:
         right_series = list(right.values)[-length:]
         pair_correlation = correlation(left_series, right_series)
 
+        pair_key = (venue_id, left_symbol, right_symbol)
+
         fit = linear_fit(list(zip(right_series, left_series)))
         if fit is None:
+            # No hedge ratio exists, so there is no spread to judge. A pair that
+            # was cointegrated is retired here as firmly as one that failed a
+            # threshold -- untestable is not a reason to keep trading it.
+            self.standing.unrelated += 1
+            self._retire(pair_key)
             return self._pair(
                 venue_id, left_symbol, right_symbol, UNRELATED,
                 None, None, None, pair_correlation, None, length,
-                "the second symbol did not move, so no hedge ratio exists",
+                "the second symbol did not move, so no hedge ratio exists and the "
+                "spread cannot be judged at all",
             )
         hedge_ratio, _intercept = fit
 
@@ -151,7 +159,6 @@ class CointegrationPairFinder:
         reversion_fit = linear_fit(points)
         reversion = -reversion_fit[0] if reversion_fit else None
 
-        pair_key = (venue_id, left_symbol, right_symbol)
         if pair_correlation is None or abs(pair_correlation) < self._minimum_correlation:
             self.standing.unrelated += 1
             self._retire(pair_key)
