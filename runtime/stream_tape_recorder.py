@@ -112,17 +112,26 @@ class StreamTapeRecorder:
     def connections(self) -> tuple[VenueStreamConnection, ...]:
         return tuple(self._connections)
 
-    def capture_one_tick(self) -> int:
+    def capture_one_tick(self, on_recorded_payload=None) -> int:
         """Drain every connection once and write what arrived. Returns records written.
 
         Never blocks longer than the drain interval each connection was given, so
         the control channel is answered promptly and the governor's off switch
         stays a switch (T-2).
+
+        on_recorded_payload, when given, is called with each payload that reached
+        the tape -- and only after it did. The order is deliberate: the tape is the
+        record that cannot be rebuilt, and publishing before writing would mean a
+        crash between the two lost a message the rest of the system had already
+        acted on. A payload the tape refused is never handed on.
         """
         written = 0
         for connection in self._connections:
             for payload in connection.drain():
-                written += self._record_payload(payload)
+                recorded = self._record_payload(payload)
+                written += recorded
+                if recorded and on_recorded_payload is not None:
+                    on_recorded_payload(payload)
         return written
 
     def _record_payload(self, payload: bytes) -> int:

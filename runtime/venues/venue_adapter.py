@@ -34,12 +34,14 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
+from runtime.trading_types import BUY
 
 __all__ = [
     "BanSignal",
     "ConnectionDiscipline",
     "HeartbeatDiscipline",
     "MessageFacts",
+    "NormalisedTrade",
     "SequenceContinuity",
     "QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE",
     "QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA",
@@ -172,6 +174,46 @@ class MessageFacts:
     # gap detector would report a gap at every legitimate resnapshot, which is
     # the fastest way to make a real gap invisible among false ones.
     resets_sequence: bool = False
+
+
+@dataclass(frozen=True)
+class NormalisedTrade:
+    """One trade, in this project's own terms rather than a venue's.
+
+    Normalisation happens on read (spec section 2.2): the tape keeps the venue's
+    bytes, and this is what a reader hands the rest of the system. Doing it here,
+    once, is the whole point -- `market-data` has 65 consumers in the blueprint, and
+    a design where each of them parsed a venue's JSON would be 65 parts that know
+    what a venue looks like, which is the opposite of what an adapter is for.
+
+    `side` is the **aggressor's** side, always. Venues do not agree on how to say
+    it: Binance sends whether the buyer was the maker, Bybit sends the taker's
+    direction outright. A consumer reasoning about buying pressure must not have to
+    know which venue phrased it which way.
+
+    `fidelity` travels with the trade because the two venues do not mean the same
+    thing by "a trade": Binance offers only 100 ms aggregates and Bybit sends every
+    print. A consumer counting trades per second is counting different things on
+    each, and this is what lets it know that.
+    """
+
+    venue_id: str
+    symbol: str
+    price: float
+    quantity: float
+    side: str
+    venue_time_ns: int
+    sequence: int
+    fidelity: TradeFidelity
+
+    @property
+    def signed_quantity(self) -> float:
+        """Positive when the aggressor bought, negative when it sold."""
+        return self.quantity if self.side == BUY else -self.quantity
+
+    @property
+    def quote_volume(self) -> float:
+        return self.price * self.quantity
 
 
 @dataclass(frozen=True)
@@ -331,6 +373,19 @@ class VenueAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
+    def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
+        """Every trade inside one stream message, in this project's terms.
+
+        Returns an empty tuple for a message that carries no trades -- a control
+        frame, a candle, a book update -- so a caller never has to ask what kind of
+        message it has before asking for its trades.
+
+        A tuple rather than one trade because a venue decides how many it packs
+        into a message: Binance sends one aggregate per frame, Bybit sends a list.
+        A signature that returned one would have quietly dropped the rest.
+        """
+
+    @abc.abstractmethod
     def read_previous_sequence(self, payload: bytes) -> int | None:
         """The sequence this message says its predecessor had, or None.
 
@@ -424,6 +479,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
 # exercise them against payloads that venue actually sent.
 QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_message_facts",
+    "read_trades",
     "read_previous_sequence",
     "read_catalogue_cursor",
     "read_quote_volumes",

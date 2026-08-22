@@ -330,3 +330,69 @@ def _paths_for_only_day(tape_root, venue_id, symbol):
     days = sorted({path.stem for path in directory.glob("*.index")})
     assert len(days) == 1, f"expected one day of tape in {directory}, found {days}"
     return tape_paths_for(tape_root, venue_id, symbol, days[0])
+
+
+# --- Publishing: what leaves this part for the other 65 that read market-data ---
+
+
+def replay_publishing(reader, payloads):
+    """Replay, capturing what the part would have published, in order."""
+    for connection in reader.connections:
+        connection.close()
+    reader._connections = [ReplayingConnection(payloads)]
+    published = []
+    written = reader.capture_one_tick(on_recorded_payload=published.append)
+    return written, published
+
+
+def test_only_what_reached_the_tape_is_published(tape_root, read_captured_payloads):
+    """The order is the point: history first, then the rest of the system.
+
+    A payload the tape refused -- a control frame, a message the adapter cannot
+    read -- must not be handed on. The rest of the system acting on a message that
+    is not in the record would make the tape and the behaviour disagree, and only
+    one of the two can be rebuilt.
+    """
+    records = read_captured_payloads("binance-usdm", "2026-08-22-btcusdt-aggtrade-run.jsonl")
+    payloads = [payload for _received_at_ns, payload in records][:50]
+    control_frame = json.dumps({"result": None, "id": 1}).encode()
+    unreadable = json.dumps({"e": "somethingNew", "s": CAPTURED_SYMBOL}).encode()
+
+    reader = build_reader("binance-usdm", tape_root)
+    written, published = replay_publishing(reader, [control_frame, *payloads, unreadable])
+    reader.close()
+
+    assert written == len(payloads)
+    assert published == payloads
+    assert reader.standing.control_frames == 1
+    assert reader.standing.unreadable_messages == 1
+
+
+def test_what_is_published_normalises_to_the_trades_the_venue_sent(tape_root, read_captured_payloads):
+    records = read_captured_payloads("binance-usdm", "2026-08-22-btcusdt-aggtrade-run.jsonl")
+    payloads = [payload for _received_at_ns, payload in records][:20]
+
+    reader = build_reader("binance-usdm", tape_root)
+    _written, published = replay_publishing(reader, payloads)
+    adapter = reader.adapter
+    trades = [trade for payload in published for trade in adapter.read_trades(payload)]
+    reader.close()
+
+    assert len(trades) == len(payloads)
+    for payload, trade in zip(payloads, trades, strict=True):
+        message = json.loads(payload)
+        assert trade.symbol == message["s"]
+        assert trade.price == float(message["p"])
+        assert trade.venue_id == "binance-usdm"
+
+
+def test_publishing_is_optional_so_a_reader_with_no_bus_still_records(tape_root, read_captured_payloads):
+    """The tape is the part's first duty and does not depend on anyone listening."""
+    records = read_captured_payloads("bybit-linear", "2026-08-22-public-linear-trade.jsonl")
+    payloads = [payload for _received_at_ns, payload in records][:20]
+
+    reader = build_reader("bybit-linear", tape_root)
+    written = replay(reader, payloads)
+    reader.close()
+
+    assert written > 0

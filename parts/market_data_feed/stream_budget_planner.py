@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from runtime.hardware_facts import HardwareFacts
+from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.stream_plan import ConnectionAssignment, StreamPlan
@@ -332,3 +333,74 @@ __all__ = [
     "require_measured_hardware",
     "run_stream_budget_planner",
 ]
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The universe arrives as one message per symbol and is regrouped here into the
+    venue-to-symbols mapping the planner works in. `symbol-universe` is a level --
+    these are the symbols we capture, now -- so the mapping is kept across ticks
+    rather than rebuilt from whatever happened to arrive in the last one; a
+    planner that saw an empty universe for one tick would refuse to plan and take
+    the capture down with it.
+
+    Keyed by (venue, symbol) rather than by symbol: the same ticker exists on both
+    venues, and a map keyed by symbol alone would silently let one venue's listing
+    overwrite the other's.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.tape import StreamKind
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    settings = context.settings[RUNTIME_SCOPE_NAME]
+    adapters = {adapter.venue_id: adapter for adapter in load_captured_venue_adapters(settings)}
+    if not adapters:
+        raise RuntimeError(
+            "captured_venues names no venue this build has an adapter for, so there is nothing "
+            "to plan streams for."
+        )
+
+    universe = LatestByKey(
+        read=context.bus.reader("symbol-universe"),
+        key_of=lambda entry: (entry.venue_id, entry.symbol),
+    )
+    withheld = Batch(read=context.bus.reader("venue-standing"))
+    publish_plan_messages = context.bus.publisher_for("stream-plan")
+
+    def read_symbol_universe():
+        by_venue: dict[str, list] = {}
+        for entry in universe.values():
+            by_venue.setdefault(entry.venue_id, []).append(entry)
+        return by_venue
+
+    def read_venues_withheld():
+        return tuple(
+            standing.venue_id
+            for standing in withheld.payloads()
+            if not getattr(standing, "may_request", True)
+        )
+
+    def publish_plan(budget, refusal) -> None:
+        """A refusal is published as nothing, and recorded on the part's own standing.
+
+        The plan type carries plans. A refusal is not a plan with zero connections
+        -- a consumer reading that would subscribe to nothing and look healthy --
+        so nothing is published and the reason stays where the board reads it.
+        """
+        if budget is not None:
+            publish_plan_messages([budget.plan])
+
+    return run_stream_budget_planner(
+        adapters=adapters,
+        control_socket=context.control_socket,
+        read_symbol_universe=read_symbol_universe,
+        read_venues_withheld=read_venues_withheld,
+        stream_kinds=(StreamKind.TRADE,),
+        open_file_headroom=int(context.number("open_file_headroom")),
+        candle_interval=settings.entries["candle_interval"].value,
+        book_depth_levels=int(context.number("book_depth_levels")),
+        publish_plan=publish_plan,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

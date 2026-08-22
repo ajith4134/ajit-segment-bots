@@ -157,3 +157,13 @@ note  = "operator, 2026-08-22: how much memory a switched-off part may still be 
 value = 0.01
 unit  = "CPU seconds per second"
 note  = "operator, 2026-08-22: how much CPU a switched-off part may still appear to use before off-state-verifier calls it a fault. A process that exited uses none; this is 1% of one core, which at the 1 s part_health_interval sampling window is 10 ms of CPU time against cpu.stat's microsecond resolution -- comfortably distinguishable from zero and well below any real work."
+
+[catalogue_request_timeout]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long symbol-catalogue-reader waits on a venue's REST catalogue or ticker before treating the request as failed. Not a venue limit -- it is how long this system is willing to sit in a syscall before saying so. Both venues answer their catalogue in well under a second in practice, and a failed read keeps the previous selection rather than dropping to an empty one, so a generous timeout costs a delayed refresh rather than lost capture."
+
+[candle_interval]
+value = "1m"
+unit  = "venue candle interval"
+note  = "operator, 2026-08-22: which candle a stream plan reserves capacity for, and which one ccxt-venue-reader reads. One minute is the finest bar both venues serve and the base RL-043's 1m/5m/15m/30m ladder is aggregated from -- a coarser base cannot be refined later, while a finer one is capacity spent on a resolution the tape already holds as trades."

@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.symbol_universe import CapturableSymbol
@@ -254,6 +255,7 @@ def run_symbol_catalogue_reader(
     request_timeout_seconds: float,
     health_interval_seconds: float,
     emit_health,
+    publish_universe=None,
 ) -> int:
     """Run this part until the governor turns it off, re-reading on its interval.
 
@@ -275,8 +277,14 @@ def run_symbol_catalogue_reader(
     def read_if_due() -> None:
         now = time.monotonic()
         if last_read_at[0] is None or now - last_read_at[0] >= refresh_interval_seconds:
-            reader.read_catalogue()
+            selection = reader.read_catalogue()
             last_read_at[0] = now
+            if publish_universe is not None:
+                # Republished in full on every read, not as a diff: symbol-universe
+                # is a level -- these are the symbols we capture, now -- and a
+                # consumer that joined after the last read would otherwise have an
+                # empty universe and no way to know it was missing one.
+                publish_universe(selection)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -321,3 +329,59 @@ __all__ = [
     "run_symbol_catalogue_reader",
     "select_capturable_symbols",
 ]
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One part, every captured venue. The blueprint declares a single
+    symbol-catalogue-reader, and which venues it reads is a settings question
+    (spec §3.1) -- so this runs one catalogue reader per adapter named in
+    `captured_venues` and publishes the union. A part per venue would have been a
+    part id per venue, which is a blueprint edit, not an implementation choice.
+
+    This part consumes nothing: it is one of the twelve that start the flow rather
+    than continue it, so it is woken by its own clock and passes no input
+    descriptors.
+    """
+    import time as clock
+
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    settings = context.settings[RUNTIME_SCOPE_NAME]
+    adapters = load_captured_venue_adapters(settings)
+    if not adapters:
+        raise RuntimeError(
+            "captured_venues names no venue this build has an adapter for, so there is no "
+            "catalogue to read. The setting is the operator's; the adapters are the code's, "
+            "and a mismatch between them is a fact rather than something to work around."
+        )
+
+    publish_universe = context.bus.publisher_for("symbol-universe")
+    readers = [
+        SymbolCatalogueReader(
+            adapter=adapter,
+            captured_symbol_count=settings.entries["captured_symbol_count"].value,
+            selection_metric=settings.entries["symbol_selection_metric"].value,
+            request_timeout_seconds=context.number("catalogue_request_timeout"),
+        )
+        for adapter in adapters
+    ]
+    refresh_interval_seconds = context.number("symbol_catalogue_refresh_interval")
+    last_read_at = [None]
+
+    def read_if_due() -> None:
+        now = clock.monotonic()
+        if last_read_at[0] is not None and now - last_read_at[0] < refresh_interval_seconds:
+            return
+        last_read_at[0] = now
+        for reader in readers:
+            publish_universe(reader.read_catalogue())
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=read_if_due,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+    )

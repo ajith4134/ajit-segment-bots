@@ -33,11 +33,13 @@ import urllib.parse
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
+from runtime.trading_types import BUY, SELL
 from runtime.venues.venue_adapter import (
     BanSignal,
     ConnectionDiscipline,
     HeartbeatDiscipline,
     MessageFacts,
+    NormalisedTrade,
     SequenceContinuity,
     StreamRequest,
     SymbolListing,
@@ -375,6 +377,36 @@ class BybitLinearAdapter(VenueAdapter):
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.NON_DECREASING
         return SequenceContinuity.NOT_NUMBERED
+
+    def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
+        """Every print in the batch, and a batch can hold up to 1024 of them.
+
+        Each trade carries its own timestamp here, unlike the message-level `ts`
+        the tape indexes on: the index describes the record, and a consumer
+        reasoning about a trade wants when that trade happened. `S` is the taker's
+        side already, so no inversion is needed -- which is exactly the venue
+        difference this method exists to absorb.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict):
+            return ()
+        topic = message.get("topic")
+        if not topic or not topic.startswith(f"{TRADE_TOPIC_PREFIX}."):
+            return ()
+        symbol = topic.split(".", 1)[1]
+        return tuple(
+            NormalisedTrade(
+                venue_id=VENUE_ID,
+                symbol=trade.get("s", symbol),
+                price=float(trade["p"]),
+                quantity=float(trade["v"]),
+                side=BUY if str(trade["S"]).lower() == BUY else SELL,
+                venue_time_ns=int(trade["T"]) * MILLISECONDS_TO_NANOSECONDS,
+                sequence=int(trade["seq"]),
+                fidelity=self.trade_fidelity,
+            )
+            for trade in message.get("data", ())
+        )
 
     def read_previous_sequence(self, payload: bytes) -> int | None:
         """Nothing here names its predecessor.

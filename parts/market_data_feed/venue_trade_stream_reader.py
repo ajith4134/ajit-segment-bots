@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import pathlib
 
+from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import PartHealth, run_part
 from runtime.stream_plan import StreamPlan
@@ -124,6 +125,84 @@ def run_trade_stream_reader(
         reader.close()
 
 
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Two things happen per message and their order is fixed: it goes on the tape,
+    then it is published. The tape is the record that cannot be rebuilt, so a crash
+    between the two must lose the publication rather than the history.
+
+    **The plan comes from the bus, never from here.** This part consumes
+    `stream-plan`, and until one arrives it subscribes to nothing and says so. A
+    reader that built its own plan would be a part deciding what to capture, which
+    is `stream-budget-planner`'s job -- and the version of this that shipped in
+    phase 1 lives in `operate/start_trade_capture.py` precisely because that part
+    did not exist yet.
+
+    Normalisation happens here rather than in the 65 parts that consume
+    `market-data`: the tape keeps the venue's bytes, the adapter turns them into a
+    `NormalisedTrade`, and no consumer ever sees a venue's phrasing.
+    """
+    from runtime.input_assembly import LatestValue
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    settings = context.settings[RUNTIME_SCOPE_NAME]
+    adapters = {adapter.venue_id: adapter for adapter in load_captured_venue_adapters(settings)}
+    tape_root = pathlib.Path(str(settings.entries["tape_root"].value)).expanduser()
+    publish_trades = context.bus.publisher_for("market-data")
+    plans = LatestValue(read=context.bus.reader("stream-plan"))
+
+    readers: dict[str, TradeStreamReader] = {}
+    planned = [None]
+
+    def rebuild_readers_if_the_plan_changed() -> None:
+        plan = plans.value()
+        if plan is None or plan is planned[0]:
+            return
+        for reader in readers.values():
+            reader.close()
+        readers.clear()
+        for venue_id, adapter in sorted(adapters.items()):
+            if not plan.assignments_for(venue_id, CAPTURED_STREAM_KIND):
+                continue  # this plan gives that venue nothing; not this part's call
+            readers[venue_id] = TradeStreamReader(
+                adapter=adapter,
+                plan=plan,
+                tape_root=tape_root,
+                writeback_interval_bytes=int(context.number("writeback_interval")),
+                reconnect_backoff_floor_seconds=context.number("venue_reconnect_backoff_floor"),
+                reconnect_backoff_ceiling_seconds=context.number("venue_reconnect_backoff_ceiling"),
+                drain_interval_seconds=context.number("stream_drain_interval"),
+            )
+        planned[0] = plan
+
+    def capture_and_publish() -> None:
+        rebuild_readers_if_the_plan_changed()
+        for venue_id, reader in readers.items():
+            adapter = adapters[venue_id]
+            reader.capture_one_tick(
+                on_recorded_payload=lambda payload, adapter=adapter: publish_trades(
+                    adapter.read_trades(payload)
+                )
+            )
+
+    try:
+        return run_part(
+            declaration=PART_DECLARATION,
+            control_socket=context.control_socket,
+            do_one_tick=capture_and_publish,
+            emit_health=context.emit_health,
+            health_interval_seconds=context.health_interval_seconds,
+            input_descriptors=context.input_descriptors,
+            tick_floor_seconds=context.tick_floor_seconds,
+        )
+    finally:
+        for reader in readers.values():
+            reader.close()
+
+
 __all__ = [
     "CAPTURED_STREAM_KIND",
     "CaptureStanding",
@@ -133,4 +212,5 @@ __all__ = [
     "TradeStreamReader",
     "describe_capture",
     "run_trade_stream_reader",
+    "start_part",
 ]

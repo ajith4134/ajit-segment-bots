@@ -34,11 +34,13 @@ import time
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
+from runtime.trading_types import BUY, SELL
 from runtime.venues.venue_adapter import (
     BanSignal,
     ConnectionDiscipline,
     HeartbeatDiscipline,
     MessageFacts,
+    NormalisedTrade,
     SequenceContinuity,
     StreamRequest,
     SymbolListing,
@@ -409,6 +411,33 @@ class BinanceUsdmAdapter(VenueAdapter):
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.INCREMENTS_BY_ONE
         return SequenceContinuity.NOT_NUMBERED
+
+    def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
+        """One aggregate trade per message, or none if this is not a trade message.
+
+        `m` is whether the *buyer* was the market maker, so the aggressor is the
+        seller when it is true. Binance is the only one of the two venues that
+        phrases the side that way round, and this is the one place that has to know.
+
+        Fidelity travels with the trade because these are 100 ms aggregates: this
+        venue has no raw trade stream at all, so a consumer counting prints here is
+        counting something coarser than the same count on Bybit.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict) or message.get("e") != TRADE_EVENT:
+            return ()
+        return (
+            NormalisedTrade(
+                venue_id=VENUE_ID,
+                symbol=message["s"],
+                price=float(message["p"]),
+                quantity=float(message["q"]),
+                side=SELL if message["m"] else BUY,
+                venue_time_ns=int(message["T"]) * MILLISECONDS_TO_NANOSECONDS,
+                sequence=int(message["a"]),
+                fidelity=self.trade_fidelity,
+            ),
+        )
 
     def read_previous_sequence(self, payload: bytes) -> int | None:
         """The `pu` a book message says the previous message's `u` was.
