@@ -91,9 +91,14 @@ class StopFrequencyBreaker:
         self.standing.trades_seen += 1
         if was_stopped_out:
             self.standing.stops_seen += 1
-        self._baseline.observe(was_stopped_out)
+        # A trade only joins the baseline once it has fallen out of the recent
+        # window. Otherwise the cluster being detected teaches the baseline that
+        # clusters are normal, and the breaker can never fire -- measured: ten
+        # consecutive stop-outs produced a baseline of 100% and a threshold of
+        # 100%, so the worst possible run compared as ordinary.
         self._recent.append(was_stopped_out)
-        del self._recent[: max(0, len(self._recent) - self._window)]
+        while len(self._recent) > self._window:
+            self._baseline.observe(self._recent.pop(0))
 
         if self.standing.state == TRIPPED:
             self.standing.trades_since_trip += 1
