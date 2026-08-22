@@ -11,6 +11,7 @@ part running at reduced rate is visible as such on the board (section 6, Rule 8)
 
 from __future__ import annotations
 
+import select
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,6 +34,11 @@ EXIT_CONTROL_CHANNEL_CLOSED = 0
 # The full rate. A part that is not throttled reports this, so the board can tell
 # "running normally" from "running at a quarter" without inferring either.
 FULL_RATE_RATIO = 1.0
+
+# No floor: a part woken by data ticks immediately. The floor is a setting the
+# launcher supplies (spec section 7); zero here means the caller did not ask for one,
+# which is also the behaviour of every part that has no inputs to be woken by.
+NO_TICK_FLOOR = 0.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,31 @@ def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> 
     return health_interval_seconds / rate_ratio
 
 
+@dataclass(frozen=True)
+class Wake:
+    """Why the loop stopped waiting. Control is answered first, always."""
+
+    control_is_pending: bool
+    data_arrived: bool
+
+
+def wait_for_control_or_data(control_socket, input_descriptors, timeout_seconds: float) -> Wake:
+    """Wait until a command arrives, data arrives, or the timeout expires.
+
+    Waiting on both is what makes a part answer its inputs instead of its clock: a
+    part that only woke on its timer would leave a fill sitting in an inbox until
+    the interval came round. Control keeps its priority in the return value rather
+    than in the wait, because the kernel reports both at once and a part that woke
+    on data must still be switchable in the same pass (T-2).
+    """
+    watched = [control_socket, *input_descriptors]
+    readable, _, _ = select.select(watched, [], [], max(0.0, timeout_seconds))
+    return Wake(
+        control_is_pending=control_socket in readable,
+        data_arrived=any(descriptor is not control_socket for descriptor in readable),
+    )
+
+
 def run_part(
     declaration: PartDeclaration,
     control_socket,
@@ -82,12 +113,24 @@ def run_part(
     emit_health: Callable[[PartHealth], None],
     health_interval_seconds: float,
     rate_ratio: float = FULL_RATE_RATIO,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = NO_TICK_FLOOR,
 ) -> int:
     """Run one part until the governor turns it off, then return.
 
     The tick and the control check share one loop deliberately: a part that blocked
     on its work and only read control between ticks would be a part the governor
     cannot switch, which is T-2 lost.
+
+    input_descriptors are the part's inbox descriptors, from its bus. Given them,
+    the loop wakes when data arrives rather than only when its timer expires; a part
+    with no inputs -- twelve of them consume nothing -- passes none and behaves
+    exactly as before.
+
+    tick_floor_seconds is the fastest the part may be woken by data, so a producer
+    with nothing to throttle it cannot spin a consumer. It is honoured without going
+    deaf to control: the remainder is waited out on the control socket alone, which
+    leaves the data queued and the switch still answerable.
     """
     last_tick_at = time.monotonic()
     last_health_at = 0.0
@@ -98,27 +141,46 @@ def run_part(
     # rather than being swallowed here.
     refused_control_frame: str | None = None
 
+    def answer_control() -> int | None:
+        """Read one waiting command. Returns an exit code when the part must stop."""
+        nonlocal refused_control_frame, last_health_at
+        try:
+            frame = receive_command(control_socket)
+        except ControlFrameRefused as refusal:
+            # A malformed or unknown frame is a fact about one command, not a
+            # reason for the part itself to exit -- the loop continues, and the
+            # refusal surfaces through health rather than through a crash the
+            # governor would otherwise have to read a refused frame as.
+            refused_control_frame = str(refusal)
+            last_health_at = 0.0  # force a health report that carries it
+            return None
+        if frame is None:
+            # The governor closed the socket. A part whose governor is gone
+            # turns off rather than running unsupervised.
+            return EXIT_CONTROL_CHANNEL_CLOSED
+        command, _payload = frame
+        if command == COMMAND_TURN_OFF:
+            return EXIT_SWITCHED_OFF
+        if command == COMMAND_REPORT_HEALTH:
+            last_health_at = 0.0  # force one out on the next pass
+        return None
+
     while True:
-        if has_pending_command(control_socket, timeout_seconds=tick_interval):
-            try:
-                frame = receive_command(control_socket)
-            except ControlFrameRefused as refusal:
-                # A malformed or unknown frame is a fact about one command, not a
-                # reason for the part itself to exit -- the loop continues, and the
-                # refusal surfaces through health rather than through a crash the
-                # governor would otherwise have to read a refused frame as.
-                refused_control_frame = str(refusal)
-                last_health_at = 0.0  # force a health report that carries it
-            else:
-                if frame is None:
-                    # The governor closed the socket. A part whose governor is gone
-                    # turns off rather than running unsupervised.
-                    return EXIT_CONTROL_CHANNEL_CLOSED
-                command, _payload = frame
-                if command == COMMAND_TURN_OFF:
-                    return EXIT_SWITCHED_OFF
-                if command == COMMAND_REPORT_HEALTH:
-                    last_health_at = 0.0  # force one out on the next pass
+        wake = wait_for_control_or_data(control_socket, input_descriptors, tick_interval)
+        if wake.control_is_pending:
+            exit_code = answer_control()
+            if exit_code is not None:
+                return exit_code
+
+        if wake.data_arrived and tick_floor_seconds > NO_TICK_FLOOR:
+            waited_since_tick = time.monotonic() - last_tick_at
+            if waited_since_tick < tick_floor_seconds:
+                # Hold the floor on the control socket alone: the data stays queued
+                # in the inbox, and the part stays switchable while it waits.
+                if has_pending_command(control_socket, tick_floor_seconds - waited_since_tick):
+                    exit_code = answer_control()
+                    if exit_code is not None:
+                        return exit_code
 
         do_one_tick()
         now = time.monotonic()

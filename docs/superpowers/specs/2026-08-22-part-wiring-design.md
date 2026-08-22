@@ -293,10 +293,16 @@ settings entry with a written provenance, none a literal in decision code:
 |---|---|
 | `inbox_receive_buffer_bytes` | how far behind a consumer may fall before it loses data — measured, 212 992 B holds 167 messages of 222 B |
 | `maximum_message_bytes` | the ceiling above which a payload belongs in a state store, not on the bus |
-| `publish_refusal_report_interval_seconds` | how often a producer's drop counts reach the board |
-| `part_tick_floor_seconds` | the fastest a part may be woken by data, so an unbounded producer cannot spin a consumer |
-| `launcher_placement_verify_timeout_seconds` | how long placement in a scope is waited for before it is called a failure |
-| `off_state_verify_delay_seconds` | how long after a part exits its memory is checked — 2 s reports a leak that is not there, 12 s does not |
+| `part_tick_floor` | the fastest a part may be woken by data, so an unbounded producer cannot spin a consumer |
+| `off_state_verify_delay` | how long after a part exits its memory is checked — 2 s reports a leak that is not there, 12 s does not |
+
+Two numbers this section originally listed were **not** added, and the reason is
+the same in both cases: a knob nobody turns is a literal with a settings file for
+a disguise. Placement already has `placement_confirmation_deadline`, which means
+exactly what a launcher verify timeout would have meant. And a separate interval
+for reporting publish refusals would be a second cadence for something that rides
+on `part-health` — so `part_health_interval` decides it, as it already decides
+when every other fact about a part reaches the board.
 
 Loop bounds, header field widths and descriptor counts are not decision code and
 are not settings.

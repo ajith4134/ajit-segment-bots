@@ -7,6 +7,7 @@ phase 2.
 """
 
 import os
+import socket
 import struct
 import time
 
@@ -276,3 +277,157 @@ def test_a_part_publishes_its_rate_ratio_and_staleness_on_every_health_report():
     # its duplicate by exiting, per T-3) and must be closed explicitly here.
     governor_end.close()
     part_end.close()
+
+
+# --- The readiness waiter: a part that answers its inputs, not only its clock ---
+
+# Long enough that a tick inside these tests can only have come from data arriving.
+SLOW_TIMER_INTERVAL_SECONDS = 5.0
+TICK_FLOOR_SECONDS = 0.3
+PATIENCE_SECONDS = 2.0
+
+
+def _run_part_in_a_thread(control_socket, tick_times, input_descriptors, tick_floor_seconds):
+    """Run one part on a thread so the test can drive its inbox from the other side.
+
+    A thread rather than a process because what is under test is the wait itself,
+    and the test has to hold both ends: the socket it publishes into and the clock
+    it measures against.
+    """
+    import threading
+
+    def body() -> None:
+        run_part(
+            declaration=_declaration(),
+            control_socket=control_socket,
+            do_one_tick=lambda: tick_times.append(time.monotonic()),
+            emit_health=lambda health: None,
+            health_interval_seconds=SLOW_TIMER_INTERVAL_SECONDS,
+            input_descriptors=input_descriptors,
+            tick_floor_seconds=tick_floor_seconds,
+        )
+
+    thread = threading.Thread(target=body, name="part-under-test", daemon=True)
+    thread.start()
+    return thread
+
+
+@pytest.fixture
+def one_inbox():
+    """A real bound inbox, on the filesystem the bus actually uses."""
+    import pathlib
+    import shutil
+
+    from runtime.bus import Inbox
+
+    root = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "part-process-test"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    inbox = Inbox(
+        part_id="substrate-test-part",
+        data_type="market-data",
+        address=root / "substrate-test-part.market-data",
+        receive_buffer_bytes=212_992,
+    )
+    yield inbox
+    inbox.close()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def _publish(inbox, payload) -> bool:
+    """Send one frame, returning whether it was accepted.
+
+    A refusal is not a test failure: the part under test never drains its inbox, so
+    the flood test fills it on purpose, and EAGAIN there is the bus behaving as it
+    is meant to rather than the test going wrong.
+    """
+    from runtime.bus import encode_frame
+
+    sender = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    sender.setblocking(False)
+    try:
+        sender.sendto(
+            encode_frame(
+                data_type="market-data",
+                producer_part_id="venue-trade-stream-reader",
+                sequence=payload,
+                published_at_ns=time.time_ns(),
+                payload=payload,
+                maximum_message_bytes=131_072,
+            ),
+            inbox.address,
+        )
+    except BlockingIOError:
+        return False
+    finally:
+        sender.close()
+    return True
+
+
+def test_a_part_wakes_when_its_data_arrives_not_when_its_timer_expires(one_inbox):
+    governor_end, part_end = create_control_socket_pair()
+    tick_times = []
+    thread = _run_part_in_a_thread(part_end, tick_times, (one_inbox.fileno(),), 0.0)
+    try:
+        started = time.monotonic()
+        _publish(one_inbox, 0)
+        deadline = started + PATIENCE_SECONDS
+        while not tick_times and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert tick_times, f"no tick within {PATIENCE_SECONDS}s of data arriving"
+        assert tick_times[0] - started < SLOW_TIMER_INTERVAL_SECONDS, (
+            "the part ticked on its timer, not on its data"
+        )
+    finally:
+        send_command(governor_end, COMMAND_TURN_OFF, {"reason": "test"})
+        thread.join(timeout=10)
+        governor_end.close()
+        part_end.close()
+
+
+def test_a_flood_of_data_cannot_tick_a_part_faster_than_its_floor(one_inbox):
+    governor_end, part_end = create_control_socket_pair()
+    tick_times = []
+    thread = _run_part_in_a_thread(part_end, tick_times, (one_inbox.fileno(),), TICK_FLOOR_SECONDS)
+    try:
+        started = time.monotonic()
+        observing_for = TICK_FLOOR_SECONDS * 3
+        sent = 0
+        while time.monotonic() - started < observing_for:
+            _publish(one_inbox, sent)
+            sent += 1
+            time.sleep(0.001)
+        ticks_in_the_window = [at for at in list(tick_times) if at - started < observing_for]
+    finally:
+        send_command(governor_end, COMMAND_TURN_OFF, {"reason": "test"})
+        thread.join(timeout=10)
+        governor_end.close()
+        part_end.close()
+
+    assert sent > len(ticks_in_the_window), "the test did not out-send the part"
+    highest_possible = int(observing_for / TICK_FLOOR_SECONDS) + 1
+    assert len(ticks_in_the_window) <= highest_possible, (
+        f"{len(ticks_in_the_window)} ticks in {observing_for}s with a "
+        f"{TICK_FLOOR_SECONDS}s floor -- at most {highest_possible} are permitted"
+    )
+
+
+def test_a_part_holding_its_floor_is_still_switchable(one_inbox):
+    """T-2: the floor is waited out on the control socket, never by going deaf."""
+    governor_end, part_end = create_control_socket_pair()
+    tick_times = []
+    long_floor = PATIENCE_SECONDS * 3
+    thread = _run_part_in_a_thread(part_end, tick_times, (one_inbox.fileno(),), long_floor)
+    try:
+        _publish(one_inbox, 0)
+        time.sleep(0.05)  # let it wake on the data and start holding the floor
+        switched_off_at = time.monotonic()
+        send_command(governor_end, COMMAND_TURN_OFF, {"reason": "test"})
+        thread.join(timeout=long_floor)
+        took = time.monotonic() - switched_off_at
+    finally:
+        governor_end.close()
+        part_end.close()
+
+    assert not thread.is_alive(), "the part did not stop while holding its tick floor"
+    assert took < long_floor, f"switching off waited out the floor: {took:.2f}s"

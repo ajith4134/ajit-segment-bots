@@ -107,3 +107,23 @@ note  = "operator, 2026-08-22: how long a stream reader blocks on its socket in 
 value = 128
 unit  = "file descriptors"
 note  = "operator, 2026-08-22: how many descriptors stream-budget-planner leaves unclaimed below the process soft limit. A part needs more than its tapes and sockets: the settings file, the health log, the interpreter's own handles, and whatever a reconnect holds briefly while the old socket is closing. Measured on this box 2026-08-22: RLIMIT_NOFILE soft is 524288 -- NOT the 1024 spec section 4.2 assumed -- and a live 30-symbol capture holds 68 descriptors. So the descriptor ceiling is not what blocks the full-universe path here; at 1,295 symbols it would need 2,590 tape files, which this limit carries easily. The planner still checks, because the limit is a property of however the process was started and a smaller one elsewhere must be a refusal at planning time rather than a tape that stopped opening partway through the alphabet."
+
+[inbox_receive_buffer_bytes]
+value = 212992
+unit  = "bytes"
+note  = "operator, 2026-08-22: SO_RCVBUF on a part's inbox -- how far behind a consumer may fall before it starts losing messages. Measured on this box: the kernel's own default of 212992 accepts 167 messages of 222 bytes, and 278 of 160 bytes, before sending returns EAGAIN in 1.5 us. Raising it buys a longer stall before loss and costs kernel memory per inbox; there is no value at which a permanently stalled consumer stops losing data, which is why this is a buffer and not a queue (RL-066)."
+
+[maximum_message_bytes]
+value = 131072
+unit  = "bytes"
+note  = "operator, 2026-08-22: the largest frame the bus carries. Measured: a default AF_UNIX SOCK_DGRAM pair delivers a single datagram of 131072 bytes intact and refuses more; buffers grown to 8 MiB carry 4 MiB. Held at the default because a payload above it belongs in a state store with a reference published in its place, and a ceiling that fits one large message is a ceiling every inbox then reserves for."
+
+[part_tick_floor]
+value = 0.005
+unit  = "seconds"
+note  = "operator, 2026-08-22: the fastest a part may be woken by arriving data, so an unbounded producer cannot spin a consumer. Measured: waiting on 20 inputs and reading one costs 4.9 us, and the tape is recording 285.3 messages a second across 62 symbols -- about 3.5 ms apart -- so a 5 ms floor batches a busy stream while adding at most 5 ms of latency to a decision. It is held on the control socket alone, so a part waiting out its floor is still switchable."
+
+[off_state_verify_delay]
+value = 12.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long after a part's process exits its memory is checked before calling the release complete (T-3). Measured with all 321 parts switched off at once: 942 MB of 1988 MB had returned after 2 seconds and all of it after 12. A verifier reading once and immediately reports a leak that is not there."

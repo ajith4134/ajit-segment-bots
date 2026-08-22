@@ -389,6 +389,89 @@ is about, in the one place where the loss is permanent. 238 GB free on `/` again
 
 ---
 
+## `runtime.toml` — the wiring's four (phase 2, part-wiring spec §7)
+
+These arrived with the data plane. They govern the bus a part publishes onto and
+the inboxes it binds, and every default below came from a measurement taken on
+this box on 2026-08-22 — the scripts are in `measurements/2026-08-22-part-wiring/`.
+
+Two numbers the wiring spec listed are deliberately **not** here.
+`launcher_placement_verify_timeout` is `placement_confirmation_deadline`, which
+already exists and already means exactly that; and a separate interval for
+reporting publish refusals would be a second cadence for something that rides on
+`part_health`, so the health interval decides it.
+
+### `inbox_receive_buffer_bytes`
+
+| | |
+|---|---|
+| Unit | bytes |
+| Default | `212992` |
+| Read by | every part, once per inbox it binds — one per data type it consumes |
+| The bound | how far behind a consumer may fall before its producer starts losing messages to it |
+
+The kernel's own default. Measured, it accepts 167 messages of 222 bytes, or 278
+of 160 bytes, before `sendto` returns `EAGAIN` in 1.5 µs. Raising it buys a
+consumer a longer stall before loss, and costs kernel memory on every one of the
+978 inboxes the blueprint implies.
+
+**There is no value at which a permanently stalled consumer stops losing data.**
+That is the point: this is a buffer, not a queue, and RL-066 forbids answering
+scarcity by making the queue longer. What the system does instead is count the
+loss at both ends and show it (spec §4).
+
+### `maximum_message_bytes`
+
+| | |
+|---|---|
+| Unit | bytes |
+| Default | `131072` |
+| Read by | every part's publisher, on every message |
+| The bound | the largest frame the bus will carry; anything above it is refused and counted |
+
+Measured: a default `AF_UNIX` `SOCK_DGRAM` pair delivers a single 131 072-byte
+datagram intact and refuses anything larger; with buffers grown to 8 MiB it
+carries 4 MiB. Held at the default deliberately. A payload above this belongs in a
+state store with a reference published in its place (runtime spec §4), and a
+ceiling sized to fit one large message is a ceiling every inbox then reserves for.
+
+### `part_tick_floor`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `0.005` |
+| Read by | `run_part`, for any part that was given input descriptors |
+| The bound | the fastest a part may be woken by arriving data |
+
+Without a floor, a producer with nothing throttling it can spin a consumer at the
+rate of its own output. Measured: waiting on 20 inputs and reading one costs
+4.9 µs, and the tape is recording 285.3 messages a second across 62 symbols —
+about 3.5 ms apart — so a 5 ms floor batches a busy stream while adding at most
+5 ms of latency to a decision.
+
+**The floor is held on the control socket alone**, so a part waiting one out is
+still switchable. A floor that made a part deaf to the governor would trade T-2
+for a rate limit.
+
+### `off_state_verify_delay`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `12.0` |
+| Read by | `off-state-verifier`, and the launcher when it confirms a stop |
+| The bound | how long after a part's process exits its memory is checked before the release is called complete |
+
+T-3 says an off part releases its CPU and RAM, and this is how long the kernel
+takes to make that true. Measured with all 321 parts switched off at once: 942 MB
+of 1 988 MB had come back after 2 seconds, and all of it after 12. **A verifier
+that reads memory once and immediately reports a leak that does not exist**, which
+under Rule 8 is worse than not measuring at all — it is a red tile nobody can act
+on.
+
+---
+
 ## `main-account.toml` — the capital scope (RL-055's actual subject)
 
 This is the file RL-055 describes directly: *"Capital settings are edited in a
