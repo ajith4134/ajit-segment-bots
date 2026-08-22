@@ -60,6 +60,12 @@ class PartHealth:
     staleness_seconds: float
     observed_at_ns: int
     refused_control_frame: str | None = None
+    # What this part's inputs lost since it started, per data type, as (type, count)
+    # pairs. Empty when nothing was lost. Loss rides on health because health is the
+    # outward channel a part already has, and 223 parts declare that a skipped tick
+    # corrupts their answer -- a part that lost input and stayed quiet would be
+    # reporting an answer it cannot support.
+    input_loss: tuple[tuple[str, int], ...] = ()
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:

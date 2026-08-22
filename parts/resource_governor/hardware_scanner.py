@@ -76,3 +76,22 @@ def run_hardware_scanner(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1): build, wire, run.
+
+    hardware-scanner consumes nothing -- it is one of the twelve parts with no
+    inputs -- so it is woken by its own clock and passes no input descriptors. What
+    it publishes is a single reading per tick, which is wrapped into the one-item
+    batch the bus carries: the bus moves messages, and how many a tick produces is
+    the part's business.
+    """
+    publish_capacity = context.bus.publisher_for("hardware-capacity")
+    return run_hardware_scanner(
+        scanner=HardwareScanner(),
+        control_socket=context.control_socket,
+        publish_capacity=lambda capacity: publish_capacity([capacity]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )
