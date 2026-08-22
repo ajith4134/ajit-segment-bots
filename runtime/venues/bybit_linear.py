@@ -34,6 +34,7 @@ from typing import Mapping, Sequence
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 from runtime.venues.venue_adapter import (
     BanSignal,
+    ConnectionDiscipline,
     HeartbeatDiscipline,
     MessageFacts,
     SequenceContinuity,
@@ -308,6 +309,25 @@ class BybitLinearAdapter(VenueAdapter):
             expects_client_ping=True,
             interval_seconds=float(_LIMITS["client_ping_interval_seconds"].value),
             ping_frame=json.dumps({"op": PING_OPERATION}, separators=(",", ":")).encode("utf-8"),
+        )
+
+    def connection_discipline(self) -> ConnectionDiscipline:
+        """500 new connections per 5 minutes is the number a reconnect storm breaks.
+
+        1.67 connections a second across everything this box holds, so the
+        backoff floor is not a politeness -- it is what keeps one venue outage
+        from becoming a ban that outlasts the outage.
+
+        No lifetime: the 10-minute idle cutoff is documented under private and
+        order-entry connections, not the public stream, and it was not re-stated
+        on any public topic page. Claiming it here would make an unexpected close
+        look scheduled, which is the one reading that would stop it being
+        investigated.
+        """
+        return ConnectionDiscipline(
+            new_connections_per_window=_LIMITS["new_connections_per_five_minutes"].value,
+            rate_window_seconds=300.0,
+            concurrent_connections=_LIMITS["concurrent_connections_per_ip"].value,
         )
 
     def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:

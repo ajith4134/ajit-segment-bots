@@ -92,3 +92,13 @@ note  = "operator, 2026-08-22: how long a symbol may be silent before the silenc
 value = "~/.local/share/ajit-segment-bots/tape"
 unit  = "path"
 note  = "operator, 2026-08-22: where the tape lives. Expanded by the part that reads it, and then put through storage_facts.require_durable_directory, which refuses a memory-backed filesystem -- /tmp is tmpfs on this box, so a tape written there would measure as working right up until the machine restarted and it was gone. 238 GB free on / against 2-4 GB/day is months of runway."
+
+[venue_reconnect_backoff_ceiling]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: the longest a reader waits before retrying, doubling up from venue_reconnect_backoff_floor. Not in spec section 4.3, which named only the floor -- added because an unbounded doubling is a connection that has silently stopped trying, and after six failures the floor of 1 s is already 32 s. 60 s is one minute of tape lost per symbol in the worst case of a venue that comes back the instant after a retry, against Bybit's 500-connections-per-5-minutes which is what the floor protects. Lower it and a long outage costs connection budget; raise it and a short outage costs capture that cannot be recovered."
+
+[stream_drain_interval]
+value = 0.5
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long a stream reader blocks on its socket in one tick. With part_health_interval this bounds how long the governor waits for an off to take effect -- run_part checks the control channel before each tick, so the worst case is one of each. 0.5 s keeps that under two seconds while still letting a busy symbol deliver a whole batch per tick: BTCUSDT aggTrade measured about 4 messages a second on 2026-08-22, and Bybit's 50-level book pushes every 20 ms, so a shorter interval would cost syscalls without capturing anything sooner."

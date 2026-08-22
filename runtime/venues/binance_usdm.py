@@ -36,6 +36,7 @@ from typing import Mapping, Sequence
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 from runtime.venues.venue_adapter import (
     BanSignal,
+    ConnectionDiscipline,
     HeartbeatDiscipline,
     MessageFacts,
     SequenceContinuity,
@@ -296,6 +297,23 @@ class BinanceUsdmAdapter(VenueAdapter):
         10-incoming-messages-per-second budget for nothing.
         """
         return HeartbeatDiscipline(expects_client_ping=False)
+
+    def connection_discipline(self) -> ConnectionDiscipline:
+        """A 24-hour close is scheduled here, and the connection budget is unstated.
+
+        Their own text: "expect to be disconnected at the 24 hour mark". A reader
+        that treated that as a fault would double its backoff every day.
+
+        No connections-per-IP or connection-rate figure exists anywhere in the
+        futures documentation -- the widely repeated "300 attempts per 5 minutes"
+        is a spot number, and carrying it across products would be a limit this
+        project invented. None says the venue does not say, which leaves the
+        reconnect backoff as the only guard here rather than pretending to a
+        budget nobody published.
+        """
+        return ConnectionDiscipline(
+            lifetime_seconds=float(_LIMITS["connection_lifetime_seconds"].value)
+        )
 
     def read_message_facts(self, payload: bytes) -> MessageFacts | None:
         """The index fields inside one message, or None when it carries no data.

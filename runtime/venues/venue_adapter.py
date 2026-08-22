@@ -37,6 +37,7 @@ from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 
 __all__ = [
     "BanSignal",
+    "ConnectionDiscipline",
     "HeartbeatDiscipline",
     "MessageFacts",
     "SequenceContinuity",
@@ -190,6 +191,29 @@ class BanSignal:
 
 
 @dataclass(frozen=True)
+class ConnectionDiscipline:
+    """What a venue says about connections themselves, rather than about data.
+
+    Every field is optional because for both phase 1 venues at least one of them
+    is genuinely unstated, and an unstated limit is not an absent one. Binance
+    documents no connections-per-IP figure for futures at all -- the widely
+    repeated "300 per 5 minutes" is a spot number -- and Bybit's 10-minute idle
+    cutoff is documented only for private connections. `None` here means "the
+    venue does not say", which a caller must treat as a thing it cannot check
+    rather than as permission (Rule 8 at the venue boundary).
+    """
+
+    # The age at which the venue closes a connection on purpose. A close at this
+    # age is routine and must not escalate a backoff: Binance disconnects every
+    # connection at 24 hours, so a reader treating it as a fault would back off
+    # further every day for no reason.
+    lifetime_seconds: float | None = None
+    new_connections_per_window: int | None = None
+    rate_window_seconds: float | None = None
+    concurrent_connections: int | None = None
+
+
+@dataclass(frozen=True)
 class HeartbeatDiscipline:
     """How this venue expects a live connection to be kept alive.
 
@@ -269,6 +293,10 @@ class VenueAdapter(abc.ABC):
         """Who pings whom, how often, and with what."""
 
     @abc.abstractmethod
+    def connection_discipline(self) -> ConnectionDiscipline:
+        """What this venue says about opening, holding and losing connections."""
+
+    @abc.abstractmethod
     def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
         """What this venue's sequence numbers promise on this stream.
 
@@ -335,6 +363,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "subscribe_frame",
     "unsubscribe_frame",
     "heartbeat_discipline",
+    "connection_discipline",
     "sequence_continuity",
 )
 

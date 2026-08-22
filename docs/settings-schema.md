@@ -321,6 +321,38 @@ venue outage into a self-inflicted ban, and both venues ban per IP. Binance's
 backoff at all; a reader that treated it as an error would back off further every
 day for no reason.
 
+### `venue_reconnect_backoff_ceiling`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `60.0` |
+| Read by | `VenueStreamConnection`, and through it every streaming reader |
+| The bound | the longest wait before a retry, doubling up from the floor |
+
+**Not in spec §4.3**, which named only the floor. It is here because an unbounded
+doubling is a connection that has silently stopped trying: six failures at a
+1-second floor is already 32 seconds, ten is over eight minutes. The cost of
+getting it wrong runs both ways — too low spends connection budget against a long
+outage, too high costs capture that cannot be recovered once the venue is back.
+
+### `stream_drain_interval`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `0.5` |
+| Read by | `VenueStreamConnection.drain`, once per part tick |
+| The bound | how long a stream reader blocks on its socket in one tick |
+
+Together with `part_health_interval` this bounds how long the governor waits for
+an `off` to take effect: `run_part` checks the control channel before each tick,
+so the worst case is one of each. `0.5` keeps that under two seconds while still
+letting a busy symbol deliver a whole batch per tick — BTCUSDT `aggTrade`
+measured about four messages a second on 2026-08-22, and Bybit's 50-level book
+pushes every 20 ms — so a shorter interval would cost syscalls without capturing
+anything sooner.
+
 ### `feed_gap_threshold`
 
 | | |

@@ -90,6 +90,14 @@ def ask_every_question_answerable_without_venue_data(adapter: VenueAdapter) -> N
     assert isinstance(adapter.subscribe_frame(topics), bytes)
     assert isinstance(adapter.unsubscribe_frame(topics), bytes)
 
+    connection_rules = adapter.connection_discipline()
+    # Every field may be None -- an unstated limit is not an absent one -- but a
+    # venue that states a rate must also state the window it is counted over, or
+    # nothing can wait against it.
+    assert (connection_rules.new_connections_per_window is None) == (
+        connection_rules.rate_window_seconds is None
+    ), f"{adapter.venue_id} states a connection rate with no window, or a window with no rate"
+
     discipline = adapter.heartbeat_discipline()
     assert isinstance(discipline.expects_client_ping, bool)
     if discipline.expects_client_ping:
