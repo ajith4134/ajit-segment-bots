@@ -102,3 +102,8 @@ note  = "operator, 2026-08-22: the longest a reader waits before retrying, doubl
 value = 0.5
 unit  = "seconds"
 note  = "operator, 2026-08-22: how long a stream reader blocks on its socket in one tick. With part_health_interval this bounds how long the governor waits for an off to take effect -- run_part checks the control channel before each tick, so the worst case is one of each. 0.5 s keeps that under two seconds while still letting a busy symbol deliver a whole batch per tick: BTCUSDT aggTrade measured about 4 messages a second on 2026-08-22, and Bybit's 50-level book pushes every 20 ms, so a shorter interval would cost syscalls without capturing anything sooner."
+
+[open_file_headroom]
+value = 128
+unit  = "file descriptors"
+note  = "operator, 2026-08-22: how many descriptors stream-budget-planner leaves unclaimed below the process soft limit. A part needs more than its tapes and sockets: the settings file, the health log, the interpreter's own handles, and whatever a reconnect holds briefly while the old socket is closing. Measured on this box 2026-08-22: RLIMIT_NOFILE soft is 524288 -- NOT the 1024 spec section 4.2 assumed -- and a live 30-symbol capture holds 68 descriptors. So the descriptor ceiling is not what blocks the full-universe path here; at 1,295 symbols it would need 2,590 tape files, which this limit carries easily. The planner still checks, because the limit is a property of however the process was started and a smaller one elsewhere must be a refusal at planning time rather than a tape that stopped opening partway through the alphabet."

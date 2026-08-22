@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.symbol_universe import CapturableSymbol
 from runtime.venues.venue_adapter import SymbolListing, VenueAdapter
 
 PART_ID = "symbol-catalogue-reader"
@@ -73,17 +74,6 @@ class CatalogueIncomplete(RuntimeError):
     kind of wrong here: the symbols it leaves out are captured by nobody, and
     nothing in the response says any are missing.
     """
-
-
-@dataclass(frozen=True)
-class CapturableSymbol:
-    """One symbol chosen for capture, with the figure that chose it."""
-
-    venue_id: str
-    symbol: str
-    contract_type: str
-    quote_volume_24h: float | None
-    price_increment: float | None
 
 
 @dataclass
