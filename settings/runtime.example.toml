@@ -127,3 +127,33 @@ note  = "operator, 2026-08-22: the fastest a part may be woken by arriving data,
 value = 12.0
 unit  = "seconds"
 note  = "operator, 2026-08-22: how long after a part's process exits its memory is checked before calling the release complete (T-3). Measured with all 321 parts switched off at once: 942 MB of 1988 MB had returned after 2 seconds and all of it after 12. A verifier reading once and immediately reports a leak that is not there."
+
+[part_stop_deadline]
+value = 10.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long the launcher waits for a part to exit after sending it off, before killing it. Measured: all 321 parts switched off together in 0.11 s with none refusing, so this is roughly ninety times the whole system's stop time. A part that needs the kill is a finding -- T-3 says off is the process exiting, and a part that ignored its switch is one the governor could not switch."
+
+[switch_request_timeout]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long gate-actuator waits for the launcher to answer a switch request. Covers the worst honest case -- a stop that runs the full part_stop_deadline of 10 s and then a kill and a second wait -- with room over. Measured for comparison: a switch on is 8.4 ms end to end (2.78 ms to fork, 5.6 ms to place), so a request that takes seconds is already a fault being reported rather than a switch being made."
+
+[memory_exhaustion_warning]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how close to memory exhaustion the forecast must come before switching-planner starts turning parts off. This box has no swap, so exhaustion is an OOM kill rather than a slowdown. Measured: switching all 321 parts off takes 0.11 s and the memory is fully back within 12 s, so 60 s leaves five times the worst observed release time plus a full part_health_interval to see whether it worked."
+
+[io_stall_fraction]
+value = 0.2
+unit  = "fraction of wall time"
+note  = "operator, 2026-08-22: the share of recent wall time spent stalled on IO above which switching-planner treats the machine as IO-bound. Judgement, not measurement -- this box has never been under real IO contention, and the number to fit is the pressure at which the tape starts losing messages. Revisit against io-pressure-meter's own readings once contention exists; until then it is deliberately a fifth of the time rather than a value implied to be measured."
+
+[released_memory_bytes]
+value = 1048576
+unit  = "bytes"
+note  = "operator, 2026-08-22: how much memory a switched-off part may still be charged with before off-state-verifier calls it a fault. Measured: an idle part is 5.46 MB PSS, and a part that has genuinely gone leaves no scope at all, so a cgroup still holding a megabyte after its process exited is holding something rather than rounding noise."
+
+[released_cpu_seconds_per_second]
+value = 0.01
+unit  = "CPU seconds per second"
+note  = "operator, 2026-08-22: how much CPU a switched-off part may still appear to use before off-state-verifier calls it a fault. A process that exited uses none; this is 1% of one core, which at the 1 s part_health_interval sampling window is 10 ms of CPU time against cpu.stat's microsecond resolution -- comfortably distinguishable from zero and well below any real work."

@@ -15,6 +15,14 @@ from runtime.part_process import run_part
 
 PART_ID = "gate-actuator"
 
+# What the launcher answers with when a switch actually happened. Anything else is
+# a switch that was not made, and must not be recorded as one.
+OUTCOME_FLIPPED_BY_THE_LAUNCHER = "flipped"
+
+
+class SwitchWasNotMade(RuntimeError):
+    """The launcher did not carry out a switch this part asked for."""
+
 PART_DECLARATION = PartDeclaration(
     part_id="gate-actuator",
     consumes=("switch-plan",),
@@ -114,4 +122,61 @@ def run_gate_actuator(
         do_one_tick=lambda: publish_records(actuator.apply(read_plan())),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This is the one part in the system that switches other parts, and T-2 is what
+    makes that safe: it holds no descriptor onto any part's control socket, because
+    it was never given one. What it was given is the launcher's request endpoint,
+    handed only to the part the blueprint says turns a switch-plan into
+    switch-records. Every other part is started with that address set to None.
+
+    A plan is an event, not a level. Applying the last one again on every tick would
+    re-switch parts that were already switched, so an empty plan -- not the previous
+    one -- is what a tick with no new plan applies.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.switch_service import request_switch
+
+    if not context.switch_endpoint:
+        raise RuntimeError(
+            f"'{context.part_id}' was started without a switch endpoint, so it cannot switch "
+            f"anything. Only the part the blueprint names as the actuator is given one -- if that "
+            f"is this part, the launcher was started without open_switch_service."
+        )
+
+    plans = Batch(read=context.bus.reader("switch-plan"))
+    publish_records = context.bus.publisher_for("switch-record")
+    request_timeout_seconds = context.number("switch_request_timeout")
+
+    def switch_part(part_id: str, action: str) -> None:
+        outcome = request_switch(
+            address=context.switch_endpoint,
+            part_id=part_id,
+            action=action,
+            reason=f"{context.part_id} acting on a switch plan",
+            timeout_seconds=request_timeout_seconds,
+        )
+        if outcome.outcome != OUTCOME_FLIPPED_BY_THE_LAUNCHER:
+            # Raised so apply() records it as a failed switch rather than a made one.
+            # A switch the launcher refused is not a switch; recording it as one is
+            # how a part that never stopped ends up shown as stopped.
+            raise SwitchWasNotMade(f"{outcome.outcome}: {outcome.detail}")
+
+    def read_plan():
+        applied = plans.payloads()
+        if not applied:
+            return SwitchPlan(decisions=(), held=(), unplannable_reason=None, planned_at_ns=time.time_ns())
+        return applied[-1]
+
+    return run_gate_actuator(
+        actuator=GateActuator(switch_part=switch_part),
+        control_socket=context.control_socket,
+        read_plan=read_plan,
+        publish_records=publish_records,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )

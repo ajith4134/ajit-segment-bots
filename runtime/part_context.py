@@ -54,6 +54,10 @@ class PartContext:
     settings: dict[str, SettingsDocument]
     health_interval_seconds: float
     tick_floor_seconds: float
+    # Where this part may ask the launcher to switch another part, or None -- which
+    # is what all but one part gets. T-2 is enforced by what the process was handed:
+    # a part with no endpoint has no way to reach the switch, whatever its code says.
+    switch_endpoint: str | None = None
 
     def setting(self, name: str, scope: str = RUNTIME_SCOPE) -> SettingEntry:
         document = self.settings.get(scope)
@@ -129,6 +133,7 @@ def open_part_context(
     runtime_directory: pathlib.Path | None = None,
     settings_directory_path: pathlib.Path | None = None,
     extra_scopes: tuple[str, ...] = (),
+    switch_endpoint: str | None = None,
 ) -> PartContext:
     """Build everything one part needs, from the blueprint and the operator's settings.
 
@@ -171,4 +176,5 @@ def open_part_context(
         settings=documents,
         health_interval_seconds=float(required(HEALTH_INTERVAL_SETTING)),
         tick_floor_seconds=float(required(TICK_FLOOR_SETTING)),
+        switch_endpoint=switch_endpoint,
     )

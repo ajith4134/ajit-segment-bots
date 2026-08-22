@@ -236,3 +236,78 @@ def run_switching_planner(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Fourteen declared inputs, and the assembly below is where each one is stated to
+    be a level or an event -- a distinction the bus cannot make for a part and the
+    part must not leave implicit. Capacity, pressure and forecasts are levels: the
+    machine still has the cores it had when nothing new arrived. Restart requests
+    are events: acting on the same request every tick would restart a part forever.
+
+    Missing is deliberately not empty. A level nobody has published yet reads as
+    None, and `plan` refuses to plan without a complete capacity reading rather
+    than planning against a zero -- which is the refusal this part exists for.
+    """
+    import time as clock
+    from datetime import UTC, datetime
+
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+
+    def by_part(data_type: str) -> LatestByKey:
+        return LatestByKey(read=context.bus.reader(data_type), key_of=lambda payload: payload.part_id)
+
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
+    usages = by_part("part-resource-usage")
+    priorities = by_part("part-priority")
+    restart_budgets = by_part("restart-budget")
+    flap_reports = by_part("flap-report")
+    duty_cycles = by_part("duty-cycle")
+    reservations = by_part("resource-reservation")
+    memory_forecast = LatestValue(read=context.bus.reader("memory-forecast"))
+    io_pressure = LatestValue(read=context.bus.reader("io-pressure"))
+    replacement_plan = LatestValue(read=context.bus.reader("replacement-plan"))
+    conservation_plan = LatestValue(read=context.bus.reader("conservation-plan"))
+    hog_reports = Batch(read=context.bus.reader("hog-report"))
+    restart_requests = Batch(read=context.bus.reader("restart-request"))
+    admitted_parts = Batch(read=context.bus.reader("admitted-part"))
+
+    publish_plan = context.bus.publisher_for("switch-plan")
+
+    def read_inputs() -> GovernorInputs:
+        usage_by_part = usages.mapping()
+        return GovernorInputs(
+            capacity=capacity.value(),
+            usages=tuple(usage_by_part.values()),
+            hog_reports=hog_reports.payloads(),
+            priorities={part_id: entry.priority for part_id, entry in priorities.mapping().items()},
+            restart_requests=restart_requests.payloads(),
+            restart_budgets=restart_budgets.mapping(),
+            flap_reports=flap_reports.mapping(),
+            duty_cycles=duty_cycles.mapping(),
+            reservations=reservations.values(),
+            memory_forecast=memory_forecast.value(),
+            io_pressure=io_pressure.value(),
+            admitted_parts=admitted_parts.payloads(),
+            replacement_plan=replacement_plan.value() or (),
+            conservation_plan=conservation_plan.value() or (),
+            # What is running is what is reporting its own usage. The planner never
+            # asks the launcher: a part that asked the substrate who else exists
+            # would know the circuit, which is exactly what T-4 forbids.
+            running_parts=tuple(sorted(usage_by_part)),
+            current_hour=datetime.now(UTC).hour,
+        )
+
+    return run_switching_planner(
+        planner=SwitchingPlanner(
+            memory_exhaustion_warning_seconds=context.number("memory_exhaustion_warning"),
+            io_stall_fraction=context.number("io_stall_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_inputs=read_inputs,
+        publish_plan=lambda plan: publish_plan([plan]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

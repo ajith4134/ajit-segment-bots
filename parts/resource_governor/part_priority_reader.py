@@ -112,3 +112,27 @@ def run_part_priority_reader(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The reader hands back a mapping of part id to rank; what goes on the bus is one
+    typed message per part, carrying whether the operator stated that rank or the
+    part took the middle. A bare integer would have lost the difference between a
+    rank someone chose and a rank nobody did -- and the planner weighs both, so the
+    consumer has to be able to tell them apart.
+    """
+    publish_priorities = context.bus.publisher_for("part-priority")
+    reader = PartPriorityReader()
+
+    def publish_ranking(ranking: dict) -> None:
+        publish_priorities(reader.rank(ranking.keys()))
+
+    return run_part_priority_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        publish_priorities=publish_ranking,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

@@ -164,3 +164,41 @@ def run_off_state_verifier(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A switch record is an event -- a part was switched, once -- and resource usage
+    is a level, the current reading per part. Verifying is what happens between the
+    two: the record starts a clock, and the usage read after the grace period says
+    whether the part let go.
+
+    The grace period is the measured one. With all 321 parts switched off at once,
+    942 MB of 1988 MB had come back after two seconds and all of it after twelve, so
+    a verifier reading immediately would report a leak that is not there -- and a
+    fault nobody can act on is worse than no measurement (Rule 8).
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    records = Batch(read=context.bus.reader("switch-record"))
+    usages = LatestByKey(
+        read=context.bus.reader("part-resource-usage"), key_of=lambda usage: usage.part_id
+    )
+    publish_faults = context.bus.publisher_for("part-fault")
+
+    def read_records_and_usage():
+        return records.payloads(), usages.values()
+
+    return run_off_state_verifier(
+        verifier=OffStateVerifier(
+            grace_seconds=context.number("off_state_verify_delay"),
+            released_memory_bytes=int(context.number("released_memory_bytes")),
+            released_cpu_seconds_per_second=context.number("released_cpu_seconds_per_second"),
+        ),
+        control_socket=context.control_socket,
+        read_records_and_usage=read_records_and_usage,
+        publish_faults=publish_faults,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

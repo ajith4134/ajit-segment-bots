@@ -37,7 +37,8 @@ from runtime.control_channel import COMMAND_TURN_OFF, create_control_socket_pair
 from runtime.forkserver_launcher import apply_blas_thread_caps, spawn_part, start_forkserver
 from runtime.part_context import open_part_context
 from runtime.scope_placer import PlacementNotConfirmed, ScopeLimits, place_process_in_scope
-from runtime.wiring_plan import PartWiring, create_inbox_root, derive_wiring
+from runtime.switch_service import SwitchService, find_switch_actuator, switch_endpoint_address
+from runtime.wiring_plan import PartWiring, create_inbox_root, derive_wiring, inbox_root, load_blueprint
 
 PARTS_ROOT = pathlib.Path(__file__).resolve().parent.parent / "parts"
 
@@ -128,7 +129,13 @@ def resolve_part_module(part_id: str, parts_root: pathlib.Path = PARTS_ROOT) -> 
     return str(relative).replace(os.sep, ".")
 
 
-def run_part_process(part_id: str, part_module_name: str, control_socket, runtime_directory_name: str | None) -> None:
+def run_part_process(
+    part_id: str,
+    part_module_name: str,
+    control_socket,
+    runtime_directory_name: str | None,
+    switch_endpoint: str | None = None,
+) -> None:
     """The forked child's whole life: build the context, hand it to the part.
 
     Module-level on purpose -- forkserver pickles the target by qualified name, and
@@ -150,6 +157,7 @@ def run_part_process(part_id: str, part_module_name: str, control_socket, runtim
         part_id=part_id,
         control_socket=control_socket,
         runtime_directory=runtime_directory,
+        switch_endpoint=switch_endpoint,
     )
     try:
         entry_point(context)
@@ -196,6 +204,37 @@ class PartLauncher:
         self._running: dict[str, LaunchedPart] = {}
         self.standing = LauncherStanding()
         create_inbox_root(runtime_directory)
+        # Which part may ask for a switch, decided by contract rather than by name:
+        # whoever the blueprint says turns a switch-plan into switch-records.
+        self._switch_actuator_part_id = find_switch_actuator(load_blueprint())
+        self._switch_service: SwitchService | None = None
+
+    def open_switch_service(self, stop_deadline_seconds: float, backlog: int) -> SwitchService:
+        """Bind the endpoint the blueprint's actuator reaches this launcher through.
+
+        The launcher serves it and never initiates on it: the decision to switch a
+        part belongs to gate-actuator, and this is only the component that can carry
+        it out, because it is the one holding every control socket (T-2).
+        """
+        if self._switch_service is None:
+            self._switch_service = SwitchService(
+                address=switch_endpoint_address(inbox_root(self._runtime_directory)),
+                turn_on=lambda part_id: f"pid {self.start(part_id).process.pid}",
+                turn_off=lambda part_id: f"exit {self.stop(part_id, stop_deadline_seconds)}",
+                backlog=backlog,
+            )
+        return self._switch_service
+
+    def _switch_endpoint_for(self, part_id: str) -> str | None:
+        """The endpoint address, and only to the one part entitled to it.
+
+        Every other part is started with None, so it holds no way to reach the
+        switch at all -- T-2 enforced by what a process was given rather than by
+        what its code refrains from doing.
+        """
+        if self._switch_service is None or part_id != self._switch_actuator_part_id:
+            return None
+        return self._switch_service.address
 
     @property
     def running_part_ids(self) -> tuple[str, ...]:
@@ -235,6 +274,7 @@ class PartLauncher:
                     module_name,
                     part_end,
                     str(self._runtime_directory) if self._runtime_directory else None,
+                    self._switch_endpoint_for(part_id),
                 ),
                 thread_ceiling=self._thread_ceiling,
             )
@@ -315,6 +355,9 @@ class PartLauncher:
             "stops_that_needed_a_kill": self.standing.stops_that_needed_a_kill,
             "last_refusal": self.standing.last_refusal,
             "fork_milliseconds_median": fork_times[len(fork_times) // 2] if fork_times else None,
+            "switch_requests_served": self._switch_service.requests_served if self._switch_service else None,
+            "switch_requests_refused": self._switch_service.requests_refused if self._switch_service else None,
+            "switch_actuator": self._switch_actuator_part_id,
         }
 
     def _place(self, part_id: str, pid: int) -> tuple[pathlib.Path | None, str | None]:
@@ -360,6 +403,9 @@ class PartLauncher:
         for launched in list(self._running.values()):
             launched.governor_control_socket.close()
         self._running.clear()
+        if self._switch_service is not None:
+            self._switch_service.close()
+            self._switch_service = None
 
     def __enter__(self) -> PartLauncher:
         return self

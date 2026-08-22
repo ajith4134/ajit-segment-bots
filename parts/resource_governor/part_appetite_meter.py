@@ -154,3 +154,45 @@ def run_part_appetite_meter(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Which parts are running is answered twice over, and both answers are required:
+    a part is a candidate because it published health -- the input this part
+    declares -- and it is measured only if its scope directory still exists, which
+    the kernel decides. Health alone would keep measuring a part that has since
+    exited, and a staleness threshold to prevent that would be a number with no
+    provenance. The scope disappearing is the measurement.
+
+    The scope of a part is a sibling of this part's own, because the launcher places
+    every part in `<part-id>.scope` under the same slice. That is a fact about the
+    substrate this part runs on, not knowledge of another part (T-4): it never
+    learns a part id from anywhere but the messages it was sent.
+    """
+    from runtime.hardware_facts import read_own_cgroup_directory
+    from runtime.input_assembly import LatestByKey
+
+    health = LatestByKey(read=context.bus.reader("part-health"), key_of=lambda report: report.part_id)
+    publish_usage = context.bus.publisher_for("part-resource-usage")
+    sibling_scopes = read_own_cgroup_directory().parent
+
+    def read_running_parts():
+        running = []
+        for part_id in sorted(health.mapping()):
+            scope = sibling_scopes / f"{part_id}.scope"
+            if scope.is_dir():
+                running.append((part_id, scope))
+            else:
+                health.forget(part_id)
+        return tuple(running)
+
+    return run_part_appetite_meter(
+        meter=PartAppetiteMeter(),
+        control_socket=context.control_socket,
+        read_running_parts=read_running_parts,
+        publish_usage=publish_usage,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )
