@@ -149,11 +149,11 @@ which would silently revert the behaviour.
 
     dashboard/rebuild_all_boards.sh
 
-One command, all four boards, in dependency order. It exists because they went
+One command, all five boards, in dependency order. It exists because they went
 stale and nobody noticed: the part monitor was current and the other three were
 two days old, showing a project with nothing built while five parts were built
 and a million records were on the tape. **A stale board is worse than no board —
-it is convincing.** The script prints the four Artifact URLs to re-publish to;
+it is convincing.** The script prints the five Artifact URLs to re-publish to;
 publishing is not scripted, because those URLs live outside this repository and a
 script that pretended to publish would be the same failure one layer along.
 
@@ -203,6 +203,26 @@ server does not have; both are installed in `~/.local/pwdeps` and the script
 refuses to run without them. Missing fonts do not error — they paint every glyph
 invisible while every DOM assertion still passes, which is exactly the failure a
 screenshot catches and an assertion does not.
+
+## Trade board
+
+    python3 dashboard/build_trade_board.py
+
+Regenerates `dashboard/trade-board.html`: every trade the system has recorded,
+and the probes that say whether it can make another one. Each tile reads a file
+on this machine — the journal the settings name, the live spine's supervisor log
+joined to `/proc`, the tape's last write, the segment's money mode.
+
+Three states it must be able to reach, because they are the true ones today:
+`NOTHING YET` when no trade has opened on a live run, `NOT BUILT` for closing
+(six parts unwritten) and for tamper evidence (the journal starts a new chain
+every time the recorder starts), and `NOT MEASURED` for how far the bull bot is
+from its first decision — nothing writes the conviction model's training count
+anywhere, so the board says so instead of implying the wait is short.
+
+**A journal entry recorded before the trading half was first started live is
+marked as a test's.** The integration test runs the same fourteen parts, and the
+boundary is read from the supervisor log rather than guessed.
 
 ## Wiring explorer
 

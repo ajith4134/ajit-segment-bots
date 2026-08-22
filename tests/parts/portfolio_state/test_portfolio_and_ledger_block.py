@@ -11,6 +11,7 @@ code's own output, because every one of these numbers is a claim about money.
 """
 
 import importlib
+import json
 
 import pytest
 
@@ -615,3 +616,56 @@ def test_net_funding_is_received_less_paid():
     recorder.record_funding(VENUE, SYMBOL, 0.0001, 50000.0, SECOND)
     recorder.record_funding(VENUE, SYMBOL, -0.0002, 50000.0, 2 * SECOND)
     assert recorder.net_funding == pytest.approx(10.0)
+
+
+def test_a_restarted_recorder_continues_the_chain_it_already_wrote(durable_tmp_path):
+    """One file, one chain, across as many restarts as the process makes.
+
+    Before this, `Journal` started from the genesis digest whenever a recorder
+    started and appended to the file the last one wrote -- so a day of running
+    produced one chain per process start. Inside a run an edit is detected; a
+    whole run cut out of the file left nothing behind that said it had been
+    there, which is the difference between a ledger and a pile of them.
+    """
+    from runtime.journal import read_journal_tail
+
+    path = durable_tmp_path / "journal.jsonl"
+
+    def append_to(line: str) -> None:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+    first_run = Journal(append_line=append_to)
+    first_run.append("fill", "trade-lifecycle-recorder", {"trade_id": "one"})
+    first_run.append("fill", "trade-lifecycle-recorder", {"trade_id": "one"})
+
+    # The recorder dies and is started again against the same file.
+    second_run = Journal(append_line=append_to, continues_from=read_journal_tail(path))
+    carried_on = second_run.append("fill", "trade-lifecycle-recorder", {"trade_id": "two"})
+
+    assert carried_on.sequence == 3, "the sequence restarted, so two entries share a number"
+    assert carried_on.previous_digest == first_run.entries[-1].digest
+    assert carried_on.previous_digest != GENESIS_DIGEST
+
+    written = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    assert [entry["sequence"] for entry in written] == [1, 2, 3]
+    assert sum(1 for entry in written if entry["previous_digest"] == GENESIS_DIGEST) == 1, (
+        "more than one entry starts a chain, so the file holds more than one ledger"
+    )
+
+
+def test_a_journal_starting_a_fresh_file_starts_at_genesis(durable_tmp_path):
+    """Nothing to continue is not the same as something unreadable."""
+    from runtime.journal import read_journal_tail
+
+    assert read_journal_tail(durable_tmp_path / "never-written.jsonl") is None
+
+    empty = durable_tmp_path / "empty.jsonl"
+    empty.write_text("")
+    assert read_journal_tail(empty) is None
+
+    damaged = durable_tmp_path / "damaged.jsonl"
+    damaged.write_text('{"sequence": 1, "digest": "a"}\nnot json at all\n')
+    assert read_journal_tail(damaged) is None, (
+        "a tail that could not be read must not become a digest the chain claims to follow"
+    )

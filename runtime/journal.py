@@ -20,6 +20,38 @@ GENESIS_DIGEST = "0" * 64
 
 
 @dataclass(frozen=True)
+class JournalTail:
+    """The last entry a journal file already holds: where the next one follows on."""
+
+    sequence: int
+    digest: str
+
+
+def read_journal_tail(path) -> "JournalTail | None":
+    """The sequence and digest of the last entry in a journal file, or None if empty.
+
+    Read by line rather than by parsing the whole file: this runs at the start of
+    every recorder, and what it needs is one number and one digest from the end.
+    A line that will not parse returns None rather than a guess -- continuing a
+    chain from an entry that could not be read would put a digest in the record
+    that nothing can check.
+    """
+    if not path.exists():
+        return None
+    last = None
+    for line in path.read_text().splitlines():
+        if line.strip():
+            last = line
+    if last is None:
+        return None
+    try:
+        entry = json.loads(last)
+        return JournalTail(sequence=int(entry["sequence"]), digest=str(entry["digest"]))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+@dataclass(frozen=True)
 class JournalEntry:
     """One immutable thing that happened, and its place in the chain."""
 
@@ -74,14 +106,27 @@ class Journal:
     same journal with different sinks, and none of them changes the chain.
     """
 
-    def __init__(self, append_line=None, now_ns=time.time_ns) -> None:
+    def __init__(
+        self,
+        append_line=None,
+        now_ns=time.time_ns,
+        continues_from: "JournalTail | None" = None,
+    ) -> None:
         self._append_line = append_line
         self._now_ns = now_ns
         self._entries: list[JournalEntry] = []
-        self._last_digest = GENESIS_DIGEST
+        # Where this journal picks up. Without it a restarted recorder appends to
+        # the same file starting again from the genesis digest, which leaves the
+        # file holding one chain per process: an edit inside a run is detected,
+        # and a whole run removed from the file leaves nothing that says it was
+        # ever there. A ledger that forgets what it wrote before it restarted is
+        # a pile of ledgers.
+        self._last_digest = continues_from.digest if continues_from else GENESIS_DIGEST
+        self._entries_before = continues_from.sequence if continues_from else 0
 
     @property
     def entries(self) -> tuple[JournalEntry, ...]:
+        """What this journal appended. Entries it continues from are not re-read."""
         return tuple(self._entries)
 
     @property
@@ -89,7 +134,7 @@ class Journal:
         return self._last_digest
 
     def append(self, kind: str, part_id: str, payload: dict) -> JournalEntry:
-        sequence = len(self._entries) + 1
+        sequence = self._entries_before + len(self._entries) + 1
         digest = compute_digest(sequence, kind, part_id, payload, self._last_digest)
         entry = JournalEntry(
             sequence=sequence,

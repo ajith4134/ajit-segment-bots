@@ -39,6 +39,10 @@ echo "== wiring explorer =="
 "${PYTHON}" dashboard/build_wiring_explorer.py | tail -2
 
 echo
+echo "== trade board =="
+"${PYTHON}" dashboard/build_trade_board.py
+
+echo
 echo "== part board (React: build, then freeze one measured payload into it) =="
 # The frontend is rebuilt first because board.html inlines the built bundle. A
 # snapshot taken over a stale bundle would be a current payload rendered by old
@@ -59,4 +63,5 @@ show the versions above's predecessors:
   status-board.html    https://claude.ai/code/artifact/7aace43b-f4d8-4ff1-a4f3-cc448ba850fb
   board.html           https://claude.ai/code/artifact/8a2fa262-34eb-498a-a8f7-246b3dc927cf
   wiring-explorer.html https://claude.ai/code/artifact/190da915-dc97-4c42-a951-907bd65c3644
+  trade-board.html     https://claude.ai/code/artifact/f6b77448-f535-4629-9647-383035214c0c
 NEXT

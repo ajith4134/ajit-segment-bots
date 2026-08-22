@@ -170,7 +170,7 @@ def start_part(context) -> int:
     from dataclasses import asdict, is_dataclass
 
     from runtime.input_assembly import Batch
-    from runtime.journal import Journal
+    from runtime.journal import Journal, read_journal_tail
 
     stages = {
         stage: Batch(read=context.bus.reader(stage))
@@ -213,7 +213,17 @@ def start_part(context) -> int:
         return tuple(recorded)
 
     return run_trade_lifecycle_recorder(
-        recorder=TradeLifecycleRecorder(journal=Journal(append_line=append_line)),
+        recorder=TradeLifecycleRecorder(
+            journal=Journal(
+                append_line=append_line,
+                # Picked up from what the file already holds, so a restarted
+                # recorder continues one chain rather than starting a second.
+                # A ledger whose chain restarts every time the process does
+                # detects an edit inside a run and nothing about a whole run
+                # deleted.
+                continues_from=read_journal_tail(journal_path),
+            )
+        ),
         control_socket=context.control_socket,
         read_stages=read_stages,
         publish_entries=publish_entries,

@@ -107,11 +107,72 @@ LIVE_SPINE = (
     "bull-entry-timer",
     "bull-exit-plan-proposer",
     "bull-opinion-composer",
+    # The decision. One bot means one opinion, and the arbiter's sole-opinion
+    # penalty is what says so in the intent rather than the intent pretending
+    # three bots agreed.
+    "opinion-arbiter",
+    # The settings the money comes from, read before anything is sized against
+    # them. The validator is what the bounds gate refuses without: a bound checked
+    # against settings nobody verified is a bound with no authority behind it.
+    "main-account-settings-reader",
+    "capital-allotment-reader",
+    "capital-settings-validator",
+    "money-mode-reader",
+    # Which instrument carries the intent, and at what price and increment. The
+    # selector prices the venue's own funding against the intent's horizon, which
+    # is why symbol-catalogue-reader above has to be running.
+    "instrument-selector",
+    "tick-size-resolver",
+    "exposure-limiter",
+    # The size, and the two bounds it must survive: what one trade may risk and
+    # what one trade may commit.
+    "paper-account-keeper",
+    "position-sizer",
+    "trade-capital-bounds-gate",
+    # The order. Stamped with the id it keeps forever, addressed by the money
+    # mode, and filled by the paper book -- which is the only destination this
+    # phase may reach.
+    "order-idempotency-stamper",
+    "order-destination-router",
+    "paper-fill-simulator",
+    # The record. Without it a fill happened and nothing can say what decided it.
+    "trade-lifecycle-recorder",
 )
+
+# The segment this spine trades, and the only money mode it may run in. Checked
+# before a part is started rather than trusted: `order-destination-router` refuses
+# to address a live order and `paper-fill-simulator` refuses to simulate one, and
+# this is the third check, at the one moment where refusing costs nothing. A run
+# that reached a live venue is the failure this phase cannot recover from (RL-005).
+TRADED_SEGMENT = "futures"
+PAPER = "paper"
+MONEY_MODE_SETTING = "money_mode"
 
 
 def read_runtime_settings():
     return load_settings_document(settings_directory() / "runtime.toml", "runtime")
+
+
+def refuse_unless_the_segment_is_on_paper() -> str:
+    """The money mode this spine may run in, read from the operator's own file.
+
+    Read here rather than assumed, and read before any part is forked. The parts
+    that place and fill orders each refuse a live order on their own, and this is
+    the check that costs nothing: an operator who set this segment live and then
+    started this spine gets a refusal instead of fourteen processes discovering it
+    one at a time.
+    """
+    document = load_settings_document(
+        settings_directory() / "segments" / f"{TRADED_SEGMENT}.toml", TRADED_SEGMENT
+    )
+    mode = str(document.read_value(MONEY_MODE_SETTING))
+    if mode != PAPER:
+        raise SystemExit(
+            f"{TRADED_SEGMENT} says {MONEY_MODE_SETTING} = {mode!r}, and this spine starts the "
+            f"parts that place orders. Only {PAPER!r} may run here: RL-005 is paper first, with "
+            f"full experimentation and no restriction, and live only for what paper proved."
+        )
+    return mode
 
 
 def is_capture_script_running() -> list[str]:
@@ -201,6 +262,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     settings = read_runtime_settings()
+    money_mode = refuse_unless_the_segment_is_on_paper()
     wiring = derive_wiring()
     unknown = [part_id for part_id in spine if part_id not in wiring]
     if unknown:
@@ -247,6 +309,11 @@ def main(argv: list[str]) -> int:
             "parts": list(spine),
             "switch_endpoint": switch_service.address,
             "without_feed": arguments.without_feed,
+            # Written into the record of the run, not only checked: what the
+            # orders this spine places were addressed at is the first thing anyone
+            # reading the journal afterwards needs to know.
+            "segment": TRADED_SEGMENT,
+            "money_mode": money_mode,
             # Said out loud: nothing is bounding these parts yet, because the
             # governor that decides what a part may have is not running.
             "placed_in_scopes": False,
