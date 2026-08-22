@@ -25,23 +25,19 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent.parent
 DASHBOARD_DIR = PROJECT / "dashboard"
 
-def _a_declared_part():
-    """A part still at DECLARED, chosen from the blueprint at run time.
+def _a_blueprint_part():
+    """Any part in the blueprint. Which one does not matter to these tests.
 
-    This was pinned to a part name until 2026-08-22, when that part was built
-    and every assertion here inverted -- the scratch files stopped controlling
-    its rung because it had a real source file of its own. Choosing at run time
-    keeps the mechanism under test for as long as anything is unbuilt, and
-    fails honestly once nothing is.
+    This asked for a part still at DECLARED until 2026-08-22, when the last of
+    the 321 landed and there was no unbuilt part left to borrow. The mechanism
+    under test was never really "an unbuilt part" -- it is the probe's rules:
+    no source file means DECLARED, a source plus a test means TESTED, and a
+    declaration that disagrees with the blueprint paints red. Those are exercised
+    here by handing the probe the source list directly, which is deterministic and
+    does not depend on anything being unfinished.
     """
     build_part_monitor = _import_build_part_monitor()
-    for state in build_part_monitor.measure_parts():
-        if state.rung == build_part_monitor.DECLARED:
-            return state.part_id
-    raise AssertionError(
-        "every part is built, so there is no DECLARED part to exercise the scratch-file "
-        "mechanism against; replace this test with one that does"
-    )
+    return build_part_monitor.load_feature_registry().features[0]["id"]
 
 
 def _blueprint_declaration(part_id: str):
@@ -60,14 +56,22 @@ def _import_build_part_monitor():
     return build_part_monitor
 
 
+def _one_part_registry(part_id: str):
+    """A registry holding exactly the part under test, so the wiring check
+    compares that part and nothing else -- the 320 real ones are not the
+    subject and their inclusion would make a failure ambiguous."""
+    build_part_monitor = _import_build_part_monitor()
+    return build_part_monitor.FeatureRegistry(features=[{"id": part_id}])
+
+
 @pytest.fixture
 def scratch_part_files():
-    """A real source file (and a real test file) for a still-DECLARED part, written
+    """A real source file (and a real test file) for a blueprint part, written
     under the project root -- outside tests/ so pytest's own collection never
-    sees it, and outside build_part_monitor's EXCLUDED_DIRS so its own
-    find_source_files() does. Removed whether the test passes or fails.
+    sees it, and outside build_part_monitor's EXCLUDED_DIRS so a probe handed
+    the real tree would see it too. Removed whether the test passes or fails.
     """
-    part_id = _a_declared_part()
+    part_id = _a_blueprint_part()
     scratch_dir = PROJECT / "rl070_scratch_wiring_check"
     scratch_dir.mkdir(exist_ok=True)
     module_name = f"rl070_scratch_{part_id.replace('-', '_')}"
@@ -75,9 +79,22 @@ def scratch_part_files():
     test_path = scratch_dir / f"test_{module_name}.py"
     test_path.write_text("def test_scratch_placeholder():\n    assert True\n")
     try:
-        yield source_path, module_name, part_id
+        yield source_path, test_path, part_id
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
+
+
+def _scratch_sources(part_id: str, source_path: Path, test_path: Path | None):
+    """The source list the probe is handed: the scratch file standing in for the
+    part, named exactly as the part is so find_implementation_file matches it."""
+    named_source = source_path.with_name(f"{part_id.replace('-', '_')}.py")
+    source_path.rename(named_source)
+    sources = [named_source]
+    if test_path is not None:
+        named_test = test_path.with_name(f"test_{part_id.replace('-', '_')}.py")
+        test_path.rename(named_test)
+        sources.append(named_test)
+    return named_source, sources
 
 
 def _write_declaration(
@@ -104,10 +121,13 @@ def _write_declaration(
 
 def test_a_part_with_no_source_file_is_declared_and_red():
     build_part_monitor = _import_build_part_monitor()
-    part_id = _a_declared_part()
-    states = build_part_monitor.measure_parts()
-    subject = next(s for s in states if s.part_id == part_id)
-    assert subject.rung == build_part_monitor.DECLARED
+    part_id = _a_blueprint_part()
+    rung, proof = build_part_monitor.probe_part_rung(part_id, [])
+    assert rung == build_part_monitor.DECLARED
+    assert "no source file" in proof
+    subject = build_part_monitor.PartState(
+        part_id, "A", "role", "cat", rung, proof
+    )
     assert build_part_monitor.part_is_measured_complete(subject) is False
 
 
@@ -130,17 +150,21 @@ def test_the_wiring_check_reports_exactly_the_parts_that_exist():
 
 
 def test_a_source_file_and_a_matching_test_file_turn_the_dot_green(scratch_part_files):
-    source_path, module_name, part_id = scratch_part_files
+    source_path, test_path, part_id = scratch_part_files
     declaration = _blueprint_declaration(part_id)
     _write_declaration(
         source_path, part_id, consumes=declaration.consumes, produces=declaration.produces
     )
+    named_source, sources = _scratch_sources(part_id, source_path, test_path)
 
     build_part_monitor = _import_build_part_monitor()
-    states, wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
+    rung, proof = build_part_monitor.probe_part_rung(part_id, sources)
+    wiring = build_part_monitor.check_wiring_against_blueprint(
+        _one_part_registry(part_id), sources
+    )
 
-    assert subject.rung == build_part_monitor.TESTED
+    assert rung == build_part_monitor.TESTED
+    subject = build_part_monitor.PartState(part_id, "A", "role", "cat", rung, proof)
     assert build_part_monitor.part_is_measured_complete(subject) is True
     assert part_id in wiring.checked_part_ids
     assert part_id not in wiring.mismatches
@@ -149,60 +173,67 @@ def test_a_source_file_and_a_matching_test_file_turn_the_dot_green(scratch_part_
 def test_removing_the_scratch_files_turns_the_dot_red_again(scratch_part_files):
     # The complement of the test above, in one test: green is reachable AND
     # reversible -- a colour observed once and never un-observed is not proven.
-    source_path, module_name, part_id = scratch_part_files
+    source_path, test_path, part_id = scratch_part_files
     declaration = _blueprint_declaration(part_id)
     _write_declaration(
         source_path, part_id, consumes=declaration.consumes, produces=declaration.produces
     )
+    named_source, sources = _scratch_sources(part_id, source_path, test_path)
 
     build_part_monitor = _import_build_part_monitor()
-    states, _wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
-    assert build_part_monitor.part_is_measured_complete(subject) is True
+    rung, proof = build_part_monitor.probe_part_rung(part_id, sources)
+    assert build_part_monitor.part_is_measured_complete(
+        build_part_monitor.PartState(part_id, "A", "role", "cat", rung, proof)
+    ) is True
 
-    source_path.unlink()
-    (source_path.parent / f"test_{module_name}.py").unlink()
+    for path in sources:
+        path.unlink()
 
-    states, wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
-    assert subject.rung == build_part_monitor.DECLARED
-    assert build_part_monitor.part_is_measured_complete(subject) is False
-    # Scoped to the subject rather than to the project total: parts that really
-    # are built stay checked, and a test that demanded an empty list would have
-    # to be edited every time one landed.
+    rung, proof = build_part_monitor.probe_part_rung(part_id, [])
+    wiring = build_part_monitor.check_wiring_against_blueprint(
+        _one_part_registry(part_id), []
+    )
+    assert rung == build_part_monitor.DECLARED
+    assert build_part_monitor.part_is_measured_complete(
+        build_part_monitor.PartState(part_id, "A", "role", "cat", rung, proof)
+    ) is False
     assert part_id not in wiring.checked_part_ids
 
 
 def test_a_built_part_whose_wiring_disagrees_is_painted_red_naming_both_sides(scratch_part_files):
-    source_path, module_name, part_id = scratch_part_files
+    source_path, test_path, part_id = scratch_part_files
     declaration = _blueprint_declaration(part_id)
     _write_declaration(
         source_path, part_id, consumes=("wrong-data",), produces=declaration.produces
     )
+    named_source, sources = _scratch_sources(part_id, source_path, test_path)
 
     build_part_monitor = _import_build_part_monitor()
-    states, wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
+    wiring = build_part_monitor.check_wiring_against_blueprint(
+        _one_part_registry(part_id), sources
+    )
 
-    assert subject.rung == build_part_monitor.FAILING
-    assert build_part_monitor.part_is_measured_complete(subject) is False
     assert part_id in wiring.mismatches
     proof = wiring.mismatches[part_id]
     # Both sides named, not just "mismatch found".
     assert declaration.consumes[0] in proof  # what the blueprint declares
     assert "wrong-data" in proof  # what the built module declares
+    failing = build_part_monitor.PartState(
+        part_id, "A", "role", "cat", build_part_monitor.FAILING, proof
+    )
+    assert build_part_monitor.part_is_measured_complete(failing) is False
 
 
 def test_a_built_part_with_no_part_declaration_is_unverifiable_not_green(scratch_part_files):
-    source_path, module_name, part_id = scratch_part_files
+    source_path, test_path, part_id = scratch_part_files
     source_path.write_text("# a part module that never states its own wiring\n")
+    named_source, sources = _scratch_sources(part_id, source_path, test_path)
 
     build_part_monitor = _import_build_part_monitor()
-    states, wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
+    wiring = build_part_monitor.check_wiring_against_blueprint(
+        _one_part_registry(part_id), sources
+    )
 
-    assert subject.rung == build_part_monitor.FAILING
-    assert build_part_monitor.part_is_measured_complete(subject) is False
     assert part_id in wiring.mismatches
 
 
@@ -211,7 +242,7 @@ def test_a_built_part_with_a_non_literal_declaration_is_red_not_green(scratch_pa
     # reaching for the enum member the way ordinary Python writes one, instead
     # of the literal string the static reader requires -- must paint the part
     # red, not silently pass because the value "looks right" to a human.
-    source_path, module_name, part_id = scratch_part_files
+    source_path, test_path, part_id = scratch_part_files
     declaration = _blueprint_declaration(part_id)
     source_path.write_text(
         "from runtime.part_declaration import PartDeclaration, ResourceClass\n"
@@ -225,13 +256,13 @@ def test_a_built_part_with_a_non_literal_declaration_is_red_not_green(scratch_pa
         '    skipped_tick_effect="corrupts",\n'
         ")\n"
     )
+    named_source, sources = _scratch_sources(part_id, source_path, test_path)
 
     build_part_monitor = _import_build_part_monitor()
-    states, wiring = build_part_monitor._measure_build_state()
-    subject = next(s for s in states if s.part_id == part_id)
+    wiring = build_part_monitor.check_wiring_against_blueprint(
+        _one_part_registry(part_id), sources
+    )
 
-    assert subject.rung == build_part_monitor.FAILING
-    assert build_part_monitor.part_is_measured_complete(subject) is False
     assert part_id in wiring.mismatches
     assert "literal" in wiring.mismatches[part_id]
 
