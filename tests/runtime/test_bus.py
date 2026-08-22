@@ -185,6 +185,14 @@ def test_a_consumer_that_stopped_reading_cannot_stall_its_producer(bus_root, rea
 
 
 def test_a_part_that_never_started_is_off_not_behind(bus_root, real_trades):
+    """And the producer stops paying a syscall for it after the first refusal.
+
+    Measured on the first live run: 59 of market-data's 66 consumers were off, so
+    89% of every publish was a syscall to nobody. The first send finds out; the
+    rest are skipped until the address is due a re-probe. Both are counted, and
+    neither is silent -- a message nobody wanted and a message nobody received are
+    different facts.
+    """
     producer = open_bus(
         wiring_for(
             bus_root,
@@ -199,7 +207,8 @@ def test_a_part_that_never_started_is_off_not_behind(bus_root, real_trades):
     finally:
         producer.close()
 
-    assert standing["withheld_from_a_consumer_that_is_off"] == 3
+    assert standing["withheld_from_a_consumer_that_is_off"] == 1
+    assert standing["skipped_a_consumer_known_to_be_off"] == 2
     assert standing["delivered"] == 0
     assert standing["refused_by_a_full_buffer"] == 0
 
@@ -247,7 +256,10 @@ def test_a_part_that_exits_becomes_off_and_the_producer_sees_it(bus_root, real_t
         producer.close()
 
     assert while_on == 1
-    assert standing["withheld_from_a_consumer_that_is_off"] == 2
+    # The first send after the part died finds out; the second is skipped until the
+    # address is due a re-probe. Both mean off.
+    assert standing["withheld_from_a_consumer_that_is_off"] == 1
+    assert standing["skipped_a_consumer_known_to_be_off"] == 1
     assert standing["refused_by_a_full_buffer"] == 0
 
 
@@ -479,3 +491,32 @@ def test_a_publisher_holds_one_descriptor_whatever_the_fan_out(bus_root):
         assert publisher._socket.fileno() > 0
     finally:
         publisher.close()
+
+
+def test_an_address_that_was_off_is_probed_again_and_picked_up(bus_root, real_trades):
+    """A part switched on must start receiving, or skipping absent consumers would
+    turn a temporary absence into a permanent one."""
+    consumer_wiring = wiring_for(bus_root, "feed-gap-detector", consumes=("market-data",))
+    producer = PartBus(
+        wiring=wiring_for(
+            bus_root,
+            "venue-trade-stream-reader",
+            produces=("market-data",),
+            sends_to={"market-data": ("feed-gap-detector",)},
+        ),
+        inbox_receive_buffer_bytes=DEFAULT_RECEIVE_BUFFER_BYTES,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+        absent_recheck_interval_seconds=0.0,  # due immediately, so the test is not a sleep
+    )
+    try:
+        producer.publish("market-data", real_trades[:2])
+        while_off = producer.standing()["outputs"]["market-data"]
+        assert while_off["withheld_from_a_consumer_that_is_off"] >= 1
+
+        with open_bus(consumer_wiring) as consumer:
+            producer.publish("market-data", real_trades[:2])
+            received = consumer.reader("market-data")()
+    finally:
+        producer.close()
+
+    assert len(received) == 2, "a part that came on was never probed again"

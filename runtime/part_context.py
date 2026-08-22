@@ -31,6 +31,7 @@ RUNTIME_SCOPE = "runtime"
 # its own business; these are the ones the runtime needs to start it at all.
 INBOX_RECEIVE_BUFFER_SETTING = "inbox_receive_buffer_bytes"
 MAXIMUM_MESSAGE_SETTING = "maximum_message_bytes"
+ABSENT_RECHECK_SETTING = "publisher_absent_recheck_interval"
 HEALTH_INTERVAL_SETTING = "part_health_interval"
 TICK_FLOOR_SETTING = "part_tick_floor"
 
@@ -167,6 +168,7 @@ def open_part_context(
         wiring=wiring,
         inbox_receive_buffer_bytes=int(required(INBOX_RECEIVE_BUFFER_SETTING)),
         maximum_message_bytes=int(required(MAXIMUM_MESSAGE_SETTING)),
+        absent_recheck_interval_seconds=float(required(ABSENT_RECHECK_SETTING)),
     )
     return PartContext(
         part_id=part_id,

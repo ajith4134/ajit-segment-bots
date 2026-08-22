@@ -51,6 +51,11 @@ CODEC_VERSION = 1
 CODEC_VERSION_BYTES = 1
 CODEC_BYTE_ORDER = "big"
 
+# How long an address that refused is left alone before it is tried again. A
+# default rather than a required argument because Publisher is also built directly
+# in tests; the running system passes the operator's setting.
+DEFAULT_ABSENT_RECHECK_SECONDS = 5.0
+
 # Every part's own health is published under this type. It is a data type like any
 # other -- same sockets, same refusals, same inboxes -- because a privileged health
 # channel would be a second data plane and T-1 says there is one shape.
@@ -96,6 +101,7 @@ class PublishStanding:
     delivered: int = 0
     refused_by_a_full_buffer: int = 0
     withheld_from_a_consumer_that_is_off: int = 0
+    skipped_a_consumer_known_to_be_off: int = 0
     refused_too_large: int = 0
     published_with_no_listener: int = 0
     last_failure: str | None = None
@@ -105,6 +111,7 @@ class PublishStanding:
             "delivered": self.delivered,
             "refused_by_a_full_buffer": self.refused_by_a_full_buffer,
             "withheld_from_a_consumer_that_is_off": self.withheld_from_a_consumer_that_is_off,
+            "skipped_a_consumer_known_to_be_off": self.skipped_a_consumer_known_to_be_off,
             "refused_too_large": self.refused_too_large,
             "published_with_no_listener": self.published_with_no_listener,
         }
@@ -199,12 +206,23 @@ class Publisher:
         part_id: str,
         outbound: dict[str, tuple],
         maximum_message_bytes: int,
+        absent_recheck_interval_seconds: float = DEFAULT_ABSENT_RECHECK_SECONDS,
         now_ns: Callable[[], int] = time.time_ns,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._part_id = part_id
         self._outbound = {data_type: tuple(str(a) for a in addresses) for data_type, addresses in outbound.items()}
         self._maximum_message_bytes = maximum_message_bytes
+        self._absent_recheck_interval_seconds = absent_recheck_interval_seconds
         self._now_ns = now_ns
+        self._monotonic = monotonic
+        # When each address that refused may be tried again. An off part is the
+        # normal case, not an error -- most of a running system is off by design --
+        # and a producer that kept paying a syscall per message per absent consumer
+        # would spend most of its budget on parts that are not there. Measured live:
+        # 59 of 66 market-data consumers were off, so 89% of every send was to
+        # nobody, and the sends that mattered were refused against a full buffer.
+        self._retry_absent_at: dict[str, float] = {}
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         self._socket.setblocking(False)
         self._next_sequence: dict[str, int] = {data_type: 0 for data_type in self._outbound}
@@ -243,10 +261,20 @@ class Publisher:
             if not addresses:
                 standing.published_with_no_listener += 1
                 continue
+            now = self._monotonic()
             for address in addresses:
-                self._send_one(frame, address, standing)
+                self._send_one(frame, address, standing, now)
 
-    def _send_one(self, frame: bytes, address: str, standing: PublishStanding) -> None:
+    def _send_one(self, frame: bytes, address: str, standing: PublishStanding, now: float) -> None:
+        retry_at = self._retry_absent_at.get(address)
+        if retry_at is not None:
+            if now < retry_at:
+                # Known off, and not yet due a re-probe. Counted, never silent: the
+                # board must be able to tell a message nobody wanted from a message
+                # nobody received.
+                standing.skipped_a_consumer_known_to_be_off += 1
+                return
+            del self._retry_absent_at[address]
         try:
             self._socket.sendto(frame, address)
         except BlockingIOError:
@@ -259,18 +287,19 @@ class Publisher:
             # cause that cannot be told apart from here; which it was is answered by
             # the consumer's own sequence gaps.
             standing.refused_by_a_full_buffer += 1
-        except FileNotFoundError:
-            # The part has never bound this address in this boot: it is off, and has
-            # been since the launcher last unlinked the address.
+        except (FileNotFoundError, ConnectionRefusedError):
+            # ENOENT: the part has never bound this address in this boot. ECONNREFUSED:
+            # the socket file is there and its process is gone. Both mean off, not
+            # broken -- the distinction the whole design rests on -- and both put the
+            # address on the re-probe clock so a part switched on is picked up within
+            # one interval rather than never.
             standing.withheld_from_a_consumer_that_is_off += 1
-        except ConnectionRefusedError:
-            # The socket file is there and nothing is bound to it: the part's process
-            # is gone. Off, not broken -- the distinction the whole design rests on.
-            standing.withheld_from_a_consumer_that_is_off += 1
+            self._retry_absent_at[address] = now + self._absent_recheck_interval_seconds
         except OSError as failure:
             standing.last_failure = f"{errno.errorcode.get(failure.errno, failure.errno)}: {failure}"
         else:
             standing.delivered += 1
+            self._retry_absent_at.pop(address, None)
 
     def close(self) -> None:
         self._socket.close()
@@ -373,6 +402,7 @@ class PartBus:
         wiring: PartWiring,
         inbox_receive_buffer_bytes: int,
         maximum_message_bytes: int,
+        absent_recheck_interval_seconds: float = DEFAULT_ABSENT_RECHECK_SECONDS,
         now_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         self.part_id = wiring.part_id
@@ -390,6 +420,7 @@ class PartBus:
                 part_id=wiring.part_id,
                 outbound=wiring.outbound,
                 maximum_message_bytes=maximum_message_bytes,
+                absent_recheck_interval_seconds=absent_recheck_interval_seconds,
                 now_ns=now_ns,
             )
         except Exception:

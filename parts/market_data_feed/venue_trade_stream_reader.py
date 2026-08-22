@@ -159,7 +159,12 @@ def start_part(context) -> int:
 
     def rebuild_readers_if_the_plan_changed() -> None:
         plan = plans.value()
-        if plan is None or plan is planned[0]:
+        # Compared by value, never by identity. stream-budget-planner re-plans on
+        # every tick and publishes a fresh object each time even when nothing
+        # changed, so an identity check tore down and reopened every venue
+        # connection once a second -- which on the first live run left consumers
+        # receiving 3.5 messages a second out of 516 written to the tape.
+        if plan is None or plan == planned[0]:
             return
         for reader in readers.values():
             reader.close()

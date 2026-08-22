@@ -452,3 +452,8 @@ note  = "operator, 2026-08-22: how many unresolved claims the labeller holds at 
 value = 64
 unit  = "feature vectors"
 note  = "operator, 2026-08-22: how many recent feature vectors the bull conviction model keeps per symbol so a label arriving a horizon later can be matched to the vector that was current when the claim was made. Sixty-four covers a 60-second horizon comfortably -- the filter accepts at most one candidate per detector per symbol at a time, so vectors accrue at the rate candidates do, not at the rate trades do. It is a bound on a process's memory: an unbounded history of vectors is a leak with a good excuse."
+
+[publisher_absent_recheck_interval]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long a producer leaves an inbox alone after finding nobody bound to it, before trying again. Measured on the first live run: 59 of market-data's 66 consumers were off, so 89% of every publish was a syscall to nobody -- and the sends that mattered were being refused against a full buffer while that work was being done. A part switched on is picked up within one interval; switching a part on is measured at 8.4 ms, so five seconds is the delay before its first message rather than a delay in the switch itself."

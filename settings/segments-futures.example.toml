@@ -1,0 +1,38 @@
+# ajit-segment-bots -- the futures segment's capital settings.
+#
+# Copy to ~/.config/ajit-segment-bots/settings/segments/futures.toml and edit
+# there. This file is the template and the schema; the live values live on the
+# machine, outside every repository (docs/settings-schema.md).
+#
+# These are the numbers that decide how much money this segment may use and
+# whether that money is real. RL-055 makes them the operator's, not the code's.
+
+[money_mode]
+value = "paper"
+unit  = "paper or live"
+note  = "operator, 2026-08-22: whether this segment's orders go to the paper book or to a venue with real money. RL-005 is paper first, with full experimentation and no restriction, and live only for what paper proved. money-mode-reader refuses anything that is not exactly 'paper' or 'live' -- real money is never a default and never a typo."
+
+[allocated_balance]
+value = 10000.0
+unit  = "USDT"
+note  = "operator, 2026-08-22: the balance this segment trades against. On paper it is the simulated account the paper-account-keeper starts from, and it sets the scale of everything downstream: the position sizer risks a fraction of this, so it decides what a trade is worth. Ten thousand is a round number chosen to make the first paper runs legible against the measured market -- the median real trade on this tape is 166 USDT on binance-usdm and 55 on bybit-linear, so a thousand-USDT order is a size the book actually sees. Change it to the size you intend to trade."
+
+[minimum_capital_per_trade]
+value = 10.0
+unit  = "USDT"
+note  = "operator, 2026-08-22: below this a trade is not placed at all. Both venues enforce a minimum notional near 5 USDT on most linear perpetuals, and a trade at the venue's floor is one where fees and increments dominate the outcome -- so this sits above it rather than at it."
+
+[maximum_capital_per_trade]
+value = 1000.0
+unit  = "USDT"
+note  = "operator, 2026-08-22: the most one trade may commit, a tenth of the allocated balance. A ceiling per trade is what keeps one sizing mistake from being the whole account, and it binds regardless of what the sizer computed: trade-capital-bounds-gate refuses above it rather than trimming silently."
+
+[leverage_ceiling]
+value = 1.0
+unit  = "multiple"
+note  = "operator, 2026-08-22: the highest leverage any position in this segment may carry. One means unlevered -- the position can never exceed the capital behind it. This is the safe value to start a futures-first build with: it removes leverage as a source of loss beyond the capital committed, until it is raised deliberately and with the risk understood."
+
+[quote_currency]
+value = "USDT"
+unit  = "currency"
+note  = "operator, 2026-08-22: the currency the allotment and the bounds are denominated in. Every symbol captured on both venues is USDT-quoted, so this is what the balances and the fills are actually in."
