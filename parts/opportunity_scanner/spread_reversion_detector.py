@@ -194,6 +194,8 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
 def run_spread_reversion_detector(
     detector: SpreadReversionDetector, control_socket, read_pairs, publish_candidates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         pairs = read_pairs(detector)
@@ -210,4 +212,55 @@ def run_spread_reversion_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A cointegrated pair is a level -- these two symbols hold together, until the
+    finder says they no longer do -- so the latest verdict per pair is kept across
+    ticks. A pair the finder retires arrives as a fresh verdict with a state that is
+    no longer tradeable, and `detect` refuses it: a stretched spread on a retired
+    pair is two symbols that have parted company, and it looks exactly like the best
+    opportunity there has ever been.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    pairs = LatestByKey(
+        read=context.bus.reader("cointegrated-pair"),
+        key_of=lambda pair: (pair.venue_id, pair.left_symbol, pair.right_symbol),
+    )
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+
+    detector = SpreadReversionDetector(
+        z_threshold=context.number("spread_reversion_z_threshold"),
+        window_length=int(context.number("spread_reversion_window_length")),
+        minimum_observations=int(context.number("spread_reversion_minimum_observations")),
+        horizon_seconds=context.number("spread_reversion_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+
+    def read_pairs(_detector):
+        for trade in trades.payloads():
+            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+        return pairs.values()
+
+    return run_spread_reversion_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_pairs=read_pairs,
+        publish_candidates=publish_candidates,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

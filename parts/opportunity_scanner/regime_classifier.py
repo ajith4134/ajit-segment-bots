@@ -193,6 +193,8 @@ def describe_regimes(classifier: RegimeClassifier) -> dict:
 def run_regime_classifier(
     classifier: RegimeClassifier, control_socket, read_prices, publish_regimes,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, price in read_prices():
@@ -205,4 +207,46 @@ def run_regime_classifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Trades arrive as an event stream and prices are observed one by one; the regime
+    is a level, republished every tick for every symbol seen so far. That asymmetry
+    is deliberate. A consumer that joined late must still learn what regime a symbol
+    is in, and a classifier that only spoke when the regime *changed* would leave it
+    with nothing and no way to know it was missing something.
+
+    Woken by its data rather than by its clock: the whole point of the regime is to
+    be current when a detector asks, and the tick floor keeps a busy symbol from
+    spinning this part at the rate of the tape.
+    """
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_regimes = context.bus.publisher_for("market-regime")
+
+    def read_prices():
+        return tuple(
+            (trade.venue_id, trade.symbol, trade.price) for trade in trades.payloads()
+        )
+
+    return run_regime_classifier(
+        classifier=RegimeClassifier(
+            window_length=int(context.number("regime_window_length")),
+            minimum_observations=int(context.number("regime_minimum_observations")),
+            trending_above=context.number("regime_trending_hurst_above"),
+            reverting_below=context.number("regime_reverting_hurst_below"),
+        ),
+        control_socket=context.control_socket,
+        read_prices=read_prices,
+        publish_regimes=publish_regimes,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

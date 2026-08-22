@@ -167,3 +167,88 @@ note  = "operator, 2026-08-22: how long symbol-catalogue-reader waits on a venue
 value = "1m"
 unit  = "venue candle interval"
 note  = "operator, 2026-08-22: which candle a stream plan reserves capacity for, and which one ccxt-venue-reader reads. One minute is the finest bar both venues serve and the base RL-043's 1m/5m/15m/30m ladder is aggregated from -- a coarser base cannot be refined later, while a finer one is capacity spent on a resolution the tape already holds as trades."
+
+[regime_window_length]
+value = 1024
+unit  = "trades"
+note  = "operator, 2026-08-22: how many trade prices regime-classifier keeps per symbol for its Hurst estimate. Measured on 60000 real trades from four symbols: the estimator's standard deviation falls from 0.26 at a 64-trade window to 0.046-0.139 at 1024, and barely improves at 2048 while doubling the market time a window spans. 1024 trades is 1.2-6.8 seconds on the busiest symbols. Full table in measurements/2026-08-22-vertical-numbers/README.md."
+
+[regime_minimum_observations]
+value = 1024
+unit  = "trades"
+note  = "operator, 2026-08-22: the fewest prices regime-classifier will estimate on -- set equal to the window, so it classifies only on a full one. Measured: below 512 trades the estimator's spread is wider than the distance from a random walk to either regime, so a shorter minimum produces a classifier that flips between trending and reverting on the same market. A symbol that has just started therefore reads 'unclassified', which is a real state rather than a guess."
+
+[regime_trending_hurst_above]
+value = 0.6
+unit  = "Hurst exponent"
+note  = "operator, 2026-08-22: above this the series is called trending. Measured at the 1024-trade window on four symbols: the median Hurst is 0.48-0.52 -- this market really is close to a random walk at these timescales -- and 0.60 is about the 95th percentile of the two least noisy symbols. So roughly one window in ten classifies on a calm symbol and fewer on a noisy one, which is the right direction: a noisier estimate should classify less often, not more."
+
+[regime_reverting_hurst_below]
+value = 0.4
+unit  = "Hurst exponent"
+note  = "operator, 2026-08-22: below this the series is called reverting. The mirror of regime_trending_hurst_above, and about the 5th percentile of the same measured distribution (q05 was 0.38-0.47 at the 1024-trade window). Both thresholds must sit either side of 0.5 and the classifier refuses at construction if they do not."
+
+[cointegration_window_length]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-22: how many prices per symbol cointegration-pair-finder keeps for its spread test. Measured on 320000 real trades per venue: the spread's reversion per step is three to five times stronger at 256 than at 1024 (median 0.066 against 0.017 on binance-usdm, 0.050 against 0.009 on bybit-linear), and a longer window also delays the first candidate. Full table in measurements/2026-08-22-vertical-numbers/README.md."
+
+[cointegration_minimum_observations]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-22: the fewest observations of each symbol before a pair is judged at all -- set equal to the window, so a pair is judged on a full one. Below it the finder reports too-few-observations, which is a state rather than a guess."
+
+[cointegration_minimum_correlation]
+value = 0.5
+unit  = "absolute Pearson correlation"
+note  = "operator, 2026-08-22: how related two symbols must be before their spread is worth testing. Measured at the 256 window: this is about the median pair on bybit-linear (q50 0.56) and the top quartile on binance-usdm (q75 0.50), so it is selective without being empty. Two prices sharing at least a quarter of their variance is the floor for calling the difference between them a spread."
+
+[cointegration_minimum_reversion_strength]
+value = 0.05
+unit  = "fraction of deviation pulled back per step"
+note  = "operator, 2026-08-22: how strongly a spread must pull back before the pair is called cointegrated rather than merely correlated. Measured at the 256 window: about the median on both venues (0.066 binance-usdm, 0.050 bybit-linear), so roughly half the pairs clear it and about a quarter clear it together with the correlation floor. Correlated-and-drifting is the classic way to lose money on pairs, which is why this test exists separately from the correlation one."
+
+[cointegration_pairs_tested_per_tick]
+value = 64
+unit  = "pairs"
+note  = "operator, 2026-08-22: how many symbol pairs the finder tests on one tick. Pairs grow as the square of symbols -- the 30 captured symbols per venue are 435 pairs -- and each test is a linear fit over the window. This bounds the work per tick so the part stays switchable (T-2); pairs are tested in rotation, so every pair is still reached, just not all in one tick."
+
+[signal_prior_hit_rate]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-22: what a detector's hit rate is assumed to be before it has been right or wrong even once. Half is the only honest prior: a detector with no history is not known to be better than chance, and any other value would be a claim about a detector nobody has measured. This is a prior, not a floor -- it is displaced by real outcomes as they arrive (RL-060)."
+
+[signal_prior_weight]
+value = 20.0
+unit  = "pseudo-observations"
+note  = "operator, 2026-08-22: how much evidence the prior is worth, in observations. Twenty means twenty real outcomes move the estimate halfway from the prior to what was actually observed, so a detector that is right thirty times in a row is believed rather than held back by an assumption. Small enough to be displaced quickly, large enough that three lucky calls do not read as a 100% hit rate."
+
+[signal_half_life_observations]
+value = 500.0
+unit  = "observations"
+note  = "operator, 2026-08-22: how quickly a detector's older outcomes stop counting. A market regime does not last forever and neither does a detector's edge in it, so evidence decays: after 500 outcomes an observation counts half as much as a fresh one. Paired with the per-regime split in SignalCalibrator, this is what stops a detector's record in a trending market from vouching for it in a choppy one."
+
+[signal_minimum_observations]
+value = 30
+unit  = "observations"
+note  = "operator, 2026-08-22: how many outcomes a detector needs before its measured hit rate is reported as measured rather than as an estimate resting on the prior. Below it the confidence carries that it is unproven, which is what stops an untested detector's first three correct calls from being read as an edge."
+
+[spread_reversion_window_length]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-22: how many spread observations spread-reversion-detector keeps per pair before judging how stretched the current one is. Matched to cointegration_window_length deliberately: the spread being measured here is the one the finder judged cointegrated over that same span, and a detector measuring a different window would be judging a different spread from the one that was tested."
+
+[spread_reversion_minimum_observations]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-22: the fewest spread observations before a z-score is computed -- a full window, as with the pair test. A z-score on a handful of points is a number with an error bar wider than the signal."
+
+[spread_reversion_z_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-22: how far the spread must be from its own mean before a candidate is raised. Judgement anchored to a measurement rather than measured directly: under a normal distribution two standard deviations is the outer 5%, and crypto spreads are fat-tailed, so this will fire more often than that -- which is the direction to prefer for a first run that needs candidates to exist at all. What would settle it is the realised reversion rate per z-bucket once trades have outcomes; until then the calibrator learns the hit rate rather than this number being tuned."
+
+[spread_reversion_horizon]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long the expected reversion is given to happen before the detector's call is scored. Anchored to measurement: the spread pulls back about 0.05 of its deviation per observation (median at the 256 window on both venues), so the half-life is roughly 14 observations -- 0.07 s on a symbol printing 200 trades a second, 14 s on one printing one. Sixty seconds covers that range with room, and a horizon that expired before the reversion could occur would train the calibrator against a detector that was right."

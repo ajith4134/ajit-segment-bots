@@ -46,11 +46,24 @@ PARTS_ROOT = pathlib.Path(__file__).resolve().parent.parent / "parts"
 # know which function to call for which part would be the circuit knowing its parts.
 PART_ENTRY_POINT = "start_part"
 
-# What the forkserver imports before any part is forked from it. Kept to what every
-# part touches: measured, widening it from 3 modules to 15 changed the per-part cost
-# by 0.01 MB, because the cost is the interpreter's own private pages rather than
-# the imports.
-FORKSERVER_PRELOAD = ("runtime.part_process", "runtime.control_channel", "runtime.part_declaration")
+# What the forkserver imports before any part is forked from it. Widening it does
+# not save memory -- measured, going from 3 modules to 15 changed the per-part cost
+# by 0.01 MB, because the cost is the interpreter's own private pages rather than the
+# imports -- so this is the set every part reaches for, plus numpy.
+#
+# numpy is preloaded for a different reason than memory: it is imported by the tape
+# and by durable numeric state, it is the slowest import in the tree, and the
+# forkserver's preload is fixed by whoever starts it first. A launcher that omitted
+# it would leave every part paying that import itself, and would also decide the
+# question for any other component in the process that expected it preloaded.
+# start_forkserver applies the BLAS thread caps before importing it, which is what
+# makes the forkserver forkable at all.
+FORKSERVER_PRELOAD = (
+    "numpy",
+    "runtime.part_process",
+    "runtime.control_channel",
+    "runtime.part_declaration",
+)
 
 EXIT_CODE_NEVER_RETURNED = None
 

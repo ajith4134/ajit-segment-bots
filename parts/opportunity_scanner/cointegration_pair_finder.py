@@ -230,6 +230,8 @@ def describe_pairs(finder: CointegrationPairFinder) -> dict:
 def run_cointegration_pair_finder(
     finder: CointegrationPairFinder, control_socket, read_prices_and_pairs, publish_pairs,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         pairs = read_prices_and_pairs(finder)
@@ -241,4 +243,76 @@ def run_cointegration_pair_finder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Pairs grow as the square of symbols -- 30 captured symbols per venue are 435
+    pairs -- and each test is a linear fit over the window, so a tick that tested
+    every pair would be a tick the governor could not interrupt (T-2). Pairs are
+    tested in rotation instead: a bounded number per tick, every pair reached, none
+    of them all at once.
+
+    Which symbols exist is learned from the trades that arrive, never from a list.
+    A part that read the symbol universe to decide what to pair would be consuming
+    a data type it does not declare, and the blueprint is what decides that.
+    """
+    import itertools
+
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    regimes = Batch(read=context.bus.reader("market-regime"))
+    publish_pairs = context.bus.publisher_for("cointegrated-pair")
+
+    finder = CointegrationPairFinder(
+        window_length=int(context.number("cointegration_window_length")),
+        minimum_observations=int(context.number("cointegration_minimum_observations")),
+        minimum_correlation=context.number("cointegration_minimum_correlation"),
+        minimum_reversion_strength=context.number("cointegration_minimum_reversion_strength"),
+    )
+    pairs_per_tick = int(context.number("cointegration_pairs_tested_per_tick"))
+    symbols_by_venue: dict[str, set[str]] = {}
+    rotation: list[tuple[str, str, str]] = []
+    rotation_position = [0]
+
+    def read_prices_and_pairs(_finder):
+        for trade in trades.payloads():
+            finder.observe_price(trade.venue_id, trade.symbol, trade.price)
+            symbols_by_venue.setdefault(trade.venue_id, set()).add(trade.symbol)
+        # The regime is consumed to keep this part's reading of the market current
+        # even when it is drained by nobody else; the pair test itself is
+        # regime-independent, and saying so is better than implying otherwise.
+        regimes.payloads()
+
+        every_pair = [
+            (venue_id, left, right)
+            for venue_id, symbols in sorted(symbols_by_venue.items())
+            for left, right in itertools.combinations(sorted(symbols), 2)
+        ]
+        if every_pair != rotation:
+            rotation[:] = every_pair
+            rotation_position[0] = min(rotation_position[0], len(rotation))
+        if not rotation:
+            return ()
+        start = rotation_position[0] % len(rotation)
+        taken = rotation[start : start + pairs_per_tick]
+        if len(taken) < pairs_per_tick:
+            taken += rotation[: pairs_per_tick - len(taken)]
+        rotation_position[0] = (start + len(taken)) % len(rotation)
+        return tuple(taken)
+
+    return run_cointegration_pair_finder(
+        finder=finder,
+        control_socket=context.control_socket,
+        read_prices_and_pairs=read_prices_and_pairs,
+        publish_pairs=publish_pairs,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )
