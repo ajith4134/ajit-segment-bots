@@ -45,11 +45,24 @@ __all__ = [
     "VenueAdapter",
     "VenueFact",
     "VenueFactWithoutSource",
+    "VenueMessageNotRecognised",
 ]
 
 
 class VenueFactWithoutSource(ValueError):
     """A venue limit was declared without saying where it was read from."""
+
+
+class VenueMessageNotRecognised(ValueError):
+    """A venue sent a data message this adapter has no reading for.
+
+    Deliberately not the same as `read_message_facts` returning None. None means
+    "this is a control frame and belongs on no tape"; this means "the venue sent
+    something real and we do not know what it is", which is a fact about the
+    adapter being out of date and must be visible rather than silently dropped.
+    Whether that ends the capture is the reading part's call, not the adapter's --
+    a venue adding an event type should not take a tape down.
+    """
 
 
 @dataclass(frozen=True)
@@ -62,7 +75,11 @@ class VenueFact:
     """
 
     name: str
-    value: int | float | str
+    # A tuple is admitted because some venue facts are an enumeration rather than
+    # a magnitude -- the depth levels a venue offers, the update speeds it pushes
+    # at. Written as a string it would be a fact the code had to re-parse, which
+    # is a literal with extra steps.
+    value: int | float | str | tuple[int | str, ...]
     unit: str
     source: str
 

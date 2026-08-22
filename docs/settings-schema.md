@@ -207,7 +207,7 @@ document holds the measured venue facts every one of them is sized against.
 | | |
 |---|---|
 | Unit | venue ids |
-| Default | `[]` |
+| Default | `["binance-usdm"]` |
 | Read by | `adapter_registry.load_captured_venue_adapters`, and through it every part in `market-data-feed` |
 | The bound | which venue adapters are live right now |
 
@@ -221,9 +221,10 @@ It is the one list-valued setting in the schema. A bare string here would be rea
 as a sequence of single-character venue ids, so `read_captured_venue_ids` refuses
 one by name rather than capturing eleven venues called `b`, `i`, `n`…
 
-Ships empty because an id named here with no module is refused loudly at load,
-and shipping a template that names a venue nobody has written yet would make the
-first run fail for a reason that has nothing to do with the operator's machine.
+An id named here with no module is refused loudly at load rather than skipped,
+so this line and the modules in `runtime/venues/` cannot silently disagree about
+which venues are being captured. `binance-usdm` was turned on when its adapter
+landed on 2026-08-22; `bybit-linear` joins it when that adapter does.
 
 ### `captured_symbol_count`
 

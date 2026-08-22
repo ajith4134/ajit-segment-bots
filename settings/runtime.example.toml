@@ -49,9 +49,9 @@ note  = "operator, 2026-08-21: SettingsDirectoryWatch's periodic backstop -- it 
 # they were read from. What is here is what the operator actually chooses.
 
 [captured_venues]
-value = []
+value = ["binance-usdm"]
 unit  = "venue ids"
-note  = "operator, 2026-08-22: which venue adapters are live. A venue id resolves to runtime/venues/<id with underscores>.py, so adding a third venue is this line plus that module and nothing else -- the user's condition of 2026-08-21, 'mark it so if the 2 are not enough we can add more later'. Empty until an adapter exists: an id named here with no module is refused loudly by adapter_registry rather than skipped quietly."
+note  = "operator, 2026-08-22: which venue adapters are live. A venue id resolves to runtime/venues/<id with underscores>.py, so adding a third venue is this line plus that module and nothing else -- the user's condition of 2026-08-21, 'mark it so if the 2 are not enough we can add more later'. binance-usdm turned on 2026-08-22 when its adapter landed. An id named here with no module is refused loudly by adapter_registry rather than skipped quietly."
 
 [captured_symbol_count]
 value = 30

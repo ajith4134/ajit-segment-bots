@@ -1,0 +1,54 @@
+{
+  "captures": [
+    {
+      "path": "binance-usdm/2026-08-22-exchange-info-subset.json",
+      "venue": "binance-usdm",
+      "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+      "captured_on": "2026-08-22",
+      "how": "one REST call, then subset to the first 3 symbols of each (contractType, status) pair, each kept verbatim. rateLimits kept whole.",
+      "full_response_symbol_count": 872,
+      "symbol_counts_by_contract_type_and_status": {
+        "PERPETUAL/TRADING": 570,
+        "PERPETUAL/SETTLING": 127,
+        "PERPETUAL/PENDING_TRADING": 1,
+        "TRADIFI_PERPETUAL/TRADING": 170,
+        "CURRENT_QUARTER/TRADING": 2,
+        "NEXT_QUARTER/TRADING": 2
+      },
+      "response_headers_of_note": {
+        "x-mbx-used-weight-1m": "1"
+      }
+    },
+    {
+      "path": "binance-usdm/2026-08-22-market-ws-aggtrade-kline.jsonl",
+      "venue": "binance-usdm",
+      "source": "wss://fstream.binance.com/market/ws",
+      "subscribed": [
+        "btcusdt@aggTrade",
+        "btcusdt@kline_1m"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+    },
+    {
+      "path": "binance-usdm/2026-08-22-market-ws-kline-through-close.jsonl",
+      "venue": "binance-usdm",
+      "source": "wss://fstream.binance.com/market/ws",
+      "subscribed": [
+        "btcusdt@kline_1m"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
+    },
+    {
+      "path": "binance-usdm/2026-08-22-public-ws-depth20.jsonl",
+      "venue": "binance-usdm",
+      "source": "wss://fstream.binance.com/public/ws",
+      "subscribed": [
+        "btcusdt@depth20@500ms"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+    }
+  ]
+}
