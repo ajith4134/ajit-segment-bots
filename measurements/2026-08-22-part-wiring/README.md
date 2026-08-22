@@ -111,6 +111,25 @@ was rebindable afterwards. So the bus can tell "the governor switched that part
 off" from "the data plane is broken" without either part knowing anything about
 the other, and neither answer ever makes a producer wait.
 
+**The address is a socket file, not an abstract name.** Both were measured and
+behave identically -- delivered while the part runs, `ECONNREFUSED` the moment its
+process is gone, rebindable afterwards. The abstract namespace has no permissions
+at all: any process in the same network namespace can send to an abstract address,
+and this box carries a second human user (uid 1000). Every message on this bus is
+deserialised by the part that receives it, so an address anyone may write to is an
+address anyone may hand a payload to. A socket file under `$XDG_RUNTIME_DIR`
+(`/run/user/1001`, mode 0700, kernel-enforced) closes that, and costs one thing:
+the file outlives its process, so binding is unlink-then-bind — measured,
+`EADDRINUSE` without the unlink, bound and delivering with it. `/run/user/1001` is
+tmpfs, which is correct here: a rendezvous point is not state.
+
+| | abstract namespace | socket file in a 0700 directory |
+|---|---|---|
+| Reachable by uid 1000 | yes | no |
+| Address after the process exits | gone | file remains, sends still `ECONNREFUSED` |
+| Rebinding | immediate | `EADDRINUSE` until unlinked |
+| Publish to a dead address | 2.5 µs | 3.8 µs |
+
 ---
 
 ## What these measurements do not answer

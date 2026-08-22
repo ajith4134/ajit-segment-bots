@@ -32,6 +32,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import pathlib
 import pickle
 import socket
 import statistics
@@ -274,6 +275,96 @@ def measure_cost_of_publishing_to_an_off_part() -> dict:
     }
 
 
+def measure_filesystem_addressing() -> dict:
+    """The same inbox, addressed by a socket file in a 0700 directory instead.
+
+    The abstract namespace has no permissions at all: any process in the same
+    network namespace can send to an abstract address, and this box has a second
+    human user (uid 1000). Every message on this bus is deserialised by the part
+    that receives it, so an address anyone can write to is an address anyone can
+    hand a payload to. A socket file under XDG_RUNTIME_DIR carries the directory's
+    mode, which is 0700 and enforced by the kernel.
+
+    What that costs is cleanup: an abstract address disappears with its process,
+    a socket file does not. So the two questions here are whether the off signal
+    survives -- ECONNREFUSED from a file whose owner is gone -- and what a part
+    must do to bind an address a previous run left behind.
+    """
+    runtime_directory = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "ajit-segment-bots" / "inboxes"
+    runtime_directory.mkdir(parents=True, exist_ok=True)
+    runtime_directory.chmod(0o700)
+    address = str(runtime_directory / "off-state-verifier.market-data")
+    blob = build_sample_message()
+
+    child = os.fork()
+    if child == 0:
+        inbox = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        inbox.bind(address)
+        try:
+            time.sleep(0.5)
+        finally:
+            os._exit(0)
+
+    time.sleep(0.2)
+    producer = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    producer.setblocking(False)
+
+    def publish() -> str:
+        try:
+            producer.sendto(blob, address)
+            return "delivered"
+        except OSError as failure:
+            return errno.errorcode.get(failure.errno, str(failure.errno))
+
+    while_on = publish()
+    os.waitpid(child, 0)
+    time.sleep(0.1)
+    while_off = publish()
+    file_left_behind = pathlib.Path(address).exists()
+
+    rebind_without_unlink = None
+    try:
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        stale.bind(address)
+        stale.close()
+        rebind_without_unlink = "bound"
+    except OSError as failure:
+        rebind_without_unlink = errno.errorcode.get(failure.errno, str(failure.errno))
+
+    pathlib.Path(address).unlink(missing_ok=True)
+    rebind_after_unlink = None
+    try:
+        fresh = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        fresh.bind(address)
+        while_on_again = publish()
+        fresh.close()
+        rebind_after_unlink = "bound"
+    except OSError as failure:
+        rebind_after_unlink = errno.errorcode.get(failure.errno, str(failure.errno))
+        while_on_again = None
+
+    costs = []
+    for _ in range(REPEATS // 10):
+        at = time.perf_counter()
+        publish()
+        costs.append(time.perf_counter() - at)
+    producer.close()
+    pathlib.Path(address).unlink(missing_ok=True)
+
+    return {
+        "directory": str(runtime_directory),
+        "directory_mode": oct(runtime_directory.stat().st_mode & 0o777),
+        "directory_filesystem": "tmpfs (a rendezvous point, not state)",
+        "publish_while_the_part_is_on": while_on,
+        "publish_after_the_part_exited": while_off,
+        "socket_file_left_behind": file_left_behind,
+        "rebind_without_unlink": rebind_without_unlink,
+        "rebind_after_unlink": rebind_after_unlink,
+        "publish_after_rebind": while_on_again,
+        "publish_to_a_dead_address_microseconds_median": round(statistics.median(costs) * 1e6, 3),
+    }
+
+
 def main() -> None:
     print(
         json.dumps(
@@ -283,6 +374,7 @@ def main() -> None:
                 "sendto_against_connected": measure_sendto_against_connected_send(),
                 "address_lifetime": measure_address_dies_with_the_part(),
                 "publishing_to_an_off_part": measure_cost_of_publishing_to_an_off_part(),
+                "filesystem_addressing": measure_filesystem_addressing(),
             },
             indent=2,
         )
