@@ -252,3 +252,66 @@ def test_records_flushed_before_a_real_sigkill_are_still_there_afterwards(tape_r
     assert len(records) == 5, "flushed records did not survive the kill"
     for record in records:
         assert read_payload(blob_path, record) == b"killme"
+
+
+WRITE_WITHOUT_FLUSHING = """
+import sys, time
+sys.path.insert(0, {repository!r})
+from runtime.tape import TapeWriter, StreamKind
+
+root, interval = {root!r}, {interval}
+writer = TapeWriter(root, {venue!r}, {symbol!r}, interval)
+for n in range({count}):
+    writer.append(StreamKind.TRADE, {payload!r}, received_at_ns={base} + n)
+print("WRITTEN", flush=True)
+time.sleep(60)
+"""
+
+
+@pytest.mark.slow
+def test_a_kill_with_no_flush_costs_at_most_the_message_in_flight(tape_root):
+    """The ordinary path, which is the one the spec's claim is about.
+
+    Spec section 2.2: "A kill between the two loses one message." A part is
+    SIGKILLed as the *ordinary* way of being switched off, and nothing calls
+    force_writeback on that path -- the writeback interval is 8 MiB, which a
+    quiet symbol does not reach for hours. So this test appends and kills with
+    no flush at all, which is exactly what a governor switching a part off does.
+
+    It failed when first written: the writer opened its file buffered, so up to
+    a userspace buffer of records lived only in the dying process. That is not
+    one message, and on a low-volume symbol it is minutes of trades that cannot
+    be recaptured.
+    """
+    import pathlib
+
+    repository = str(pathlib.Path(__file__).resolve().parents[2])
+    written_count = 200
+    payload = b'{"e":"aggTrade","p":"64000.10","q":"0.5"}'
+    script = WRITE_WITHOUT_FLUSHING.format(
+        repository=repository, root=str(tape_root), interval=WRITEBACK_INTERVAL,
+        venue=VENUE, symbol=SYMBOL, count=written_count, base=NOON_NS, payload=payload,
+    )
+    child = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == "WRITTEN"
+        os.kill(child.pid, signal.SIGKILL)
+        child.wait(timeout=30)
+    finally:
+        child.stdout.close()
+
+    index_path, blob_path = _paths(tape_root)
+    survived = count_whole_records(index_path)
+    assert survived >= written_count - 1, (
+        f"{written_count - survived} of {written_count} records did not survive a kill; "
+        f"the spec's claim is that a kill costs the one message in flight"
+    )
+
+    # And every surviving index record still points at bytes that are really
+    # there -- blob before index, at the syscall level and not just in the
+    # order the calls were made.
+    index = read_tape_index(index_path)
+    blob_size = blob_path.stat().st_size
+    for record in index:
+        assert int(record["blob_offset"]) + int(record["blob_length"]) <= blob_size
+        assert read_payload(blob_path, record) == payload

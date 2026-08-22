@@ -75,7 +75,19 @@ class CacheReleasingWriter:
         self._path = path
         self._interval = writeback_interval_bytes
         already_on_disk = path.stat().st_size if append and path.exists() else 0
-        self._handle = open(path, "ab" if append else "wb")
+        # Unbuffered, and that is the whole point of this line. Measured
+        # 2026-08-22 with a buffered handle: 200 records appended and then
+        # SIGKILLed left ZERO of them on disk -- every one died in the process's
+        # own userspace buffer. A part is SIGKILLed as the ordinary way of being
+        # switched off, and nothing on that path calls force_writeback, so a
+        # buffered writer makes the tape's central claim -- that a kill costs the
+        # one message in flight -- simply false. It also breaks the blob-before-
+        # index ordering, which holds only if the writes reach the kernel in the
+        # order they were issued rather than when two independent buffers happen
+        # to fill. The cost is one write syscall per append, which at the
+        # measured 1,500 messages a second across both venues is nothing next to
+        # losing a quiet symbol's whole hour.
+        self._handle = open(path, "ab" if append else "wb", buffering=0)
         self._descriptor = self._handle.fileno()
         self._bytes_written = already_on_disk
         self._released_to = already_on_disk
@@ -89,8 +101,17 @@ class CacheReleasingWriter:
         return self._bytes_written
 
     def append(self, block: bytes) -> int:
-        """Append a block, forcing writeback and releasing cache once per interval."""
-        self._handle.write(block)
+        """Append a block, forcing writeback and releasing cache once per interval.
+
+        Loops on a short write. An unbuffered handle hands back what the kernel
+        actually took, and a regular file takes it all in practice -- but a
+        silently dropped tail would be an index record pointing at bytes that
+        were never written, which is the one failure this format is built to
+        make impossible.
+        """
+        view = memoryview(block)
+        while view:
+            view = view[self._handle.write(view) :]
         self._bytes_written += len(block)
         if self._bytes_written - self._released_to >= self._interval:
             self.force_writeback()
