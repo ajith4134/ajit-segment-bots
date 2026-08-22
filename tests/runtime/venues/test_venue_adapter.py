@@ -28,6 +28,7 @@ from runtime.venues.adapter_registry import (
 from runtime.venues.venue_adapter import (
     QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE,
     QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA,
+    SequenceContinuity,
     StreamRequest,
     VenueAdapter,
     VenueFact,
@@ -64,6 +65,11 @@ def ask_every_question_answerable_without_venue_data(adapter: VenueAdapter) -> N
 
     topics = []
     for stream_kind in StreamKind:
+        continuity = adapter.sequence_continuity(stream_kind)
+        assert isinstance(continuity, SequenceContinuity), (
+            f"{adapter.venue_id} does not say what its {stream_kind.name} sequence promises, "
+            f"so §6 has nothing to check continuity against"
+        )
         url = adapter.stream_endpoint_url(stream_kind)
         assert url.startswith("wss://"), f"{adapter.venue_id} {stream_kind.name} url is {url!r}"
         topic = adapter.subscription_topic(

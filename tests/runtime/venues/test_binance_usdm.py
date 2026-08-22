@@ -19,7 +19,11 @@ from runtime.venues.binance_usdm import (
     VENUE_ID,
     build_venue_adapter,
 )
-from runtime.venues.venue_adapter import StreamRequest, VenueMessageNotRecognised
+from runtime.venues.venue_adapter import (
+    SequenceContinuity,
+    StreamRequest,
+    VenueMessageNotRecognised,
+)
 
 MARKET_FIXTURE = "2026-08-22-market-ws-aggtrade-kline.jsonl"
 CANDLE_FIXTURE = "2026-08-22-market-ws-kline-through-close.jsonl"
@@ -207,7 +211,7 @@ def test_the_book_stream_carries_a_sequence_and_it_is_continuous(adapter, read_c
         assert len(message["a"]) == REQUESTED_BOOK_DEPTH
 
     for (_, previous), (payload, _) in zip(books, books[1:]):
-        assert adapter.read_previous_book_sequence(payload) == previous.sequence
+        assert adapter.read_previous_sequence(payload) == previous.sequence
 
 
 def test_an_unknown_event_is_raised_rather_than_dropped(adapter):
@@ -336,3 +340,32 @@ def test_the_client_does_not_ping_because_the_venue_does(adapter):
     assert discipline.expects_client_ping is False
     limits = adapter.declared_limits()
     assert limits["server_ping_interval_seconds"].value < limits["pong_deadline_seconds"].value
+
+
+def test_each_stream_says_what_its_sequence_promises(adapter, read_captured_payloads):
+    """The book chains, trades increment, candles are not numbered -- all measured.
+
+    Binance documents the book's `pu` rule. Nothing documents that aggregate
+    trade ids step by exactly one, so that claim is checked here against the
+    whole capture rather than asserted from the enum.
+    """
+    assert adapter.sequence_continuity(StreamKind.BOOK) is SequenceContinuity.CHAINED_TO_PREVIOUS
+    assert adapter.sequence_continuity(StreamKind.TRADE) is SequenceContinuity.INCREMENTS_BY_ONE
+    assert adapter.sequence_continuity(StreamKind.CANDLE) is SequenceContinuity.NOT_NUMBERED
+
+    records = read_captured_payloads("binance-usdm", MARKET_FIXTURE)
+    trade_ids = [
+        facts.sequence
+        for _, facts in data_facts(adapter, records)
+        if facts.stream_kind is StreamKind.TRADE
+    ]
+    steps = {later - earlier for earlier, later in zip(trade_ids, trade_ids[1:])}
+    assert steps == {1}, f"aggregate trade ids stepped by {steps} in the real capture"
+
+
+def test_only_the_chained_stream_names_its_predecessor(adapter, read_captured_payloads):
+    """A trade message must not be read as claiming a continuity Binance never made."""
+    for _, payload in read_captured_payloads("binance-usdm", MARKET_FIXTURE):
+        assert adapter.read_previous_sequence(payload) is None
+    books = read_captured_payloads("binance-usdm", BOOK_FIXTURE)
+    assert any(adapter.read_previous_sequence(payload) is not None for _, payload in books)

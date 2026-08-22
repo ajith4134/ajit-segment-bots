@@ -38,6 +38,7 @@ from runtime.venues.venue_adapter import (
     BanSignal,
     HeartbeatDiscipline,
     MessageFacts,
+    SequenceContinuity,
     StreamRequest,
     SymbolListing,
     VenueAdapter,
@@ -355,15 +356,33 @@ class BinanceUsdmAdapter(VenueAdapter):
             f"That is this adapter being out of date, not a message to drop quietly."
         )
 
-    def read_previous_book_sequence(self, payload: bytes) -> int:
+    def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
+        """What each of this venue's streams promises about its own numbering.
+
+        The book is the strong case and the one that matters: Binance states the
+        rule itself -- each event's `pu` equals the previous event's `u`, and
+        otherwise the local book must be re-initialised -- so continuity is
+        checked against what the message claims rather than against arithmetic.
+        Aggregate trade ids increment by one per event, measured across the whole
+        2026-08-22 capture. Candles carry no sequence at all, so silence is the
+        only detector there and `feed_gap_threshold` is what catches them.
+        """
+        if stream_kind is StreamKind.BOOK:
+            return SequenceContinuity.CHAINED_TO_PREVIOUS
+        if stream_kind is StreamKind.TRADE:
+            return SequenceContinuity.INCREMENTS_BY_ONE
+        return SequenceContinuity.NOT_NUMBERED
+
+    def read_previous_sequence(self, payload: bytes) -> int | None:
         """The `pu` a book message says the previous message's `u` was.
 
-        Binance states the continuity rule itself: each event's `pu` should equal
-        the previous event's `u`, and otherwise the book must be re-initialised.
-        That makes a gap detectable from one message plus its predecessor, which
-        is what §6 checks -- and it is venue knowledge, so it is answered here.
+        None for anything else: only the book chains here, and returning a number
+        for a stream that does not chain would invent a continuity claim the
+        venue never made.
         """
         message = json.loads(payload)
+        if message.get("e") != BOOK_EVENT:
+            return None
         return int(message["pu"])
 
     def read_http_ban_signal(

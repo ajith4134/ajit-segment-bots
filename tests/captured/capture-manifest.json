@@ -49,6 +49,49 @@
       ],
       "captured_on": "2026-08-22",
       "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+    },
+    {
+      "path": "bybit-linear/2026-08-22-instruments-info-subset.json",
+      "venue": "bybit-linear",
+      "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
+      "captured_on": "2026-08-22",
+      "how": "one REST call, then subset to the first 3 instruments of each (contractType, status) pair, each kept verbatim.",
+      "full_response_instrument_count": 833,
+      "symbol_counts_by_contract_type_and_status": {
+        "LinearPerpetual/Trading": 793,
+        "LinearFutures/Trading": 40
+      },
+      "response_headers_of_note": {}
+    },
+    {
+      "path": "bybit-linear/2026-08-22-public-linear-kline-through-close.jsonl",
+      "venue": "bybit-linear",
+      "source": "wss://stream.bybit.com/v5/public/linear",
+      "subscribed": [
+        "kline.1.BTCUSDT"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (confirm true), then four more"
+    },
+    {
+      "path": "bybit-linear/2026-08-22-public-linear-orderbook.jsonl",
+      "venue": "bybit-linear",
+      "source": "wss://stream.bybit.com/v5/public/linear",
+      "subscribed": [
+        "orderbook.50.BTCUSDT"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement and the opening snapshot"
+    },
+    {
+      "path": "bybit-linear/2026-08-22-public-linear-trade.jsonl",
+      "venue": "bybit-linear",
+      "source": "wss://stream.bybit.com/v5/public/linear",
+      "subscribed": [
+        "publicTrade.BTCUSDT"
+      ],
+      "captured_on": "2026-08-22",
+      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
     }
   ]
 }

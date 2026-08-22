@@ -29,6 +29,7 @@ operator *does* own. A fact with no source is refused at construction.
 from __future__ import annotations
 
 import abc
+import enum
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -38,6 +39,7 @@ __all__ = [
     "BanSignal",
     "HeartbeatDiscipline",
     "MessageFacts",
+    "SequenceContinuity",
     "QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE",
     "QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA",
     "StreamRequest",
@@ -92,6 +94,28 @@ class VenueFact:
             )
 
 
+class SequenceContinuity(enum.StrEnum):
+    """What a venue's sequence numbers promise on one stream, so §6 can check it.
+
+    The gap detector needs one comparison rather than one per venue, and the only
+    thing that varies is what "continuous" means here. Getting this wrong in
+    either direction is expensive: a stream declared stricter than it is cries
+    gap on every message, and one declared looser than it is silently accepts a
+    missed message -- which on a delta book means every later price is wrong
+    while the feed still looks healthy.
+    """
+
+    # The venue numbers nothing on this stream, so silence is the only detector.
+    NOT_NUMBERED = "not-numbered"
+    # Each message's sequence is the previous one plus one.
+    INCREMENTS_BY_ONE = "increments-by-one"
+    # Sequences never go backwards but may repeat or jump; a jump is not a gap.
+    NON_DECREASING = "non-decreasing"
+    # Each message names its predecessor's sequence, so continuity is checked
+    # against what the message itself claims rather than against arithmetic.
+    CHAINED_TO_PREVIOUS = "chained-to-previous"
+
+
 @dataclass(frozen=True)
 class StreamRequest:
     """One thing we want a venue to stream: a kind, a symbol, and its parameters.
@@ -141,6 +165,12 @@ class MessageFacts:
     venue_time_ns: int = NOT_SENT
     sequence: int = NOT_SENT
     is_closed_candle: bool | None = None
+    # True when this message restarts the numbering rather than continuing it --
+    # Bybit re-sends a full book snapshot when its own service restarts, and the
+    # sequence after it has no relationship to the one before. Without this the
+    # gap detector would report a gap at every legitimate resnapshot, which is
+    # the fastest way to make a real gap invisible among false ones.
+    resets_sequence: bool = False
 
 
 @dataclass(frozen=True)
@@ -239,6 +269,15 @@ class VenueAdapter(abc.ABC):
         """Who pings whom, how often, and with what."""
 
     @abc.abstractmethod
+    def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
+        """What this venue's sequence numbers promise on this stream.
+
+        Answered per stream kind because one venue can promise different things
+        on different streams -- Binance chains its book by `pu` while numbering
+        its trades one by one, and its candles carry no sequence at all.
+        """
+
+    @abc.abstractmethod
     def read_message_facts(self, payload: bytes) -> MessageFacts | None:
         """The index fields inside one raw venue message, or None if it carries no data.
 
@@ -246,6 +285,16 @@ class VenueAdapter(abc.ABC):
         error envelope. Those are not tape records, and telling them apart is
         venue knowledge, so the adapter decides rather than the caller guessing
         from a missing field.
+        """
+
+    @abc.abstractmethod
+    def read_previous_sequence(self, payload: bytes) -> int | None:
+        """The sequence this message says its predecessor had, or None.
+
+        Only a `CHAINED_TO_PREVIOUS` stream answers this with a number. It exists
+        on the shape rather than on the one venue that has it so that §6's check
+        is one comparison over an adapter's answers, not a branch on which venue
+        is being read.
         """
 
     @abc.abstractmethod
@@ -286,6 +335,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "subscribe_frame",
     "unsubscribe_frame",
     "heartbeat_discipline",
+    "sequence_continuity",
 )
 
 # The questions that need a real message or a real catalogue response to ask.
@@ -294,6 +344,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
 # exercise them against payloads that venue actually sent.
 QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_message_facts",
+    "read_previous_sequence",
     "read_http_ban_signal",
     "read_stream_ban_signal",
     "read_symbol_listings",

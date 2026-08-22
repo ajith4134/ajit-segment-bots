@@ -207,7 +207,7 @@ document holds the measured venue facts every one of them is sized against.
 | | |
 |---|---|
 | Unit | venue ids |
-| Default | `["binance-usdm"]` |
+| Default | `["binance-usdm", "bybit-linear"]` |
 | Read by | `adapter_registry.load_captured_venue_adapters`, and through it every part in `market-data-feed` |
 | The bound | which venue adapters are live right now |
 
@@ -223,8 +223,8 @@ one by name rather than capturing eleven venues called `b`, `i`, `n`…
 
 An id named here with no module is refused loudly at load rather than skipped,
 so this line and the modules in `runtime/venues/` cannot silently disagree about
-which venues are being captured. `binance-usdm` was turned on when its adapter
-landed on 2026-08-22; `bybit-linear` joins it when that adapter does.
+which venues are being captured. Both phase 1 venues were turned on as their
+adapters landed, on 2026-08-22.
 
 ### `captured_symbol_count`
 

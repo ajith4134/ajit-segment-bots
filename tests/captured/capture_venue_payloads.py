@@ -310,7 +310,133 @@ def capture_binance_usdm(day: str) -> None:
     )
 
 
-VENUE_CAPTURES = {"binance-usdm": capture_binance_usdm}
+def capture_bybit_linear(day: str) -> None:
+    """Every fixture the Bybit linear adapter's tests are checked against.
+
+    Split into three captures rather than one because this venue's book is far
+    chattier than its trades: a single subscription to all three would fill forty
+    messages with book deltas and capture no trade at all, and the trade stream
+    is the one whose fidelity claim -- every print, not aggregates -- has to be
+    checked against something.
+    """
+    from runtime.tape import StreamKind
+    from runtime.venues.adapter_registry import load_venue_adapter
+    from runtime.venues.venue_adapter import StreamRequest
+
+    venue = "bybit-linear"
+    adapter = load_venue_adapter(venue)
+    venue_directory = HERE / venue
+    url = adapter.stream_endpoint_url(StreamKind.TRADE)
+
+    def topic(stream_kind: StreamKind, **parameters) -> str:
+        return adapter.subscription_topic(
+            StreamRequest(stream_kind=stream_kind, symbol=CAPTURE_SYMBOL, **parameters)
+        )
+
+    streams = [
+        (
+            "trade",
+            [topic(StreamKind.TRADE)],
+            f"{day}-public-linear-trade.jsonl",
+            None,
+            "connect with the adapter's own url and subscribe frame, keep every frame "
+            "received including the acknowledgement",
+        ),
+        (
+            "candle",
+            [topic(StreamKind.CANDLE, candle_interval=CAPTURE_CANDLE_INTERVAL)],
+            f"{day}-public-linear-kline-through-close.jsonl",
+            lambda text: '"confirm":true' in text.replace(" ", ""),
+            "connect with the adapter's own url and subscribe frame, keep every frame until "
+            "one carries a closed candle (confirm true), then four more",
+        ),
+        (
+            "book",
+            [topic(StreamKind.BOOK, book_depth_levels=CAPTURE_BOOK_DEPTH_LEVELS)],
+            f"{day}-public-linear-orderbook.jsonl",
+            None,
+            "connect with the adapter's own url and subscribe frame, keep every frame "
+            "received including the acknowledgement and the opening snapshot",
+        ),
+    ]
+
+    for _, topics, filename, until, how in streams:
+        path = venue_directory / filename
+        write_payload_lines(
+            path,
+            asyncio.run(
+                capture_stream_payloads(
+                    url,
+                    adapter.subscribe_frame(topics),
+                    message_count=0 if until else STREAM_MESSAGE_COUNT,
+                    keep_going_until=until,
+                    messages_after_that=4 if until else 0,
+                )
+            ),
+        )
+        record_in_manifest(
+            {
+                "path": str(path.relative_to(HERE)),
+                "venue": venue,
+                "source": url,
+                "subscribed": topics,
+                "captured_on": day,
+                "how": how,
+            }
+        )
+
+    catalogue_url = "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000"
+    catalogue, headers = fetch_json_over_rest(catalogue_url)
+    instruments = catalogue["result"]["list"]
+    kind_counts: dict[str, int] = {}
+    for instrument in instruments:
+        key = f"{instrument.get('contractType', '')}/{instrument.get('status', '')}"
+        kind_counts[key] = kind_counts.get(key, 0) + 1
+    keep_per_kind = 3
+    kept: dict[tuple[str, str], list[dict]] = {}
+    for instrument in instruments:
+        bucket = kept.setdefault(
+            (instrument.get("contractType", ""), instrument.get("status", "")), []
+        )
+        if len(bucket) < keep_per_kind:
+            bucket.append(instrument)
+    catalogue_path = venue_directory / f"{day}-instruments-info-subset.json"
+    catalogue_path.write_text(
+        json.dumps(
+            {
+                "retCode": catalogue.get("retCode"),
+                "retMsg": catalogue.get("retMsg"),
+                "time": catalogue.get("time"),
+                "result": {
+                    "category": catalogue["result"].get("category"),
+                    "nextPageCursor": catalogue["result"].get("nextPageCursor"),
+                    "list": [entry for bucket in kept.values() for entry in bucket],
+                },
+            },
+            indent=1,
+        )
+        + "\n"
+    )
+    record_in_manifest(
+        {
+            "path": str(catalogue_path.relative_to(HERE)),
+            "venue": venue,
+            "source": catalogue_url,
+            "captured_on": day,
+            "how": (
+                f"one REST call, then subset to the first {keep_per_kind} instruments of each "
+                f"(contractType, status) pair, each kept verbatim."
+            ),
+            "full_response_instrument_count": len(instruments),
+            "symbol_counts_by_contract_type_and_status": kind_counts,
+            "response_headers_of_note": {
+                name: value for name, value in headers.items() if name.startswith("x-bapi")
+            },
+        }
+    )
+
+
+VENUE_CAPTURES = {"binance-usdm": capture_binance_usdm, "bybit-linear": capture_bybit_linear}
 
 
 def main(argv: list[str]) -> int:
