@@ -379,6 +379,20 @@ class BinanceUsdmAdapter(VenueAdapter):
             f"That is this adapter being out of date, not a message to drop quietly."
         )
 
+    def book_stream_delivers_full_depth(self) -> bool:
+        """True: the partial-depth stream sends a fresh top-N snapshot every push.
+
+        Measured 2026-08-22 -- every captured depth20 message carried 20 bids and
+        20 asks, not a difference against a previous one. So a reader may record
+        one every few seconds and lose only how finely it can see the book move.
+
+        This is the partial-depth stream specifically. Binance also offers a diff
+        stream, which is not what this adapter subscribes to precisely because it
+        would need a REST snapshot and a re-initialisation procedure to be
+        readable at all.
+        """
+        return True
+
     def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
         """What each of this venue's streams promises about its own numbering.
 

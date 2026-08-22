@@ -348,6 +348,17 @@ class BybitLinearAdapter(VenueAdapter):
             concurrent_connections=_LIMITS["concurrent_connections_per_ip"].value,
         )
 
+    def book_stream_delivers_full_depth(self) -> bool:
+        """False: one snapshot, then deltas -- and nothing will resend the snapshot.
+
+        Measured 2026-08-22: the subscription opened with a `type: "snapshot"`
+        message and every message after it was a `delta`. A reader that dropped
+        one of those would not lose resolution, it would lose the book, and
+        every later price it produced would be wrong with nothing in the record
+        to say so.
+        """
+        return False
+
     def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
         """What each stream promises, one measured and one documented as weaker.
 

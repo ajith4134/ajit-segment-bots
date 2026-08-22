@@ -144,6 +144,18 @@ already sources that file. It is a shell function rather than a wrapper script
 in `~/.local/bin` because Claude Code auto-updates rewrite the symlink there,
 which would silently revert the behaviour.
 
+## Rebuilding every board
+
+    dashboard/rebuild_all_boards.sh
+
+One command, all four boards, in dependency order. It exists because they went
+stale and nobody noticed: the part monitor was current and the other three were
+two days old, showing a project with nothing built while five parts were built
+and a million records were on the tape. **A stale board is worse than no board —
+it is convincing.** The script prints the four Artifact URLs to re-publish to;
+publishing is not scripted, because those URLs live outside this repository and a
+script that pretended to publish would be the same failure one layer along.
+
 ## Status board
 
     python3 dashboard/build_status_board.py

@@ -388,6 +388,38 @@ def collect_substrate_results() -> list[ProbeResult]:
     ]
 
 
+def collect_capture_results() -> list[ProbeResult]:
+    """What the tape has actually captured (Rule 8).
+
+    The capture is the one thing in this project that cannot be caught up on
+    later, and it was the one thing this board could not see: 321 blueprint tiles
+    and nothing about whether bytes were landing. A capture that quietly stopped
+    looked exactly like one that was running.
+
+    Guarded on import for the same reason the substrate probes are: a board build
+    must succeed before the capture exists or while it is broken, and Rule 8 wants
+    that failure to be a tile saying so rather than a tile silently missing.
+    """
+    repository_root = str(PROJECT_HOME)
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    try:
+        from runtime.probes.capture_probes import run_all_capture_probes
+    except ImportError:
+        return [
+            ProbeResult(
+                "Market data capture",
+                UNMEASURED,
+                "capture probes not importable",
+                "import runtime.probes.capture_probes",
+            )
+        ]
+    return [
+        ProbeResult(label=result.label, state=result.state, value=result.value, proof=result.proof)
+        for result in run_all_capture_probes()
+    ]
+
+
 def run_all_probes() -> list[ProbeResult]:
     results = []
     for probe in PROBES:
@@ -397,6 +429,7 @@ def run_all_probes() -> list[ProbeResult]:
             results.append(
                 ProbeResult(probe.__name__, UNMEASURED, f"probe raised {type(error).__name__}", probe.__name__)
             )
+    results.extend(collect_capture_results())
     results.extend(collect_substrate_results())
     return results
 

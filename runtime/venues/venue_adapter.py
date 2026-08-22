@@ -297,6 +297,21 @@ class VenueAdapter(abc.ABC):
         """What this venue says about opening, holding and losing connections."""
 
     @abc.abstractmethod
+    def book_stream_delivers_full_depth(self) -> bool:
+        """Whether every book message stands alone, or only makes sense in sequence.
+
+        True when each message carries the whole requested depth -- Binance's
+        partial-depth stream sends a fresh top-N every push -- so a reader may
+        record one message every few seconds and lose only resolution.
+
+        False when messages are deltas against a snapshot the venue sent once, as
+        Bybit's are. Dropping one of those does not cost resolution, it costs the
+        book: every later price is wrong, and nothing in the record says so. A
+        reader that thinned a delta stream would produce a tape that cannot be
+        replayed and cannot be told from one that can.
+        """
+
+    @abc.abstractmethod
     def sequence_continuity(self, stream_kind: StreamKind) -> SequenceContinuity:
         """What this venue's sequence numbers promise on this stream.
 
@@ -399,6 +414,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "connection_discipline",
     "catalogue_url",
     "ticker_url",
+    "book_stream_delivers_full_depth",
     "sequence_continuity",
 )
 
