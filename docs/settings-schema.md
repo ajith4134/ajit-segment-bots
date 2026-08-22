@@ -188,6 +188,174 @@ sit unreported if its inotify event never arrived.
 
 ---
 
+## `runtime.toml` — the market data feed's nine (phase 1, spec §4.3)
+
+These are the numbers the operator actually chooses about capture. **Venue
+capacity figures are deliberately not here.** The operator does not decide that
+Binance allows 1024 streams per connection or that Bybit's subscribe payload caps
+at 21,000 characters; those are facts the venue fixes, and they are declared as
+`VenueFact`s inside each adapter, carrying the document they were read from. Both
+shapes carry provenance — RL-061 is about a number being answerable for, not
+about which side of that boundary it came from.
+
+The design these serve is
+`docs/superpowers/specs/2026-08-21-market-data-feed-design.md`; §1 of that
+document holds the measured venue facts every one of them is sized against.
+
+### `captured_venues`
+
+| | |
+|---|---|
+| Unit | venue ids |
+| Default | `[]` |
+| Read by | `adapter_registry.load_captured_venue_adapters`, and through it every part in `market-data-feed` |
+| The bound | which venue adapters are live right now |
+
+The user's condition on phase 1 was *"mark it so if the 2 are not enough we can
+add more later"*, and this line is where that condition is discharged. A venue id
+resolves to `runtime/venues/<id with underscores>.py` by convention, so adding
+OKX is that module plus this line — no registry table, no part edited, and the
+conformance test of §3.2 covers the new venue automatically.
+
+It is the one list-valued setting in the schema. A bare string here would be read
+as a sequence of single-character venue ids, so `read_captured_venue_ids` refuses
+one by name rather than capturing eleven venues called `b`, `i`, `n`…
+
+Ships empty because an id named here with no module is refused loudly at load,
+and shipping a template that names a venue nobody has written yet would make the
+first run fail for a reason that has nothing to do with the operator's machine.
+
+### `captured_symbol_count`
+
+| | |
+|---|---|
+| Unit | symbols per venue |
+| Default | `30` |
+| Read by | `symbol-catalogue-reader`, applying the §4.1 selection policy |
+| The bound | how many symbols per venue the tape carries |
+
+`30` is the user's decision of 2026-08-21. `0` means every symbol the venue
+lists, which is the full-universe path with **no code change at all** — the
+second condition the user attached. That path is not free: 1,295 perpetuals
+across the two venues means 2,590 open tape files against a 1024 soft
+file-descriptor limit, so §4.2 blocks the raise on that ceiling being dealt with
+first. It is stated here rather than discovered at 3 a.m.
+
+### `symbol_selection_metric`
+
+| | |
+|---|---|
+| Unit | metric name |
+| Default | `"quote-volume-24h"` |
+| Read by | `symbol-catalogue-reader` |
+| The bound | how "top N" is ordered when `captured_symbol_count` is not `0` |
+
+24-hour quote volume is the venue's own field and is comparable across both
+venues because both quote in USDT. Getting it wrong costs capture of the wrong
+symbols for as long as it stands, and that capture cannot be recovered later —
+which is the asymmetry the whole phase is ordered around.
+
+### `symbol_catalogue_refresh_interval`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `900.0` (15 minutes) |
+| Read by | `symbol-catalogue-reader` |
+| The bound | how often each venue's symbol list is re-read |
+
+Not calibrated against a measured listing rate — no such measurement exists. What
+*was* measured is that the count moved while it was being measured: Binance
+USDⓈ-M reported 169 `TRADIFI_PERPETUAL` contracts on one call and 170 minutes
+later on the next, 2026-08-21. That single observation is the whole argument for
+reading the catalogue on an interval instead of writing a symbol list into code.
+Too high costs a new listing uncaptured for that long; too low costs REST weight
+against a 2400-per-minute budget for a call that weighs 1.
+
+### `book_depth_levels`
+
+| | |
+|---|---|
+| Unit | levels per side |
+| Default | `20` |
+| Read by | `order-book-reader`, through each adapter's own supported-level mapping |
+| The bound | how deep the shallow book snapshot goes |
+
+The venues do not offer the same levels — Binance USDⓈ-M's partial-depth streams
+are 5/10/20, Bybit linear's are 1/50/200/1000 — so the adapter picks its own
+nearest supported level at or above this and records which it actually got.
+`20` is Binance's deepest partial stream, which makes it the deepest value both
+venues can serve without the two adapters disagreeing about what "shallow" means.
+On Bybit depth and cadence are coupled: choosing depth chooses push rate.
+
+### `book_snapshot_interval`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `5.0` |
+| Read by | `order-book-reader` |
+| The bound | how often a book snapshot is written to the tape |
+
+Distinct from how often the venue pushes an update. The tape carries snapshots
+rather than raw deltas because a delta is only meaningful alongside the snapshot
+it was applied to, and §6 has to be able to record that a resync happened — a
+book rebuilt after a gap is not the same object as one that never gapped. Too
+high loses book resolution permanently; too low costs tape volume against 238 GB
+free and 2–4 GB/day.
+
+### `venue_reconnect_backoff_floor`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `1.0` |
+| Read by | the stream connection shared by `venue-trade-stream-reader` and `order-book-reader` |
+| The bound | the shortest wait before a reconnect, doubled from here on repeat failure |
+
+Bybit allows **500 new connections per IP per rolling 5 minutes** — 1.67 per
+second across every connection this box holds — so a floor below this turns one
+venue outage into a self-inflicted ban, and both venues ban per IP. Binance's
+24-hour forced disconnect is routine rather than a failure and does not enter the
+backoff at all; a reader that treated it as an error would back off further every
+day for no reason.
+
+### `feed_gap_threshold`
+
+| | |
+|---|---|
+| Unit | seconds |
+| Default | `60.0` |
+| Read by | `feed-gap-detector` |
+| The bound | how long a symbol may be silent before the silence is a `feed-gap` |
+
+This is the detector for §1.1's live hazard: a Binance connection missing its
+routed path (`/market`) **stays open, errors nothing, and delivers nothing**. So
+the threshold has to be short enough to catch a socket that is healthy and empty.
+`60.0` is safe at 30 symbols chosen by volume, where a genuinely silent minute is
+rare. It is **not** safe at the full universe — an illiquid perpetual is quiet for
+minutes at a time — so this becomes a per-symbol threshold estimated from that
+symbol's own arrival rate before `captured_symbol_count` is raised. Recorded here
+rather than discovered as a flood of false gaps.
+
+### `tape_root`
+
+| | |
+|---|---|
+| Unit | path |
+| Default | `"~/.local/share/ajit-segment-bots/tape"` |
+| Read by | every part that writes to the tape, through `tape.resolve_tape_root` |
+| The bound | where the tape lives |
+
+Expanded by the part that reads it, then put through
+`storage_facts.require_durable_directory`, which refuses a memory-backed
+filesystem. `/tmp` is tmpfs on this box: a tape written there would measure as
+working right up until the machine restarted and it was gone — the failure Rule 8
+is about, in the one place where the loss is permanent. 238 GB free on `/` against
+2–4 GB/day is months of runway.
+
+---
+
 ## `main-account.toml` — the capital scope (RL-055's actual subject)
 
 This is the file RL-055 describes directly: *"Capital settings are edited in a

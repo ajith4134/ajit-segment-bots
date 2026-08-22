@@ -41,3 +41,54 @@ note  = "operator, 2026-08-20: how often a part emits part-health while on. Intr
 value = 5.0
 unit  = "seconds"
 note  = "operator, 2026-08-21: SettingsDirectoryWatch's periodic backstop -- it re-reads the whole settings directory on this cadence regardless of what any inotify event announced. Measured directly: watchdog==6.0.0's own C shim discards the kernel's IN_Q_OVERFLOW marker (wd == -1) before it ever reaches a handler, so nothing built on it can react to a real, reproduced overflow (a raw 49152-event burst against this box's max_queued_events=16384 produced one). This periodic re-read is the actual guarantee instead, and the cost of getting this number wrong is exactly the worst-case staleness of an operator's capital-bound edit sitting unreported: too high risks the board showing a stale main_balance or leverage_ceiling for that long; too low is still cheap, since parsing a 6-entry settings file measured at roughly 225 microseconds, so even this cadence is negligible CPU."
+
+# --- Market data feed (phase 1, spec section 4.3) -----------------------------
+# These nine are the block's own numbers. Venue capacity figures are NOT here --
+# the operator does not decide that Binance allows 1024 streams per connection,
+# so those are declared as VenueFacts inside each adapter, carrying the document
+# they were read from. What is here is what the operator actually chooses.
+
+[captured_venues]
+value = []
+unit  = "venue ids"
+note  = "operator, 2026-08-22: which venue adapters are live. A venue id resolves to runtime/venues/<id with underscores>.py, so adding a third venue is this line plus that module and nothing else -- the user's condition of 2026-08-21, 'mark it so if the 2 are not enough we can add more later'. Empty until an adapter exists: an id named here with no module is refused loudly by adapter_registry rather than skipped quietly."
+
+[captured_symbol_count]
+value = 30
+unit  = "symbols per venue"
+note  = "operator, 2026-08-21: how many symbols to capture per venue, ordered by symbol_selection_metric. 30 is the user's decision of 2026-08-21. 0 means every symbol the venue lists, which is the full-universe path with no code change -- 1,295 perpetuals across the two venues as measured on 2026-08-21. Raising it past roughly 500 needs the file-descriptor ceiling of spec section 4.2 dealt with first: 2,590 open tape files against a 1024 soft limit."
+
+[symbol_selection_metric]
+value = "quote-volume-24h"
+unit  = "metric name"
+note  = "operator, 2026-08-22: how 'top N' is ordered when captured_symbol_count is not 0. 24-hour quote volume is the venue's own field and is comparable across the two venues because both quote in USDT. Getting this wrong costs capture of the wrong symbols for as long as it stands, and that capture cannot be recovered later."
+
+[symbol_catalogue_refresh_interval]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how often each venue's symbol list is re-read. Not measured against a listing rate -- what is measured is that the count moved while it was being measured: Binance USDⓈ-M reported 169 TRADIFI perpetuals on one call and 170 minutes later on the next, 2026-08-21. So the cost of this being too high is a new listing uncaptured for up to that long, and the cost of it being too low is REST weight against a 2400-per-minute budget for a call that costs 1. Lower it if a listing gap is ever observed."
+
+[book_depth_levels]
+value = 20
+unit  = "levels per side"
+note  = "operator, 2026-08-22: how deep the shallow book snapshot goes. The venues do not offer the same levels -- Binance USDⓈ-M's partial-depth streams are 5/10/20 and Bybit linear's are 1/50/200/1000 -- so the adapter picks its own nearest supported level at or above this and records which it actually got. 20 is Binance's deepest partial stream, which makes this the deepest value both venues can serve without the adapters disagreeing about what 'shallow' means. Deeper couples to push rate on Bybit: choosing depth chooses cadence."
+
+[book_snapshot_interval]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how often a book snapshot is written to the tape, as distinct from how often the venue pushes an update. The tape carries snapshots rather than every delta because a delta stream is only meaningful alongside the snapshot it was applied to, and spec section 6 has to be able to record that a resync happened. Too high loses book resolution permanently; too low costs tape volume against 238 GB free and 2-4 GB/day."
+
+[venue_reconnect_backoff_floor]
+value = 1.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: the shortest wait before a reconnect, doubled from here on repeat failure. Bybit allows 500 new connections per IP per rolling 5 minutes, which is 1.67 per second across every connection this box holds, so a floor below this turns one venue outage into a self-inflicted ban. Binance's 24-hour forced disconnect is routine and is not a failure, so it does not enter the backoff at all."
+
+[feed_gap_threshold]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-22: how long a symbol may be silent before the silence is a feed-gap. This is the detector for spec section 1.1's live hazard -- a Binance connection missing its routed path stays open, errors nothing, and delivers nothing -- so it must be short enough to catch an empty socket. 60 s is safe at 30 symbols chosen by volume, where a genuinely silent minute is rare. It is NOT safe at the full universe: an illiquid perpetual is quiet for minutes at a time, and this becomes a per-symbol threshold estimated from that symbol's own arrival rate before captured_symbol_count is raised. Recorded here rather than discovered as a flood of false gaps."
+
+[tape_root]
+value = "~/.local/share/ajit-segment-bots/tape"
+unit  = "path"
+note  = "operator, 2026-08-22: where the tape lives. Expanded by the part that reads it, and then put through storage_facts.require_durable_directory, which refuses a memory-backed filesystem -- /tmp is tmpfs on this box, so a tape written there would measure as working right up until the machine restarted and it was gone. 238 GB free on / against 2-4 GB/day is months of runway."

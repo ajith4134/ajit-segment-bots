@@ -28,7 +28,11 @@ from dataclasses import dataclass
 # who changed it and why -- recorded at the point the number enters the system.
 REQUIRED_ENTRY_KEYS = ("value", "unit", "note")
 
-SettingValue = float | int | str | bool
+# A list is admitted because some settings are a set rather than a number -- which
+# venues are captured, for one. It stays a TOML array of scalars: a setting whose
+# value needed a table would be a schema hiding inside a value, and the board could
+# not render it or say what changed.
+SettingValue = float | int | str | bool | list[str]
 
 
 class SettingsParseRefused(ValueError):
