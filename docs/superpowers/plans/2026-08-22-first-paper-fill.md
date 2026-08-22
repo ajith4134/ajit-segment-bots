@@ -1,12 +1,20 @@
 # The first paper fill — phase 3 plan
 
 **Spec:** `docs/superpowers/specs/2026-08-22-part-wiring-design.md` §10, which fixed
-the method: switch on the smallest set that carries a trade from the tape to a
-simulated fill, and leave the rest genuinely off.
+the method: switch on the smallest set that carries a trade from the venue feed to
+a simulated fill, and leave the rest genuinely off.
 
-**What "done" means:** a fill that came from a real trade the tape recorded, made
-by parts running as their own processes, wired only by the blueprint, recorded in
-the ledger — and a board that shows the live path lit and everything else dark.
+**What "done" means:** a fill that came from prices arriving live from a venue,
+made by parts running as their own processes, wired only by the blueprint, recorded
+in the ledger — and a board that shows the live path lit and everything else dark.
+
+**RL-071, given by the user on 2026-08-22:** *"no tape use live prices in te market
+to trade live ike do in live tradin wit real money it is te rule important rule."*
+The bot trades on prices as they arrive, exactly as it would with real money. A
+tape replay is never the input a trading decision is made from, and never the input
+the system learns from while running. The tape stays the durable record and the
+fixture the real-data tests run on (RL-063) — a run driven by replayed history
+would be a backtest presented as a bot.
 
 ---
 
@@ -21,16 +29,32 @@ every optional input stay empty.
 Parts that then refuse to act are the finding, not the failure. A part that cannot
 decide without an input nobody is producing has just named the next batch.
 
-## The decision spine — 21 parts
+## The decision spine — 23 parts
 
 Each must act for a fill to exist. Listed in the order data moves, with what it
 must publish for the next one to have anything to read.
+
+Two entries changed once the parts were read rather than assumed, and both changes
+are findings the plan promised would come from doing this:
+
+- **The detector is not `momentum-burst-detector`.** It needs a `playbook-rule`,
+  and so do nine of the thirteen detectors; the playbook is built by the learning
+  loop out of instructions that do not exist until trades have happened. The only
+  path to an `entry-candidate` from inputs a cold system has is
+  `cointegration-pair-finder` feeding `spread-reversion-detector`.
+- **`signal-outcome-labeller` is new** (`docs/proposals/signal-outcome-labelling.md`).
+  Without it nothing downstream of the conviction model can ever run: the model
+  needs a `training-label`, the only source of one was the outcome of a trade, and
+  the system cannot make its first trade without one. It learns from live
+  candidates and live prices, never from a replay (RL-071).
 
 | # | Part | Publishes |
 |---|---|---|
 | 1 | `venue-trade-stream-reader` | `market-data` |
 | 2 | `regime-classifier` | `market-regime` |
-| 3 | `momentum-burst-detector` | `entry-candidate` |
+| 3 | `cointegration-pair-finder` | `cointegrated-pair` |
+| 3b | `spread-reversion-detector` | `entry-candidate` |
+| 3c | `signal-outcome-labeller` | `training-label` |
 | 4 | `bull-setup-filter` | `bull-side-candidate` |
 | 5 | `bull-feature-builder` | `bull-feature-vector` |
 | 6 | `bull-outlier-rejector` | `bull-feature-out-of-distribution-flag` |
@@ -89,10 +113,12 @@ A number that cannot say which of those it is does not go in.
 Each batch ends green, committed, and with the wiring probe holding.
 
 1. **Feed and regime** — 1, 2. Proves market-data crosses a process boundary from
-   the part that is already recording the tape.
-2. **Notice** — 3, 4. First `entry-candidate` from a real trade.
-3. **The bull's opinion** — 5 through 11. The longest batch and the one with the
-   learned components (RL-060).
+   the part that is already recording the tape. **Done, 2026-08-22.**
+2. **Notice** — 3, 3b, 4. First `entry-candidate` from real trades, through three
+   separate processes. **Done, 2026-08-22.**
+3. **The bull's opinion** — 3c, 5 through 11. The longest batch and the one with
+   the learned components (RL-060). The labeller comes first inside it: until the
+   model has labels, every part after it correctly refuses.
 4. **Intent and size** — 12 through 16.
 5. **The order** — 17, 18, 19. Including the paper-only assertions above.
 6. **The fill and the record** — 20, 21. The first paper fill.
@@ -101,7 +127,9 @@ Each batch ends green, committed, and with the wiring probe holding.
 
 ## What this phase will not do
 
-- No live venue, no keys, no order that can move money.
+- **No live order, no keys, no order that can move money.** The market data is
+  live and the decisions are made on it in real time (RL-071); what stays simulated
+  is the fill, and `money-mode-reader` reporting paper is what keeps it that way.
 - No bear bot, no tailgater, no spot, no options.
 - No governor deciding what runs: the spine's parts are switched on deliberately
   for this run. `switching-planner` deciding the on-set is later work, and pretending

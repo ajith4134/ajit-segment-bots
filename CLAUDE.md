@@ -100,6 +100,7 @@ The decisions that followed from that interview:
 | **RL-067** | what is built matches the diagrams — a part's real consumes and produces equal what the blueprint declares |
 | **RL-068** | build order: substrate, then market-data-feed, then the governor spine, then the futures vertical |
 | **RL-069** | the runtime substrate is off-diagram — its own status-board tile, not a cell on the part monitor |
+| **RL-071** | the bot trades on live prices as they arrive, exactly as it would with real money; a tape replay is never what a trading decision or a live run's learning is made from |
 
 **Build order matters because no dependency order exists.** 299 of the 321 parts sit
 in one feedback cycle, and the transitive inputs of a paper fill are 306 parts. So no

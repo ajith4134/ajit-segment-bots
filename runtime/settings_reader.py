@@ -29,10 +29,10 @@ from dataclasses import dataclass
 REQUIRED_ENTRY_KEYS = ("value", "unit", "note")
 
 # A list is admitted because some settings are a set rather than a number -- which
-# venues are captured, for one. It stays a TOML array of scalars: a setting whose
-# value needed a table would be a schema hiding inside a value, and the board could
-# not render it or say what changed.
-SettingValue = float | int | str | bool | list[str]
+# venues are captured, or the quantiles an exit plan places targets at. It stays a
+# TOML array of scalars: a setting whose value needed a table would be a schema
+# hiding inside a value, and the board could not render it or say what changed.
+SettingValue = float | int | str | bool | list[str] | list[float]
 
 
 class SettingsParseRefused(ValueError):

@@ -11811,6 +11811,31 @@
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "signal-outcome-labeller",
+      "name": "Signal outcome labeller",
+      "role": "score whether a detector's expected move happened inside its own horizon",
+      "category": "learning-loop",
+      "consumes": [
+        "entry-candidate",
+        "market-data"
+      ],
+      "produces": [
+        "training-label",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/signal-outcome-labelling.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {

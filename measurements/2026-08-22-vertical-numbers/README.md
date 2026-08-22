@@ -122,3 +122,52 @@ the first fill proves the circuit conducts rather than that the trade was good.
 The fix — resampling both symbols onto a common time grid before comparing — is a
 change to `cointegration-pair-finder`'s own logic and belongs in its own piece of
 work, with its own measurement.
+
+---
+
+## Will a signal label ever resolve? — `measure_label_resolution.py`
+
+`signal-outcome-labeller` was added because the models could not otherwise train
+(`docs/proposals/signal-outcome-labelling.md`). It calls a claim right or wrong when
+price moves a threshold one way or the other inside the horizon, and drops it when
+neither happens. So the threshold decides whether any label is ever produced — a
+threshold the market does not reach inside the horizon leaves the model exactly as
+untrained as before.
+
+400 claims placed at fixed intervals through 120 000 real trades per symbol, six
+symbols across both venues. Threshold as a fraction of price, horizon in seconds:
+
+| Setting | Share resolved (min – median – max) | Right share of resolved |
+|---|---|---|
+| 0.0005 @ 60 s | 0.998 – 1.000 – 1.000 | 0.499 |
+| 0.001 @ 60 s | 0.975 – 1.000 – 1.000 | 0.515 |
+| **0.002 @ 60 s** | **0.780 – 0.998 – 1.000** | **0.540** |
+| 0.005 @ 60 s | 0.268 – 0.894 – 0.995 | 0.525 |
+| 0.005 @ 900 s | 0.853 – 0.983 – 0.995 | 0.512 |
+
+Median seconds to resolve at 0.002 @ 60 s, per symbol: 0.08 (TRUMPUSDT), 0.37
+(XRPUSDT), 1.22 (ZECUSDT), 3.78 (1000PEPEUSDT), 15.21 and 16.51 (ETHUSDT on both
+venues).
+
+**Three findings.**
+
+1. **The costs-based threshold works.** 20 basis points — twice the round trip in
+   taker fees — resolves 78% to 100% of claims within the 60-second horizon. The
+   setting chosen from cost and the setting chosen from resolvability agree, which
+   is the outcome worth having and not one to assume.
+2. **Five basis points would be measuring noise.** It resolves 100% of claims with
+   a right share of 0.499 — precisely a coin flip, which is what a symmetric barrier
+   on a random walk gives. A label at that threshold carries no information at all,
+   and a model trained on it would learn the base rate and nothing else.
+3. **The labels are close to 50/50 at every usable threshold** (0.48 – 0.56). That
+   is the same reading as the Hurst measurement, from a different direction: at
+   these timescales this market is close to a random walk. **So anything the model
+   learns must come from the features, not from the base rate** — and a model that
+   reports 54% accuracy has learned nothing, because guessing "up" every time gets
+   that. What the promotion gates have to beat is the base rate on the same data,
+   not zero.
+
+**The small fixture is not the market.** `tests/captured/.../aggtrade-run.jsonl` is
+2 000 trades spanning 0.133% of price, so no claim in it can reach a 0.2% barrier —
+the unit tests place their barriers where that fixture can actually reach them, and
+this measurement is why the shipped setting is not the one those tests use.

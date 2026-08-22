@@ -58,6 +58,12 @@ class TrainingLabel:
     resolved_within_horizon: bool
     features: dict
     built_at_ns: int
+    # When the claim this label judges was made. Defaulted because a label built
+    # from a closed trade has the trade's own times; a label built from a signal
+    # needs it, because the model has to find the feature vector that was current
+    # when the detector spoke rather than the one current when the label arrived --
+    # and by then the market has moved on, which is the whole point of the horizon.
+    claimed_at_ns: int = 0
 
     def label_for(self, component: str) -> bool | None:
         return self.labels.get(component)
