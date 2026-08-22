@@ -388,6 +388,33 @@ def collect_substrate_results() -> list[ProbeResult]:
     ]
 
 
+def collect_trading_results() -> list[ProbeResult]:
+    """Whether this system is trading, and what is missing before it could be.
+
+    The question an operator actually asks. It goes above the capture tiles on
+    purpose: capture is the thing that must never stop, trading is the thing that
+    must never start by accident.
+    """
+    repository_root = str(PROJECT_HOME)
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    try:
+        from runtime.probes.trading_probes import run_all_trading_probes
+    except ImportError:
+        return [
+            ProbeResult(
+                "Trading",
+                UNMEASURED,
+                "trading probes not importable",
+                "import runtime.probes.trading_probes",
+            )
+        ]
+    return [
+        ProbeResult(label=result.label, state=result.state, value=result.value, proof=result.proof)
+        for result in run_all_trading_probes()
+    ]
+
+
 def collect_capture_results() -> list[ProbeResult]:
     """What the tape has actually captured (Rule 8).
 
@@ -429,6 +456,7 @@ def run_all_probes() -> list[ProbeResult]:
             results.append(
                 ProbeResult(probe.__name__, UNMEASURED, f"probe raised {type(error).__name__}", probe.__name__)
             )
+    results.extend(collect_trading_results())
     results.extend(collect_capture_results())
     results.extend(collect_substrate_results())
     return results

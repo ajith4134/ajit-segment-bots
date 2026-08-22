@@ -1,0 +1,153 @@
+"""trade-lifecycle-recorder: every step from candidate to fill, in order.
+
+This is the one journal that has to answer "why did this trade happen". A fill on
+its own says what was bought; the chain that produced it -- the candidate that was
+noticed, the intent formed from it, the bounds risk put on it, the order that was
+sent -- is what makes the outcome attributable to a decision rather than to luck.
+
+So it records the stages of one trade as a chain, not as five unrelated events.
+Each entry carries the trade's own correlation id, and the recorder refuses a
+stage that arrives out of order rather than journaling a lifecycle that never
+happened in that sequence: a journal whose order is wrong is worse than a gap in
+it, because a later phase reading it would learn the wrong causal story.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from runtime.journal import Journal, JournalEntry
+from runtime.part_declaration import PartDeclaration
+from runtime.part_process import run_part
+
+PART_ID = "trade-lifecycle-recorder"
+
+PART_DECLARATION = PartDeclaration(
+    part_id="trade-lifecycle-recorder",
+    consumes=("entry-candidate", "trade-intent", "bounded-order", "order-request", "fill"),
+    produces=("journal-entry", "part-health"),
+    resource_class="io-bound",
+    rate_risk="latency-only",
+    skipped_tick_effect="delays",
+)
+
+# The stages of one trade, in the order they must occur. A candidate becomes an
+# intent, risk bounds it, it is sent, it fills. Position in this tuple is the
+# rule the recorder checks against -- there is no separate ordering table to fall
+# out of step with the data types this part actually consumes.
+LIFECYCLE_STAGES = ("entry-candidate", "trade-intent", "bounded-order", "order-request", "fill")
+
+# A fill may arrive more than once for one order -- partial fills are ordinary --
+# so it is the one stage that may repeat without being an ordering fault.
+REPEATABLE_STAGES = ("fill",)
+
+
+@dataclass
+class LifecycleStanding:
+    recorded: int = 0
+    out_of_order: int = 0
+    unknown_stages: int = 0
+    trades_started: int = 0
+    trades_filled: int = 0
+    stage_counts: dict = field(default_factory=dict)
+    last_refusal: str | None = None
+
+
+class TradeLifecycleRecorder:
+    """Journals each stage of a trade, keeping the chain in the order it happened."""
+
+    def __init__(self, journal: Journal) -> None:
+        self._journal = journal
+        self._furthest_stage: dict[str, int] = {}
+        self.standing = LifecycleStanding()
+
+    def record(self, stage: str, trade_id: str, payload: dict) -> JournalEntry | None:
+        """Journal one stage of one trade, or refuse it and say why.
+
+        `trade_id` correlates the stages of a single trade. Without it the
+        journal would hold five streams of unrelated events and nothing could
+        reconstruct which candidate became which fill.
+        """
+        if stage not in LIFECYCLE_STAGES:
+            self.standing.unknown_stages += 1
+            self.standing.last_refusal = f"{stage!r} is not a stage of a trade's lifecycle"
+            return None
+
+        position = LIFECYCLE_STAGES.index(stage)
+        furthest = self._furthest_stage.get(trade_id)
+
+        if furthest is None:
+            if position != 0:
+                # A trade first seen mid-lifecycle is still recorded: refusing it
+                # would lose a real fill because this part started late. What is
+                # refused is a stage going *backwards*, which cannot have happened.
+                self._furthest_stage[trade_id] = position
+                return self._append(stage, trade_id, payload, note="lifecycle joined in progress")
+            self.standing.trades_started += 1
+            self._furthest_stage[trade_id] = position
+            return self._append(stage, trade_id, payload)
+
+        if position < furthest and stage not in REPEATABLE_STAGES:
+            self.standing.out_of_order += 1
+            self.standing.last_refusal = (
+                f"{trade_id}: {stage} arrived after {LIFECYCLE_STAGES[furthest]}, "
+                f"which is backwards through the lifecycle"
+            )
+            return None
+
+        self._furthest_stage[trade_id] = max(furthest, position)
+        return self._append(stage, trade_id, payload)
+
+    def _append(self, stage: str, trade_id: str, payload: dict, note: str | None = None) -> JournalEntry:
+        entry = self._journal.append(
+            kind=stage,
+            part_id=PART_ID,
+            payload={"trade_id": trade_id, **payload, **({"note": note} if note else {})},
+        )
+        self.standing.recorded += 1
+        self.standing.stage_counts[stage] = self.standing.stage_counts.get(stage, 0) + 1
+        if stage == "fill":
+            self.standing.trades_filled += 1
+        return entry
+
+    def stages_recorded_for(self, trade_id: str) -> tuple[str, ...]:
+        """Which stages of one trade are on the journal, in order."""
+        return tuple(
+            entry.kind
+            for entry in self._journal.entries
+            if entry.part_id == PART_ID and entry.payload.get("trade_id") == trade_id
+        )
+
+
+def describe_lifecycle(recorder: TradeLifecycleRecorder) -> dict:
+    return {
+        "part_id": PART_ID,
+        "recorded": recorder.standing.recorded,
+        "trades_started": recorder.standing.trades_started,
+        "trades_filled": recorder.standing.trades_filled,
+        "out_of_order_refused": recorder.standing.out_of_order,
+        "unknown_stages_refused": recorder.standing.unknown_stages,
+        "stage_counts": dict(recorder.standing.stage_counts),
+        "last_refusal": recorder.standing.last_refusal,
+    }
+
+
+def run_trade_lifecycle_recorder(
+    recorder: TradeLifecycleRecorder, control_socket, read_stages, publish_entries,
+    health_interval_seconds: float, emit_health,
+) -> int:
+    def tick() -> None:
+        entries = [
+            entry
+            for stage, trade_id, payload in read_stages()
+            if (entry := recorder.record(stage, trade_id, payload)) is not None
+        ]
+        publish_entries(tuple(entries))
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=control_socket,
+        do_one_tick=tick,
+        emit_health=emit_health,
+        health_interval_seconds=health_interval_seconds,
+    )
