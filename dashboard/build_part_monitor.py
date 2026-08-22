@@ -77,6 +77,52 @@ def name_variants(part_id: str) -> set[str]:
     return {part_id, "_".join(words), camel, camel[:1].upper() + camel[1:]}
 
 
+def is_test_file(path: Path) -> bool:
+    return "test" in path.name.lower() or "test" in str(path.parent).lower()
+
+
+def find_test_files(part_id: str, sources: list[Path]) -> list[Path]:
+    """Every test file that names this part, by filename or by what it imports.
+
+    Filename alone was the rule until 2026-08-22, when a block's eight parts were
+    tested by one module covering all of them and every one of their dots stayed
+    red. A test that imports a part and asserts on it is evidence about that part
+    whatever the file is called -- and one module per block is how the rest of
+    this build is going, so the probe reads the file rather than only its name.
+    """
+    variants = name_variants(part_id)
+    named = [p for p in sources if is_test_file(p) and any(v in p.stem for v in variants)]
+    importing = [
+        path
+        for path, text in _test_file_texts(sources)
+        if path not in named and any(variant in text for variant in variants)
+    ]
+    return named + importing
+
+
+# Every test file is read once per board build, not once per part: at 321 parts
+# the naive form was 321 passes over every test file and made the build minutes
+# long instead of seconds.
+_TEST_TEXT_CACHE: dict[tuple[Path, ...], tuple[tuple[Path, str], ...]] = {}
+
+
+def _test_file_texts(sources: list[Path]) -> tuple[tuple[Path, str], ...]:
+    key = tuple(sources)
+    cached = _TEST_TEXT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    texts = []
+    for path in sources:
+        if not is_test_file(path):
+            continue
+        try:
+            texts.append((path, path.read_text()))
+        except OSError:
+            continue
+    _TEST_TEXT_CACHE[key] = tuple(texts)
+    return _TEST_TEXT_CACHE[key]
+
+
 def find_implementation_file(part_id: str, sources: list[Path]) -> Path | None:
     """The one non-test source file whose name matches this part, if any.
 
@@ -97,14 +143,10 @@ def probe_part_rung(part_id: str, sources: list[Path]) -> tuple[str, str]:
     Never guesses upward. A part with no file is DECLARED, which is a real state and
     not a gap -- the blueprint phase is where every part is meant to be right now.
     """
-    variants = name_variants(part_id)
-    hits = [p for p in sources if any(v in p.stem for v in variants)]
-    if not hits:
-        return DECLARED, "no source file on disk matches this part's name"
-
-    tests = [p for p in hits if "test" in p.name.lower() or "test" in str(p.parent).lower()]
     impl = find_implementation_file(part_id, sources)
-
+    tests = find_test_files(part_id, sources)
+    if impl is None and not tests:
+        return DECLARED, "no source file on disk matches this part's name"
     if impl is None:
         return DECLARED, f"only test files found ({tests[0].relative_to(PROJECT)}), no implementation"
     where = impl.relative_to(PROJECT)
