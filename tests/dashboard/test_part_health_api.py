@@ -64,13 +64,24 @@ def scratch_part_files():
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
-def test_nothing_built_means_every_dot_is_red():
+def test_a_green_dot_means_a_part_that_really_is_built():
+    # This asserted that every dot was red until 2026-08-22, when
+    # venue-trade-stream-reader landed. A board that can never go green is not a
+    # board, so what is pinned now is the direction the inference may run: a dot
+    # is green only where a part reached the top rung, never the other way round.
     part_health_api = _import_part_health_api()
     payload = part_health_api.build_board_payload("live")
-    assert all(part["is_complete"] is False for part in payload["parts"])
-    assert all(block["is_complete"] is False for block in payload["blocks"])
-    assert sum(1 for p in payload["parts"] if p["is_complete"]) == 0
-    assert sum(1 for b in payload["blocks"] if b["is_complete"]) == 0
+    complete = [part for part in payload["parts"] if part["is_complete"]]
+    for part in complete:
+        assert part["rung"] in ("TESTED", "RUNNING"), part
+        assert part["dot_proof"]
+    # A block is green only if every part in it is, so it cannot lead its parts.
+    parts_by_block = {}
+    for part in payload["parts"]:
+        parts_by_block.setdefault(part["block"], []).append(part)
+    for block in payload["blocks"]:
+        if block["is_complete"]:
+            assert all(part["is_complete"] for part in parts_by_block[block["id"]])
 
 
 def test_every_part_dot_carries_its_proof():
@@ -124,7 +135,6 @@ def test_removing_the_scratch_files_turns_the_part_dot_red_again(scratch_part_fi
     subject = next(p for p in payload["parts"] if p["id"] == SUBJECT_PART_ID)
     assert subject["is_complete"] is False
     assert subject["rung"] == "DECLARED"
-    assert sum(1 for p in payload["parts"] if p["is_complete"]) == 0
 
 
 def test_live_and_snapshot_payloads_declare_their_own_mode():

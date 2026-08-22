@@ -91,16 +91,22 @@ def test_a_part_with_no_source_file_is_declared_and_red():
     assert build_part_monitor.part_is_measured_complete(subject) is False
 
 
-def test_nothing_built_means_the_wiring_check_has_nothing_to_compare():
-    # RL-070: today no part is implemented, so this must say "nothing to
-    # compare" rather than report an agreement it never checked.
+def test_the_wiring_check_reports_exactly_the_parts_that_exist():
+    # RL-070: it must report what it actually compared, never an agreement it
+    # never checked. This was "nothing is built" until 2026-08-22, when
+    # venue-trade-stream-reader landed and the board stopped being all-red --
+    # which is the board working, not the test needing to be relaxed. What is
+    # asserted now is the invariant that survives every part landing: every id
+    # it claims to have checked has a real implementation file, and none of them
+    # disagrees with the blueprint.
     build_part_monitor = _import_build_part_monitor()
     registry = build_part_monitor.load_feature_registry()
     sources = build_part_monitor.find_source_files()
     wiring = build_part_monitor.check_wiring_against_blueprint(registry, sources)
     assert wiring.unavailable is None
-    assert wiring.checked_part_ids == ()
     assert wiring.mismatches == {}
+    for part_id in wiring.checked_part_ids:
+        assert build_part_monitor.find_implementation_file(part_id, sources) is not None
 
 
 def test_a_source_file_and_a_matching_test_file_turn_the_dot_green(scratch_part_files):
@@ -135,7 +141,10 @@ def test_removing_the_scratch_files_turns_the_dot_red_again(scratch_part_files):
     subject = next(s for s in states if s.part_id == SUBJECT_PART_ID)
     assert subject.rung == build_part_monitor.DECLARED
     assert build_part_monitor.part_is_measured_complete(subject) is False
-    assert wiring.checked_part_ids == ()
+    # Scoped to the subject rather than to the project total: parts that really
+    # are built stay checked, and a test that demanded an empty list would have
+    # to be edited every time one landed.
+    assert SUBJECT_PART_ID not in wiring.checked_part_ids
 
 
 def test_a_built_part_whose_wiring_disagrees_is_painted_red_naming_both_sides(scratch_part_files):
