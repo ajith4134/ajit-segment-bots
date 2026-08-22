@@ -475,3 +475,35 @@ def no_budget(part_id: str, issued_at_ns: int) -> LlmPartBudget:
         money_allowed=0.0, window_seconds=0.0, calls_used=0, tokens_used=0,
         money_used=0.0, issued_at_ns=issued_at_ns,
     )
+
+
+@dataclass(frozen=True)
+class RoutedLlmRequest:
+    """A rendered request assigned to one place that will actually pay for it.
+
+    The router produces three named data types -- subscription, paid, local -- and
+    they are the same shape because the difference that matters is not structural,
+    it is who is billed. Keeping one shape means a caller cannot be written to work
+    on only one of them by accident, and keeping the field means nothing can lose
+    track of which pocket the money came out of.
+    """
+
+    routed_id: str
+    rendered_id: str
+    request_id: str
+    version_id: str
+    purpose: str
+    part_id: str
+    payment_kind: str
+    model_id: str
+    text: str
+    output_schema: dict
+    facts: dict
+    fingerprint: str
+    admitted_fraction: float
+    reason: str
+    routed_at_ns: int
+
+    @property
+    def costs_money(self) -> bool:
+        return self.payment_kind == METERED
