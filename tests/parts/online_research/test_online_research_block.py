@@ -417,7 +417,7 @@ def a_copy_scorer(minimum=3, threshold=0.001):
     return CopyWorthinessScorer(
         minimum_positions=minimum, worth_copying_threshold=threshold,
         prior_follow_success=0.5, prior_weight=4.0, half_life_observations=200,
-        now_ns=Clock(),
+        minimum_follow_observations=3, now_ns=Clock(),
     )
 
 

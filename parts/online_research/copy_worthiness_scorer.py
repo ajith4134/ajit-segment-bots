@@ -79,10 +79,16 @@ class CopyWorthinessScorer:
         prior_follow_success: float,
         prior_weight: float,
         half_life_observations: float,
+        minimum_follow_observations: int,
         now_ns=time.time_ns,
     ) -> None:
         if minimum_positions < 1:
             raise ValueError("scoring zero positions scores nothing")
+        if minimum_follow_observations < 1:
+            raise ValueError(
+                "a follow-success rate fitted on zero outcomes is the prior wearing the "
+                "appearance of evidence"
+            )
         if worth_copying_threshold <= 0:
             raise ValueError(
                 "a copyable return that is not positive after costs is not an edge"
@@ -93,6 +99,7 @@ class CopyWorthinessScorer:
         self._prior_follow_success = prior_follow_success
         self._prior_weight = prior_weight
         self._half_life = half_life_observations
+        self._minimum_follow_observations = minimum_follow_observations
         self._records: dict[str, object] = {}
         self._latency: dict[tuple, object] = {}
         self._positions: dict[str, list] = {}
@@ -188,7 +195,12 @@ class CopyWorthinessScorer:
         # The learned term is a multiplier on the arithmetic, never a substitute for
         # it: a trader followed successfully three times is still not copyable if the
         # delay eats the move.
-        confidence = success.estimate().value if success else self._prior_follow_success
+        follow_estimate = (
+            success.estimate(self._minimum_follow_observations) if success else None
+        )
+        confidence = (
+            follow_estimate.value if follow_estimate else self._prior_follow_success
+        )
         score = copyable_return * confidence
 
         if copyable_return < self._threshold:
@@ -208,7 +220,7 @@ class CopyWorthinessScorer:
             + (
                 f", and following them has worked {confidence:.0%} of "
                 f"{success.observations} time(s) here"
-                if success and success.estimate().is_fitted
+                if follow_estimate and follow_estimate.is_fitted
                 else ", with no follow history here yet"
             ),
         )
