@@ -71,9 +71,10 @@ TRADING_HALF = (
     "trade-lifecycle-recorder",
 )
 
-# What a trade needs before it can close, and none of it is written. Listed by
-# part id with what it would produce, so the board names the work rather than
-# leaving a dark tile nobody can act on.
+# What a trade needs before it can close, by part id and what each produces. Not a
+# claim that any of them is missing: which of them exist, which can start, and
+# which are running is probed below. Asserting "unwritten" here is the mistake
+# this list was written with, and every one of the six turned out to have code.
 CLOSING_CHAIN = (
     ("fill-reconciler", "position"),
     ("peak-excursion-tracker", "peak-excursion"),
@@ -82,6 +83,16 @@ CLOSING_CHAIN = (
     ("stop-order-manager", "order-request"),
     ("position-close-detector", "closed-trade"),
 )
+
+# The columns the board cannot fill from a file, and the part that would fill each
+# one. Rendered as their own state in the table rather than left out: a column that
+# is missing tells the reader nothing, and one silently blank tells them something
+# false.
+COLUMNS_A_PART_WOULD_FILL = {
+    "target": ("stop-target-placer", "stop-target-plan"),
+    "trailing stop": ("exit-order-chainer", "stop-adjustment"),
+    "forecast price": ("kronos-forecaster", "price-forecast"),
+}
 
 OK = "OK"
 NOT_BUILT = "NOT BUILT"
@@ -133,6 +144,17 @@ class RecordedTrade:
     # first started live. A trade nobody filled is not an opened trade, and a test
     # run's fill does not become one because a detector saw the symbol again.
     is_from_a_live_run: bool = False
+    # What the decision said, taken from the stages that carry it: the stop the
+    # exit plan proposed, how long the intent expected to be held, and how sure
+    # the bull bot was. Each is None when no stage recorded it, which is a real
+    # state for a trade that never got past being noticed.
+    stop_price: float | None = None
+    horizon_seconds: float | None = None
+    conviction: float | None = None
+    # Filled from the tape when the row is rendered, not while entries are read:
+    # it costs a walk over the venue's own records and only the trades that are
+    # listed are worth it.
+    prices: "PriceWindow | None" = None
 
     @property
     def average_price(self) -> float | None:
@@ -142,6 +164,40 @@ class RecordedTrade:
     def is_open(self) -> bool:
         """Filled and never closed. Every trade is open: nothing can close one yet."""
         return self.fills > 0
+
+    @property
+    def is_long(self) -> bool:
+        return (self.side or "buy") == "buy"
+
+    def profit_at(self, price: float | None) -> float | None:
+        """What this position is worth at a price, in quote currency, after fees.
+
+        Signed by the side: a short is worth the distance the price fell. Fees are
+        the ones actually charged on the fills, so this is money, not a move.
+        """
+        entry = self.average_price
+        if price is None or entry is None or not self.quantity:
+            return None
+        move = (price - entry) if self.is_long else (entry - price)
+        return move * self.quantity - self.fees
+
+    @property
+    def peak_profit(self) -> float | None:
+        """The best this position has been worth since it opened."""
+        if self.prices is None:
+            return None
+        return self.profit_at(self.prices.highest if self.is_long else self.prices.lowest)
+
+    @property
+    def worst_loss(self) -> float | None:
+        """The worst it has been worth since it opened -- what it went through."""
+        if self.prices is None:
+            return None
+        return self.profit_at(self.prices.lowest if self.is_long else self.prices.highest)
+
+    @property
+    def profit_now(self) -> float | None:
+        return self.profit_at(self.prices.last_price if self.prices else None)
 
 
 def read_journal_path() -> pathlib.Path:
@@ -246,6 +302,13 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
         trade.venue_id = payload.get("venue_id") or trade.venue_id
         trade.symbol = payload.get("symbol") or trade.symbol
         trade.side = payload.get("side") or trade.side
+        if payload.get("stop_price") is not None:
+            trade.stop_price = float(payload["stop_price"])
+        if payload.get("horizon_seconds") is not None:
+            trade.horizon_seconds = float(payload["horizon_seconds"])
+        conviction = payload.get("conviction")
+        if isinstance(conviction, dict) and conviction.get("value") is not None:
+            trade.conviction = float(conviction["value"])
         if entry["kind"] == "fill":
             trade.fills += 1
             quantity = float(payload.get("quantity") or 0.0)
@@ -324,6 +387,96 @@ def read_running_parts() -> dict[str, int]:
         for part_id, pid in started.items()
         if pathlib.Path(f"/proc/{pid}").exists()
     }
+
+
+@dataclass
+class PriceWindow:
+    """What a symbol did between one moment and now, off the tape.
+
+    The tape is the venue's own record and it is being written continuously by
+    `venue-trade-stream-reader`, so this is as current as the feed is -- which is
+    why `read_at_ns` travels with it. A price with no time beside it is a number
+    a reader has to trust; a price with one is a number they can judge.
+    """
+
+    last_price: float
+    read_at_ns: int
+    highest: float
+    lowest: float
+    trades_seen: int
+
+    @property
+    def age_seconds(self) -> float:
+        return max(0.0, datetime.now(timezone.utc).timestamp() - self.read_at_ns / 1e9)
+
+
+def read_price_window(venue_id: str, symbol: str, since_ns: int | None) -> PriceWindow | None:
+    """The last price for a symbol, and its high and low since a moment.
+
+    Reads the venue's own payloads back through that venue's adapter rather than
+    re-deriving a price format here: what a trade message means is the adapter's
+    business everywhere else in this system, and a board that parsed it itself
+    would be a second definition to keep in step.
+
+    Only today's file is read. A position older than midnight would have its
+    excursion measured from the start of the day, which is why the window says how
+    many trades it actually saw -- an excursion over 40 trades and one over 40 000
+    are not the same claim.
+    """
+    from runtime.tape import day_of_timestamp_ns, read_payload, read_tape_index, tape_paths_for
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    now_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+    index_path, blob_path = tape_paths_for(
+        TAPE_ROOT, venue_id, symbol, day_of_timestamp_ns(now_ns)
+    )
+    if not index_path.exists() or not blob_path.exists():
+        return None
+    index = read_tape_index(index_path)
+    if len(index) == 0:
+        return None
+
+    try:
+        adapter = load_venue_adapter(venue_id)
+    except Exception:
+        return None
+
+    first = 0
+    if since_ns is not None:
+        first = int(index["received_at_ns"].searchsorted(since_ns, side="left"))
+        # A trade opened before today, or before this file's first record, takes
+        # the whole file rather than nothing: the window says how much it covered.
+        first = min(first, len(index) - 1)
+
+    highest = lowest = last_price = None
+    read_at_ns = 0
+    seen = 0
+    with open(blob_path, "rb") as handle:
+        for record in index[first:]:
+            handle.seek(int(record["blob_offset"]))
+            payload = handle.read(int(record["blob_length"]))
+            try:
+                trades = adapter.read_trades(payload)
+            except Exception:
+                continue
+            for trade in trades:
+                if trade.symbol != symbol:
+                    continue
+                seen += 1
+                last_price = trade.price
+                read_at_ns = int(record["received_at_ns"])
+                highest = trade.price if highest is None else max(highest, trade.price)
+                lowest = trade.price if lowest is None else min(lowest, trade.price)
+
+    if last_price is None:
+        return None
+    return PriceWindow(
+        last_price=last_price,
+        read_at_ns=read_at_ns,
+        highest=highest,
+        lowest=lowest,
+        trades_seen=seen,
+    )
 
 
 def read_tape_last_write_seconds() -> float | None:
@@ -471,14 +624,36 @@ def probe_noticed(entries: list[dict], live_from_ns: int | None) -> ProbeResult:
     )
 
 
-def probe_closed() -> ProbeResult:
-    """Nothing can close a trade yet, and the board says which parts that needs."""
+def how_far_a_part_is_built(part_id: str, running: dict[str, int]) -> str:
+    """Where one part stands: running, startable, written, or not written at all.
+
+    Measured, not assumed. The first version of this board asserted that the six
+    parts a close needs were unwritten; all six had code, and what they were
+    missing was the twenty-line `start_part` that lets the launcher fork them.
+    """
+    if part_id in running:
+        return "running"
+    stem = part_id.replace("-", "_")
+    matches = [path for path in (PROJECT_HOME / "parts").rglob(f"{stem}.py") if path.stem == stem]
+    if not matches:
+        return "no module"
+    if "def start_part" not in matches[0].read_text():
+        return "no start_part"
+    return "startable"
+
+
+def probe_closed(running: dict[str, int]) -> ProbeResult:
+    """Whether a trade can close, and exactly what each part of the chain lacks."""
+    standing = {part_id: how_far_a_part_is_built(part_id, running) for part_id, _ in CLOSING_CHAIN}
+    proof = ", ".join(f"{part_id}: {state}" for part_id, state in standing.items())
+    if all(state == "running" for state in standing.values()):
+        return ProbeResult("Trades closed", OK, "the chain is on", proof)
     return ProbeResult(
         "Trades closed",
         NOT_BUILT,
-        f"{len(CLOSING_CHAIN)} parts unwritten",
-        "a close needs "
-        + ", ".join(f"{part_id} → {produces}" for part_id, produces in CLOSING_CHAIN),
+        f"{sum(1 for state in standing.values() if state != 'running')} of "
+        f"{len(CLOSING_CHAIN)} not running",
+        proof,
     )
 
 
@@ -559,7 +734,7 @@ def run_all_probes() -> tuple[list[ProbeResult], list[RecordedTrade], pathlib.Pa
         probe_feed(read_tape_last_write_seconds()),
         probe_noticed(entries, live_from_ns),
         probe_opened(trades, journal_path),
-        probe_closed(),
+        probe_closed(running),
         probe_journal_chain(entries, unreadable, journal_path),
         probe_chain_continuity(entries),
         probe_learning(),
@@ -590,25 +765,97 @@ def render_tile(result: ProbeResult) -> str:
 BEFORE_A_TRADE_EXISTS = LIFECYCLE_STAGES[0]
 
 
+# The most open trades this page lists. A cap that dropped rows silently would be
+# a board reporting a smaller book than the one that exists, so what it dropped is
+# said in the note above the table.
+MOST_TRADES_LISTED = 50
+
+
 def trades_worth_listing(trades: list[RecordedTrade]) -> list[RecordedTrade]:
-    """The trades that got past being noticed: an intent was formed about them."""
-    return [
-        trade
-        for trade in trades
-        if any(stage != BEFORE_A_TRADE_EXISTS for stage in trade.stages)
-    ]
+    """The open positions: filled, and nothing has closed them.
+
+    A trade the bot decided against, or one whose order never filled, is counted
+    above and not listed -- the table is about money that is currently at risk,
+    and 129 intents that produced no position would bury the ones that did.
+
+    Nothing closes a position yet, so every filled trade is open. When
+    `position-close-detector` runs, a closed one leaves this table and the count
+    beside it changes; that is the difference the tile will report.
+    """
+    filled = [trade for trade in trades if trade.fills > 0]
+    return sorted(filled, key=lambda trade: trade.first_recorded_at_ns or 0, reverse=True)
+
+
+def as_money(amount: float | None) -> str:
+    """A quote-currency figure, signed, or an em dash when it could not be computed."""
+    if amount is None:
+        return "—"
+    return f"{amount:+,.2f}"
+
+
+def profit_class(amount: float | None) -> str:
+    if amount is None:
+        return ""
+    return " up" if amount > 0 else (" down" if amount < 0 else "")
+
+
+def not_built_cell(column: str) -> str:
+    """A column no part fills yet, saying which part would fill it."""
+    part_id, produces = COLUMNS_A_PART_WOULD_FILL[column]
+    return (
+        f'<td class="gap" title="{html.escape(part_id)} would publish {html.escape(produces)}">'
+        f"not built</td>"
+    )
+
+
+def price_cell(window: "PriceWindow | None") -> str:
+    """The last traded price and how old it is, because a price without its age
+    is a number the reader has to trust rather than judge.
+
+    This page is a snapshot: it is generated, then published. The age is measured
+    at generation and stated, so a board read an hour later shows an hour-old
+    price *saying* it is an hour old, rather than a stale number wearing the
+    present tense.
+    """
+    if window is None:
+        return '<td class="mono">—<span class="age">no tape for this symbol today</span></td>'
+    age = window.age_seconds
+    staleness = "" if age <= TAPE_SILENCE_SECONDS else " stale"
+    return (
+        f'<td class="mono">{window.last_price:,.2f}'
+        f'<span class="age{staleness}">{age:,.0f}s old, {window.trades_seen:,} trades</span></td>'
+    )
+
+
+def with_prices(trades: list[RecordedTrade]) -> list[RecordedTrade]:
+    """Attach each trade's price window, read off the tape once per symbol pair.
+
+    Once per (venue, symbol) rather than once per trade: several trades on one
+    symbol walk the same records, and the tape is the largest thing on this
+    machine.
+    """
+    windows: dict[tuple[str, str], PriceWindow | None] = {}
+    for trade in trades:
+        if not trade.venue_id or not trade.symbol:
+            continue
+        key = (trade.venue_id, trade.symbol)
+        since = trade.first_recorded_at_ns
+        if key not in windows:
+            windows[key] = read_price_window(trade.venue_id, trade.symbol, since)
+        trade.prices = windows[key]
+    return trades
 
 
 def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> str:
     if not trades:
         return (
-            '<p class="empty">No trade has been recorded. '
-            f"{html.escape(str(journal_path))} holds no entry carrying a trade id, which is "
+            '<p class="empty">No position is open. '
+            f"{html.escape(str(journal_path))} holds no fill that nothing has closed, which is "
             "what a system that has not traded looks like.</p>"
         )
     rows = []
     for trade in trades:
-        price = trade.average_price
+        entry = trade.average_price
         origin = (
             '<span class="chip live">live run</span>'
             if trade.is_from_a_live_run
@@ -616,20 +863,33 @@ def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> st
         )
         rows.append(
             "<tr>"
-            f'<td class="mono">{html.escape(trade.trade_id)}{origin}</td>'
+            f'<td class="mono">{html.escape(trade.symbol or trade.trade_id)}{origin}'
+            f'<span class="age">{as_time(trade.first_recorded_at_ns)}</span></td>'
             f"<td>{html.escape(trade.side or '—')}</td>"
             f'<td class="mono">{trade.quantity:g}</td>'
-            f'<td class="mono">{f"{price:,.2f}" if price else "—"}</td>'
+            f'<td class="mono">{f"{entry:,.2f}" if entry else "—"}</td>'
+            + price_cell(trade.prices)
+            + f'<td class="mono">{f"{trade.stop_price:,.2f}" if trade.stop_price else "—"}</td>'
+            + not_built_cell("target")
+            + not_built_cell("trailing stop")
+            + not_built_cell("forecast price")
+            + f'<td class="mono">'
+            f'{f"{trade.conviction:.0%}" if trade.conviction is not None else "—"}</td>'
+            f'<td class="mono{profit_class(trade.peak_profit)}">{as_money(trade.peak_profit)}</td>'
+            f'<td class="mono{profit_class(trade.worst_loss)}">{as_money(trade.worst_loss)}</td>'
+            f'<td class="mono{profit_class(trade.profit_now)}">{as_money(trade.profit_now)}</td>'
             f'<td class="mono">{trade.fees:,.4f}</td>'
-            f'<td class="mono">{as_time(trade.first_recorded_at_ns)}</td>'
-            f'<td class="mono">{html.escape(" → ".join(trade.stages))}</td>'
-            f'<td>{"open" if trade.is_open else "no fill"}</td>'
+            f'<td>{"open" if trade.is_open else "no fill"}'
+            f'<span class="age">{html.escape(" → ".join(dict.fromkeys(trade.stages)))}</span></td>'
             "</tr>"
         )
     return (
         '<div class="table-wrap"><table>'
-        "<thead><tr><th>trade</th><th>side</th><th>quantity</th><th>average price</th>"
-        "<th>fees</th><th>first recorded (UTC)</th><th>stages journalled</th><th>state</th>"
+        "<thead><tr>"
+        "<th>symbol</th><th>side</th><th>quantity</th><th>entry</th>"
+        "<th>price now</th><th>stop</th><th>target</th><th>trailing</th><th>forecast</th>"
+        "<th>conviction</th><th>peak profit</th><th>worst loss</th><th>profit now</th>"
+        "<th>fees</th><th>state</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -708,6 +968,17 @@ PAGE = """<title>Segment Bots Trade Board</title>
     font-size: .58rem; letter-spacing: .08em; text-transform: uppercase;
     border: 1px solid currentColor; border-radius: 2px; padding: .08rem .28rem;
   }}
+  .age {{
+    display: block; font-size: .62rem; letter-spacing: .04em; color: var(--muted);
+    margin-top: .15rem;
+  }}
+  .age.stale {{ color: var(--fail); }}
+  .up {{ color: var(--ok); }}
+  .down {{ color: var(--fail); }}
+  .gap {{
+    font-family: ui-monospace, monospace; font-size: .68rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted);
+  }}
   .chip.live {{ color: var(--ok); }}
   .chip.test {{ color: var(--muted); }}
   .empty {{ color: var(--muted); border: 1px dashed var(--line-strong); padding: 1rem; border-radius: 3px; }}
@@ -776,6 +1047,30 @@ def compose_verdict(results: list[ProbeResult], trades: list[RecordedTrade]) -> 
     )
 
 
+def compose_listing_note(trades: list[RecordedTrade]) -> str:
+    """What the table shows, and what it leaves out, in the numbers themselves."""
+    open_trades = trades_worth_listing(trades)
+    decided = [
+        trade
+        for trade in trades
+        if trade.fills == 0 and any(stage != BEFORE_A_TRADE_EXISTS for stage in trade.stages)
+    ]
+    noticed = len(trades) - len(open_trades) - len(decided)
+    note = (
+        f"{len(open_trades)} open position(s). Every price, peak and profit below is quote "
+        f"currency, computed from the venue's own trades on the tape between the entry and "
+        f"the moment this page was generated. "
+        f"{len(decided)} decision(s) never filled and {noticed} setup(s) were noticed without "
+        f"becoming one; both are counted above rather than listed here."
+    )
+    if len(open_trades) > MOST_TRADES_LISTED:
+        note += (
+            f" Only the {MOST_TRADES_LISTED} most recent are listed; "
+            f"{len(open_trades) - MOST_TRADES_LISTED} older open position(s) are not shown."
+        )
+    return note
+
+
 def build_page() -> str:
     results, trades, journal_path, live_from_ns = run_all_probes()
     return PAGE.format(
@@ -784,12 +1079,10 @@ def build_page() -> str:
         probe_count=len(results),
         journal_path=html.escape(str(journal_path)),
         tiles="".join(render_tile(result) for result in results),
-        listed_note=html.escape(
-            f"{len(trades_worth_listing(trades))} of {len(trades)} things the journal holds got "
-            f"past being noticed. The rest are entry candidates: a detector saying a setup looks "
-            f"interesting, which is not a trade and is counted above rather than listed here."
+        listed_note=html.escape(compose_listing_note(trades)),
+        trades=render_trades(
+            with_prices(trades_worth_listing(trades)[:MOST_TRADES_LISTED]), journal_path
         ),
-        trades=render_trades(trades_worth_listing(trades), journal_path),
         live_from=html.escape(as_time(live_from_ns)) if live_from_ns else "no live run yet",
     )
 

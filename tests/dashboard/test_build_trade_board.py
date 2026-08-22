@@ -179,11 +179,26 @@ def test_a_silent_tape_fails_and_a_written_one_does_not(board):
     assert board.probe_feed(1.0).state == board.OK
 
 
-def test_closing_is_not_built_and_the_board_names_the_parts(board):
-    result = board.probe_closed()
+def test_closing_is_not_built_and_the_board_measures_how_far_each_part_got(board):
+    """Measured, not asserted. The first version of this claimed six parts were
+    unwritten; all six had code, and what they lacked was `start_part`."""
+    result = board.probe_closed(running={})
     assert result.state == board.NOT_BUILT
     for part_id, _produces in board.CLOSING_CHAIN:
         assert part_id in result.proof
+    assert "no start_part" in result.proof or "startable" in result.proof
+
+    every_part_up = {part_id: 1 for part_id, _ in board.CLOSING_CHAIN}
+    assert board.probe_closed(every_part_up).state == board.OK
+
+
+def test_how_far_a_part_is_built_tells_running_from_startable_from_absent(board):
+    assert board.how_far_a_part_is_built("paper-fill-simulator", {"paper-fill-simulator": 1}) == (
+        "running"
+    )
+    assert board.how_far_a_part_is_built("paper-fill-simulator", {}) == "startable"
+    assert board.how_far_a_part_is_built("fill-reconciler", {}) == "no start_part"
+    assert board.how_far_a_part_is_built("a-part-nobody-wrote", {}) == "no module"
 
 
 def test_learning_progress_is_unmeasured_and_says_what_would_measure_it(board):
@@ -192,24 +207,100 @@ def test_learning_progress_is_unmeasured_and_says_what_would_measure_it(board):
     assert "bull-conviction-model" in result.proof
 
 
-def test_the_page_renders_every_probe_and_every_trade(board, durable_tmp_path):
+def test_the_table_carries_the_numbers_an_open_position_is_judged_by(board, durable_tmp_path):
+    """Entry, the price now with its age, the peak, the worst and the profit."""
     path = durable_tmp_path / "journal.jsonl"
-    entries = write_journal(path, trades=2)
-    trades = board.collect_trades(entries, live_from_ns=None)
+    entries = write_journal(path, trades=1)
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    trade.prices = board.PriceWindow(
+        last_price=78_000.0,
+        read_at_ns=int(__import__("time").time() * 1e9),
+        highest=79_000.0,
+        lowest=77_000.0,
+        trades_seen=4_919,
+    )
 
-    rendered = board.render_trades(trades, path)
-    for trade in trades:
-        assert trade.trade_id in rendered
+    # entry 77,518.10 on 0.012, fee 0.186: the peak is the high, the worst the low.
+    assert trade.peak_profit == pytest.approx(0.012 * (79_000.0 - 77_518.1) - 0.186)
+    assert trade.worst_loss == pytest.approx(0.012 * (77_000.0 - 77_518.1) - 0.186)
+    assert trade.profit_now == pytest.approx(0.012 * (78_000.0 - 77_518.1) - 0.186)
+
+    rendered = board.render_trades([trade], path)
+    assert "78,000.00" in rendered and "4,919 trades" in rendered
+    assert "s old" in rendered, "a price with no age is a number the reader must trust"
+    assert "not built" in rendered, "the columns no part fills yet must say so"
     assert "test run" in rendered
 
     empty = board.render_trades([], path)
-    assert "No trade has been recorded" in empty
+    assert "No position is open" in empty
     assert str(path) in empty
 
 
+def test_a_short_is_worth_the_distance_the_price_fell(board, durable_tmp_path):
+    """Signed by the side, or every short reads as a loss when it is winning."""
+    path = durable_tmp_path / "journal.jsonl"
+    entries = write_journal(path, trades=1)
+    for entry in entries:
+        entry["payload"]["side"] = "sell"
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    trade.prices = board.PriceWindow(
+        last_price=77_000.0, read_at_ns=1, highest=79_000.0, lowest=77_000.0, trades_seen=10
+    )
+    assert trade.is_long is False
+    assert trade.profit_now == pytest.approx(0.012 * (77_518.1 - 77_000.0) - 0.186)
+    assert trade.peak_profit > 0, "the price fell, which is a short in profit"
+    assert trade.worst_loss < trade.peak_profit
+
+
+def test_a_stale_price_says_so_in_the_cell(board):
+    """The page is generated then published; the age is what keeps it honest."""
+    fresh = board.PriceWindow(
+        last_price=1.0,
+        read_at_ns=int(__import__("time").time() * 1e9),
+        highest=1.0,
+        lowest=1.0,
+        trades_seen=1,
+    )
+    assert "stale" not in board.price_cell(fresh)
+
+    old = board.PriceWindow(
+        last_price=1.0,
+        read_at_ns=int((__import__("time").time() - board.TAPE_SILENCE_SECONDS * 10) * 1e9),
+        highest=1.0,
+        lowest=1.0,
+        trades_seen=1,
+    )
+    assert "stale" in board.price_cell(old)
+    assert board.price_cell(None).count("no tape") == 1
+
+
+def test_a_decision_that_never_filled_is_counted_rather_than_listed(board, durable_tmp_path):
+    """The table is about money at risk; 128 unfilled intents would bury it."""
+    path = durable_tmp_path / "journal.jsonl"
+    entries = write_journal(path, trades=1)
+    unfilled = [entry for entry in entries if entry["kind"] != "fill"]
+    trades = board.collect_trades(unfilled, live_from_ns=None)
+    assert trades and board.trades_worth_listing(trades) == []
+    assert "never filled" in board.compose_listing_note(trades)
+
+
 def test_the_generated_page_is_self_contained_and_theme_aware(board):
-    """It is published as an artifact, where an external request is blocked."""
-    page = board.build_page()
+    """It is published as an artifact, where an external request is blocked.
+
+    The template is filled with stand-ins rather than by running every probe:
+    what is under test is the page, and building it for real walks a tape with
+    millions of records on it.
+    """
+    page = board.PAGE.format(
+        verdict="nothing yet",
+        measured_at="2026-08-22 18:00:00 UTC",
+        probe_count=9,
+        journal_path="/tmp/journal.jsonl",
+        tiles="",
+        listed_note="",
+        trades="",
+        live_from="2026-08-22 17:37:10",
+    )
     assert "<title>" in page
     assert "prefers-color-scheme" in page
     assert 'data-theme="dark"' in page
