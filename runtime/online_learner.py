@@ -347,6 +347,10 @@ class ProbabilityCalibrator:
                 value=stated_probability,
                 observations=int(self.observations),
                 is_fitted=False,
+                prior=stated_probability,
+                was_clamped=False,
+                bound_low=None,
+                bound_high=None,
                 reason=(
                     f"{self.observations:.0f} outcomes of the {self.minimum_observations} "
                     f"needed; until then the model's own number is passed through unchanged "
@@ -362,6 +366,10 @@ class ProbabilityCalibrator:
             value=value,
             observations=int(self.observations),
             is_fitted=True,
+            prior=stated_probability,
+            was_clamped=False,
+            bound_low=None,
+            bound_high=None,
             reason=(
                 f"stated {stated_probability:.2f} has been followed by the expected outcome "
                 f"{value:.0%} of the time over {count:.0f} weighted observations in that band"

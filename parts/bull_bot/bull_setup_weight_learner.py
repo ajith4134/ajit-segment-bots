@@ -85,19 +85,59 @@ class BullSetupWeightLearner:
         self._maximum_weight = maximum_weight
         self._now_ns = now_ns
         self._by_detector: dict[str, RateEstimator] = {}
-        self._base_rate = RateEstimator(
-            prior=prior_hit_rate, prior_weight=prior_weight,
-            half_life_observations=half_life_observations,
-        )
         self._instruction_of: dict[str, str] = {}
         self.standing = LearnerStanding()
 
     def observe_closed_trade(self, detector: str, was_win: bool) -> None:
         """One closed long trade attributed to the detector that proposed it."""
         self._estimator_for(detector).observe(was_win)
-        self._base_rate.observe(was_win)
         self.standing.trades_learned_from += 1
         self.standing.detectors_tracked = len(self._by_detector)
+
+    def base_rate_excluding(self, detector: str) -> Estimate:
+        """What the rest of the bot achieves, which is what "better" is measured against.
+
+        Excluding the detector itself, because a detector that produces most of
+        the bot's trades drags the overall rate toward its own and would come
+        out at exactly average however good or bad it is -- and the detector
+        that trades most is the one it matters most to judge.
+        """
+        estimates = [
+            self._by_detector[other].estimate(self._minimum)
+            for other in self._by_detector
+            if other != detector
+        ]
+        weighted = [estimate for estimate in estimates if estimate.observations > 0]
+        if not weighted:
+            return Estimate(
+                value=self._prior_hit_rate,
+                is_fitted=False,
+                observations=0,
+                prior=self._prior_hit_rate,
+                was_clamped=False,
+                bound_low=None,
+                bound_high=None,
+                reason=(
+                    "no other detector has a record yet, so there is nothing to be better "
+                    "than and the prior stands"
+                ),
+            )
+        observations = sum(estimate.observations for estimate in weighted)
+        value = sum(
+            estimate.value * estimate.observations for estimate in weighted
+        ) / observations
+        return Estimate(
+            value=value,
+            is_fitted=all(estimate.is_fitted for estimate in weighted),
+            observations=observations,
+            prior=self._prior_hit_rate,
+            was_clamped=False,
+            bound_low=None,
+            bound_high=None,
+            reason=(
+                f"{len(weighted)} other detector(s) over {observations} long trades"
+            ),
+        )
 
     def observe_scorecard(self, scorecard) -> None:
         """Adopt the bot's durable record, so a restart does not relearn from nothing."""
@@ -126,19 +166,19 @@ class BullSetupWeightLearner:
         """This detector's hit rate against the bot's own, floored and capped."""
         estimator = self._estimator_for(detector)
         hit_rate = estimator.estimate(self._minimum)
-        base = self._base_rate.estimate(self._minimum)
+        base = self.base_rate_excluding(detector)
 
         if base.value <= 0:
-            ratio = 1.0
+            ratio = self._maximum_weight if hit_rate.value > 0 else 1.0
             provenance = (
-                "the bot has no base rate above zero yet, so every detector carries the "
-                "same weight and none is favoured by an accident of ordering"
+                f"{hit_rate.value:.1%} over {hit_rate.observations} long trades while every "
+                f"other detector this bot has tried has won nothing"
             )
         else:
             ratio = hit_rate.value / base.value
             provenance = (
-                f"{hit_rate.value:.1%} over {hit_rate.observations} long trades against this "
-                f"bot's own {base.value:.1%} base rate"
+                f"{hit_rate.value:.1%} over {hit_rate.observations} long trades against the "
+                f"{base.value:.1%} the rest of this bot achieves ({base.reason})"
                 + ("" if hit_rate.is_fitted else ", still pulled toward the prior")
             )
 
@@ -174,7 +214,28 @@ class BullSetupWeightLearner:
 
     @property
     def base_rate(self) -> Estimate:
-        return self._base_rate.estimate(self._minimum)
+        """The bot's own hit rate over every detector, for reporting."""
+        estimates = [
+            estimator.estimate(self._minimum) for estimator in self._by_detector.values()
+        ]
+        observed = [estimate for estimate in estimates if estimate.observations > 0]
+        if not observed:
+            return Estimate(
+                value=self._prior_hit_rate, is_fitted=False, observations=0,
+                prior=self._prior_hit_rate, was_clamped=False, bound_low=None,
+                bound_high=None, reason="no long trade has closed yet",
+            )
+        observations = sum(estimate.observations for estimate in observed)
+        return Estimate(
+            value=sum(estimate.value * estimate.observations for estimate in observed) / observations,
+            is_fitted=all(estimate.is_fitted for estimate in observed),
+            observations=observations,
+            prior=self._prior_hit_rate,
+            was_clamped=False,
+            bound_low=None,
+            bound_high=None,
+            reason=f"{len(observed)} detector(s) over {observations} long trades",
+        )
 
     def _estimator_for(self, detector: str) -> RateEstimator:
         estimator = self._by_detector.get(detector)

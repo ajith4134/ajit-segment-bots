@@ -351,7 +351,10 @@ def stand_down(
         symbol=symbol,
         action=STAND_DOWN,
         conviction=conviction
-        or Estimate(value=0.0, observations=0, is_fitted=False, reason=refusal),
+        or Estimate(
+            value=0.0, is_fitted=False, observations=0, prior=0.0,
+            was_clamped=False, bound_low=None, bound_high=None, reason=refusal,
+        ),
         timing=None,
         exit_plan=None,
         features_summary={},

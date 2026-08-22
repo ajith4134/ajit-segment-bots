@@ -1,31 +1,24 @@
-"""bull-position-invalidation-watcher: when the reason for being long stopped being true.
+"""bear-position-invalidation-watcher: when a short stops being justified, and it is urgent.
 
-Every other part in this bot decides whether to open something. This one watches
-what is already open, and it exists because the two are different questions
-answered from different evidence. An entry is judged on a setup; a held position
-is judged on whether the conditions that justified it still hold -- and those can
-fail long before the stop is reached.
+The bull's watcher checks a held long against the reasons it was opened for. This
+does the same for shorts and adds the two things that only matter on this side:
 
-Three ways a long stops being justified, and none of them is "it is losing":
+- **A squeeze is not a slow invalidation.** The bull watcher can afford to reduce
+  on partial reversal and reconsider next tick. A short whose offer side has been
+  eaten while volatility rises is in the state that ends positions, and this
+  watcher closes on that shape directly rather than waiting for enough individual
+  features to flip. By the time a majority of them have, the exit is expensive.
+- **Carry is a clock.** A short that has been open long enough for funding to
+  have eaten the move it was expecting has been invalidated by cost rather than
+  by price. That is invisible to any feature comparison, so it is measured
+  explicitly: what has been paid so far against what the thesis was worth.
 
-1. **The features moved back.** The book imbalance that made the entry a long has
-   flipped, the volatility that made the target reachable has collapsed. The
-   thesis has expired even though the price has not moved much.
-2. **The regime broke.** `regime-break-alert` says the market this trade was
-   entered into is not the market it is in now, and every model that formed the
-   entry was fitted on the old one.
-3. **The horizon ran out.** A trade past the horizon it was given is not a trade,
-   it is a position nobody decided to hold.
+It produces `directional-opinion`, the same type as the composer, so the arbiter
+and the risk gate stay in the path (T-2). A part that could close a position
+directly would be a second execution route with none of the first one's checks.
 
-It produces `directional-opinion` -- the same type as the composer, on purpose.
-A bot changing its mind is an opinion the arbiter weighs, not a control message
-that bypasses it (T-2): the risk gate and the arbiter stay in the path, because a
-part that could close a position directly would be a second, hidden execution
-route with none of the first one's checks.
-
-**Reduce is a real answer.** Between "hold" and "close" sits "this is less true
-than it was", and a watcher that could only do the two extremes would either hold
-losing theses or dump good positions on one noisy tick.
+**Reduce is still a real answer**, but the thresholds are tighter than the bull's,
+and the squeeze shape and the carry clock bypass them entirely.
 """
 
 from __future__ import annotations
@@ -34,18 +27,18 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import (
-    CLOSE_POSITION, LONG, REDUCE_POSITION, STAND_DOWN, DirectionalOpinion,
+    CLOSE_POSITION, REDUCE_POSITION, SHORT, STAND_DOWN, DirectionalOpinion,
 )
 from runtime.learned_estimator import Estimate, RateEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
-PART_ID = "bull-position-invalidation-watcher"
-BOT = "bull-bot"
+PART_ID = "bear-position-invalidation-watcher"
+BOT = "bear-bot"
 
 PART_DECLARATION = PartDeclaration(
-    part_id="bull-position-invalidation-watcher",
-    consumes=("position", "market-data", "bull-feature-vector", "regime-break-alert"),
+    part_id="bear-position-invalidation-watcher",
+    consumes=("position", "market-data", "bear-feature-vector", "regime-break-alert"),
     produces=("directional-opinion", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -54,6 +47,8 @@ PART_DECLARATION = PartDeclaration(
 
 STILL_VALID = "thesis-still-holds"
 FEATURES_REVERSED = "entry-features-have-reversed"
+SQUEEZE_FORMING = "offer-side-eaten-while-volatility-rises"
+CARRY_ATE_THE_THESIS = "funding-paid-has-eaten-what-the-thesis-was-worth"
 REGIME_BROKEN = "regime-this-was-entered-into-has-broken"
 HORIZON_EXPIRED = "past-the-horizon-it-was-given"
 NO_ENTRY_RECORD = "no-entry-features-recorded-for-this-position"
@@ -61,17 +56,14 @@ NO_ENTRY_RECORD = "no-entry-features-recorded-for-this-position"
 
 @dataclass
 class HeldThesis:
-    """What was true when this position was opened, kept so it can be checked.
-
-    Kept per position rather than recomputed: the question is whether the
-    entry's reasons still hold, and that cannot be asked without the reasons.
-    """
+    """What was true when this short was opened, and what it was expected to be worth."""
 
     venue_id: str
     symbol: str
     entry_features: dict
     entry_regime: str
     entry_price: float
+    expected_move_fraction: float
     horizon_seconds: float
     opened_at_ns: int
     detector: str
@@ -84,16 +76,21 @@ class WatcherStanding:
     close_calls: int = 0
     reduce_calls: int = 0
     held: int = 0
+    squeezes_caught: int = 0
+    carry_closes: int = 0
     by_reason: dict = field(default_factory=dict)
 
 
-class BullPositionInvalidationWatcher:
-    """Checks open longs against the reasons they were opened for."""
+class BearPositionInvalidationWatcher:
+    """Checks open shorts against their reasons, their carry, and the squeeze shape."""
 
     def __init__(
         self,
         reversal_fraction_to_reduce: float,
         reversal_fraction_to_close: float,
+        squeeze_room_collapse_fraction: float,
+        volatility_rise_fraction: float,
+        carry_fraction_of_expected_move: float,
         prior_invalidation_hit_rate: float,
         prior_weight: float,
         half_life_observations: float,
@@ -105,11 +102,20 @@ class BullPositionInvalidationWatcher:
                 "the reduce threshold must be reached before the close threshold, or the "
                 "watcher can only ever do the extreme"
             )
+        if not 0.0 < carry_fraction_of_expected_move <= 1.0:
+            raise ValueError(
+                "the carry clock is the fraction of the expected move that funding may eat "
+                "before the thesis has been paid away; it must be inside (0, 1]"
+            )
         self._reduce_at = reversal_fraction_to_reduce
         self._close_at = reversal_fraction_to_close
+        self._room_collapse = squeeze_room_collapse_fraction
+        self._volatility_rise = volatility_rise_fraction
+        self._carry_limit = carry_fraction_of_expected_move
         self._minimum = minimum_observations
         self._now_ns = now_ns
         self._theses: dict[tuple[str, str], HeldThesis] = {}
+        self._carry_paid: dict[tuple[str, str], float] = {}
         self._broken_regimes: set[str] = set()
         self._was_right = RateEstimator(
             prior=prior_invalidation_hit_rate, prior_weight=prior_weight,
@@ -118,13 +124,22 @@ class BullPositionInvalidationWatcher:
         self.standing = WatcherStanding()
 
     def record_entry(self, thesis: HeldThesis) -> None:
-        """What justified this position, kept for as long as it is held."""
-        self._theses[(thesis.venue_id, thesis.symbol)] = thesis
+        key = (thesis.venue_id, thesis.symbol)
+        self._theses[key] = thesis
+        self._carry_paid.setdefault(key, 0.0)
         self.standing.positions_watched = len(self._theses)
 
+    def observe_funding_settlement(self, venue_id: str, symbol: str, paid_fraction: float) -> None:
+        """One settlement's carry, as a fraction of notional. Positive means paid out."""
+        key = (venue_id, symbol)
+        if key in self._theses:
+            self._carry_paid[key] = self._carry_paid.get(key, 0.0) + paid_fraction
+
     def forget_position(self, venue_id: str, symbol: str) -> None:
-        """A closed position releases its thesis. T-3: nothing accumulates for ever."""
-        self._theses.pop((venue_id, symbol), None)
+        """A closed short releases its thesis and its carry. T-3."""
+        key = (venue_id, symbol)
+        self._theses.pop(key, None)
+        self._carry_paid.pop(key, None)
         self.standing.positions_watched = len(self._theses)
 
     def observe_regime_break(self, regime: str, has_broken: bool) -> None:
@@ -134,15 +149,9 @@ class BullPositionInvalidationWatcher:
             self._broken_regimes.discard(regime)
 
     def observe_outcome(self, was_right: bool) -> None:
-        """Whether closing early was the right call, so the watcher is judged too.
-
-        Without this the watcher is the one part of the bot with no record, and
-        a watcher that panics is indistinguishable from one that saves money.
-        """
         self._was_right.observe(was_right)
 
     def check(self, position, vector) -> DirectionalOpinion:
-        """One held long against the reasons it was opened for."""
         self.standing.checks += 1
         key = (position.venue_id, position.symbol)
         thesis = self._theses.get(key)
@@ -150,9 +159,26 @@ class BullPositionInvalidationWatcher:
         if thesis is None:
             return self._opinion(
                 position, STAND_DOWN, NO_ENTRY_RECORD, 0.0,
-                "no entry features were recorded for this position, so there is nothing to "
-                "compare against; this watcher will not invent a reason to close a trade it "
-                "cannot judge",
+                "no entry features were recorded for this short, so there is nothing to compare "
+                "against; this watcher will not invent a reason to close a trade it cannot judge",
+                vector,
+            )
+
+        squeeze = self._squeeze_shape(thesis, vector)
+        if squeeze is not None:
+            self.standing.squeezes_caught += 1
+            return self._opinion(position, CLOSE_POSITION, SQUEEZE_FORMING, 1.0, squeeze, vector)
+
+        carry = self._carry_paid.get(key, 0.0)
+        if thesis.expected_move_fraction > 0 and carry >= (
+            self._carry_limit * thesis.expected_move_fraction
+        ):
+            self.standing.carry_closes += 1
+            return self._opinion(
+                position, CLOSE_POSITION, CARRY_ATE_THE_THESIS, 1.0,
+                f"funding has cost {carry:.3%} against an expected move of "
+                f"{thesis.expected_move_fraction:.3%}; the thesis has been paid away rather "
+                f"than proved wrong, which no feature comparison can see",
                 vector,
             )
 
@@ -161,17 +187,17 @@ class BullPositionInvalidationWatcher:
             return self._opinion(
                 position, CLOSE_POSITION, HORIZON_EXPIRED, 1.0,
                 f"open for {age_seconds:.0f}s against the {thesis.horizon_seconds:.0f}s this "
-                f"trade was given; past its horizon it is not a trade any more, it is a "
-                f"position nobody decided to hold",
+                f"short was given; past its horizon it is an exposure nobody decided to hold, "
+                f"still paying carry",
                 vector,
             )
 
         if thesis.entry_regime in self._broken_regimes:
             return self._opinion(
                 position, CLOSE_POSITION, REGIME_BROKEN, 1.0,
-                f"this long was entered in the {thesis.entry_regime} regime and that regime "
-                f"has broken; every model that formed the entry was fitted on a market that "
-                f"is no longer the one this position is in",
+                f"this short was entered in the {thesis.entry_regime} regime and that regime has "
+                f"broken; every model that formed the entry was fitted on a market that is no "
+                f"longer the one this position is in",
                 vector,
             )
 
@@ -187,7 +213,7 @@ class BullPositionInvalidationWatcher:
         if reversed_fraction >= self._close_at:
             return self._opinion(
                 position, CLOSE_POSITION, FEATURES_REVERSED, reversed_fraction,
-                f"{reversed_fraction:.0%} of the features that made this a long have reversed "
+                f"{reversed_fraction:.0%} of the features that made this a short have reversed "
                 f"({', '.join(reversed_features)}), past the {self._close_at:.0%} this bot "
                 f"treats as the thesis having expired",
                 vector,
@@ -205,18 +231,39 @@ class BullPositionInvalidationWatcher:
         return self._opinion(
             position, STAND_DOWN, STILL_VALID, reversed_fraction,
             f"{reversed_fraction:.0%} of the entry features have reversed, inside the "
-            f"{self._reduce_at:.0%} that would call for reducing; the reason for being long "
-            f"still holds and being down on the trade is not one of the ways it stops holding",
+            f"{self._reduce_at:.0%} that would call for reducing; carry so far is {carry:.3%} of "
+            f"an expected {thesis.expected_move_fraction:.3%}",
             vector,
         )
 
-    def _reversal(self, thesis: HeldThesis, vector) -> tuple[float | None, list]:
-        """How much of the entry's evidence now points the other way.
+    def _squeeze_shape(self, thesis: HeldThesis, vector) -> str | None:
+        """Offer side eaten while volatility rises -- the state that ends short positions.
 
-        Sign change rather than magnitude: a feature that was +2 and is now +0.5
-        has weakened, and one that was +2 and is now -0.5 has reversed. Only the
-        second means the reason has stopped being true.
+        Checked against this position's own entry rather than against a learned
+        normal, because what matters is that the book this short was sized
+        against is no longer there.
         """
+        entry_room = thesis.entry_features.get("squeeze_room")
+        entry_volatility = thesis.entry_features.get("realised_volatility_fraction")
+        room = vector.features.get("squeeze_room")
+        volatility = vector.features.get("realised_volatility_fraction")
+        if None in (entry_room, entry_volatility, room, volatility):
+            return None
+        if entry_room <= 0 or entry_volatility <= 0:
+            return None
+        room_left = room / entry_room
+        volatility_now = volatility / entry_volatility
+        if room_left <= self._room_collapse and volatility_now >= self._volatility_rise:
+            return (
+                f"the offer side this short was sized against is {room_left:.0%} of what it was "
+                f"while volatility is {volatility_now:.1f}x entry. That is the shape a squeeze "
+                f"takes, and waiting for a majority of features to flip would mean exiting "
+                f"after it"
+            )
+        return None
+
+    def _reversal(self, thesis: HeldThesis, vector) -> tuple[float | None, list]:
+        """How much of the entry's evidence now points the other way, by sign change."""
         comparable = 0
         reversed_features = []
         for name, entry_value in sorted(thesis.entry_features.items()):
@@ -233,7 +280,7 @@ class BullPositionInvalidationWatcher:
         return len(reversed_features) / comparable, reversed_features
 
     def _opinion(
-        self, position, action, reason_code, reversed_fraction, reason, vector=None
+        self, position, action, reason_code, reversed_fraction, reason, vector
     ) -> DirectionalOpinion:
         self.standing.by_reason[reason_code] = self.standing.by_reason.get(reason_code, 0) + 1
         if action == CLOSE_POSITION:
@@ -246,7 +293,7 @@ class BullPositionInvalidationWatcher:
         record = self._was_right.estimate(self._minimum)
         return DirectionalOpinion(
             bot=BOT,
-            side=LONG,
+            side=SHORT,
             venue_id=position.venue_id,
             symbol=position.symbol,
             action=action,
@@ -260,7 +307,7 @@ class BullPositionInvalidationWatcher:
                 bound_high=None,
                 reason=(
                     f"this watcher has been right {record.value:.0%} of the times it called a "
-                    f"position invalid, over {record.observations} judged call(s)"
+                    f"short invalid, over {record.observations} judged call(s)"
                 ),
             ),
             timing=None,
@@ -272,11 +319,12 @@ class BullPositionInvalidationWatcher:
         )
 
     def _summarise(self, position, vector) -> dict:
-        """What was true at entry against what is true now, side by side."""
-        thesis = self._theses.get((position.venue_id, position.symbol))
+        key = (position.venue_id, position.symbol)
+        thesis = self._theses.get(key)
         return {
             "entry": dict(sorted(thesis.entry_features.items())) if thesis else {},
             "now": dict(sorted(vector.features.items())) if vector is not None else {},
+            "carry_paid_fraction": self._carry_paid.get(key, 0.0),
         }
 
     @property
@@ -284,7 +332,7 @@ class BullPositionInvalidationWatcher:
         return self._was_right.estimate(self._minimum)
 
 
-def describe_invalidation_watching(watcher: BullPositionInvalidationWatcher) -> dict:
+def describe_invalidation_watching(watcher: BearPositionInvalidationWatcher) -> dict:
     record = watcher.invalidation_record
     return {
         "part_id": PART_ID,
@@ -293,14 +341,16 @@ def describe_invalidation_watching(watcher: BullPositionInvalidationWatcher) -> 
         "close_calls": watcher.standing.close_calls,
         "reduce_calls": watcher.standing.reduce_calls,
         "held": watcher.standing.held,
+        "squeezes_caught": watcher.standing.squeezes_caught,
+        "closed_because_carry_ate_the_thesis": watcher.standing.carry_closes,
         "by_reason": dict(watcher.standing.by_reason),
-        "was_right_when_it_called_a_position_invalid": record.value,
+        "was_right_when_it_called_a_short_invalid": record.value,
         "record_is_measured": record.is_fitted,
     }
 
 
-def run_bull_position_invalidation_watcher(
-    watcher: BullPositionInvalidationWatcher, control_socket, read_positions_and_features,
+def run_bear_position_invalidation_watcher(
+    watcher: BearPositionInvalidationWatcher, control_socket, read_positions_and_features,
     publish_opinions, health_interval_seconds: float, emit_health,
 ) -> int:
     def tick() -> None:
