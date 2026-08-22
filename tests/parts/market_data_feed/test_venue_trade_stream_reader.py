@@ -233,7 +233,11 @@ def test_a_candle_arriving_on_a_trade_connection_is_not_written(
     with reader:
         written = replay(reader, candles)
     assert written == 0
-    assert reader.standing.unreadable_messages == len(candles)
+    # Counted as the wrong kind rather than as unreadable: the adapter read it
+    # perfectly, it simply belongs to another part's tape. Merging the two counts
+    # would make an out-of-date adapter and a mis-planned connection look alike.
+    assert reader.standing.wrong_kind_messages == len(candles)
+    assert reader.standing.unreadable_messages == 0
     assert "CANDLE message arrived" in reader.standing.last_unreadable_reason
 
 
