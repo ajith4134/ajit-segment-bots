@@ -1,0 +1,256 @@
+"""tail-winner-selector: adding to this segment's own winning leg, and when not to.
+
+RL-047 made concrete. When an exploration pair has been run and one leg is
+working, the working leg is the best-evidenced opportunity this system has: it is
+not a forecast, it is a position that is already right, in a symbol this segment
+already holds and already understands.
+
+That is also exactly why it is dangerous, and every check here exists because of
+it:
+
+- **Concentration.** Adding to a winner is how a diversified book becomes a
+  single bet. The most reliable signal the system produces is the one most likely
+  to be over-weighted, and the check against it has to sit here rather than being
+  left to the risk gate -- by the time the gate sees it, the bot has already
+  claimed the capital.
+- **The verdict must be in.** A leg that is merely up is not a winning leg; the
+  pair verdict is what says the experiment has resolved. Adding on unrealised
+  profit before the verdict is adding on noise.
+- **Peak excursion, not current profit** (RL-042). A position up 3% that was up
+  8% is a position giving profit back, and that is the shape of a move that has
+  finished. Current profit alone cannot see it.
+
+**It never adds to a loser and never reverses one.** A losing leg is the other
+experiment's evidence, not this bot's opportunity.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from runtime.bot_opinion import FROM_OUR_OWN_WINNER, LONG, SHORT, FollowCandidate
+from runtime.part_declaration import PartDeclaration
+from runtime.part_process import run_part
+
+PART_ID = "tail-winner-selector"
+BOT = "profit-tailgating-bot"
+
+PART_DECLARATION = PartDeclaration(
+    part_id="tail-winner-selector",
+    consumes=("position", "market-data", "peak-excursion", "pair-verdict"),
+    produces=("follow-candidate", "part-health"),
+    resource_class="compute-bound",
+    rate_risk="latency-only",
+    skipped_tick_effect="delays",
+)
+
+SELECTED = "selected"
+NO_VERDICT = "the-pair-experiment-has-not-resolved"
+NOT_THE_WINNING_LEG = "this-is-not-the-leg-that-won"
+NOT_IN_PROFIT = "the-leg-is-not-actually-ahead"
+GIVING_PROFIT_BACK = "price-has-retraced-from-its-peak"
+ALREADY_CONCENTRATED = "this-symbol-already-holds-too-much-of-the-book"
+NO_PEAK_RECORD = "no-peak-excursion-recorded-for-this-position"
+
+
+@dataclass(frozen=True)
+class PairVerdict:
+    """Which leg of an exploration pair won, once the experiment has resolved."""
+
+    venue_id: str
+    winning_symbol: str | None
+    losing_symbol: str | None
+    has_resolved: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class PeakExcursion:
+    """The furthest a position has been in profit, and where it is now (RL-042)."""
+
+    venue_id: str
+    symbol: str
+    peak_fraction: float
+    current_fraction: float
+    observations: int
+
+    @property
+    def retraced_fraction(self) -> float:
+        """How much of the peak has been given back. 0 means it is at its high."""
+        if self.peak_fraction <= 0:
+            return 0.0
+        return max(0.0, (self.peak_fraction - self.current_fraction) / self.peak_fraction)
+
+
+@dataclass
+class SelectorStanding:
+    positions_examined: int = 0
+    selected: int = 0
+    by_rejection: dict = field(default_factory=dict)
+    largest_retracement_refused: float = 0.0
+    concentration_refusals: int = 0
+
+
+class TailWinnerSelector:
+    """Selects this segment's own winning leg to add to, and refuses to concentrate."""
+
+    def __init__(
+        self,
+        maximum_retraced_fraction: float,
+        maximum_symbol_share_of_book: float,
+        minimum_profit_fraction: float,
+        default_setup_weight: float,
+        now_ns=time.time_ns,
+    ) -> None:
+        if not 0.0 < maximum_retraced_fraction < 1.0:
+            raise ValueError(
+                "the retracement ceiling is a fraction of the peak and must be inside (0, 1); "
+                "without one this bot adds to moves that have already finished"
+            )
+        if not 0.0 < maximum_symbol_share_of_book < 1.0:
+            raise ValueError(
+                "adding to a winner is how a diversified book becomes a single bet, so the "
+                "share one symbol may hold must be bounded"
+            )
+        self._maximum_retraced = maximum_retraced_fraction
+        self._maximum_share = maximum_symbol_share_of_book
+        self._minimum_profit = minimum_profit_fraction
+        self._default_weight = default_setup_weight
+        self._now_ns = now_ns
+        self._verdicts: dict[tuple[str, str], PairVerdict] = {}
+        self._peaks: dict[tuple[str, str], PeakExcursion] = {}
+        self._exposure: dict[tuple[str, str], float] = {}
+        self._book_value: float = 0.0
+        self.standing = SelectorStanding()
+
+    def observe_pair_verdict(self, verdict: PairVerdict) -> None:
+        for symbol in (verdict.winning_symbol, verdict.losing_symbol):
+            if symbol is not None:
+                self._verdicts[(verdict.venue_id, symbol)] = verdict
+
+    def observe_peak_excursion(self, peak: PeakExcursion) -> None:
+        self._peaks[(peak.venue_id, peak.symbol)] = peak
+
+    def observe_exposure(self, venue_id: str, symbol: str, notional: float) -> None:
+        self._exposure[(venue_id, symbol)] = notional
+
+    def observe_book_value(self, book_value: float) -> None:
+        """What the whole book is worth, so one symbol's share can be measured."""
+        if book_value < 0:
+            raise ValueError("a book cannot be worth less than nothing")
+        self._book_value = book_value
+
+    def symbol_share(self, venue_id: str, symbol: str) -> float | None:
+        if self._book_value <= 0:
+            return None
+        return self._exposure.get((venue_id, symbol), 0.0) / self._book_value
+
+    def select(self, position) -> tuple[FollowCandidate | None, str]:
+        """One held position, judged as something to add to rather than to hold."""
+        self.standing.positions_examined += 1
+        key = (position.venue_id, position.symbol)
+
+        verdict = self._verdicts.get(key)
+        if verdict is None or not verdict.has_resolved:
+            return None, self._reject(NO_VERDICT)
+        if verdict.winning_symbol != position.symbol:
+            return None, self._reject(NOT_THE_WINNING_LEG)
+
+        peak = self._peaks.get(key)
+        if peak is None:
+            return None, self._reject(NO_PEAK_RECORD)
+        if peak.current_fraction < self._minimum_profit:
+            return None, self._reject(NOT_IN_PROFIT)
+
+        if peak.retraced_fraction > self._maximum_retraced:
+            self.standing.largest_retracement_refused = max(
+                self.standing.largest_retracement_refused, peak.retraced_fraction
+            )
+            return None, self._reject(GIVING_PROFIT_BACK)
+
+        share = self.symbol_share(*key)
+        if share is not None and share > self._maximum_share:
+            self.standing.concentration_refusals += 1
+            return None, self._reject(ALREADY_CONCENTRATED)
+
+        self.standing.selected += 1
+        direction = LONG if position.quantity > 0 else SHORT
+        return (
+            FollowCandidate(
+                bot=BOT,
+                source=FROM_OUR_OWN_WINNER,
+                venue_id=position.venue_id,
+                symbol=position.symbol,
+                direction=direction,
+                move_so_far=peak.current_fraction,
+                move_normal=peak.peak_fraction,
+                observations_in_move=peak.observations,
+                entry_cost_fraction=None,
+                setup_weight=self._default_weight,
+                detector=PART_ID,
+                evidence={
+                    "peak_fraction": peak.peak_fraction,
+                    "current_fraction": peak.current_fraction,
+                    "retraced_fraction": peak.retraced_fraction,
+                    "symbol_share_of_book": share,
+                    "pair_verdict": verdict.reason,
+                },
+                reason=(
+                    f"{position.symbol} is the winning leg of a resolved pair "
+                    f"({verdict.reason}), up {peak.current_fraction:.2%} against a peak of "
+                    f"{peak.peak_fraction:.2%} -- {peak.retraced_fraction:.0%} given back, "
+                    f"inside the {self._maximum_retraced:.0%} this bot will add through"
+                    + (
+                        f"; this symbol holds {share:.0%} of the book, inside the "
+                        f"{self._maximum_share:.0%} ceiling that keeps the most reliable "
+                        f"signal from becoming the only position"
+                        if share is not None
+                        else "; the book's value is unknown, so no share could be checked"
+                    )
+                ),
+                qualified_at_ns=self._now_ns(),
+            ),
+            SELECTED,
+        )
+
+    def select_all(self, positions) -> tuple[FollowCandidate, ...]:
+        selected = []
+        for position in positions:
+            candidate, _ = self.select(position)
+            if candidate is not None:
+                selected.append(candidate)
+        return tuple(selected)
+
+    def _reject(self, reason: str) -> str:
+        self.standing.by_rejection[reason] = self.standing.by_rejection.get(reason, 0) + 1
+        return reason
+
+
+def describe_winner_selection(selector: TailWinnerSelector) -> dict:
+    return {
+        "part_id": PART_ID,
+        "positions_examined": selector.standing.positions_examined,
+        "selected": selector.standing.selected,
+        "rejected_by_reason": dict(selector.standing.by_rejection),
+        "refused_for_concentration": selector.standing.concentration_refusals,
+        "largest_retracement_refused": selector.standing.largest_retracement_refused,
+        "resolved_pairs_held": len(selector._verdicts),
+    }
+
+
+def run_tail_winner_selector(
+    selector: TailWinnerSelector, control_socket, read_positions_and_verdicts,
+    publish_follow_candidates, health_interval_seconds: float, emit_health,
+) -> int:
+    def tick() -> None:
+        positions = read_positions_and_verdicts(selector)
+        publish_follow_candidates(selector.select_all(positions))
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=control_socket,
+        do_one_tick=tick,
+        emit_health=emit_health,
+        health_interval_seconds=health_interval_seconds,
+    )

@@ -251,6 +251,132 @@ class DirectionalOpinion:
         return self.action in (CLOSE_POSITION, REDUCE_POSITION)
 
 
+# Where a follow candidate came from. The tailgater has three sources and they
+# fail in different ways -- a scanner move can be a print, our own winner can be
+# one we are already too big in, a tracked trader can be someone we cannot keep
+# up with -- so the source travels with the candidate rather than being inferred.
+FROM_A_SCANNER_MOVE = "scanner-continuation"
+FROM_OUR_OWN_WINNER = "our-own-winning-leg"
+FROM_A_TRACKED_TRADER = "tracked-trader-position"
+
+
+@dataclass(frozen=True)
+class FollowCandidate:
+    """Something already working that the tailgating bot may join.
+
+    `move_so_far` and `move_normal` are both fractions of price and both are
+    measured: the first from the tape, the second from this symbol's own recorded
+    moves. Their ratio is how much of a typical move has already happened, which
+    is the number this whole bot turns on -- a move that has barely started might
+    still reverse, and one past what this symbol normally covers is a move to be
+    on the other side of.
+    """
+
+    bot: str
+    source: str
+    venue_id: str
+    symbol: str
+    direction: str
+    move_so_far: float
+    move_normal: float
+    observations_in_move: int
+    entry_cost_fraction: float | None
+    setup_weight: float
+    detector: str
+    evidence: dict
+    reason: str
+    qualified_at_ns: int
+
+    @property
+    def fraction_of_a_normal_move_done(self) -> float:
+        return self.move_so_far / self.move_normal if self.move_normal > 0 else 0.0
+
+
+# What the tailgating bot's two readings look like. Both are produced by one
+# part and consumed by others, and no part may import another (T-4).
+
+FROM_HISTORY = "this-symbol's-own-recorded-moves"
+FROM_FORECAST = "the-price-forecast"
+FROM_DECAY = "the-move's-own-rate-of-progress"
+
+ESTIMATES_AGREE = "the-estimates-agree"
+ESTIMATES_DISAGREE = "the-estimates-disagree"
+ONLY_ONE_ESTIMATE = "only-one-estimate-could-be-made"
+NO_ESTIMATE_AVAILABLE = "no-estimate-could-be-made"
+
+
+@dataclass(frozen=True)
+class MoveRemaining:
+    """How much of a move is left, and how much the independent views disagree.
+
+    `spread` is not a confidence interval. It is the distance between estimates
+    that were made independently, so a wide one means the views contradict each
+    other -- a different thing from a wide distribution, and the parts below act
+    on the difference.
+    """
+
+    bot: str
+    venue_id: str
+    symbol: str
+    direction: str
+    remaining_fraction: float | None
+    lowest: float | None
+    highest: float | None
+    estimates: dict
+    agreement: str
+    reason: str
+    estimated_at_ns: int
+
+    @property
+    def spread(self) -> float | None:
+        if self.lowest is None or self.highest is None:
+            return None
+        return self.highest - self.lowest
+
+    @property
+    def is_sizeable(self) -> bool:
+        """Whether anything below should act on this at all."""
+        return self.remaining_fraction is not None and self.agreement != ESTIMATES_DISAGREE
+
+
+FROM_THE_BOOK = "the-book-is-one-sided"
+FROM_FUNDING = "funding-is-the-price-of-consensus"
+FROM_SENTIMENT = "sentiment-has-converged"
+
+NOT_CROWDED = "not-crowded"
+CROWDED = "crowded"
+CROWDING_NOT_MEASURED = "not-measured"
+
+
+@dataclass(frozen=True)
+class CrowdingReading:
+    """How crowded a move is, per source, and which source says so.
+
+    Unmeasured is its own state rather than a low reading (Rule 8): a symbol
+    nobody could read is not an uncrowded symbol.
+    """
+
+    bot: str
+    venue_id: str
+    symbol: str
+    direction: str
+    state: str
+    tripped_by: tuple
+    readings: dict
+    sources_measured: int
+    sources_unavailable: tuple
+    reason: str
+    read_at_ns: int
+
+    @property
+    def is_crowded(self) -> bool:
+        return self.state == CROWDED
+
+    @property
+    def is_measured(self) -> bool:
+        return self.state != CROWDING_NOT_MEASURED
+
+
 @dataclass(frozen=True)
 class SetupWeight:
     """How much one bot should trust one detector's setups, learned from results."""
