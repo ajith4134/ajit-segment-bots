@@ -178,6 +178,129 @@ def record_in_manifest(entry: dict) -> None:
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
+
+def capture_catalogue_and_tickers(venue: str, day: str, keep_per_kind: int = 3, keep_top: int = 12) -> None:
+    """The two REST responses the symbol selection is made from, subset together.
+
+    Subset together on purpose. Taken separately, a catalogue subset by contract
+    type and a ticker subset by volume can share no symbol at all -- which is
+    exactly what happened to bybit-linear on the first attempt, leaving the
+    ordering untested while every test still passed. So the catalogue keeps the
+    highest-volume symbols *and* the first few of each (contractType, status)
+    pair: the first set exercises the ordering, the second guarantees a tokenised
+    equity and a settling contract are present. Every entry is verbatim.
+    """
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    adapter = load_venue_adapter(venue)
+    venue_directory = HERE / venue
+
+    ticker_url = adapter.ticker_url()
+    tickers, _ticker_headers = fetch_json_over_rest(ticker_url)
+    volumes = adapter.read_quote_volumes(tickers)
+    top_symbols = [symbol for symbol, _ in sorted(volumes.items(), key=lambda pair: -pair[1])[:keep_top]]
+
+    catalogue_url = adapter.catalogue_url()
+    catalogue, catalogue_headers = fetch_json_over_rest(catalogue_url)
+    entries = _catalogue_entries(catalogue)
+    kind_counts: dict[str, int] = {}
+    for entry in entries:
+        key = f"{entry.get('contractType', '')}/{entry.get('status', '')}"
+        kind_counts[key] = kind_counts.get(key, 0) + 1
+
+    kept: dict[tuple[str, str], list[dict]] = {}
+    chosen: list[dict] = []
+    chosen_symbols: set[str] = set()
+    for entry in entries:
+        if entry["symbol"] in top_symbols and entry["symbol"] not in chosen_symbols:
+            chosen.append(entry)
+            chosen_symbols.add(entry["symbol"])
+    for entry in entries:
+        bucket = kept.setdefault((entry.get("contractType", ""), entry.get("status", "")), [])
+        if len(bucket) < keep_per_kind and entry["symbol"] not in chosen_symbols:
+            bucket.append(entry)
+            chosen.append(entry)
+            chosen_symbols.add(entry["symbol"])
+
+    catalogue_path = venue_directory / f"{day}-catalogue-subset.json"
+    catalogue_path.write_text(json.dumps(_catalogue_with_entries(catalogue, chosen), indent=1) + "\n")
+    record_in_manifest(
+        {
+            "path": str(catalogue_path.relative_to(HERE)),
+            "venue": venue,
+            "source": catalogue_url,
+            "captured_on": day,
+            "how": (
+                f"one REST call, subset to the {keep_top} highest 24-hour quote volumes plus the "
+                f"first {keep_per_kind} of each (contractType, status) pair, each kept verbatim"
+            ),
+            "full_response_symbol_count": len(entries),
+            "symbol_counts_by_contract_type_and_status": kind_counts,
+            "response_headers_of_note": {
+                name: value
+                for name, value in catalogue_headers.items()
+                if name.startswith("x-mbx") or name.startswith("x-bapi")
+            },
+        }
+    )
+
+    ticker_path = venue_directory / f"{day}-ticker-24h-subset.json"
+    ticker_path.write_text(json.dumps(_tickers_for(tickers, chosen_symbols), indent=1) + "\n")
+    record_in_manifest(
+        {
+            "path": str(ticker_path.relative_to(HERE)),
+            "venue": venue,
+            "source": ticker_url,
+            "captured_on": day,
+            "how": "one REST call, subset to exactly the symbols kept in the catalogue subset "
+            "beside it, each entry verbatim",
+            "full_response_symbol_count": len(volumes),
+            "highest_quote_volume": max(volumes.values()),
+            "lowest_quote_volume": min(volumes.values()),
+        }
+    )
+
+
+def _catalogue_entries(catalogue):
+    """The contract list inside either venue's catalogue response."""
+    if "symbols" in catalogue:
+        return catalogue["symbols"]
+    return catalogue["result"]["list"]
+
+
+def _catalogue_with_entries(catalogue, entries):
+    """The same response shape, carrying only the entries kept."""
+    if "symbols" in catalogue:
+        return {
+            "timezone": catalogue.get("timezone"),
+            "serverTime": catalogue.get("serverTime"),
+            "rateLimits": catalogue.get("rateLimits"),
+            "symbols": entries,
+        }
+    return {
+        "retCode": catalogue.get("retCode"),
+        "retMsg": catalogue.get("retMsg"),
+        "time": catalogue.get("time"),
+        "result": {
+            "category": catalogue["result"].get("category"),
+            "nextPageCursor": catalogue["result"].get("nextPageCursor"),
+            "list": entries,
+        },
+    }
+
+
+def _tickers_for(tickers, symbols):
+    """The same ticker response shape, carrying only these symbols."""
+    if isinstance(tickers, list):
+        return [entry for entry in tickers if entry["symbol"] in symbols]
+    trimmed = dict(tickers)
+    trimmed["result"] = dict(tickers["result"])
+    trimmed["result"]["list"] = [
+        entry for entry in tickers["result"]["list"] if entry["symbol"] in symbols
+    ]
+    return trimmed
+
+
 def capture_binance_usdm(day: str) -> None:
     """Every fixture the Binance USDⓈ-M adapter's tests are checked against.
 
@@ -280,34 +403,7 @@ def capture_binance_usdm(day: str) -> None:
         }
     )
 
-    catalogue_url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-    catalogue, headers = fetch_json_over_rest(catalogue_url)
-    kind_counts: dict[str, int] = {}
-    for symbol in catalogue["symbols"]:
-        key = f"{symbol.get('contractType', '')}/{symbol.get('status', '')}"
-        kind_counts[key] = kind_counts.get(key, 0) + 1
-    keep_per_kind = 3
-    catalogue_path = venue_directory / f"{day}-exchange-info-subset.json"
-    catalogue_path.write_text(
-        json.dumps(subset_binance_exchange_info(catalogue, keep_per_kind), indent=1) + "\n"
-    )
-    record_in_manifest(
-        {
-            "path": str(catalogue_path.relative_to(HERE)),
-            "venue": "binance-usdm",
-            "source": catalogue_url,
-            "captured_on": day,
-            "how": (
-                f"one REST call, then subset to the first {keep_per_kind} symbols of each "
-                f"(contractType, status) pair, each kept verbatim. rateLimits kept whole."
-            ),
-            "full_response_symbol_count": len(catalogue["symbols"]),
-            "symbol_counts_by_contract_type_and_status": kind_counts,
-            "response_headers_of_note": {
-                name: value for name, value in headers.items() if name.startswith("x-mbx")
-            },
-        }
-    )
+    capture_catalogue_and_tickers(venue, day)
 
 
 def capture_bybit_linear(day: str) -> None:
@@ -385,55 +481,7 @@ def capture_bybit_linear(day: str) -> None:
             }
         )
 
-    catalogue_url = "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000"
-    catalogue, headers = fetch_json_over_rest(catalogue_url)
-    instruments = catalogue["result"]["list"]
-    kind_counts: dict[str, int] = {}
-    for instrument in instruments:
-        key = f"{instrument.get('contractType', '')}/{instrument.get('status', '')}"
-        kind_counts[key] = kind_counts.get(key, 0) + 1
-    keep_per_kind = 3
-    kept: dict[tuple[str, str], list[dict]] = {}
-    for instrument in instruments:
-        bucket = kept.setdefault(
-            (instrument.get("contractType", ""), instrument.get("status", "")), []
-        )
-        if len(bucket) < keep_per_kind:
-            bucket.append(instrument)
-    catalogue_path = venue_directory / f"{day}-instruments-info-subset.json"
-    catalogue_path.write_text(
-        json.dumps(
-            {
-                "retCode": catalogue.get("retCode"),
-                "retMsg": catalogue.get("retMsg"),
-                "time": catalogue.get("time"),
-                "result": {
-                    "category": catalogue["result"].get("category"),
-                    "nextPageCursor": catalogue["result"].get("nextPageCursor"),
-                    "list": [entry for bucket in kept.values() for entry in bucket],
-                },
-            },
-            indent=1,
-        )
-        + "\n"
-    )
-    record_in_manifest(
-        {
-            "path": str(catalogue_path.relative_to(HERE)),
-            "venue": venue,
-            "source": catalogue_url,
-            "captured_on": day,
-            "how": (
-                f"one REST call, then subset to the first {keep_per_kind} instruments of each "
-                f"(contractType, status) pair, each kept verbatim."
-            ),
-            "full_response_instrument_count": len(instruments),
-            "symbol_counts_by_contract_type_and_status": kind_counts,
-            "response_headers_of_note": {
-                name: value for name, value in headers.items() if name.startswith("x-bapi")
-            },
-        }
-    )
+    capture_catalogue_and_tickers(venue, day)
 
 
 VENUE_CAPTURES = {"binance-usdm": capture_binance_usdm, "bybit-linear": capture_bybit_linear}

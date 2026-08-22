@@ -29,6 +29,7 @@ indistinguishable from a network fault.
 from __future__ import annotations
 
 import json
+import urllib.parse
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
@@ -51,7 +52,15 @@ VENUE_ID = "bybit-linear"
 # routed path differs per stream and getting it wrong delivers silence.
 LINEAR_PUBLIC_STREAM = "wss://stream.bybit.com/v5/public/linear"
 REST_HOST = "https://api.bybit.com"
-CATALOGUE_URL = f"{REST_HOST}/v5/market/instruments-info?category=linear"
+# The largest page this endpoint serves. Asking without it returns 500 entries
+# against 837 live symbols -- measured 2026-08-22 -- and says nothing about the
+# ones it left out, so the default is a silently truncated universe.
+CATALOGUE_PAGE_LIMIT = 1000
+CATALOGUE_URL = f"{REST_HOST}/v5/market/instruments-info?category=linear&limit={CATALOGUE_PAGE_LIMIT}"
+# Every linear symbol's 24-hour statistics in one call, against the blanket
+# 600-requests-per-5-seconds IP limit -- this venue publishes no per-endpoint
+# figure for its public market-data calls at all.
+TICKER_URL = f"{REST_HOST}/v5/market/tickers?category=linear"
 
 _DOCS = "https://bybit-exchange.github.io/docs/v5"
 _CONNECT_PAGE = f"{_DOCS}/ws/connect"
@@ -145,6 +154,15 @@ _LIMITS: dict[str, VenueFact] = {
         unit="trades",
         source=f'{_TRADE_PAGE} -- "a single message may have up to 1024 trades. As such, '
         f'multiple messages may be sent for the same seq."',
+    ),
+    "catalogue_page_limit": VenueFact(
+        name="catalogue_page_limit",
+        value=CATALOGUE_PAGE_LIMIT,
+        unit="instruments per page",
+        source=f'{_INSTRUMENTS_PAGE} -- "This endpoint returns 500 entries by default. There are '
+        f'now more than 500 linear symbols on the platform. As a result, you will need to use '
+        f'cursor for pagination or limit to get all entries." Measured 2026-08-22: the default '
+        f"returned 500 of 837.",
     ),
     "rest_requests_per_five_seconds": VenueFact(
         name="rest_requests_per_five_seconds",
@@ -467,6 +485,34 @@ class BybitLinearAdapter(VenueAdapter):
             # borrowed from the HTTP case would be a guess wearing a fact's shape.
             retry_after_seconds=None,
         )
+
+    def catalogue_url(self, cursor: str | None = None) -> str:
+        """One page of the contract list, at the largest size this venue serves."""
+        if cursor is None:
+            return CATALOGUE_URL
+        return f"{CATALOGUE_URL}&cursor={urllib.parse.quote(cursor)}"
+
+    def read_catalogue_cursor(self, catalogue_response: object) -> str | None:
+        """The venue's own nextPageCursor, empty string meaning there is no next page."""
+        cursor = catalogue_response.get("result", {}).get("nextPageCursor")
+        return cursor or None
+
+    def ticker_url(self) -> str:
+        return TICKER_URL
+
+    def read_quote_volumes(self, ticker_response: object) -> Mapping[str, float]:
+        """Each symbol's 24-hour turnover, which this venue calls turnover24h.
+
+        `volume24h` on the same record is the base-asset count. This venue names
+        the quote-denominated figure differently from the other one -- turnover
+        rather than quoteVolume -- which is exactly the kind of difference that
+        would otherwise be a field name repeated in a part.
+        """
+        return {
+            entry["symbol"]: float(entry["turnover24h"])
+            for entry in ticker_response["result"]["list"]
+            if entry.get("turnover24h") is not None
+        }
 
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every instrument the venue lists, from an instruments-info response.

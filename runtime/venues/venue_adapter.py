@@ -336,8 +336,41 @@ class VenueAdapter(abc.ABC):
         """A ban this venue signalled over the websocket, or None if it did not."""
 
     @abc.abstractmethod
+    def catalogue_url(self, cursor: str | None = None) -> str:
+        """Where this venue's contract list is fetched from, one page at a time.
+
+        Paged because one of them is: Bybit's instruments-info returns 500
+        entries by default against 837 live symbols, and asking without a cursor
+        silently returns a prefix. A truncated universe is the worst kind of
+        wrong here -- the symbols missing from it are captured by nobody, and
+        nothing about the response says any are missing.
+        """
+
+    @abc.abstractmethod
+    def ticker_url(self) -> str:
+        """Where this venue's 24-hour volume figures are fetched from over REST.
+
+        Separate from the catalogue because both venues serve them separately:
+        what a contract *is* and how much of it traded are different endpoints
+        with different weights, and merging them is the reader's job.
+        """
+
+    @abc.abstractmethod
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every contract this venue lists, as listings, from its own catalogue response."""
+
+    @abc.abstractmethod
+    def read_catalogue_cursor(self, catalogue_response: object) -> str | None:
+        """The cursor for the next page of this catalogue, or None when it is whole."""
+
+    @abc.abstractmethod
+    def read_quote_volumes(self, ticker_response: object) -> Mapping[str, float]:
+        """Each symbol's 24-hour quote volume, from this venue's own ticker response.
+
+        Quote volume rather than base volume, because it is the only figure
+        comparable across symbols and across venues: both quote in USDT, while
+        base volumes are counts of different coins.
+        """
 
     @abc.abstractmethod
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
@@ -364,6 +397,8 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "unsubscribe_frame",
     "heartbeat_discipline",
     "connection_discipline",
+    "catalogue_url",
+    "ticker_url",
     "sequence_continuity",
 )
 
@@ -374,6 +409,8 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
 QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_message_facts",
     "read_previous_sequence",
+    "read_catalogue_cursor",
+    "read_quote_volumes",
     "read_http_ban_signal",
     "read_stream_ban_signal",
     "read_symbol_listings",

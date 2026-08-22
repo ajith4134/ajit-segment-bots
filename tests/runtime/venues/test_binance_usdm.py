@@ -28,7 +28,7 @@ from runtime.venues.venue_adapter import (
 MARKET_FIXTURE = "2026-08-22-market-ws-aggtrade-kline.jsonl"
 CANDLE_FIXTURE = "2026-08-22-market-ws-kline-through-close.jsonl"
 BOOK_FIXTURE = "2026-08-22-public-ws-depth20.jsonl"
-CATALOGUE_FIXTURE = "2026-08-22-exchange-info-subset.json"
+CATALOGUE_FIXTURE = "2026-08-22-catalogue-subset.json"
 
 CAPTURED_SYMBOL = "BTCUSDT"
 CANDLE_INTERVAL = "1m"
@@ -280,7 +280,7 @@ def test_the_live_counts_in_the_manifest_still_match_the_spec(capture_manifest):
     entry = next(
         capture
         for capture in capture_manifest["captures"]
-        if capture["path"].endswith(CATALOGUE_FIXTURE)
+        if capture["path"].endswith(CATALOGUE_FIXTURE) and capture["venue"] == VENUE_ID
     )
     counts = entry["symbol_counts_by_contract_type_and_status"]
     assert counts["PERPETUAL/TRADING"] == 570
@@ -328,7 +328,7 @@ def test_used_request_weight_is_read_from_the_venue_not_counted_locally(
     entry = next(
         capture
         for capture in capture_manifest["captures"]
-        if capture["path"].endswith(CATALOGUE_FIXTURE)
+        if capture["path"].endswith(CATALOGUE_FIXTURE) and capture["venue"] == VENUE_ID
     )
     headers = entry["response_headers_of_note"]
     assert adapter.read_used_request_weight(headers) == int(headers["x-mbx-used-weight-1m"])

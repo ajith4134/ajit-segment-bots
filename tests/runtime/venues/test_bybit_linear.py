@@ -27,7 +27,7 @@ from runtime.venues.venue_adapter import (
 TRADE_FIXTURE = "2026-08-22-public-linear-trade.jsonl"
 CANDLE_FIXTURE = "2026-08-22-public-linear-kline-through-close.jsonl"
 BOOK_FIXTURE = "2026-08-22-public-linear-orderbook.jsonl"
-CATALOGUE_FIXTURE = "2026-08-22-instruments-info-subset.json"
+CATALOGUE_FIXTURE = "2026-08-22-catalogue-subset.json"
 
 CAPTURED_SYMBOL = "BTCUSDT"
 CANDLE_INTERVAL = "1m"
@@ -329,7 +329,7 @@ def test_the_public_rest_endpoint_sends_no_rate_limit_headers(capture_manifest):
     entry = next(
         capture
         for capture in capture_manifest["captures"]
-        if capture["path"].endswith(CATALOGUE_FIXTURE)
+        if capture["path"].endswith(CATALOGUE_FIXTURE) and capture["venue"] == VENUE_ID
     )
     assert entry["response_headers_of_note"] == {}
 
@@ -338,8 +338,11 @@ def test_the_live_instrument_counts_are_recorded_with_the_fixture(capture_manife
     entry = next(
         capture
         for capture in capture_manifest["captures"]
-        if capture["path"].endswith(CATALOGUE_FIXTURE)
+        if capture["path"].endswith(CATALOGUE_FIXTURE) and capture["venue"] == VENUE_ID
     )
     counts = entry["symbol_counts_by_contract_type_and_status"]
-    assert counts["LinearPerpetual/Trading"] > 500
-    assert entry["full_response_instrument_count"] == sum(counts.values())
+    assert counts["LinearPerpetual/Trading"] > 500, (
+        "the catalogue was fetched without the page limit and returned a prefix -- "
+        "500 of 837 on 2026-08-22, with nothing in the response saying so"
+    )
+    assert entry["full_response_symbol_count"] == sum(counts.values())
