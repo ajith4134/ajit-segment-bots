@@ -47,9 +47,13 @@ SPINE = ("regime-classifier", "cointegration-pair-finder", "spread-reversion-det
 # Enough symbols for pairs to exist, few enough that the rotation reaches them all.
 SYMBOLS_PER_VENUE = 6
 # Comfortably past the 256-observation window every part in this chain needs.
-TRADES_PER_SYMBOL = 4_000
-# Paced so no consumer is asked to swallow more than its inbox holds in one go.
-REPLAY_BATCH = 40
+TRADES_PER_SYMBOL = 1_500
+# Paced at roughly twice the rate the tape is actually recording -- measured,
+# 285.3 messages a second across 62 symbols on 2026-08-22. Publishing as fast as
+# the loop can go measures the kernel instead of the chain: a burst of 4.7 million
+# datagrams was refused for 96% of its sends, and the parts then saw 0.4% of the
+# market and correctly concluded nothing.
+REPLAY_BATCH = 12
 REPLAY_PAUSE_SECONDS = 0.02
 PATIENCE_SECONDS = 240.0
 

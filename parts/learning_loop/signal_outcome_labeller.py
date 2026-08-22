@@ -144,6 +144,13 @@ class SignalOutcomeLabeller:
         self._now_ns = now_ns
         self._latest_price: dict[tuple[str, str], float] = {}
         self._open: dict[tuple[str, str, str], OpenClaim] = {}
+        # The same claims indexed by the symbol they are about. Every trade has to
+        # update every claim on that symbol, and scanning all open claims per trade
+        # is quadratic: at the 5000-claim bound and the measured 285 trades a second
+        # that is over a million comparisons a second spent on symbols the trade
+        # says nothing about. The index is what keeps this part able to keep up,
+        # and a part that falls behind loses its input rather than delaying it.
+        self._open_by_symbol: dict[tuple[str, str], dict] = {}
         self.standing = LabellerStanding()
 
     # -- watching the market -------------------------------------------------
@@ -152,9 +159,7 @@ class SignalOutcomeLabeller:
         """One live trade. Every open claim on this symbol is measured against it."""
         self.standing.prices_observed += 1
         self._latest_price[(venue_id, symbol)] = price
-        for claim in self._open.values():
-            if claim.venue_id != venue_id or claim.symbol != symbol:
-                continue
+        for claim in self._open_by_symbol.get((venue_id, symbol), {}).values():
             moved = claim.move_fraction(price)
             claim.best_favourable_fraction = max(claim.best_favourable_fraction, moved)
             claim.worst_adverse_fraction = min(claim.worst_adverse_fraction, moved)
@@ -196,6 +201,7 @@ class SignalOutcomeLabeller:
             deadline_ns=claimed_at + int(candidate.horizon_seconds * 1e9),
         )
         self._open[key] = claim
+        self._open_by_symbol.setdefault((claim.venue_id, claim.symbol), {})[key] = claim
         self.standing.claims_opened += 1
         self.standing.open_claims = len(self._open)
         self.standing.by_detector[claim.detector] = self.standing.by_detector.get(claim.detector, 0) + 1
@@ -223,7 +229,15 @@ class SignalOutcomeLabeller:
                 continue
             labels.append(self._label_for(claim, verdict, now))
         for key in settled_keys:
-            del self._open[key]
+            claim = self._open.pop(key)
+            on_symbol = self._open_by_symbol.get((claim.venue_id, claim.symbol))
+            if on_symbol is not None:
+                on_symbol.pop(key, None)
+                if not on_symbol:
+                    # Dropped rather than left empty: the map is keyed by every
+                    # symbol ever claimed on, and an empty entry per symbol is a
+                    # slow leak in a process that runs for weeks.
+                    del self._open_by_symbol[(claim.venue_id, claim.symbol)]
         self.standing.open_claims = len(self._open)
         return tuple(labels)
 

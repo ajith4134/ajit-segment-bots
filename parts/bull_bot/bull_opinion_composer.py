@@ -199,3 +199,60 @@ def run_bull_opinion_composer(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Four judgements have to be about the same symbol before an opinion exists: the
+    vector it was judged on, the conviction, the entry timing and the exit plan.
+    Three of them are levels kept per symbol and the fourth -- the vector -- is the
+    event that asks for the opinion, because a vector is what every one of the other
+    three was derived from.
+
+    A symbol missing any of the four gets no opinion at all. Composing one from
+    three would be an opinion with a hole where a decision should be, and the
+    arbiter downstream cannot see which part is missing.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    vectors = Batch(read=context.bus.reader("bull-feature-vector"))
+
+    def by_symbol(data_type: str) -> LatestByKey:
+        return LatestByKey(
+            read=context.bus.reader(data_type),
+            key_of=lambda payload: (payload.venue_id, payload.symbol),
+        )
+
+    convictions = by_symbol("bull-calibrated-conviction")
+    timings = by_symbol("bull-entry-timing")
+    exit_plans = by_symbol("bull-exit-plan")
+    publish_opinions = context.bus.publisher_for("directional-opinion")
+
+    def read_judgements():
+        belief = convictions.mapping()
+        timing_by_symbol = timings.mapping()
+        plan_by_symbol = exit_plans.mapping()
+        judgements = []
+        for vector in vectors.payloads():
+            key = (vector.venue_id, vector.symbol)
+            conviction = belief.get(key)
+            timing = timing_by_symbol.get(key)
+            exit_plan = plan_by_symbol.get(key)
+            if conviction is None or timing is None or exit_plan is None:
+                continue
+            judgements.append((vector, conviction, timing, exit_plan))
+        return tuple(judgements)
+
+    return run_bull_opinion_composer(
+        composer=BullOpinionComposer(
+            minimum_conviction=context.number("bull_opinion_minimum_conviction"),
+            maximum_missing_features=int(context.number("bull_opinion_maximum_missing_features")),
+            require_measured_conviction=bool(context.setting("bull_opinion_require_measured_conviction").value),
+        ),
+        control_socket=context.control_socket,
+        read_judgements=read_judgements,
+        publish_opinions=publish_opinions,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

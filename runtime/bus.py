@@ -7,9 +7,10 @@ runtime.wiring_plan, which computes them from the blueprint.
 Publishing never waits. Three outcomes, all measured on this box, none of which
 blocks a producer:
 
-    delivered       the consumer is on and keeping up            2.5 us
-    EAGAIN          the consumer is on and behind -- lost        1.5 us
+    delivered       the message reached the consumer's queue     2.5 us
+    EAGAIN          a buffer was full -- this message is lost    1.5 us
     ECONNREFUSED    the consumer is off; its process is gone     3.8 us
+    ENOENT          the consumer is off; it never bound at all
 
 That is RL-066 as arithmetic rather than as intent: a consumer that stops reading
 cannot slow its producer, and cannot make a stream reader miss a tick on the wire.
@@ -17,6 +18,13 @@ It also means loss is real, so it is counted at both ends -- the producer counts
 what it could not hand over, and the consumer detects what did not arrive, by the
 gap in a per-producer sequence. The two are independent measurements of the same
 event and are expected to agree.
+
+**A producer cannot tell whose buffer was full.** Measured on this box: a burst of
+4.7 million datagrams at 66 addresses returned EAGAIN for 96% of them while only 7
+of those addresses were bound at all, so most were refused against the sending
+socket's own buffer before any destination was resolved. The producer's counter is
+therefore named for what it observed -- a full buffer -- and the consumer's sequence
+gaps are what say whether that consumer lost anything.
 
 What a consumer may do about loss is decided by the blueprint, not here: 223 parts
 declare that a skipped tick corrupts their answer and 98 that it merely delays it.
@@ -86,7 +94,7 @@ class PublishStanding:
     """
 
     delivered: int = 0
-    lost_to_a_consumer_behind: int = 0
+    refused_by_a_full_buffer: int = 0
     withheld_from_a_consumer_that_is_off: int = 0
     refused_too_large: int = 0
     published_with_no_listener: int = 0
@@ -95,7 +103,7 @@ class PublishStanding:
     def outcome_counts(self) -> dict[str, int]:
         return {
             "delivered": self.delivered,
-            "lost_to_a_consumer_behind": self.lost_to_a_consumer_behind,
+            "refused_by_a_full_buffer": self.refused_by_a_full_buffer,
             "withheld_from_a_consumer_that_is_off": self.withheld_from_a_consumer_that_is_off,
             "refused_too_large": self.refused_too_large,
             "published_with_no_listener": self.published_with_no_listener,
@@ -242,7 +250,15 @@ class Publisher:
         try:
             self._socket.sendto(frame, address)
         except BlockingIOError:
-            standing.lost_to_a_consumer_behind += 1
+            # EAGAIN, and the producer cannot tell which buffer was full. Measured
+            # on this box: bursting 4.7 million datagrams at 66 addresses returned
+            # EAGAIN for 96% of them while only 7 of those addresses were bound at
+            # all -- so most were refused against this socket's own send buffer
+            # before a destination was ever resolved, not against a consumer's
+            # queue. The counter is named for what was observed rather than for a
+            # cause that cannot be told apart from here; which it was is answered by
+            # the consumer's own sequence gaps.
+            standing.refused_by_a_full_buffer += 1
         except FileNotFoundError:
             # The part has never bound this address in this boot: it is off, and has
             # been since the launcher last unlinked the address.

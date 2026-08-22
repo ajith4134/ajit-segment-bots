@@ -303,3 +303,58 @@ def run_bull_entry_timer(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The timer decides on a pair: the candidate that was accepted, and the
+    conviction the model reached about it. Conviction is a level per symbol -- the
+    model's current belief -- and the candidate is the event that asks for a
+    decision, so a candidate with no conviction yet is not timed at all rather than
+    timed against a belief nobody formed.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    candidates = Batch(read=context.bus.reader("bull-side-candidate"))
+    convictions = LatestByKey(
+        read=context.bus.reader("bull-calibrated-conviction"),
+        key_of=lambda conviction: (conviction.venue_id, conviction.symbol),
+    )
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    quality = Batch(read=context.bus.reader("entry-quality"))
+    publish_timings = context.bus.publisher_for("bull-entry-timing")
+
+    def read_candidates_and_convictions(timer):
+        for trade in trades.payloads():
+            timer.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for rule in rules.payloads():
+            timer.observe_playbook_rule(rule)
+        for entry in quality.payloads():
+            timer.observe_entry_quality(entry)
+        belief = convictions.mapping()
+        pairs = []
+        for candidate in candidates.payloads():
+            conviction = belief.get((candidate.venue_id, candidate.symbol))
+            if conviction is not None:
+                pairs.append((candidate, conviction))
+        return tuple(pairs)
+
+    return run_bull_entry_timer(
+        timer=BullEntryTimer(
+            minimum_conviction=context.number("bull_entry_minimum_conviction"),
+            window_length=int(context.number("bull_entry_window_length")),
+            minimum_observations=int(context.number("bull_entry_minimum_observations")),
+            trigger_validity_seconds=context.number("bull_entry_trigger_validity"),
+            maximum_extension_quantile=context.number("bull_entry_maximum_extension_quantile"),
+            entry_quality_window=int(context.number("bull_entry_quality_window")),
+            prior_extension_cap=context.number("bull_entry_prior_extension_cap"),
+            prior_entry_cost_fraction=context.number("bull_entry_prior_entry_cost_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_convictions=read_candidates_and_convictions,
+        publish_timings=publish_timings,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

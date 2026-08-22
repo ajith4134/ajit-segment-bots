@@ -338,3 +338,81 @@ def run_bull_exit_plan_proposer(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def _paired_targets(context) -> tuple[tuple[float, float], ...]:
+    """Quantiles and the share of the position each one takes, as pairs.
+
+    Two flat settings rather than one nested value: a setting whose value needed a
+    table would be a schema hiding inside a value, and the settings board could not
+    render it or say what changed. Zipped here, with the mismatch refused by name --
+    a quantile with no fraction beside it is a target nobody sized.
+    """
+    quantiles = list(context.setting("bull_exit_target_quantiles").value)
+    fractions = list(context.setting("bull_exit_target_fractions").value)
+    if len(quantiles) != len(fractions):
+        raise ValueError(
+            f"bull_exit_target_quantiles has {len(quantiles)} entries and "
+            f"bull_exit_target_fractions has {len(fractions)}. They are read position by "
+            f"position, so a mismatch is a target with no size or a size with no target."
+        )
+    return tuple(zip(quantiles, fractions, strict=True))
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The same pairing as the entry timer, for the same reason: a plan for a trade
+    nobody has a conviction about is a plan for a trade that will not be taken.
+
+    Three of its inputs -- excursion profiles, horizon profiles and stop audits --
+    come from closed-trade decoding and will be empty until trades have closed. The
+    proposer already has priors for that case and says which it used, so a stop
+    placed before any trade has been decoded is visibly a stop placed on a prior.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    candidates = Batch(read=context.bus.reader("bull-side-candidate"))
+    convictions = LatestByKey(
+        read=context.bus.reader("bull-calibrated-conviction"),
+        key_of=lambda conviction: (conviction.venue_id, conviction.symbol),
+    )
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    excursions = Batch(read=context.bus.reader("excursion-profile"))
+    horizons = Batch(read=context.bus.reader("horizon-profile"))
+    audits = Batch(read=context.bus.reader("stop-audit"))
+    publish_plans = context.bus.publisher_for("bull-exit-plan")
+
+    def read_candidates_and_profiles(proposer):
+        for trade in trades.payloads():
+            proposer.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for profile in profiles.payloads():
+            proposer.observe_symbol_profile(profile)
+        for excursion in excursions.payloads():
+            proposer.observe_excursion_profile(excursion)
+        for horizon in horizons.payloads():
+            proposer.observe_horizon_profile(horizon)
+        for audit in audits.payloads():
+            proposer.observe_stop_audit(audit)
+        belief = convictions.mapping()
+        pairs = []
+        for candidate in candidates.payloads():
+            conviction = belief.get((candidate.venue_id, candidate.symbol))
+            if conviction is not None:
+                pairs.append((candidate, conviction))
+        return tuple(pairs)
+
+    return run_bull_exit_plan_proposer(
+        proposer=BullExitPlanProposer(
+            stop_safety_multiple=context.number("bull_exit_stop_safety_multiple"),
+            target_quantiles=_paired_targets(context),
+            minimum_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+            conviction_horizon_multiple=context.number("bull_exit_conviction_horizon_multiple"),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_profiles=read_candidates_and_profiles,
+        publish_plans=publish_plans,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

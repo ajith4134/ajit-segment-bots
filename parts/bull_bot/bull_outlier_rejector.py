@@ -219,3 +219,31 @@ def run_bull_outlier_rejector(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Judge first, then learn from the vector: a vector compared against a
+    distribution it has already been added to is a vector compared against itself,
+    which makes every reading look ordinary. The part's own tick already does them
+    in that order; this only has to hand it the vectors.
+    """
+    from runtime.input_assembly import Batch
+
+    vectors = Batch(read=context.bus.reader("bull-feature-vector"))
+    publish_flags = context.bus.publisher_for("bull-feature-out-of-distribution-flag")
+
+    return run_bull_outlier_rejector(
+        rejector=BullOutlierRejector(
+            deviation_threshold=context.number("bull_outlier_deviation_threshold"),
+            minimum_observations=int(context.number("bull_outlier_minimum_observations")),
+            half_life_observations=context.number("bull_outlier_half_life_observations"),
+            maximum_unjudgeable_fraction=context.number("bull_outlier_maximum_unjudgeable_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_vectors=vectors.payloads,
+        publish_flags=publish_flags,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

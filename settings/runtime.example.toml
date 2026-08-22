@@ -406,7 +406,12 @@ note  = "operator, 2026-08-22: how far beyond the symbol's own recent deviation 
 [bull_exit_target_quantiles]
 value = [0.5, 0.75, 0.9]
 unit  = "quantiles of the observed excursion distribution"
-note  = "operator, 2026-08-22: where profit targets are placed, as quantiles of how far this symbol's moves have actually run. Three targets rather than one, because the distribution has a long right tail and a single target either leaves it all or waits for a move most trades do not make. Quantiles rather than fixed percentages so the plan adapts per symbol without anyone tuning it."
+note  = "operator, 2026-08-22: where profit targets are placed, as quantiles of how far this symbol's moves have actually run. Three targets rather than one, because the distribution has a long right tail and a single target either leaves it all on the table or waits for a move most trades never make. Quantiles rather than fixed percentages so the plan adapts per symbol without anyone tuning it. Paired position-by-position with bull_exit_target_fractions, and the proposer refuses a plan whose fractions do not close the whole position."
+
+[bull_exit_target_fractions]
+value = [0.4, 0.4, 0.2]
+unit  = "fraction of the position"
+note  = "operator, 2026-08-22: how much of the position each target takes, in the same order as bull_exit_target_quantiles. Front-loaded: most of the position is taken at the two nearer targets and a fifth is left to run to the 90th percentile, because the far target is by construction reached least often. They must sum to one -- a plan whose fractions leave a remainder is a plan holding a position nobody decided to hold, and the proposer refuses it at construction."
 
 [bull_exit_minimum_reward_to_risk]
 value = 1.5
@@ -442,3 +447,8 @@ note  = "operator, 2026-08-22: how far price must move for signal-outcome-labell
 value = 5000
 unit  = "claims"
 note  = "operator, 2026-08-22: how many unresolved claims the labeller holds at once, above which new candidates are refused and counted rather than silently dropped. Each claim is a small record and the bound exists so a detector firing on every tick cannot grow this part's memory without limit -- the governor bounds the process, and this bounds what the process would ask for."
+
+[bull_remembered_vectors_per_symbol]
+value = 64
+unit  = "feature vectors"
+note  = "operator, 2026-08-22: how many recent feature vectors the bull conviction model keeps per symbol so a label arriving a horizon later can be matched to the vector that was current when the claim was made. Sixty-four covers a 60-second horizon comfortably -- the filter accepts at most one candidate per detector per symbol at a time, so vectors accrue at the rate candidates do, not at the rate trades do. It is a bound on a process's memory: an unbounded history of vectors is a leak with a good excuse."

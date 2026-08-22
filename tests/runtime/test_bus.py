@@ -175,7 +175,7 @@ def test_a_consumer_that_stopped_reading_cannot_stall_its_producer(bus_root, rea
         consumer.close()
 
     assert took < PUBLISH_MUST_NOT_TAKE_LONGER_THAN_SECONDS, f"publishing blocked for {took:.1f}s"
-    assert producer_standing["lost_to_a_consumer_behind"] > 0, (
+    assert producer_standing["refused_by_a_full_buffer"] > 0, (
         "a consumer that never read should have made the producer drop, not wait"
     )
     assert producer_standing["delivered"] > 0
@@ -201,7 +201,7 @@ def test_a_part_that_never_started_is_off_not_behind(bus_root, real_trades):
 
     assert standing["withheld_from_a_consumer_that_is_off"] == 3
     assert standing["delivered"] == 0
-    assert standing["lost_to_a_consumer_behind"] == 0
+    assert standing["refused_by_a_full_buffer"] == 0
 
 
 def test_a_part_that_exits_becomes_off_and_the_producer_sees_it(bus_root, real_trades):
@@ -248,7 +248,7 @@ def test_a_part_that_exits_becomes_off_and_the_producer_sees_it(bus_root, real_t
 
     assert while_on == 1
     assert standing["withheld_from_a_consumer_that_is_off"] == 2
-    assert standing["lost_to_a_consumer_behind"] == 0
+    assert standing["refused_by_a_full_buffer"] == 0
 
 
 def test_a_consumer_counts_what_never_reached_it(bus_root, real_trades):

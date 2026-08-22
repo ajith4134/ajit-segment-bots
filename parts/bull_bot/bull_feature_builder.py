@@ -317,3 +317,52 @@ def run_bull_feature_builder(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Prices, books, profiles and funding are all levels the builder accumulates; the
+    side candidates are the events that ask for a vector. Prices are taken in first
+    within a tick, so a vector is built from the market as of the candidate rather
+    than as of the last tick.
+
+    Four of its five inputs will be empty in the first run -- nothing is producing
+    order books, symbol profiles or funding forecasts yet. That is why the vector
+    names what it could not measure instead of substituting zeros: a missing
+    feature and a feature that measured zero are different, and the composer counts
+    the first.
+    """
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    candidates = Batch(read=context.bus.reader("bull-side-candidate"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    funding = Batch(read=context.bus.reader("funding-forecast"))
+    publish_vectors = context.bus.publisher_for("bull-feature-vector")
+
+    def read_candidates_and_market(builder):
+        for trade in trades.payloads():
+            builder.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for book in books.payloads():
+            builder.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
+        for profile in profiles.payloads():
+            builder.observe_symbol_profile(profile)
+        for forecast in funding.payloads():
+            builder.observe_funding_forecast(forecast)
+        return candidates.payloads()
+
+    return run_bull_feature_builder(
+        builder=BullFeatureBuilder(
+            short_window=int(context.number("bull_feature_short_window")),
+            long_window=int(context.number("bull_feature_long_window")),
+            minimum_observations=int(context.number("bull_feature_minimum_observations")),
+            reference_order_size_quote=context.number("bull_reference_order_size_quote"),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_market=read_candidates_and_market,
+        publish_vectors=publish_vectors,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

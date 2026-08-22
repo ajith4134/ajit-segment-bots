@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 from runtime.bot_opinion import LONG, RawConviction
 from runtime.online_learner import OnlineLogisticModel
+from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -321,4 +322,114 @@ def run_bull_conviction_model(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This is the part the whole cold-start problem was about. It forms no conviction
+    until it has been trained, and until `signal-outcome-labeller` exists nothing
+    could train it -- see `docs/proposals/signal-outcome-labelling.md`.
+
+    A label arrives after the vector it belongs to, by the length of the claim's
+    horizon. So vectors are kept by symbol with the time they were built, and a
+    label is matched to the vector that was current when the claim was made, not to
+    whichever vector happens to be current when the label lands. Training on the
+    latter would teach the model to predict the past from the present.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    vectors = Batch(read=context.bus.reader("bull-feature-vector"))
+    flags = LatestByKey(
+        read=context.bus.reader("bull-feature-out-of-distribution-flag"),
+        key_of=lambda flag: (flag.venue_id, flag.symbol),
+    )
+    labels = Batch(read=context.bus.reader("training-label"))
+    weights = LatestByKey(
+        read=context.bus.reader("sample-weight"),
+        key_of=lambda weight: (weight.venue_id, weight.symbol),
+    )
+    forecasts = Batch(read=context.bus.reader("price-forecast"))
+    forecast_flags = Batch(read=context.bus.reader("forecast-out-of-distribution-flag"))
+    kline_windows = Batch(read=context.bus.reader("kline-window"))
+    rewards = Batch(read=context.bus.reader("learning-reward"))
+    publish_convictions = context.bus.publisher_for("bull-raw-conviction")
+
+    # Vectors kept per symbol with when they were built, so a label that arrives a
+    # horizon later can find the one that was current when the claim was made.
+    # Bounded by what the horizon can span, because this is a process's memory and
+    # an unbounded history of vectors is a leak with a good excuse.
+    remembered: dict[tuple[str, str], list] = {}
+    remembered_per_symbol = int(context.number("bull_remembered_vectors_per_symbol"))
+
+    def remember(vector) -> None:
+        key = (vector.venue_id, vector.symbol)
+        history = remembered.setdefault(key, [])
+        history.append(vector)
+        if len(history) > remembered_per_symbol:
+            del history[0]
+
+    def vector_current_at(venue_id: str, symbol: str, at_ns: int):
+        history = remembered.get((venue_id, symbol), ())
+        current = None
+        for vector in history:
+            if vector.built_at_ns <= at_ns:
+                current = vector
+            else:
+                break
+        return current
+
+    def read_vectors_flags_and_labels(model):
+        for forecast in forecasts.payloads():
+            model.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
+        for flag in forecast_flags.payloads():
+            model.observe_forecast_flag(flag)
+        for window in kline_windows.payloads():
+            model.observe_kline_window(window)
+        for reward in rewards.payloads():
+            model.observe_learning_reward(reward)
+
+        weight_by_symbol = weights.mapping()
+        for label in labels.payloads():
+            vector = vector_current_at(label.venue_id, label.symbol, label.claimed_at_ns)
+            if vector is None:
+                # A label for a symbol this bot never built a vector for. Not an
+                # error: the labeller scores every detector's claims, and the bull
+                # bot only builds vectors for the ones its filter accepted.
+                continue
+            outcome = label.label_for(THE_SETUP_WAS_RIGHT)
+            if outcome is None:
+                continue
+            weight = weight_by_symbol.get((label.venue_id, label.symbol))
+            model.train_from_label(
+                features=vector.features,
+                label=outcome,
+                source=f"{label.detector}:{THE_SETUP_WAS_RIGHT}",
+                sample_weight=getattr(weight, "weight", None),
+            )
+
+        flag_by_symbol = flags.mapping()
+        judged = []
+        for vector in vectors.payloads():
+            remember(vector)
+            flag = flag_by_symbol.get((vector.venue_id, vector.symbol))
+            judged.append((vector, bool(flag.is_out_of_distribution) if flag else False))
+        return judged
+
+    return run_bull_conviction_model(
+        model=BullConvictionModel(
+            learning_rate=context.number("bull_learning_rate"),
+            l2_regularisation=context.number("bull_l2_regularisation"),
+            feature_half_life_observations=context.number("bull_feature_half_life_observations"),
+            minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
+            minimum_training_observations=int(context.number("bull_minimum_training_observations")),
+            default_sample_weight=context.number("bull_default_sample_weight"),
+            maximum_sample_weight=context.number("bull_maximum_sample_weight"),
+        ),
+        control_socket=context.control_socket,
+        read_vectors_flags_and_labels=read_vectors_flags_and_labels,
+        publish_convictions=publish_convictions,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )
