@@ -1,0 +1,249 @@
+"""kline-window-builder: candles shaped for whatever model reads them, with holes named.
+
+Separate from the forecaster because the window length is a property of the
+model, not of the market (T-6). Kronos-base reads 512 candles and Kronos-mini
+reads 2048; swapping one for the other must be a change to one part, and it is
+only that if the shaping lives outside the model.
+
+**A gap is named, never closed.** A feed that dropped three minutes leaves a
+window whose candles are not consecutive, and a model handed those as though they
+were learns that time moves at whatever rate the feed happened to deliver. So the
+builder detects missing intervals from the timestamps themselves rather than
+trusting the count, and reports each one.
+
+**An open candle is excluded by default.** The last bar of a live stream is
+incomplete, and a model trained on closed candles reading a partial one is being
+shown a bar that will change after it has been forecast from. That is the single
+easiest way to produce a backtest that cannot be reproduced live.
+
+**Aggregation is arithmetic, not resampling.** Building a 5-minute window from
+1-minute candles takes the first open, the last close, the extremes and the sums
+-- and refuses a group that is missing a minute, because a 5-minute bar built
+from four minutes is not a shorter bar, it is a wrong one.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from runtime.forecast_types import Candle, KlineWindow
+from runtime.part_declaration import PartDeclaration
+from runtime.part_process import run_part
+
+PART_ID = "kline-window-builder"
+
+PART_DECLARATION = PartDeclaration(
+    part_id="kline-window-builder",
+    consumes=("market-data",),
+    produces=("kline-window", "part-health"),
+    resource_class="bandwidth-bound",
+    rate_risk="changes-the-answer",
+    skipped_tick_effect="corrupts",
+)
+
+INTERVAL_SECONDS = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+}
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A run of intervals the feed never delivered."""
+
+    after_open_time_ns: int
+    missing_intervals: int
+
+    def __str__(self) -> str:
+        return f"{self.missing_intervals} interval(s) missing after {self.after_open_time_ns}"
+
+
+@dataclass
+class BuilderStanding:
+    candles_observed: int = 0
+    windows_built: int = 0
+    complete_windows: int = 0
+    open_candles_excluded: int = 0
+    gaps_found: int = 0
+    aggregations_refused: int = 0
+    symbols_tracked: int = 0
+    by_interval: dict = field(default_factory=dict)
+
+
+class KlineWindowBuilder:
+    """Keeps a bounded run of candles per symbol and shapes windows on request."""
+
+    def __init__(
+        self,
+        interval: str,
+        maximum_window: int,
+        include_open_candle: bool = False,
+        now_ns=time.time_ns,
+    ) -> None:
+        if interval not in INTERVAL_SECONDS:
+            raise ValueError(
+                f"{interval!r} is not an interval this builder can space-check; add it to "
+                f"INTERVAL_SECONDS with its length in seconds rather than guessing"
+            )
+        if maximum_window < 2:
+            raise ValueError("a window of one candle has no sequence to model")
+        self._interval = interval
+        self._interval_ns = INTERVAL_SECONDS[interval] * 1_000_000_000
+        self._maximum = maximum_window
+        self._include_open = include_open_candle
+        self._now_ns = now_ns
+        self._candles: dict[tuple[str, str], list] = {}
+        self.standing = BuilderStanding()
+
+    @property
+    def interval(self) -> str:
+        return self._interval
+
+    def observe_candle(self, venue_id: str, symbol: str, candle: Candle) -> None:
+        """One candle. A repeat of the same open time replaces it -- streams revise."""
+        self.standing.candles_observed += 1
+        key = (venue_id, symbol)
+        candles = self._candles.setdefault(key, [])
+        if candles and candles[-1].open_time_ns == candle.open_time_ns:
+            candles[-1] = candle
+        else:
+            candles.append(candle)
+        del candles[: max(0, len(candles) - self._maximum)]
+        self.standing.symbols_tracked = len(self._candles)
+
+    def build(self, venue_id: str, symbol: str, length: int) -> KlineWindow:
+        """The last `length` candles, with any missing intervals named."""
+        if length > self._maximum:
+            raise ValueError(
+                f"this builder keeps {self._maximum} candles and was asked for {length}; "
+                f"returning a shorter window silently would hand the model a series it "
+                f"believes is {length} long"
+            )
+        self.standing.windows_built += 1
+        self.standing.by_interval[self._interval] = (
+            self.standing.by_interval.get(self._interval, 0) + 1
+        )
+
+        candles = list(self._candles.get((venue_id, symbol), []))
+        if not self._include_open:
+            closed = [candle for candle in candles if candle.is_closed]
+            self.standing.open_candles_excluded += len(candles) - len(closed)
+            candles = closed
+
+        candles = candles[-length:]
+        gaps = self._gaps_in(candles)
+        self.standing.gaps_found += len(gaps)
+
+        window = KlineWindow(
+            venue_id=venue_id,
+            symbol=symbol,
+            interval=self._interval,
+            candles=tuple(candles),
+            length_requested=length,
+            gaps=tuple(str(gap) for gap in gaps),
+            built_at_ns=self._now_ns(),
+        )
+        if window.is_complete:
+            self.standing.complete_windows += 1
+        return window
+
+    def aggregate(self, venue_id: str, symbol: str, group_size: int, length: int) -> KlineWindow:
+        """Build a longer interval from the one this builder holds.
+
+        A group missing a candle is refused rather than built from what arrived:
+        a 5-minute bar assembled from four minutes is not a shorter bar, it is a
+        wrong one, and nothing downstream could tell.
+        """
+        if group_size < 2:
+            raise ValueError("aggregating by one is not aggregation")
+        source = self.build(venue_id, symbol, min(self._maximum, group_size * length))
+        aggregated = []
+        candles = list(source.candles)
+
+        for start in range(0, len(candles) - group_size + 1, group_size):
+            group = candles[start : start + group_size]
+            expected = group[0].open_time_ns + self._interval_ns * (group_size - 1)
+            if group[-1].open_time_ns != expected:
+                self.standing.aggregations_refused += 1
+                continue
+            aggregated.append(
+                Candle(
+                    open_time_ns=group[0].open_time_ns,
+                    open=group[0].open,
+                    high=max(candle.high for candle in group),
+                    low=min(candle.low for candle in group),
+                    close=group[-1].close,
+                    volume=sum(candle.volume for candle in group),
+                    quote_volume=sum(candle.quote_volume for candle in group),
+                    trades=sum(candle.trades for candle in group),
+                    is_closed=all(candle.is_closed for candle in group),
+                )
+            )
+
+        aggregated = aggregated[-length:]
+        return KlineWindow(
+            venue_id=venue_id,
+            symbol=symbol,
+            interval=f"{group_size}x{self._interval}",
+            candles=tuple(aggregated),
+            length_requested=length,
+            gaps=source.gaps,
+            built_at_ns=self._now_ns(),
+        )
+
+    def _gaps_in(self, candles) -> list:
+        """Missing intervals, found from the timestamps rather than from the count."""
+        gaps = []
+        for earlier, later in zip(candles, candles[1:]):
+            spacing = later.open_time_ns - earlier.open_time_ns
+            if spacing > self._interval_ns:
+                missing = spacing // self._interval_ns - 1
+                if missing > 0:
+                    gaps.append(Gap(earlier.open_time_ns, int(missing)))
+        return gaps
+
+    def release(self, venue_id: str, symbol: str) -> None:
+        """Drop a symbol's candles. T-3: an off part releases its memory."""
+        self._candles.pop((venue_id, symbol), None)
+        self.standing.symbols_tracked = len(self._candles)
+
+
+def describe_window_building(builder: KlineWindowBuilder) -> dict:
+    return {
+        "part_id": PART_ID,
+        "interval": builder.interval,
+        "candles_observed": builder.standing.candles_observed,
+        "windows_built": builder.standing.windows_built,
+        "complete_windows": builder.standing.complete_windows,
+        "windows_with_a_gap": builder.standing.windows_built - builder.standing.complete_windows,
+        "open_candles_excluded": builder.standing.open_candles_excluded,
+        "gaps_found": builder.standing.gaps_found,
+        "aggregations_refused_for_a_missing_candle": builder.standing.aggregations_refused,
+        "symbols_tracked": builder.standing.symbols_tracked,
+    }
+
+
+def run_kline_window_builder(
+    builder: KlineWindowBuilder, control_socket, read_candles, publish_windows,
+    health_interval_seconds: float, emit_health,
+) -> int:
+    def tick() -> None:
+        requests = read_candles(builder)
+        publish_windows(
+            tuple(builder.build(venue_id, symbol, length) for venue_id, symbol, length in requests)
+        )
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=control_socket,
+        do_one_tick=tick,
+        emit_health=emit_health,
+        health_interval_seconds=health_interval_seconds,
+    )
