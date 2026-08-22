@@ -134,7 +134,15 @@ def find_implementation_file(part_id: str, sources: list[Path]) -> Path | None:
     hits = [p for p in sources if any(v in p.stem for v in variants)]
     tests = [p for p in hits if "test" in p.name.lower() or "test" in str(p.parent).lower()]
     impls = [p for p in hits if p not in tests]
-    return impls[0] if impls else None
+    if not impls:
+        return None
+    # An exact stem wins over a substring. Without this, counterfactual-replayer
+    # claimed exit_counterfactual_replayer.py -- the shorter id is a substring of
+    # the longer one, and the board then reported a wiring mismatch that was really
+    # two parts sharing one file. A part's file is named for the part, so an exact
+    # match is the answer whenever one exists.
+    exact = [p for p in impls if p.stem in variants]
+    return exact[0] if exact else impls[0]
 
 
 def probe_part_rung(part_id: str, sources: list[Path]) -> tuple[str, str]:
