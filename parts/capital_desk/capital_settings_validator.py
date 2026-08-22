@@ -25,6 +25,13 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.risk_types import (
+    CONSISTENT,
+    INCOMPLETE,
+    INCONSISTENT,
+    CapitalSettingsVerdict,
+    SettingsFault,
+)
 
 PART_ID = "capital-settings-validator"
 
@@ -39,35 +46,6 @@ PART_DECLARATION = PartDeclaration(
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
-
-CONSISTENT = "consistent"
-INCONSISTENT = "inconsistent"
-INCOMPLETE = "incomplete"
-
-
-@dataclass(frozen=True)
-class SettingsFault:
-    """One pair of settings that cannot both be obeyed."""
-
-    settings: tuple[str, ...]
-    values: tuple[float, ...]
-    explanation: str
-
-
-@dataclass(frozen=True)
-class CapitalSettingsVerdict:
-    """Whether the settings can be obeyed, and every reason they cannot."""
-
-    segment: str
-    verdict: str
-    faults: tuple[SettingsFault, ...]
-    reason: str
-    judged_at_ns: int
-
-    @property
-    def permits_trading(self) -> bool:
-        return self.verdict == CONSISTENT
-
 
 @dataclass
 class ValidatorStanding:

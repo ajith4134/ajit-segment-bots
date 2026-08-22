@@ -260,6 +260,48 @@ def capture_catalogue_and_tickers(venue: str, day: str, keep_per_kind: int = 3, 
         }
     )
 
+    capture_funding_responses(venue, day, chosen_symbols)
+
+
+def capture_funding_responses(venue: str, day: str, symbols: set[str]) -> None:
+    """Whatever extra responses this venue needs before its funding can be stated.
+
+    Nothing at all for a venue that puts funding on the catalogue and ticker
+    responses captured beside this -- Bybit does, so its funding is already in
+    those two files and a third would be the same bytes under another name.
+
+    Subset to exactly the symbols the two files beside it kept, for the same
+    reason they are subset together: a funding fixture whose symbols were chosen
+    independently could share none with the catalogue, and every test over the
+    join would pass while testing nothing.
+    """
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    adapter = load_venue_adapter(venue)
+    venue_directory = HERE / venue
+    for index, url in enumerate(adapter.funding_request_urls()):
+        response, _headers = fetch_json_over_rest(url)
+        endpoint = url.rsplit("/", 1)[-1].split("?")[0]
+        kept = [entry for entry in response if entry["symbol"] in symbols]
+        path = venue_directory / f"{day}-funding-{endpoint}-subset.json"
+        path.write_text(json.dumps(kept, indent=1) + "\n")
+        record_in_manifest(
+            {
+                "path": str(path.relative_to(HERE)),
+                "venue": venue,
+                "source": url,
+                "captured_on": day,
+                "how": (
+                    f"one REST call, request {index + 1} of "
+                    f"{len(adapter.funding_request_urls())} this adapter names for funding, "
+                    f"subset to exactly the symbols the catalogue subset beside it kept, "
+                    f"each entry verbatim"
+                ),
+                "full_response_symbol_count": len(response),
+                "symbols_kept_of_those_asked_for": f"{len(kept)} of {len(symbols)}",
+            }
+        )
+
 
 def _catalogue_entries(catalogue):
     """The contract list inside either venue's catalogue response."""

@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import math
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.trading_types import DATED_FUTURE, OPTION, PERPETUAL_FUTURE, SPOT
 
 PART_ID = "instrument-selector"
 
@@ -45,17 +47,13 @@ PART_DECLARATION = PartDeclaration(
     part_id="instrument-selector",
     consumes=(
         "trade-intent", "market-data", "implied-vol-surface", "liquidity-grade", "timed-intent",
+        "symbol-universe",
     ),
     produces=("instrument-choice", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
 )
-
-PERPETUAL_FUTURE = "perpetual-future"
-DATED_FUTURE = "dated-future"
-SPOT = "spot"
-OPTION = "option"
 
 # Which segment each instrument belongs to. The build order is futures first and
 # the other two are honestly empty, so this table is what lets the part say
@@ -135,6 +133,12 @@ class SelectorStanding:
     by_refusal: dict = field(default_factory=dict)
     unbuilt_segment_wins: dict = field(default_factory=dict)
     largest_carry_avoided: float = 0.0
+    # How many listings from the venue's own universe became instruments this part
+    # can price, and why each of the rest did not. Counted because a selector that
+    # priced nothing looks identical to one nobody asked anything of, and the
+    # difference is the whole diagnosis (Rule 8).
+    listings_registered: int = 0
+    listings_skipped: Counter = field(default_factory=Counter)
 
 
 class InstrumentSelector:
@@ -206,42 +210,75 @@ class InstrumentSelector:
         return None
 
     def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        """The last trade for a symbol, which is also how this part learns the
-        symbol is tradeable at all.
+        """The last trade for a symbol, kept so a choice carries the price it was
+        made at.
 
-        The perpetual is registered from the fact that it traded rather than from a
-        catalogue this part does not consume: a symbol printing trades on a venue is
-        a symbol that venue lists, and the round trip is the fee schedule the
-        operator set. What is deliberately left None is funding -- unknown is not
-        zero, and a carry cost invented here would make a perpetual look cheaper
-        than a dated future nobody priced.
+        It registers no instrument. What contracts a venue lists and what they
+        cost to hold is the venue's own statement, and it arrives on
+        `symbol-universe`; a symbol printing trades is evidence that some contract
+        exists, not a statement of its terms. Inferring one here is what left every
+        perpetual with an unpriceable carry.
         """
-        key = (venue_id, symbol)
-        self._prices[key] = price
+        self._prices[(venue_id, symbol)] = price
+
+    def observe_listed_symbol(self, listed) -> None:
+        """One entry of `symbol-universe`: a contract the venue lists, on its terms.
+
+        Only a perpetual is registered, and only when the venue declared both
+        halves of its funding -- the rate it last charged and how often it charges
+        one. Either half missing means the carry cannot be priced, and an
+        unregistered instrument is refused by name at selection
+        (`no-instrument-is-listed-for-this-symbol`) rather than silently priced as
+        free. Measured 2026-08-22: Binance declares an interval for 740 of its 872
+        listed symbols, so this is a real state and not a defensive branch.
+
+        A dated future is deliberately not registered even though its kind is
+        known: its carry is its basis, nothing published to this part carries one,
+        and registering it with `basis_fraction=None` would add a listing that
+        could only ever be rejected. What is not priceable is not listed here, and
+        the count of what was skipped is what says so.
+
+        Spot and options are not registered either, for a different reason: those
+        segments are honestly empty (RL-050, RL-062). When they are built their
+        instruments will arrive the same way, and `unbuilt_segment_would_have_won`
+        is what reports the cost of their absence until then.
+        """
         if self._round_trip_cost_fraction is None:
+            self.standing.listings_skipped["no round-trip cost was set for this selector"] += 1
             return
-        if key not in self._listed:
-            self._listed[key] = []
-        if not any(i.instrument_kind == PERPETUAL_FUTURE for i in self._listed[key]):
-            self._listed[key].append(
-                ListedInstrument(
-                    venue_id=venue_id,
-                    symbol=symbol,
-                    instrument_kind=PERPETUAL_FUTURE,
-                    contract_symbol=symbol,
-                    funding_rate_per_settlement=None,
-                    settlements_per_day=None,
-                    basis_fraction=None,
-                    premium_fraction=None,
-                    seconds_to_expiry=None,
-                    supports_short=True,
-                    supports_convexity=False,
-                    round_trip_cost_fraction=self._round_trip_cost_fraction,
-                    absorbable_quote=None,
-                    seconds_to_fill=None,
-                )
+        if listed.instrument_kind != PERPETUAL_FUTURE:
+            self.standing.listings_skipped[
+                f"kind {listed.instrument_kind or 'unrecognised'} is not priced by this part yet"
+            ] += 1
+            return
+        if listed.funding_rate_per_settlement is None or listed.funding_settlements_per_day is None:
+            self.standing.listings_skipped[
+                "the venue declared no funding rate or no settlement interval"
+            ] += 1
+            return
+        self.observe_listed_instrument(
+            ListedInstrument(
+                venue_id=listed.venue_id,
+                symbol=listed.symbol,
+                instrument_kind=PERPETUAL_FUTURE,
+                contract_symbol=listed.symbol,
+                funding_rate_per_settlement=listed.funding_rate_per_settlement,
+                settlements_per_day=listed.funding_settlements_per_day,
+                basis_fraction=None,
+                premium_fraction=None,
+                seconds_to_expiry=None,
+                # A linear perpetual is short-sellable and carries no convexity.
+                # Both are properties of the contract rather than of this venue.
+                supports_short=True,
+                supports_convexity=False,
+                # Two crossings of the spread at the taker rate the operator set.
+                # The venue owns the funding above; the operator owns this.
+                round_trip_cost_fraction=self._round_trip_cost_fraction,
+                absorbable_quote=None,
+                seconds_to_fill=None,
             )
-            self.standing.instruments_seen = sum(len(v) for v in self._listed.values())
+        )
+        self.standing.listings_registered += 1
 
     def select(self, intent) -> InstrumentChoice:
         """One intent, priced against everything listed for its symbol."""
@@ -424,6 +461,8 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         ),
         "largest_cost_paid_for_the_build_order": selector.standing.largest_carry_avoided,
         "symbols_with_listed_instruments": len(selector._listed),
+        "listings_registered": selector.standing.listings_registered,
+        "listings_skipped": dict(sorted(selector.standing.listings_skipped.items())),
     }
 
 
@@ -460,11 +499,19 @@ def start_part(context) -> int:
     grades = Batch(read=context.bus.reader("liquidity-grade"))
     timed = Batch(read=context.bus.reader("timed-intent"))
     trades = Batch(read=context.bus.reader("market-data"))
+    universe = Batch(read=context.bus.reader("symbol-universe"))
     publish_choices = context.bus.publisher_for("instrument-choice")
 
     def read_intents_and_instruments(selector):
         # Everything that describes what could be traded arrives as its own type;
         # the selector holds them and the intents are what ask a question.
+        #
+        # symbol-universe is the venue's own listing and is republished whole on
+        # every catalogue read, so a funding rate that changed at settlement
+        # arrives as a replacement for the instrument rather than as a second one:
+        # `observe_listed_instrument` keys on the contract symbol and overwrites.
+        for listed in universe.payloads():
+            selector.observe_listed_symbol(listed)
         for instrument in list(surfaces.payloads()) + list(grades.payloads()):
             selector.observe_listed_instrument(instrument)
         for trade in trades.payloads():
@@ -477,9 +524,10 @@ def start_part(context) -> int:
             built_segments=(context.setting("segment_id").value,),
             maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
             # A perpetual's round trip is two crossings of the spread at the taker
-            # rate. Nothing lists instruments for this system yet, so the venue's
-            # own perpetual is registered from the trades that arrive and priced at
-            # the fee schedule the operator set.
+            # rate. The venue states what holding the contract costs; what
+            # trading it costs is the fee schedule the operator set, so the two
+            # halves of an instrument's cost come from the two sides that own
+            # them.
             round_trip_cost_fraction=2 * context.number("taker_fee_rate"),
         ),
         control_socket=context.control_socket,

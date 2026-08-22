@@ -33,10 +33,11 @@ import urllib.parse
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
-from runtime.trading_types import BUY, SELL
+from runtime.trading_types import BUY, DATED_FUTURE, PERPETUAL_FUTURE, SELL
 from runtime.venues.venue_adapter import (
     BanSignal,
     ConnectionDiscipline,
+    ContractFunding,
     HeartbeatDiscipline,
     MessageFacts,
     NormalisedTrade,
@@ -571,13 +572,103 @@ class BybitLinearAdapter(VenueAdapter):
                 contract_type=entry.get("contractType", ""),
                 status=entry["status"],
                 price_increment=_read_price_increment(entry),
+                funding_settlements_per_day=_read_settlements_per_day(entry),
+                instrument_kind=INSTRUMENT_KIND_OF_CONTRACT_TYPE.get(
+                    entry.get("contractType", "")
+                ),
             )
             for entry in instruments
         )
 
+    def funding_request_urls(self) -> tuple[str, ...]:
+        """None. This venue already put both funding figures in what we fetch.
+
+        `fundingRate` is on the tickers response the reader reads volumes from,
+        and `fundingInterval` is on the instruments-info response it reads
+        listings from. Asking again would be a request against a rate limit that
+        bought a number already in hand.
+        """
+        return ()
+
+    def read_funding_facts(
+        self,
+        listings: Sequence[SymbolListing],
+        ticker_response: object,
+        funding_responses: Sequence[object],
+    ) -> Mapping[str, ContractFunding]:
+        """Each perpetual's funding: the rate off the tickers, the interval off the
+        catalogue.
+
+        The two come from different responses, which is why the join happens here
+        rather than in the reader -- on the other venue they come from two
+        endpoints that neither response knows about, and a reader that knew which
+        was which would be a reader with a venue inside it.
+
+        A symbol quoting an empty `fundingRate` -- this venue writes "" rather
+        than omitting the field, and does so on its dated contracts, which pay no
+        funding at all -- is left out of the mapping rather than recorded as zero.
+        """
+        if funding_responses:
+            raise ValueError(
+                f"{VENUE_ID} asks for no funding endpoint of its own and was handed "
+                f"{len(funding_responses)} response(s). A response nothing here reads is a "
+                f"request paid for against a rate limit and then discarded."
+            )
+        settlements_per_day = {
+            listing.symbol: listing.funding_settlements_per_day
+            for listing in listings
+            if listing.funding_settlements_per_day is not None
+        }
+        facts = {}
+        for entry in ticker_response["result"]["list"]:
+            rate = entry.get("fundingRate")
+            if rate is None or rate == "":
+                continue
+            symbol = entry["symbol"]
+            facts[symbol] = ContractFunding(
+                symbol=symbol,
+                rate_per_settlement=float(rate),
+                settlements_per_day=settlements_per_day.get(symbol),
+                source=(
+                    f"{TICKER_URL} fundingRate"
+                    + (
+                        f", {CATALOGUE_URL} fundingInterval"
+                        if symbol in settlements_per_day
+                        else ", interval undeclared by this venue"
+                    )
+                ),
+            )
+        return facts
+
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
         """Trading and nothing else. The venue spells it with one capital letter."""
         return listing.status == _LIMITS["capturable_status"].value
+
+
+# This venue's two words for a linear contract, translated into the system's own.
+# Measured 2026-08-22: 793 LinearPerpetual and 40 LinearFutures, and nothing else
+# under category=linear. The inverse contracts live under a category this adapter
+# does not read, so they are absent here rather than unrecognised.
+INSTRUMENT_KIND_OF_CONTRACT_TYPE = {
+    "LinearPerpetual": PERPETUAL_FUTURE,
+    "LinearFutures": DATED_FUTURE,
+}
+
+MINUTES_PER_DAY = 1440.0
+
+
+def _read_settlements_per_day(entry: Mapping[str, object]) -> float | None:
+    """How often this contract settles funding per day, from `fundingInterval`.
+
+    The venue states the interval in minutes -- 240 and 480 are what its linear
+    perpetuals carry, measured 2026-08-22. A dated contract pays no funding and
+    declares no interval, and comes back None rather than zero: nothing settles
+    is not the same fact as settles zero times.
+    """
+    interval_minutes = entry.get("fundingInterval")
+    if not interval_minutes:
+        return None
+    return MINUTES_PER_DAY / float(interval_minutes)
 
 
 def _read_price_increment(entry: Mapping[str, object]) -> float | None:

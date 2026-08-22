@@ -39,6 +39,7 @@ from runtime.trading_types import BUY
 __all__ = [
     "BanSignal",
     "ConnectionDiscipline",
+    "ContractFunding",
     "HeartbeatDiscipline",
     "MessageFacts",
     "NormalisedTrade",
@@ -150,6 +151,52 @@ class SymbolListing:
     status: str
     quote_volume_24h: float | None = None
     price_increment: float | None = None
+    # `contract_type` translated into this system's words -- one of
+    # trading_types.PERPETUAL_FUTURE, DATED_FUTURE, SPOT, OPTION -- because how a
+    # position is charged for being held depends on which it is, and no part may
+    # recognise a venue's spelling to find out (T-4). None when this adapter does
+    # not know the word the venue used, which is a fact about the adapter being
+    # out of date and must not read as any particular kind of contract: pricing an
+    # unrecognised listing as a perpetual would charge a quarterly's basis as
+    # funding, and be wrong in the same direction every time.
+    instrument_kind: str | None = None
+    # How often this contract settles funding, per day, when the venue states it
+    # in the catalogue response itself -- Bybit does, in `fundingInterval`
+    # minutes. None where the catalogue does not say, which is Binance: its
+    # exchangeInfo is silent and the figure arrives on a separate endpoint
+    # instead, through `read_funding_facts`. None means undeclared, never
+    # "the usual eight hours".
+    funding_settlements_per_day: float | None = None
+
+
+@dataclass(frozen=True)
+class ContractFunding:
+    """What a venue says holding one of its perpetuals costs, and where it said it.
+
+    Two numbers, because a funding rate alone prices nothing: a rate is charged
+    per settlement, and 0.01% costs three times as much on a contract that
+    settles every four hours as on one that settles every eight. Both are the
+    venue's to state.
+
+    `settlements_per_day` is None when the venue declares a rate but not an
+    interval -- 132 of Binance's 872 listed symbols on 2026-08-22. That is
+    carried rather than filled in with the documented default: an assumed
+    eight-hour interval is a carry cost wrong by a factor of two on every
+    four-hourly symbol, and it would be wrong invisibly.
+    """
+
+    symbol: str
+    rate_per_settlement: float
+    settlements_per_day: float | None
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.source.strip():
+            raise VenueFactWithoutSource(
+                f"the funding rate for {self.symbol} carries no source. It is a number a "
+                f"position is priced against, so which endpoint declared it is part of it "
+                f"(RL-061)."
+            )
 
 
 @dataclass(frozen=True)
@@ -426,6 +473,44 @@ class VenueAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
+    def funding_request_urls(self) -> tuple[str, ...]:
+        """The extra REST calls this venue needs before its funding can be stated.
+
+        Empty for a venue that already puts funding in the catalogue and ticker
+        responses the reader fetches anyway -- Bybit does, so asking it again
+        would be a request paid for nothing. Binance publishes neither figure on
+        either endpoint, so it names two: the per-symbol rate and the per-symbol
+        settlement interval live apart from each other and apart from everything
+        else.
+
+        The order is the adapter's own and is fed straight back to
+        `read_funding_facts`, which is the only thing that has to know it.
+        """
+
+    @abc.abstractmethod
+    def read_funding_facts(
+        self,
+        listings: Sequence["SymbolListing"],
+        ticker_response: object,
+        funding_responses: Sequence[object],
+    ) -> Mapping[str, "ContractFunding"]:
+        """What each perpetual costs to hold, out of this venue's own responses.
+
+        Given everything the reader has already fetched -- the listings from the
+        catalogue, the ticker response, and the decoded responses of
+        `funding_request_urls` in that order -- because *which* of them carries
+        funding is exactly what differs between venues, and is therefore the
+        adapter's business rather than the reader's. Bybit's rate is on the
+        ticker and its interval on the catalogue; Binance publishes neither on
+        either and names two endpoints of its own. The reader does the same thing
+        for both: hand over what it has, receive one mapping.
+
+        A symbol the venue quotes no rate for is absent from the mapping rather
+        than present with a zero. Zero funding is a real and common state, and a
+        symbol that is merely unquoted must not be indistinguishable from it.
+        """
+
+    @abc.abstractmethod
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every contract this venue lists, as listings, from its own catalogue response."""
 
@@ -469,6 +554,7 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "connection_discipline",
     "catalogue_url",
     "ticker_url",
+    "funding_request_urls",
     "book_stream_delivers_full_depth",
     "sequence_continuity",
 )
@@ -486,5 +572,6 @@ QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_http_ban_signal",
     "read_stream_ban_signal",
     "read_symbol_listings",
+    "read_funding_facts",
     "is_symbol_capturable",
 )

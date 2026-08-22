@@ -30,6 +30,20 @@ CATALOGUE_FIXTURES = {
     "bybit-linear": "2026-08-22-catalogue-subset.json",
 }
 TICKER_FIXTURE = "2026-08-22-ticker-24h-subset.json"
+# Only one venue needs a response of its own for funding. Bybit's rate is on the
+# ticker and its interval on the catalogue, both of which are already fetched, so
+# it names no url and this map is empty for it rather than absent.
+FUNDING_FIXTURES = {
+    "binance-usdm": {
+        "https://fapi.binance.com/fapi/v1/premiumIndex": (
+            "2026-08-22-funding-premiumIndex-subset.json"
+        ),
+        "https://fapi.binance.com/fapi/v1/fundingInfo": (
+            "2026-08-22-funding-fundingInfo-subset.json"
+        ),
+    },
+    "bybit-linear": {},
+}
 CAPTURED_SYMBOL_COUNT = 30
 REQUEST_TIMEOUT = 30.0
 
@@ -41,12 +55,22 @@ def load_real_responses(venue_id, read_captured_json):
     )
 
 
-def build_reader(venue_id, read_captured_json, count=CAPTURED_SYMBOL_COUNT, metric=QUOTE_VOLUME_24H):
+def build_reader(
+    venue_id,
+    read_captured_json,
+    count=CAPTURED_SYMBOL_COUNT,
+    metric=QUOTE_VOLUME_24H,
+    funding_fails=False,
+):
     adapter = load_venue_adapter(venue_id)
     catalogue, tickers = load_real_responses(venue_id, read_captured_json)
     responses = {adapter.catalogue_url(): catalogue, adapter.ticker_url(): tickers}
+    for url in adapter.funding_request_urls():
+        responses[url] = read_captured_json(venue_id, FUNDING_FIXTURES[venue_id][url])
 
     def fetch(url, _timeout):
+        if funding_fails and url in adapter.funding_request_urls():
+            raise TimeoutError(f"{url} did not answer")
         return responses[url]
 
     return SymbolCatalogueReader(
@@ -266,3 +290,66 @@ def test_the_venue_that_paginates_nothing_reads_one_page(read_captured_json):
     reader.read_catalogue()
     assert reader.standing.catalogue_pages == 1
     assert load_venue_adapter("binance-usdm").read_catalogue_cursor({"symbols": []}) is None
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_a_selected_symbol_carries_what_the_venue_charges_to_hold_it(
+    venue_id, read_captured_json
+):
+    """`symbol-universe` is the venue's listing, so the venue's terms travel on it.
+
+    Funding is the largest recurring cost of holding a perpetual -- 0.01% three
+    times a day is 10.95% a year against a position -- and the part that prices an
+    instrument consumes this type and nothing that would carry the figure
+    otherwise.
+    """
+    reader = build_reader(venue_id, read_captured_json)
+    selection = reader.read_catalogue()
+
+    priced = [entry for entry in selection if entry.funding_rate_per_settlement is not None]
+    assert priced, "no selected symbol carries a funding rate"
+    for entry in priced:
+        assert entry.funding_source, "a carry cost with no source is a number nobody owns"
+        assert entry.instrument_kind is not None
+
+    perpetuals = [entry for entry in priced if entry.funding_settlements_per_day is not None]
+    assert perpetuals, "nothing carries both halves, so no carry could be priced from this"
+    assert all(entry.funding_settlements_per_day > 0 for entry in perpetuals)
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_the_reader_counts_what_the_venue_would_not_price(venue_id, read_captured_json):
+    """Counted at the reader rather than discovered at the part that refuses it."""
+    reader = build_reader(venue_id, read_captured_json)
+    selection = reader.read_catalogue()
+    described = describe_catalogue(reader)
+
+    assert described["selected_without_funding_rate"] == sum(
+        1 for entry in selection if entry.funding_rate_per_settlement is None
+    )
+    assert described["selected_without_funding_interval"] == sum(
+        1 for entry in selection if entry.funding_settlements_per_day is None
+    )
+    assert described["funding_failure"] is None
+
+
+def test_a_failed_funding_read_leaves_carry_unpriced_and_does_not_stop_the_capture(
+    read_captured_json,
+):
+    """The two failures cost different things, so they are handled differently.
+
+    A catalogue read that failed captures no symbols for that interval and those
+    minutes are gone permanently. A funding read that failed leaves carry unpriced
+    until the next refresh, and the part that prices carry refuses an unpriced
+    instrument by name. Dropping the whole read for the second would trade the
+    recoverable failure for the unrecoverable one.
+    """
+    reader = build_reader("binance-usdm", read_captured_json, funding_fails=True)
+    selection = reader.read_catalogue()
+
+    assert selection, "the symbols were not captured because funding did not answer"
+    assert reader.standing.reads_completed == 1
+    assert reader.standing.last_failure is None
+    assert "TimeoutError" in reader.standing.funding_failure
+    assert all(entry.funding_rate_per_settlement is None for entry in selection)
+    assert all(entry.price_increment is None or entry.price_increment > 0 for entry in selection)

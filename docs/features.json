@@ -5647,7 +5647,8 @@
         "market-data",
         "implied-vol-surface",
         "liquidity-grade",
-        "timed-intent"
+        "timed-intent",
+        "symbol-universe"
       ],
       "produces": [
         "instrument-choice",

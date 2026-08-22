@@ -22,16 +22,18 @@ is excluded is only what the venue says is on its way out.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.symbol_universe import CapturableSymbol
-from runtime.venues.venue_adapter import SymbolListing, VenueAdapter
+from runtime.venues.venue_adapter import ContractFunding, SymbolListing, VenueAdapter
 
 PART_ID = "symbol-catalogue-reader"
 
@@ -88,8 +90,21 @@ class CatalogueStanding:
     capturable_seen: int = 0
     selected: int = 0
     without_volume: int = 0
+    # How many selected symbols the venue quoted no funding rate for, and how many
+    # it quoted a rate for but no settlement interval. Counted rather than
+    # asserted: a perpetual missing either cannot have its carry priced, and the
+    # part that refuses it should not be the first place that becomes visible.
+    without_funding_rate: int = 0
+    without_funding_interval: int = 0
     contract_types_seen: dict[str, int] = field(default_factory=dict)
     last_failure: str | None = None
+    # A funding read that failed while the catalogue read succeeded. Separate from
+    # `last_failure` because the consequences are different and must not be
+    # confused: a failed catalogue read stops symbols being captured, which is
+    # irrecoverable, while a failed funding read only leaves carry unpriced for
+    # one refresh -- so the first keeps the previous selection and the second
+    # publishes the symbols anyway.
+    funding_failure: str | None = None
     read_at_ns: int | None = None
 
 
@@ -100,12 +115,34 @@ def fetch_json(url: str, timeout_seconds: float) -> object:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _with_funding(
+    symbol: CapturableSymbol, funding: ContractFunding | None
+) -> CapturableSymbol:
+    """The same symbol, carrying what the venue said holding it costs.
+
+    Unchanged when the venue quoted no rate for it. That is the state of a dated
+    contract, which pays no funding at all, and of a symbol whose funding read
+    failed -- and the two are told apart downstream by whether the read failed,
+    which `CatalogueStanding.funding_failure` records, rather than by guessing
+    here.
+    """
+    if funding is None:
+        return symbol
+    return dataclasses.replace(
+        symbol,
+        funding_rate_per_settlement=funding.rate_per_settlement,
+        funding_settlements_per_day=funding.settlements_per_day,
+        funding_source=funding.source,
+    )
+
+
 def select_capturable_symbols(
     adapter: VenueAdapter,
     listings: tuple[SymbolListing, ...],
     quote_volumes: dict[str, float],
     captured_symbol_count: int,
     selection_metric: str,
+    funding: Mapping[str, ContractFunding] | None = None,
     standing: CatalogueStanding | None = None,
 ) -> tuple[CapturableSymbol, ...]:
     """Apply the settings policy to one venue's catalogue. Pure, so it is testable.
@@ -128,13 +165,18 @@ def select_capturable_symbols(
         )
 
     capturable = [listing for listing in listings if adapter.is_symbol_capturable(listing)]
+    funding = funding or {}
     chosen = [
-        CapturableSymbol(
-            venue_id=adapter.venue_id,
-            symbol=listing.symbol,
-            contract_type=listing.contract_type,
-            quote_volume_24h=quote_volumes.get(listing.symbol),
-            price_increment=listing.price_increment,
+        _with_funding(
+            CapturableSymbol(
+                venue_id=adapter.venue_id,
+                symbol=listing.symbol,
+                contract_type=listing.contract_type,
+                quote_volume_24h=quote_volumes.get(listing.symbol),
+                price_increment=listing.price_increment,
+                instrument_kind=listing.instrument_kind,
+            ),
+            funding.get(listing.symbol),
         )
         for listing in capturable
     ]
@@ -149,6 +191,12 @@ def select_capturable_symbols(
         standing.capturable_seen = len(capturable)
         standing.selected = len(chosen)
         standing.without_volume = sum(1 for entry in chosen if entry.quote_volume_24h is None)
+        standing.without_funding_rate = sum(
+            1 for entry in chosen if entry.funding_rate_per_settlement is None
+        )
+        standing.without_funding_interval = sum(
+            1 for entry in chosen if entry.funding_settlements_per_day is None
+        )
         types: dict[str, int] = {}
         for listing in capturable:
             types[listing.contract_type] = types.get(listing.contract_type, 0) + 1
@@ -216,6 +264,31 @@ class SymbolCatalogueReader:
             f"worse than failing to read it, because nothing downstream can tell the difference."
         )
 
+    def _read_funding(self, listings, tickers) -> Mapping[str, ContractFunding]:
+        """What the venue says each contract costs to hold, or nothing if it would not say.
+
+        Its failure is caught separately from the catalogue's and does not stop
+        the read, because the two cost different things when they go wrong. A
+        catalogue read that failed would capture no symbols for that interval and
+        those minutes are not recoverable; a funding read that failed leaves carry
+        unpriced until the next refresh, and the part that prices carry refuses an
+        unpriced instrument by name rather than assuming it is free.
+
+        On a venue that publishes funding in what has already been fetched this
+        makes no request at all -- `funding_request_urls` is empty there.
+        """
+        try:
+            responses = [
+                self._fetch(url, self._request_timeout_seconds)
+                for url in self._adapter.funding_request_urls()
+            ]
+            facts = self._adapter.read_funding_facts(listings, tickers, responses)
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError, KeyError) as failure:
+            self.standing.funding_failure = f"{type(failure).__name__}: {failure}"
+            return {}
+        self.standing.funding_failure = None
+        return facts
+
     def read_catalogue(self) -> tuple[CapturableSymbol, ...]:
         """Fetch both responses, apply the policy, and keep what came back.
 
@@ -232,12 +305,14 @@ class SymbolCatalogueReader:
             return self._selection
 
         volumes = dict(self._adapter.read_quote_volumes(tickers))
+        funding = self._read_funding(listings, tickers)
         self._selection = select_capturable_symbols(
             adapter=self._adapter,
             listings=listings,
             quote_volumes=volumes,
             captured_symbol_count=self._captured_symbol_count,
             selection_metric=self._selection_metric,
+            funding=funding,
             standing=self.standing,
         )
         self.standing.reads_completed += 1
@@ -307,6 +382,9 @@ def describe_catalogue(reader: SymbolCatalogueReader) -> dict:
         "capturable_seen": reader.standing.capturable_seen,
         "selected": reader.standing.selected,
         "selected_without_volume": reader.standing.without_volume,
+        "selected_without_funding_rate": reader.standing.without_funding_rate,
+        "selected_without_funding_interval": reader.standing.without_funding_interval,
+        "funding_failure": reader.standing.funding_failure,
         "contract_types_seen": dict(reader.standing.contract_types_seen),
         "last_failure": reader.standing.last_failure,
         "symbols": [entry.symbol for entry in reader.selection],

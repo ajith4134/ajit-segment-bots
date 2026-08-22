@@ -32,7 +32,7 @@ from parts.paper_live_trading.paper_account_keeper import (
     APPLIED, REFUSED_DUPLICATE, REFUSED_INSUFFICIENT, REFUSED_LIVE_FILL, PaperAccountKeeper,
 )
 from parts.paper_live_trading.paper_fill_simulator import (
-    FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED, REFUSED_FEED_JUMP,
+    ALREADY_FILLED, FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED, REFUSED_FEED_JUMP,
     REFUSED_NO_PRICE, RESTING, PaperFillSimulator,
 )
 from parts.paper_live_trading.paper_liquidation_simulator import (
@@ -414,6 +414,42 @@ def test_an_order_larger_than_the_book_fills_partially():
     assert result.outcome == PARTIALLY_FILLED
     assert result.filled_quantity == pytest.approx(2.0)
     assert result.remaining_quantity == pytest.approx(3.0)
+
+
+def test_an_order_id_already_filled_is_not_filled_again():
+    """The paper book holds one order per client id, the way a venue does.
+
+    `order-idempotency-stamper` derives a stable id precisely so that a retry is
+    the same order -- "a venue that already has it rejects the duplicate rather
+    than opening a second position". The simulator counted what it had filled and
+    then filled it again anyway, so on paper the retry opened the second position
+    the id exists to prevent, and paper and live diverged exactly where it costs.
+    """
+    subject = fill_simulator()
+    first = subject.simulate(**an_order(quantity=2.0, fill_price_estimate=Estimate(100.5, 5.0)))
+    assert first.outcome == FILLED
+    assert first.filled_quantity == pytest.approx(2.0)
+
+    again = subject.simulate(**an_order(quantity=2.0, fill_price_estimate=Estimate(100.5, 5.0)))
+    assert again.outcome == ALREADY_FILLED
+    assert again.fill is None
+    assert again.filled_quantity == 0.0
+    assert "already been filled" in again.reason
+
+
+def test_a_partially_filled_order_fills_only_what_is_left():
+    """The remainder, not the whole order again."""
+    subject = fill_simulator()
+    first = subject.simulate(**an_order(quantity=5.0, fill_price_estimate=Estimate(100.5, 2.0)))
+    assert first.outcome == PARTIALLY_FILLED
+    assert first.filled_quantity == pytest.approx(2.0)
+
+    rest = subject.simulate(**an_order(quantity=5.0, fill_price_estimate=Estimate(100.5, 10.0)))
+    assert rest.outcome == FILLED
+    assert rest.filled_quantity == pytest.approx(3.0), (
+        "the whole order filled a second time, so the position is 7 of an order for 5"
+    )
+    assert rest.remaining_quantity == pytest.approx(0.0)
 
 
 def test_no_price_at_all_fills_nothing():

@@ -208,6 +208,25 @@ def describe_bounding(gate: TradeCapitalBoundsGate) -> dict:
     }
 
 
+def does_verdict_permit_trading(verdict) -> bool | None:
+    """Whether a capital-settings verdict permits an order, or None if none arrived.
+
+    A named function rather than an attribute read at the call site, because the
+    call site got it wrong and nothing noticed: it asked for `is_valid`, which
+    `CapitalSettingsVerdict` has never had, so every order was refused as
+    "settings inconsistent" while the validator published `consistent` beside it
+    -- and that refusal is indistinguishable from the deliberate one for settings
+    that really do contradict each other.
+
+    None means no verdict has been read, which the gate treats as unverified
+    rather than as permission. A bound checked against settings nobody verified is
+    a bound with no authority behind it.
+    """
+    if verdict is None:
+        return None
+    return verdict.permits_trading
+
+
 def run_trade_capital_bounds_gate(
     gate: TradeCapitalBoundsGate, control_socket, read_sized_orders, publish_bounded_orders,
     health_interval_seconds: float, emit_health,
@@ -237,10 +256,10 @@ def start_part(context) -> int:
     settings to have been validated: a bound checked against settings nobody
     verified is a bound with no authority behind it.
 
-    Nothing validates capital settings in this run -- `capital-settings-validator`
-    is not started -- so `settings_are_valid` arrives as None and the gate treats
-    that as unverified rather than as valid. Whether that refuses every order is one
-    of the things the first run finds out, and it is the correct direction to fail.
+    A verdict that has not arrived is unverified, not valid: `settings_are_valid`
+    stays None until `capital-settings-validator` publishes one, and the gate
+    refuses meanwhile. That is the correct direction to fail -- a bound checked
+    against settings nobody verified is a bound with no authority behind it.
     """
     from runtime.input_assembly import Batch, LatestValue
 
@@ -251,9 +270,10 @@ def start_part(context) -> int:
 
     def read_sized_orders():
         current_bounds = bounds.value()
-        verdict = verdicts.value()
-        is_valid = getattr(verdict, "is_valid", None) if verdict is not None else None
-        return tuple((order, current_bounds, is_valid) for order in sized.payloads())
+        return tuple(
+            (order, current_bounds, does_verdict_permit_trading(verdicts.value()))
+            for order in sized.payloads()
+        )
 
     return run_trade_capital_bounds_gate(
         gate=TradeCapitalBoundsGate(quantity_increment=context.number("order_quantity_increment")),

@@ -32,3 +32,20 @@ class CapturableSymbol:
     contract_type: str
     quote_volume_24h: float | None
     price_increment: float | None
+    # The contract type translated into this system's words, from
+    # trading_types -- what decides whether holding this costs funding, basis or
+    # nothing. None where the adapter did not recognise the venue's spelling, and
+    # a reader must treat that as "unknown kind" rather than as any kind.
+    instrument_kind: str | None = None
+    # What the venue says holding this contract costs: the funding rate it last
+    # charged, and how many times a day it charges one. Both None on a contract
+    # that pays no funding, and both None when the venue quoted a rate this read
+    # did not reach -- unknown is not zero here either, and a part that priced a
+    # missing rate as free would make a perpetual look cheaper than it is by the
+    # largest recurring cost of holding one.
+    funding_rate_per_settlement: float | None = None
+    funding_settlements_per_day: float | None = None
+    # Which endpoint and field each of the two above was read from. Carried with
+    # them because a carry cost is a number a position is priced against, and
+    # RL-061 does not stop at the venue boundary.
+    funding_source: str | None = None

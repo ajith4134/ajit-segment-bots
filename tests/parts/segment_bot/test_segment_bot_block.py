@@ -256,3 +256,232 @@ def test_relisting_an_instrument_replaces_it_rather_than_duplicating_it():
 def test_a_selector_with_no_built_segment_is_refused_at_construction():
     with pytest.raises(ValueError):
         InstrumentSelector(built_segments=(), maximum_cost_fraction=0.05)
+
+
+# --- what the venue lists, read from the venue's own catalogue -----------------
+#
+# These run on the responses binance-usdm actually returned on 2026-08-22
+# (RL-063). The universe entry is built the way symbol-catalogue-reader builds it,
+# from the same three responses, so a change to either end fails here rather than
+# at the part that would have refused every trade.
+
+FUNDING_RATE_FIXTURE = "2026-08-22-funding-premiumIndex-subset.json"
+FUNDING_INTERVAL_FIXTURE = "2026-08-22-funding-fundingInfo-subset.json"
+
+
+def a_real_universe(read_captured_json):
+    """`symbol-universe` for one venue, as its catalogue reader would publish it."""
+    from parts.market_data_feed.symbol_catalogue_reader import select_capturable_symbols
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    adapter = load_venue_adapter(VENUE)
+    catalogue = read_captured_json(VENUE, "2026-08-22-catalogue-subset.json")
+    tickers = read_captured_json(VENUE, "2026-08-22-ticker-24h-subset.json")
+    listings = adapter.read_symbol_listings(catalogue)
+    return select_capturable_symbols(
+        adapter=adapter,
+        listings=listings,
+        quote_volumes=dict(adapter.read_quote_volumes(tickers)),
+        captured_symbol_count=0,
+        selection_metric="quote-volume-24h",
+        funding=adapter.read_funding_facts(
+            listings,
+            tickers,
+            [
+                read_captured_json(VENUE, FUNDING_RATE_FIXTURE),
+                read_captured_json(VENUE, FUNDING_INTERVAL_FIXTURE),
+            ],
+        ),
+    )
+
+
+def a_selector_that_pays_fees(taker_fee_rate=0.0005):
+    return InstrumentSelector(
+        built_segments=("futures",),
+        maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=2 * taker_fee_rate,
+    )
+
+
+def test_a_perpetual_the_venue_declared_carries_an_intent(read_captured_json):
+    """The whole of the carry, from the venue's own numbers.
+
+    This is the case the first paper fill was blocked on: nothing published a
+    funding rate, so the only listed instrument was rejected as unpriceable and
+    every intent came back `no-listed-instrument-can-express-this-intent`.
+    """
+    subject = a_selector_that_pays_fees()
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+
+    choice = subject.select(Intent(horizon_seconds=3600.0))
+    assert choice.state == CHOSEN, choice.reason
+    assert choice.chosen.instrument_kind == PERPETUAL_FUTURE
+    assert choice.chosen.contract_symbol == SYMBOL
+
+    # An hour of an eight-hourly rate is an eighth of one settlement, at the rate
+    # the venue last charged. Nothing here is a preference or a default.
+    settlements = 3600.0 / 86400.0 * choice.chosen.settlements_per_day
+    assert choice.carry_cost_fraction == pytest.approx(
+        choice.chosen.funding_rate_per_settlement * settlements
+    )
+    assert choice.total_cost_fraction == pytest.approx(
+        0.001 + max(0.0, choice.carry_cost_fraction)
+    )
+
+
+def test_the_horizon_still_decides_when_the_numbers_are_the_venue_s_own(read_captured_json):
+    """A day of funding costs 24 times an hour of it, on the same declared rate."""
+    subject = a_selector_that_pays_fees()
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+
+    brief = subject.select(Intent(horizon_seconds=3600.0))
+    long_held = subject.select(Intent(horizon_seconds=86400.0))
+    assert long_held.carry_cost_fraction == pytest.approx(brief.carry_cost_fraction * 24.0)
+    assert long_held.total_cost_fraction > brief.total_cost_fraction
+
+
+def test_a_dated_future_is_skipped_by_name_rather_than_listed_unpriceably(read_captured_json):
+    """Every listing is either registered or counted under why it was not.
+
+    The quarterlies are the case in this fixture: their kind is known and their
+    carry is their basis, which nothing publishes to this part. Registering one
+    with no basis would add a listing that could only ever be rejected, and the
+    count is what says it was seen at all.
+    """
+    subject = a_selector_that_pays_fees()
+    universe = a_real_universe(read_captured_json)
+    for listed in universe:
+        subject.observe_listed_symbol(listed)
+
+    skipped = subject.standing.listings_skipped
+    assert subject.standing.listings_registered + sum(skipped.values()) == len(universe)
+    assert any("dated-future is not priced by this part yet" in reason for reason in skipped), (
+        skipped
+    )
+    dated = [entry.symbol for entry in universe if entry.instrument_kind == DATED_FUTURE]
+    assert dated, "the fixture holds no dated contract, so this case is absent"
+    for symbol in dated:
+        assert not any(
+            instrument.symbol == symbol
+            for listed in subject._listed.values()
+            for instrument in listed
+        ), f"{symbol} was registered although its basis is not published to this part"
+
+
+def test_a_perpetual_whose_interval_the_venue_never_declared_is_skipped(read_captured_json):
+    """A rate without an interval prices nothing, and is refused rather than halved.
+
+    OMGUSDT is the real case: on 2026-08-22 this venue listed it as a perpetual on
+    its way out, quoted `lastFundingRate` for it on premiumIndex, and declared no
+    `fundingIntervalHours` for it anywhere. Measured the same day, all 740 of its
+    TRADING perpetuals do declare one -- so this branch guards a state the venue
+    genuinely produces while no symbol the capture selects is currently in it,
+    which is exactly when an assumed eight hours would go unnoticed.
+    """
+    from runtime.symbol_universe import CapturableSymbol
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    adapter = load_venue_adapter(VENUE)
+    catalogue = read_captured_json(VENUE, "2026-08-22-catalogue-subset.json")
+    tickers = read_captured_json(VENUE, "2026-08-22-ticker-24h-subset.json")
+    listings = adapter.read_symbol_listings(catalogue)
+    facts = adapter.read_funding_facts(
+        listings,
+        tickers,
+        [
+            read_captured_json(VENUE, FUNDING_RATE_FIXTURE),
+            read_captured_json(VENUE, FUNDING_INTERVAL_FIXTURE),
+        ],
+    )
+    unpriceable = [
+        listing
+        for listing in listings
+        if listing.instrument_kind == PERPETUAL_FUTURE
+        and facts[listing.symbol].settlements_per_day is None
+    ]
+    assert unpriceable, "the fixture declares an interval for every perpetual it holds"
+
+    subject = a_selector_that_pays_fees()
+    for listing in unpriceable:
+        fact = facts[listing.symbol]
+        assert fact.rate_per_settlement is not None, "the venue did quote it a rate"
+        subject.observe_listed_symbol(
+            CapturableSymbol(
+                venue_id=VENUE,
+                symbol=listing.symbol,
+                contract_type=listing.contract_type,
+                quote_volume_24h=None,
+                price_increment=listing.price_increment,
+                instrument_kind=listing.instrument_kind,
+                funding_rate_per_settlement=fact.rate_per_settlement,
+                funding_settlements_per_day=fact.settlements_per_day,
+                funding_source=fact.source,
+            )
+        )
+
+    assert subject.standing.listings_registered == 0
+    assert subject.standing.listings_skipped[
+        "the venue declared no funding rate or no settlement interval"
+    ] == len(unpriceable)
+
+
+def test_a_selector_that_was_given_no_fee_registers_nothing(read_captured_json):
+    """What trading costs is the operator's to state, and unstated is not free."""
+    subject = a_selector()
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+
+    assert subject.standing.listings_registered == 0
+    assert subject.select(Intent()).state == NOTHING_AVAILABLE
+
+
+def test_a_trade_registers_a_price_and_never_an_instrument():
+    """A symbol printing trades is evidence a contract exists, not its terms.
+
+    Inferring one here is what left every perpetual with an unpriceable carry: the
+    inferred listing carried no funding, so it was rejected the moment it was
+    priced, while looking from outside exactly like a venue that listed nothing.
+    """
+    subject = a_selector_that_pays_fees()
+    subject.observe_price(VENUE, SYMBOL, 77_000.0)
+
+    choice = subject.select(Intent())
+    assert choice.state == NOTHING_AVAILABLE
+    assert choice.reference_price == 77_000.0, (
+        "the price a choice was made at must still travel with the choice"
+    )
+
+
+def test_a_republished_universe_replaces_a_contract_s_terms(read_captured_json):
+    """Funding changes at every settlement, and the universe is republished whole.
+
+    A second read must overwrite the instrument rather than list it twice --
+    otherwise the cheapest of the two is chosen, which is the stale one exactly
+    when the rate has risen.
+    """
+    import dataclasses
+
+    subject = a_selector_that_pays_fees()
+    universe = [
+        entry
+        for entry in a_real_universe(read_captured_json)
+        if entry.symbol == SYMBOL and entry.funding_settlements_per_day is not None
+    ]
+    assert universe
+    for listed in universe:
+        subject.observe_listed_symbol(listed)
+    first = subject.select(Intent(horizon_seconds=3600.0))
+
+    for listed in universe:
+        subject.observe_listed_symbol(
+            dataclasses.replace(
+                listed,
+                funding_rate_per_settlement=listed.funding_rate_per_settlement * 10.0,
+            )
+        )
+    after = subject.select(Intent(horizon_seconds=3600.0))
+
+    assert after.considered == first.considered, "the same contract was listed twice"
+    assert after.carry_cost_fraction == pytest.approx(first.carry_cost_fraction * 10.0)

@@ -14,6 +14,20 @@ LONG = "long"
 SHORT = "short"
 FLAT = "flat"
 
+# What kind of contract a listing is, in this system's words rather than a
+# venue's. Binance says PERPETUAL and TRADIFI_PERPETUAL and CURRENT_QUARTER,
+# Bybit says LinearPerpetual and LinearFutures, and the difference decides how a
+# position is charged for being held: a perpetual pays funding every settlement,
+# a dated future pays its basis once as it converges, spot pays nothing.
+#
+# The translation from a venue's word to one of these belongs to that venue's
+# adapter, the same way the trade-side translation above belongs here: a part
+# that recognised a venue's spelling would be a part wired to a venue (T-4).
+PERPETUAL_FUTURE = "perpetual-future"
+DATED_FUTURE = "dated-future"
+SPOT = "spot"
+OPTION = "option"
+
 
 def order_side_for(position_side: str) -> str:
     """The side an order is placed on to open a position of this side.

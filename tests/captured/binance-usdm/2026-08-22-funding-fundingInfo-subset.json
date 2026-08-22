@@ -1,0 +1,146 @@
+[
+ {
+  "symbol": "ZECUSDT",
+  "adjustedFundingRateCap": "0.02000000",
+  "adjustedFundingRateFloor": "-0.02000000",
+  "fundingIntervalHours": 8,
+  "disclaimer": false,
+  "updateTime": 1698655930369
+ },
+ {
+  "symbol": "ENAUSDT",
+  "adjustedFundingRateCap": "0.02000000",
+  "adjustedFundingRateFloor": "-0.02000000",
+  "fundingIntervalHours": 4,
+  "disclaimer": false,
+  "updateTime": 1712061164617
+ },
+ {
+  "symbol": "HYPEUSDT",
+  "adjustedFundingRateCap": "0.02000000",
+  "adjustedFundingRateFloor": "-0.02000000",
+  "fundingIntervalHours": 4,
+  "disclaimer": false,
+  "updateTime": 1748601134819
+ },
+ {
+  "symbol": "XAUUSDT",
+  "adjustedFundingRateCap": "0.00500000",
+  "adjustedFundingRateFloor": "-0.00500000",
+  "fundingIntervalHours": 4,
+  "disclaimer": false,
+  "updateTime": 1769796333728
+ },
+ {
+  "symbol": "XAGUSDT",
+  "adjustedFundingRateCap": "0.00500000",
+  "adjustedFundingRateFloor": "-0.00500000",
+  "fundingIntervalHours": 4,
+  "disclaimer": false,
+  "updateTime": 1769796311587
+ },
+ {
+  "symbol": "TSLAUSDT",
+  "adjustedFundingRateCap": "0.02000000",
+  "adjustedFundingRateFloor": "-0.02000000",
+  "fundingIntervalHours": 8,
+  "disclaimer": false,
+  "updateTime": 1769775454495
+ },
+ {
+  "symbol": "XPTUSDT",
+  "adjustedFundingRateCap": "0.00500000",
+  "adjustedFundingRateFloor": "-0.00500000",
+  "fundingIntervalHours": 4,
+  "disclaimer": false,
+  "updateTime": 1769796378525
+ },
+ {
+  "symbol": "SNDKUSDT",
+  "adjustedFundingRateCap": "0.02000000",
+  "adjustedFundingRateFloor": "-0.02000000",
+  "fundingIntervalHours": 8,
+  "disclaimer": false,
+  "updateTime": 1775551773899
+ },
+ {
+  "symbol": "SPCXUSDT",
+  "adjustedFundingRateCap": "0.01000000",
+  "adjustedFundingRateFloor": "-0.01000000",
+  "fundingIntervalHours": 8,
+  "disclaimer": false,
+  "updateTime": 1781280941193
+ },
+ {
+  "symbol": "TRXUSDT",
+  "adjustedFundingRateCap": "0.004875",
+  "adjustedFundingRateFloor": "-0.004875",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "ETHUSDC",
+  "adjustedFundingRateCap": "0.00300",
+  "adjustedFundingRateFloor": "-0.00300",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "ETHUSDT",
+  "adjustedFundingRateCap": "0.00300",
+  "adjustedFundingRateFloor": "-0.00300",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "BCHUSDT",
+  "adjustedFundingRateCap": "0.00375",
+  "adjustedFundingRateFloor": "-0.00375",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "LTCUSDT",
+  "adjustedFundingRateCap": "0.00375",
+  "adjustedFundingRateFloor": "-0.00375",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "XRPUSDT",
+  "adjustedFundingRateCap": "0.00375",
+  "adjustedFundingRateFloor": "-0.00375",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "BTCUSDC",
+  "adjustedFundingRateCap": "0.00300",
+  "adjustedFundingRateFloor": "-0.00300",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "BTCUSDT",
+  "adjustedFundingRateCap": "0.00300",
+  "adjustedFundingRateFloor": "-0.00300",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ },
+ {
+  "symbol": "SOLUSDT",
+  "adjustedFundingRateCap": "0.00375",
+  "adjustedFundingRateFloor": "-0.00375",
+  "fundingIntervalHours": 8,
+  "disclaimer": true,
+  "updateTime": null
+ }
+]

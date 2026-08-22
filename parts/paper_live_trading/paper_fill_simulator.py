@@ -51,6 +51,10 @@ HELD_IN_FLIGHT = "held-until-the-round-trip-elapses"
 REFUSED_FEED_JUMP = "refused-price-jumped"
 REFUSED_NO_PRICE = "refused-no-price"
 REFUSED_LIVE_ORDER = "refused-live-orders-are-not-simulated"
+# The id has already been filled for everything it asked for. Its own outcome
+# rather than a refusal for no price: nothing is wrong with the order or the
+# book, and an operator reading "no price" for a duplicate would look at the feed.
+ALREADY_FILLED = "already-filled"
 
 MARKET = "market"
 LIMIT = "limit"
@@ -88,6 +92,7 @@ class SimulatorStanding:
     held_in_flight: int = 0
     refused_feed_jump: int = 0
     refused_no_price: int = 0
+    refused_already_filled: int = 0
     fees_charged: float = 0.0
     worst_slippage_fraction: float = 0.0
 
@@ -182,6 +187,26 @@ class PaperFillSimulator:
             price = limit_price
             is_taker = False
 
+        # What this id still has outstanding. A venue holds one order per client
+        # id -- that is the whole reason `order-idempotency-stamper` derives a
+        # stable one -- so an id already filled in full is not filled again, and a
+        # partially filled one fills only what is left. Without this the simulator
+        # counted what it had filled and then filled it again anyway, so a
+        # resubmitted order opened a second position on paper while the same
+        # order against a real venue would have been rejected as a duplicate.
+        already_filled = self._filled_so_far.get(client_order_id, 0.0)
+        outstanding = quantity - already_filled
+        if outstanding <= 0:
+            self.standing.refused_already_filled += 1
+            return self._result(
+                client_order_id, venue_id, symbol, side, ALREADY_FILLED, None, 0.0, 0.0,
+                None, 0.0, None,
+                f"{client_order_id} has already been filled for {already_filled:g}, which is "
+                f"the whole order; a venue holding this id would reject the duplicate rather "
+                f"than open a second position",
+            )
+        fillable = min(fillable, outstanding)
+
         if fillable <= 0:
             self.standing.refused_no_price += 1
             return self._result(
@@ -197,9 +222,8 @@ class PaperFillSimulator:
                 self.standing.worst_slippage_fraction, slippage
             )
 
-        already = self._filled_so_far.get(client_order_id, 0.0)
-        self._filled_so_far[client_order_id] = already + fillable
-        remaining = quantity - fillable
+        self._filled_so_far[client_order_id] = already_filled + fillable
+        remaining = outstanding - fillable
         outcome = FILLED if remaining <= 0 else PARTIALLY_FILLED
         if outcome == FILLED:
             self.standing.filled += 1
@@ -249,6 +273,7 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "held_in_flight": simulator.standing.held_in_flight,
         "refused_feed_jump": simulator.standing.refused_feed_jump,
         "refused_no_price": simulator.standing.refused_no_price,
+        "refused_already_filled": simulator.standing.refused_already_filled,
         "fees_charged": simulator.standing.fees_charged,
         "worst_slippage_fraction": simulator.standing.worst_slippage_fraction,
     }

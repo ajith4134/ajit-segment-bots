@@ -65,6 +65,7 @@ from parts.risk_capital_allocation.stop_target_placer import (
 from parts.risk_capital_allocation.trade_capital_bounds_gate import (
     BUMPED_TO_MINIMUM, CAPPED_AT_MAXIMUM, REFUSED_BUMP_BREACHES_RISK,
     REFUSED_SETTINGS_INVALID, WITHIN_BOUNDS, TradeCapitalBoundsGate,
+    does_verdict_permit_trading,
 )
 from runtime.journal import Journal
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -905,3 +906,46 @@ def test_a_balance_inside_tolerance_agrees():
     watch.set_allocation(SEGMENT, 1000.0)
     watch.observe_venue_balance(SEGMENT, 1010.0)
     assert watch.check(SEGMENT)[0].state == AGREES
+
+
+def test_the_gate_reads_the_verdict_the_validator_actually_publishes():
+    """The two parts are joined here, on the object one of them really produces.
+
+    They were joined by `getattr(verdict, "is_valid", None)`, and the verdict has
+    no `is_valid`: the gate refused every order for inconsistent settings while
+    the validator was publishing `consistent` beside it, and the refusal it
+    produced is the same one it produces for settings that genuinely contradict
+    each other. Nothing caught it because the gate's own tests pass a bool.
+    """
+    validator = CapitalSettingsValidator()
+    consistent = validator.judge(
+        segment="futures",
+        allotment=CapitalAllotment(
+            segment="futures",
+            allotted=1_000.0,
+            currency="USDT",
+            leverage_ceiling=1.0,
+            bounds=TradeCapitalBounds(
+                segment="futures", minimum_capital=10.0, maximum_capital=100.0, currency="USDT"
+            ),
+            read_at_ns=1,
+        ),
+        main_balance=10_000.0,
+    )
+    assert consistent.permits_trading is True
+    assert does_verdict_permit_trading(consistent) is True
+
+    incomplete = validator.judge(segment="futures", allotment=None)
+    assert does_verdict_permit_trading(incomplete) is False
+    assert does_verdict_permit_trading(None) is None, (
+        "no verdict is unverified, which the gate refuses -- not the same as a verdict "
+        "that said no"
+    )
+
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    passed = gate.bound(sized_for_gate(5.0), bounds(), does_verdict_permit_trading(consistent))
+    assert passed.outcome == WITHIN_BOUNDS, passed.reason
+    assert passed.quantity > 0
+
+    refused = gate.bound(sized_for_gate(5.0), bounds(), does_verdict_permit_trading(None))
+    assert refused.outcome == REFUSED_SETTINGS_INVALID

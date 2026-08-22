@@ -13,6 +13,7 @@ import json
 import pytest
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
+from runtime.trading_types import DATED_FUTURE, PERPETUAL_FUTURE
 from runtime.venues.binance_usdm import (
     MARKET_ROUTE,
     PUBLIC_ROUTE,
@@ -29,6 +30,8 @@ MARKET_FIXTURE = "2026-08-22-market-ws-aggtrade-kline.jsonl"
 CANDLE_FIXTURE = "2026-08-22-market-ws-kline-through-close.jsonl"
 BOOK_FIXTURE = "2026-08-22-public-ws-depth20.jsonl"
 CATALOGUE_FIXTURE = "2026-08-22-catalogue-subset.json"
+FUNDING_RATE_FIXTURE = "2026-08-22-funding-premiumIndex-subset.json"
+FUNDING_INTERVAL_FIXTURE = "2026-08-22-funding-fundingInfo-subset.json"
 
 CAPTURED_SYMBOL = "BTCUSDT"
 CANDLE_INTERVAL = "1m"
@@ -268,6 +271,100 @@ def test_a_listing_carries_its_tick_size_or_says_it_has_none(adapter, read_captu
     increments = [listing.price_increment for listing in listings]
     assert any(value is not None for value in increments)
     assert all(value is None or value > 0 for value in increments)
+
+
+def test_a_listing_is_translated_out_of_this_venue_s_vocabulary(adapter, read_captured_json):
+    """PERPETUAL, TRADIFI_PERPETUAL and CURRENT_QUARTER are three words for two kinds.
+
+    The translation happens here because how a position is charged for being held
+    depends on which kind it is, and no part may recognise a venue's spelling to
+    find out (T-4).
+    """
+    catalogue = read_captured_json("binance-usdm", CATALOGUE_FIXTURE)
+    listings = {listing.symbol: listing for listing in adapter.read_symbol_listings(catalogue)}
+
+    by_type = {}
+    for listing in listings.values():
+        by_type.setdefault(listing.contract_type, set()).add(listing.instrument_kind)
+    assert by_type["PERPETUAL"] == {PERPETUAL_FUTURE}
+    assert by_type["TRADIFI_PERPETUAL"] == {PERPETUAL_FUTURE}, (
+        "a tokenised equity perpetual never expires and settles funding, so it is "
+        "priced as the perpetual it is; whether to trade one is a segment question"
+    )
+    assert by_type["CURRENT_QUARTER"] == {DATED_FUTURE}
+    assert by_type["NEXT_QUARTER"] == {DATED_FUTURE}
+
+
+def test_funding_joins_the_rate_this_venue_charged_to_the_interval_it_declared(
+    adapter, read_captured_json
+):
+    """Both halves, from the two endpoints this venue splits them across.
+
+    A rate alone prices nothing: 0.01% costs twice as much on a four-hourly
+    contract as on an eight-hourly one, and this venue states the two figures on
+    different endpoints that neither the catalogue nor the ticker carries.
+    """
+    listings = adapter.read_symbol_listings(read_captured_json("binance-usdm", CATALOGUE_FIXTURE))
+    facts = adapter.read_funding_facts(
+        listings,
+        read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json"),
+        [
+            read_captured_json("binance-usdm", FUNDING_RATE_FIXTURE),
+            read_captured_json("binance-usdm", FUNDING_INTERVAL_FIXTURE),
+        ],
+    )
+
+    bitcoin = facts[CAPTURED_SYMBOL]
+    assert bitcoin.rate_per_settlement == 0.0001
+    assert bitcoin.settlements_per_day == 3.0, "eight-hourly, as this venue declared it"
+    assert "premiumIndex" in bitcoin.source and "fundingInfo" in bitcoin.source
+
+    intervals = {fact.settlements_per_day for fact in facts.values()}
+    assert intervals - {None} <= {1.0, 3.0, 6.0, 24.0}, (
+        f"an interval outside the ones this venue declares: {sorted(intervals - {None})}"
+    )
+
+
+def test_a_contract_this_venue_states_no_interval_for_is_left_unpriceable(
+    adapter, read_captured_json
+):
+    """None, not the documented eight hours.
+
+    The quarterlies are the case that matters: measured 2026-08-22 they are absent
+    from fundingInfo *and* quote `lastFundingRate` 0.00000000 on premiumIndex, so
+    a default interval would have priced a dated future as a perpetual that costs
+    nothing to hold -- wrong in the same direction every time, and invisibly.
+    """
+    listings = adapter.read_symbol_listings(read_captured_json("binance-usdm", CATALOGUE_FIXTURE))
+    facts = adapter.read_funding_facts(
+        listings,
+        read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json"),
+        [
+            read_captured_json("binance-usdm", FUNDING_RATE_FIXTURE),
+            read_captured_json("binance-usdm", FUNDING_INTERVAL_FIXTURE),
+        ],
+    )
+
+    dated = [listing for listing in listings if listing.instrument_kind == DATED_FUTURE]
+    assert dated, "the fixture holds no dated contract, so the case this test exists for is absent"
+    for listing in dated:
+        assert facts[listing.symbol].rate_per_settlement == 0.0, (
+            "this venue really does quote a zero funding rate on a contract that pays none"
+        )
+        assert facts[listing.symbol].settlements_per_day is None
+        assert "undeclared" in facts[listing.symbol].source
+
+
+def test_funding_responses_in_the_wrong_number_are_refused(adapter, read_captured_json):
+    """A rate joined to another symbol's interval is a wrong carry that looks right."""
+    listings = adapter.read_symbol_listings(read_captured_json("binance-usdm", CATALOGUE_FIXTURE))
+    with pytest.raises(ValueError) as refusal:
+        adapter.read_funding_facts(
+            listings,
+            read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json"),
+            [read_captured_json("binance-usdm", FUNDING_RATE_FIXTURE)],
+        )
+    assert "2 funding responses" in str(refusal.value)
 
 
 def test_the_live_counts_in_the_manifest_still_match_the_spec(capture_manifest):

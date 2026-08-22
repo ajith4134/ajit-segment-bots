@@ -95,6 +95,45 @@ class TradeCapitalBounds:
             )
 
 
+# What `capital-settings-verdict` says, in the three states it has. Named rather
+# than compared against a bare string, and living here rather than in the part
+# that judges, because the part that acts on a verdict must not import the part
+# that formed it (T-4) -- and a reader that guessed at the shape instead would
+# get a wrong answer that looks exactly like a refusal.
+CONSISTENT = "consistent"
+INCONSISTENT = "inconsistent"
+INCOMPLETE = "incomplete"
+
+
+@dataclass(frozen=True)
+class SettingsFault:
+    """One pair of settings that cannot both be obeyed."""
+
+    settings: tuple[str, ...]
+    values: tuple[float, ...]
+    explanation: str
+
+
+@dataclass(frozen=True)
+class CapitalSettingsVerdict:
+    """Whether the settings can be obeyed, and every reason they cannot.
+
+    `permits_trading` is the whole point of the type: `trade-capital-bounds-gate`
+    refuses every order while it is False, so this is the switch between a system
+    that can place an order and one that cannot.
+    """
+
+    segment: str
+    verdict: str
+    faults: tuple[SettingsFault, ...]
+    reason: str
+    judged_at_ns: int
+
+    @property
+    def permits_trading(self) -> bool:
+        return self.verdict == CONSISTENT
+
+
 @dataclass(frozen=True)
 class CapitalAllotment:
     """One segment's slice of the main account, and what bounds it (RL-051)."""

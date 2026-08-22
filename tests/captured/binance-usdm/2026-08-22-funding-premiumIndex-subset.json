@@ -1,0 +1,262 @@
+[
+ {
+  "symbol": "SNDKUSDT",
+  "markPrice": "1595.38000000",
+  "indexPrice": "1595.14952408",
+  "estimatedSettlePrice": "1594.90060415",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "ENAUSDT",
+  "markPrice": "0.15062393",
+  "indexPrice": "0.15050191",
+  "estimatedSettlePrice": "0.15050925",
+  "lastFundingRate": "0.00005000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787428800000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "XAUUSDT",
+  "markPrice": "4611.40000000",
+  "indexPrice": "4609.90500767",
+  "estimatedSettlePrice": "4609.19449522",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787428800000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "XPTUSDT",
+  "markPrice": "1882.17000000",
+  "indexPrice": "1882.37203203",
+  "estimatedSettlePrice": "1882.37172956",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787428800000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "ZECUSDT",
+  "markPrice": "808.06000000",
+  "indexPrice": "808.26061035",
+  "estimatedSettlePrice": "798.04634600",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "XRPUSDT",
+  "markPrice": "1.46980000",
+  "indexPrice": "1.46967858",
+  "estimatedSettlePrice": "1.45799716",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "TSLAUSDT",
+  "markPrice": "362.24000000",
+  "indexPrice": "362.17072193",
+  "estimatedSettlePrice": "362.04996398",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "XAGUSDT",
+  "markPrice": "69.01859456",
+  "indexPrice": "69.01501304",
+  "estimatedSettlePrice": "69.00516003",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787428800000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "SPCXUSDT",
+  "markPrice": "135.17413844",
+  "indexPrice": "135.26631714",
+  "estimatedSettlePrice": "135.28101920",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416471152
+ },
+ {
+  "symbol": "OMGUSDT",
+  "markPrice": "0.15445273",
+  "indexPrice": "0.15445273",
+  "estimatedSettlePrice": "0.00000000",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "ETHUSDT_261225",
+  "markPrice": "2444.18629845",
+  "indexPrice": "2420.45883721",
+  "estimatedSettlePrice": "2417.57365401",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "LTCUSDT",
+  "markPrice": "52.23108824",
+  "indexPrice": "52.23647059",
+  "estimatedSettlePrice": "52.17528529",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "SOLUSDT",
+  "markPrice": "94.00822744",
+  "indexPrice": "93.98538146",
+  "estimatedSettlePrice": "93.69418890",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "ETHUSDC",
+  "markPrice": "2419.05000000",
+  "indexPrice": "2419.80874951",
+  "estimatedSettlePrice": "2417.41812323",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "MKRUSDT",
+  "markPrice": "1818.50800619",
+  "indexPrice": "1818.50800619",
+  "estimatedSettlePrice": "0.00000000",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "HYPEUSDT",
+  "markPrice": "77.48593103",
+  "indexPrice": "77.45057143",
+  "estimatedSettlePrice": "77.67317016",
+  "lastFundingRate": "0.00009787",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787428800000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "GAIBUSDT",
+  "markPrice": "0.02082667",
+  "indexPrice": "0.02082667",
+  "estimatedSettlePrice": "0.02082667",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "ETHUSDT",
+  "markPrice": "2419.40690698",
+  "indexPrice": "2420.45883721",
+  "estimatedSettlePrice": "2417.57365401",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "BTCUSDT_261225",
+  "markPrice": "78406.65611594",
+  "indexPrice": "77191.63521739",
+  "estimatedSettlePrice": "77129.47107524",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "BTCUSDC",
+  "markPrice": "77174.00637878",
+  "indexPrice": "77180.08514521",
+  "estimatedSettlePrice": "77118.32829782",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "BTCUSDT",
+  "markPrice": "77204.73161594",
+  "indexPrice": "77191.63521739",
+  "estimatedSettlePrice": "77129.47107524",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "TRXUSDT",
+  "markPrice": "0.34442629",
+  "indexPrice": "0.34431235",
+  "estimatedSettlePrice": "0.34414605",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "BCHUSDT",
+  "markPrice": "277.91000000",
+  "indexPrice": "277.84916324",
+  "estimatedSettlePrice": "277.09745447",
+  "lastFundingRate": "0.00010000",
+  "interestRate": "0.00010000",
+  "nextFundingTime": 1787443200000,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "BTCUSDT_260925",
+  "markPrice": "77512.85444928",
+  "indexPrice": "77191.63521739",
+  "estimatedSettlePrice": "77129.47107524",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "WAVESUSDT",
+  "markPrice": "0.75728182",
+  "indexPrice": "0.75728182",
+  "estimatedSettlePrice": "0.00000000",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ },
+ {
+  "symbol": "ETHUSDT_260925",
+  "markPrice": "2425.54079845",
+  "indexPrice": "2420.45883721",
+  "estimatedSettlePrice": "2417.57365401",
+  "lastFundingRate": "0.00000000",
+  "interestRate": "0.00000000",
+  "nextFundingTime": 0,
+  "time": 1787416472000
+ }
+]

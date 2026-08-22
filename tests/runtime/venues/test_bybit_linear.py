@@ -13,6 +13,7 @@ import json
 import pytest
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
+from runtime.trading_types import DATED_FUTURE, PERPETUAL_FUTURE
 from runtime.venues.bybit_linear import (
     LINEAR_PUBLIC_STREAM,
     VENUE_ID,
@@ -28,6 +29,7 @@ TRADE_FIXTURE = "2026-08-22-public-linear-trade.jsonl"
 CANDLE_FIXTURE = "2026-08-22-public-linear-kline-through-close.jsonl"
 BOOK_FIXTURE = "2026-08-22-public-linear-orderbook.jsonl"
 CATALOGUE_FIXTURE = "2026-08-22-catalogue-subset.json"
+TICKER_FIXTURE = "2026-08-22-ticker-24h-subset.json"
 
 CAPTURED_SYMBOL = "BTCUSDT"
 CANDLE_INTERVAL = "1m"
@@ -280,6 +282,87 @@ def test_a_listing_carries_its_tick_size(adapter, read_captured_json):
     increments = [listing.price_increment for listing in adapter.read_symbol_listings(catalogue)]
     assert any(value is not None for value in increments)
     assert all(value is None or value > 0 for value in increments)
+
+
+def test_a_listing_is_translated_out_of_this_venue_s_vocabulary(adapter, read_captured_json):
+    """LinearPerpetual and LinearFutures are this venue's words for two kinds."""
+    catalogue = read_captured_json("bybit-linear", CATALOGUE_FIXTURE)
+    listings = adapter.read_symbol_listings(catalogue)
+    by_type = {}
+    for listing in listings:
+        by_type.setdefault(listing.contract_type, set()).add(listing.instrument_kind)
+    assert by_type["LinearPerpetual"] == {PERPETUAL_FUTURE}
+    assert by_type["LinearFutures"] == {DATED_FUTURE}, (
+        "the fixture holds no dated contract, so the case this test exists for is absent"
+    )
+
+
+def test_this_venue_needs_no_extra_request_to_state_its_funding(adapter):
+    """Both figures are already in the two responses the reader fetches anyway.
+
+    A request that bought a number already in hand would be paid for against a
+    rate limit, which is the resource this venue actually meters.
+    """
+    assert adapter.funding_request_urls() == ()
+
+
+def test_funding_joins_the_ticker_s_rate_to_the_catalogue_s_interval(
+    adapter, read_captured_json
+):
+    """The join happens in the adapter because the two responses are its own.
+
+    On the other venue neither figure is on either response, so a reader that
+    knew which one carried funding would be a reader with a venue inside it.
+    """
+    listings = adapter.read_symbol_listings(read_captured_json("bybit-linear", CATALOGUE_FIXTURE))
+    facts = adapter.read_funding_facts(
+        listings, read_captured_json("bybit-linear", TICKER_FIXTURE), []
+    )
+
+    bitcoin = facts[CAPTURED_SYMBOL]
+    assert bitcoin.rate_per_settlement == 0.0001
+    assert bitcoin.settlements_per_day == 3.0, "480 minutes, as this venue declared it"
+    assert "fundingRate" in bitcoin.source and "fundingInterval" in bitcoin.source
+
+    four_hourly = [
+        listing.symbol
+        for listing in listings
+        if listing.funding_settlements_per_day == 6.0
+    ]
+    assert four_hourly, (
+        "the fixture holds no four-hourly contract, so the interval could be ignored "
+        "entirely and every assertion here would still pass"
+    )
+
+
+def test_a_dated_contract_pays_no_funding_and_is_not_recorded_as_paying_zero(
+    adapter, read_captured_json
+):
+    """This venue writes "" rather than omitting the field, and "" is not 0.0."""
+    listings = adapter.read_symbol_listings(read_captured_json("bybit-linear", CATALOGUE_FIXTURE))
+    tickers = read_captured_json("bybit-linear", TICKER_FIXTURE)
+    unquoted = {
+        entry["symbol"]
+        for entry in tickers["result"]["list"]
+        if entry.get("fundingRate") == ""
+    }
+    assert unquoted, "the fixture quotes a rate for everything, so this case is absent"
+
+    facts = adapter.read_funding_facts(listings, tickers, [])
+    assert unquoted.isdisjoint(facts), (
+        f"{sorted(unquoted & set(facts))} were recorded as paying zero funding when the "
+        f"venue quoted them none at all"
+    )
+
+
+def test_a_funding_response_this_venue_never_asked_for_is_refused(adapter, read_captured_json):
+    """A response nothing reads is a request paid for and discarded."""
+    listings = adapter.read_symbol_listings(read_captured_json("bybit-linear", CATALOGUE_FIXTURE))
+    with pytest.raises(ValueError) as refusal:
+        adapter.read_funding_facts(
+            listings, read_captured_json("bybit-linear", TICKER_FIXTURE), [{}]
+        )
+    assert "asks for no funding endpoint" in str(refusal.value)
 
 
 def test_a_403_is_the_whole_http_ban_and_it_states_its_own_floor(adapter):

@@ -148,6 +148,7 @@ def run_part_process(
     control_socket,
     runtime_directory_name: str | None,
     switch_endpoint: str | None = None,
+    settings_directory_name: str | None = None,
 ) -> None:
     """The forked child's whole life: build the context, hand it to the part.
 
@@ -158,6 +159,14 @@ def run_part_process(
     does not leave its inbox addresses bound by a process that is gone.
     """
     runtime_directory = pathlib.Path(runtime_directory_name) if runtime_directory_name else None
+    # Passed rather than left to the child's environment. A forkserver is one
+    # long-lived process and every part is forked from it, so a child's
+    # XDG_CONFIG_HOME is whatever the forkserver was started with -- which makes
+    # "which settings did this part read" a question about process history rather
+    # than about the run. None means the operator's own directory.
+    settings_directory_path = (
+        pathlib.Path(settings_directory_name) if settings_directory_name else None
+    )
     module = importlib.import_module(part_module_name)
     entry_point = getattr(module, PART_ENTRY_POINT, None)
     if entry_point is None:
@@ -170,6 +179,7 @@ def run_part_process(
         part_id=part_id,
         control_socket=control_socket,
         runtime_directory=runtime_directory,
+        settings_directory_path=settings_directory_path,
         switch_endpoint=switch_endpoint,
     )
     try:
@@ -197,6 +207,7 @@ class PartLauncher:
         runtime_directory: pathlib.Path | None = None,
         wiring: dict[str, PartWiring] | None = None,
         parts_root: pathlib.Path = PARTS_ROOT,
+        settings_directory: pathlib.Path | None = None,
     ) -> None:
         if place_in_scope and limits_for is None:
             raise ValueError(
@@ -212,6 +223,11 @@ class PartLauncher:
         self._limits_for = limits_for
         self._runtime_directory = runtime_directory
         self._parts_root = parts_root
+        # Which settings the parts this launcher starts will read. None is the
+        # operator's own directory, which is what a real run wants; a caller that
+        # states one is saying so out loud rather than arranging an environment
+        # variable and hoping it survives the fork.
+        self._settings_directory = settings_directory
         self._wiring = wiring if wiring is not None else derive_wiring(runtime_directory=runtime_directory)
         self._forkserver = start_forkserver(FORKSERVER_PRELOAD)
         self._running: dict[str, LaunchedPart] = {}
@@ -288,6 +304,7 @@ class PartLauncher:
                     part_end,
                     str(self._runtime_directory) if self._runtime_directory else None,
                     self._switch_endpoint_for(part_id),
+                    str(self._settings_directory) if self._settings_directory else None,
                 ),
                 thread_ceiling=self._thread_ceiling,
             )

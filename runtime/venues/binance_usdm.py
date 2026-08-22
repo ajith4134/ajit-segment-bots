@@ -34,10 +34,11 @@ import time
 from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
-from runtime.trading_types import BUY, SELL
+from runtime.trading_types import BUY, DATED_FUTURE, PERPETUAL_FUTURE, SELL
 from runtime.venues.venue_adapter import (
     BanSignal,
     ConnectionDiscipline,
+    ContractFunding,
     HeartbeatDiscipline,
     MessageFacts,
     NormalisedTrade,
@@ -62,6 +63,14 @@ CATALOGUE_URL = f"{REST_HOST}/fapi/v1/exchangeInfo"
 # individually -- at 570 symbols the per-symbol form would cost fourteen times
 # the entire minute's budget.
 TICKER_URL = f"{REST_HOST}/fapi/v1/ticker/24hr"
+# Where a perpetual's funding comes from, which is neither of the two above.
+# `premiumIndex` carries `lastFundingRate` for every listed symbol -- 875 of 875
+# on 2026-08-22 -- and `fundingInfo` carries `fundingIntervalHours` for the 760
+# symbols this venue states an interval for. Two calls because the rate and the
+# interval genuinely live apart here; a rate without its interval prices nothing.
+FUNDING_RATE_URL = f"{REST_HOST}/fapi/v1/premiumIndex"
+FUNDING_INTERVAL_URL = f"{REST_HOST}/fapi/v1/fundingInfo"
+HOURS_PER_DAY = 24.0
 
 _DOCS = "https://developers.binance.com/docs/derivatives/usds-margined-futures"
 _CONNECT_PAGE = f"{_DOCS}/websocket-market-streams/Connect"
@@ -549,6 +558,72 @@ class BinanceUsdmAdapter(VenueAdapter):
             if entry.get("quoteVolume") is not None
         }
 
+    def funding_request_urls(self) -> tuple[str, ...]:
+        """Two: the rate, then the interval. Neither is on the catalogue or ticker.
+
+        The order is what `read_funding_facts` expects to be handed back, and it
+        is the only thing that needs to know it.
+        """
+        return (FUNDING_RATE_URL, FUNDING_INTERVAL_URL)
+
+    def read_funding_facts(
+        self,
+        listings: Sequence[SymbolListing],
+        ticker_response: object,
+        funding_responses: Sequence[object],
+    ) -> Mapping[str, ContractFunding]:
+        """Each perpetual's funding, from premiumIndex joined to fundingInfo.
+
+        The rate is `lastFundingRate`: the rate the venue last actually charged,
+        rather than the running `estimatedSettlePrice` premium, because a carry a
+        position will be billed is the one worth pricing against.
+
+        A symbol absent from fundingInfo gets `settlements_per_day=None` -- 132 of
+        872 listed symbols on 2026-08-22 -- rather than this venue's documented
+        eight-hour default. Of the 760 it does state, 444 settle four-hourly and 2
+        hourly, so a blanket eight would be wrong for the majority of the symbols
+        the venue bothered to mention, and would be wrong silently. Whoever wants
+        one of those 132 priced can settle it in one call to /fapi/v1/fundingRate,
+        whose history gives the interval between two consecutive settlements as a
+        measurement rather than an assumption.
+
+        Neither the listings nor the ticker response is read: this venue puts no
+        funding on its exchangeInfo or its 24-hour statistics.
+        """
+        if len(funding_responses) != len(self.funding_request_urls()):
+            raise ValueError(
+                f"{VENUE_ID} asked for {len(self.funding_request_urls())} funding responses "
+                f"and was handed {len(funding_responses)}. Reading them in the wrong order "
+                f"would attach one symbol's rate to another's interval, which is a wrong "
+                f"carry cost that looks exactly like a right one."
+            )
+        rate_response, interval_response = funding_responses
+        settlements_per_day = {
+            entry["symbol"]: HOURS_PER_DAY / float(entry["fundingIntervalHours"])
+            for entry in interval_response
+            if entry.get("fundingIntervalHours")
+        }
+        facts = {}
+        for entry in rate_response:
+            rate = entry.get("lastFundingRate")
+            if rate is None:
+                continue
+            symbol = entry["symbol"]
+            facts[symbol] = ContractFunding(
+                symbol=symbol,
+                rate_per_settlement=float(rate),
+                settlements_per_day=settlements_per_day.get(symbol),
+                source=(
+                    f"{FUNDING_RATE_URL} lastFundingRate"
+                    + (
+                        f", {FUNDING_INTERVAL_URL} fundingIntervalHours"
+                        if symbol in settlements_per_day
+                        else ", interval undeclared by this venue"
+                    )
+                ),
+            )
+        return facts
+
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every contract the venue lists, as listings, from an exchangeInfo response.
 
@@ -565,6 +640,9 @@ class BinanceUsdmAdapter(VenueAdapter):
                 contract_type=entry.get("contractType", ""),
                 status=entry["status"],
                 price_increment=_read_price_increment(entry),
+                instrument_kind=INSTRUMENT_KIND_OF_CONTRACT_TYPE.get(
+                    entry.get("contractType", "")
+                ),
             )
             for entry in symbols
         )
@@ -578,6 +656,22 @@ class BinanceUsdmAdapter(VenueAdapter):
         phase that has something to trade with.
         """
         return listing.status == _LIMITS["capturable_status"].value
+
+
+# This venue's word for a contract type, translated into the system's own. The
+# tokenised equities are perpetuals in every mechanical sense -- they are quoted
+# in USDT, they never expire and they settle funding on the same schedule -- so
+# they carry the same kind; whether one should be traded is a segment question,
+# not a pricing one. The quarterlies are dated: measured 2026-08-22, all four of
+# them are absent from fundingInfo and quote lastFundingRate 0.00000000, which is
+# exactly the shape that would price as a free perpetual if the kind were
+# inferred from funding instead of stated here.
+INSTRUMENT_KIND_OF_CONTRACT_TYPE = {
+    "PERPETUAL": PERPETUAL_FUTURE,
+    "TRADIFI_PERPETUAL": PERPETUAL_FUTURE,
+    "CURRENT_QUARTER": DATED_FUTURE,
+    "NEXT_QUARTER": DATED_FUTURE,
+}
 
 
 def _read_price_increment(entry: Mapping[str, object]) -> float | None:
