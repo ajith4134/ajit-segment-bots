@@ -1,0 +1,340 @@
+"""bull-exit-plan-proposer: where this long is wrong, before there is anything to defend.
+
+The plan is built **before entry** on purpose. A stop chosen after a position is
+open is chosen by whoever is losing money on it, and the excursion record that
+says how far this symbol normally goes against a winner is only usable while
+there is no position arguing with it.
+
+Three numbers, each from a measurement rather than a rule of thumb:
+
+- **The stop.** Placed past the excursion a winning trade in this symbol normally
+  survives (RL-042). A stop inside that band is not tight risk management, it is
+  a machine for being stopped out of trades that were going to work. The
+  `stop-audit` record is what corrects this: it says where stops have actually
+  been hit and then reversed, and the proposer widens past that.
+- **The targets.** Scaled out at the excursion quantiles that have actually been
+  reached, not at round multiples of the risk. A 3R target on a symbol that
+  reaches 3R twice a year is a plan to never take profit.
+- **The horizon.** From the horizon profile: how long this kind of trade has
+  taken to resolve. A trade past its horizon is not a trade any more, it is a
+  position nobody decided to hold.
+
+**A plan that cannot be built is not built.** No default stop, no fallback
+percentage. A symbol with no excursion record produces no plan and the bot stands
+down, because a stop invented from nothing is the single most expensive
+placeholder in a trading system (RL-062).
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from runtime.bot_opinion import LONG, ExitPlan, ExitTarget
+from runtime.part_declaration import PartDeclaration
+from runtime.part_process import run_part
+
+PART_ID = "bull-exit-plan-proposer"
+BOT = "bull-bot"
+
+PART_DECLARATION = PartDeclaration(
+    part_id="bull-exit-plan-proposer",
+    consumes=(
+        "bull-side-candidate", "market-data", "symbol-profile",
+        "bull-calibrated-conviction", "excursion-profile", "horizon-profile", "stop-audit",
+    ),
+    produces=("bull-exit-plan", "part-health"),
+    resource_class="compute-bound",
+    rate_risk="changes-the-answer",
+    skipped_tick_effect="corrupts",
+)
+
+NO_EXCURSION_PROFILE = "no-excursion-record-for-this-symbol"
+NO_PRICE = "no-price-for-this-symbol"
+NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
+REWARD_BELOW_RISK = "reward-to-risk-below-floor"
+
+
+@dataclass(frozen=True)
+class ExcursionProfile:
+    """How far this symbol's trades have gone against and in favour of a winner.
+
+    Fractions of entry price, from closed trades. `adverse_quantile` is the
+    excursion a winning trade normally survives; `favourable_quantiles` maps a
+    quantile to the move reached, which is where scaling out belongs.
+    """
+
+    venue_id: str
+    symbol: str
+    side: str
+    adverse_excursion: float
+    favourable_quantiles: dict
+    trades_observed: int
+    is_fitted: bool
+
+
+@dataclass(frozen=True)
+class HorizonProfile:
+    """How long this kind of trade has taken to resolve, in seconds."""
+
+    detector: str
+    median_seconds: float
+    trades_observed: int
+    is_fitted: bool
+
+
+@dataclass(frozen=True)
+class StopAudit:
+    """Where stops have been hit and the trade then went on to work anyway.
+
+    The measurement that says a stop was too tight rather than that the trade
+    was wrong -- and the only honest reason to widen one.
+    """
+
+    venue_id: str
+    symbol: str
+    stops_hit: int
+    stops_hit_then_reversed: int
+    worst_reversal_excursion: float | None
+
+    @property
+    def reversal_fraction(self) -> float | None:
+        if not self.stops_hit:
+            return None
+        return self.stops_hit_then_reversed / self.stops_hit
+
+
+@dataclass
+class ProposerStanding:
+    plans_requested: int = 0
+    plans_built: int = 0
+    stops_widened_by_audit: int = 0
+    by_refusal: dict = field(default_factory=dict)
+    widest_stop_fraction: float = 0.0
+
+
+class BullExitPlanProposer:
+    """Builds the stop, the targets and the horizon from what has actually happened."""
+
+    def __init__(
+        self,
+        stop_safety_multiple: float,
+        target_quantiles: tuple,
+        minimum_reward_to_risk: float,
+        conviction_horizon_multiple: float,
+        now_ns=time.time_ns,
+    ) -> None:
+        if stop_safety_multiple <= 1.0:
+            raise ValueError(
+                "a stop at or inside the excursion a winner normally survives is a machine "
+                "for being stopped out of trades that were going to work"
+            )
+        if not target_quantiles:
+            raise ValueError("a plan with no target never takes profit")
+        if not all(0.0 < quantile < 1.0 for quantile, _ in target_quantiles):
+            raise ValueError("each target names a quantile of the favourable excursion")
+        if abs(sum(fraction for _, fraction in target_quantiles) - 1.0) > 1e-9:
+            raise ValueError(
+                "the target fractions must close the whole position, or the plan leaves "
+                "a remainder nobody decided to hold"
+            )
+        self._stop_multiple = stop_safety_multiple
+        self._target_quantiles = tuple(target_quantiles)
+        self._minimum_reward_to_risk = minimum_reward_to_risk
+        self._conviction_horizon_multiple = conviction_horizon_multiple
+        self._now_ns = now_ns
+        self._prices: dict[tuple[str, str], float] = {}
+        self._price_steps: dict[tuple[str, str], float] = {}
+        self._excursions: dict[tuple[str, str], ExcursionProfile] = {}
+        self._horizons: dict[str, HorizonProfile] = {}
+        self._audits: dict[tuple[str, str], StopAudit] = {}
+        self.standing = ProposerStanding()
+
+    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+        self._prices[(venue_id, symbol)] = price
+
+    def observe_symbol_profile(self, venue_id: str, symbol: str, price_step: float) -> None:
+        """The venue's tick size: a stop that is not on one is not a stop the venue will take."""
+        self._price_steps[(venue_id, symbol)] = price_step
+
+    def observe_excursion_profile(self, profile: ExcursionProfile) -> None:
+        self._excursions[(profile.venue_id, profile.symbol)] = profile
+
+    def observe_horizon_profile(self, profile: HorizonProfile) -> None:
+        self._horizons[profile.detector] = profile
+
+    def observe_stop_audit(self, audit: StopAudit) -> None:
+        self._audits[(audit.venue_id, audit.symbol)] = audit
+
+    def propose(self, candidate, conviction) -> tuple[ExitPlan | None, str]:
+        self.standing.plans_requested += 1
+        key = (candidate.venue_id, candidate.symbol)
+
+        price = self._prices.get(key)
+        if price is None or price <= 0:
+            return None, self._refuse(NO_PRICE)
+
+        profile = self._excursions.get(key)
+        if profile is None or not profile.is_fitted:
+            # No default stop. A stop invented from nothing is the most
+            # expensive placeholder a trading system can contain (RL-062).
+            return None, self._refuse(NO_EXCURSION_PROFILE)
+
+        horizon = self._horizons.get(candidate.detector)
+        if horizon is None or not horizon.is_fitted:
+            return None, self._refuse(NO_HORIZON)
+
+        stop_fraction, widened = self._stop_fraction(key, profile)
+        stop_price = self._on_step(key, price * (1.0 - stop_fraction), round_down=True)
+        if stop_price <= 0 or stop_price >= price:
+            return None, self._refuse(NO_EXCURSION_PROFILE)
+
+        targets = self._targets(key, price, profile)
+        if not targets:
+            return None, self._refuse(NO_EXCURSION_PROFILE)
+
+        risk = price - stop_price
+        weighted_reward = sum((target.price - price) * target.fraction for target in targets)
+        reward_to_risk = weighted_reward / risk if risk > 0 else None
+
+        if reward_to_risk is None or reward_to_risk < self._minimum_reward_to_risk:
+            return None, self._refuse(REWARD_BELOW_RISK)
+
+        # A conviction the bot is surer of is given longer to work, because the
+        # horizon record is the median over all such trades and the ones it was
+        # sure about are the ones worth waiting on.
+        horizon_seconds = horizon.median_seconds * (
+            1.0 + self._conviction_horizon_multiple * conviction.probability
+        )
+
+        self.standing.plans_built += 1
+        self.standing.widest_stop_fraction = max(self.standing.widest_stop_fraction, stop_fraction)
+
+        return (
+            ExitPlan(
+                bot=BOT,
+                venue_id=candidate.venue_id,
+                symbol=candidate.symbol,
+                side=LONG,
+                stop_price=stop_price,
+                targets=targets,
+                invalidation_reason=(
+                    f"a close below {stop_price:.8g} is further against this long than "
+                    f"{profile.trades_observed} recorded trades in {candidate.symbol} normally "
+                    f"survive, so the reason for being long has stopped being true"
+                ),
+                horizon_seconds=horizon_seconds,
+                risk_fraction=stop_fraction,
+                reward_to_risk=reward_to_risk,
+                reason=(
+                    f"stop {stop_fraction:.2%} below {price:.8g}, which is "
+                    f"{self._stop_multiple:.2g}x the {profile.adverse_excursion:.2%} adverse "
+                    f"excursion winners in this symbol normally survive"
+                    + (" and widened again by the stop audit" if widened else "")
+                    + f"; {len(targets)} target(s) at excursions actually reached, weighted "
+                    f"reward-to-risk {reward_to_risk:.2f}; resolved within "
+                    f"{horizon_seconds:.0f}s on a {horizon.median_seconds:.0f}s median for "
+                    f"{candidate.detector}"
+                ),
+                planned_at_ns=self._now_ns(),
+            ),
+            "planned",
+        )
+
+    def _stop_fraction(self, key, profile: ExcursionProfile) -> tuple[float, bool]:
+        """Past what winners survive, and past what the audit says was too tight."""
+        fraction = profile.adverse_excursion * self._stop_multiple
+        audit = self._audits.get(key)
+        widened = False
+        if audit is not None and audit.worst_reversal_excursion is not None:
+            widened_to = audit.worst_reversal_excursion * self._stop_multiple
+            if widened_to > fraction:
+                fraction = widened_to
+                widened = True
+                self.standing.stops_widened_by_audit += 1
+        return fraction, widened
+
+    def _targets(self, key, price: float, profile: ExcursionProfile) -> tuple:
+        """Scale-outs at excursions this symbol has actually reached."""
+        targets = []
+        for quantile, fraction in self._target_quantiles:
+            excursion = profile.favourable_quantiles.get(quantile)
+            if excursion is None or excursion <= 0:
+                continue
+            targets.append(
+                ExitTarget(
+                    price=self._on_step(key, price * (1.0 + excursion), round_down=False),
+                    fraction=fraction,
+                    reason=(
+                        f"the {quantile:.0%} favourable excursion over "
+                        f"{profile.trades_observed} recorded trades is {excursion:.2%}"
+                    ),
+                )
+            )
+        if not targets:
+            return ()
+
+        # Whatever the profile could not price is folded into the last target,
+        # so the plan always closes the whole position rather than leaving a
+        # remainder nobody decided to hold.
+        allocated = sum(target.fraction for target in targets)
+        if allocated < 1.0:
+            last = targets[-1]
+            targets[-1] = ExitTarget(
+                price=last.price,
+                fraction=last.fraction + (1.0 - allocated),
+                reason=(
+                    f"{last.reason}; carries the {1.0 - allocated:.0%} of the position whose "
+                    f"target quantile has no recorded excursion, so nothing is left unplanned"
+                ),
+            )
+        return tuple(targets)
+
+    def _on_step(self, key, price: float, round_down: bool) -> float:
+        """A price the venue will accept. A stop off the tick grid is not a stop."""
+        step = self._price_steps.get(key)
+        if step is None or step <= 0:
+            return price
+        steps = price / step
+        whole = int(steps)
+        if round_down:
+            return whole * step
+        return (whole if steps == whole else whole + 1) * step
+
+    def _refuse(self, reason: str) -> str:
+        self.standing.by_refusal[reason] = self.standing.by_refusal.get(reason, 0) + 1
+        return reason
+
+
+def describe_exit_planning(proposer: BullExitPlanProposer) -> dict:
+    return {
+        "part_id": PART_ID,
+        "plans_requested": proposer.standing.plans_requested,
+        "plans_built": proposer.standing.plans_built,
+        "refused_by_reason": dict(proposer.standing.by_refusal),
+        "stops_widened_by_audit": proposer.standing.stops_widened_by_audit,
+        "widest_stop_fraction": proposer.standing.widest_stop_fraction,
+        "symbols_with_an_excursion_profile": len(proposer._excursions),
+        "detectors_with_a_horizon_profile": len(proposer._horizons),
+    }
+
+
+def run_bull_exit_plan_proposer(
+    proposer: BullExitPlanProposer, control_socket, read_candidates_and_profiles,
+    publish_plans, health_interval_seconds: float, emit_health,
+) -> int:
+    def tick() -> None:
+        plans = []
+        for candidate, conviction in read_candidates_and_profiles(proposer):
+            plan, _ = proposer.propose(candidate, conviction)
+            if plan is not None:
+                plans.append(plan)
+        publish_plans(tuple(plans))
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=control_socket,
+        do_one_tick=tick,
+        emit_health=emit_health,
+        health_interval_seconds=health_interval_seconds,
+    )

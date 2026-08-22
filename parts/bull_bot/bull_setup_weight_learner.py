@@ -1,0 +1,218 @@
+"""bull-setup-weight-learner: how much this bot should trust each detector, from results.
+
+The setup filter needs a number per detector and that number must not be typed by
+anybody (RL-061). This is where it comes from: the bot's own scorecard, split by
+detector, and the instruction scorecard for detectors that came from a learned
+instruction rather than a built-in one.
+
+**Long results only.** A detector that is right about shorts and wrong about
+longs must be weighted low *here* while the bear bot weights it high, and a
+single number over both sides would let each bot inherit the other's edge. The
+scorecard this part reads is the bull bot's own.
+
+The weight is a **Beta-Bernoulli posterior against the bot's own base rate**,
+which is the honest form of "better than usual":
+
+- A detector with three wins out of three is not three times as good as the base
+  rate. The prior pulls it back toward it, and the pull weakens as evidence
+  accumulates -- which is exactly the behaviour that stops a bot piling into a
+  detector that has had a good morning.
+- A detector below the base rate is discounted rather than deleted. Deleting it
+  would end the evidence, and a detector that stops being sampled can never be
+  found to have started working again.
+
+**A floor, not zero.** The floor is what keeps exploration alive; RL-005 is
+explicit that the paper stage experiments without restriction, and a bot that
+weighted a losing detector to zero would stop learning about it permanently.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from runtime.bot_opinion import SetupWeight
+from runtime.learned_estimator import Estimate, RateEstimator
+from runtime.part_declaration import PartDeclaration
+from runtime.part_process import run_part
+
+PART_ID = "bull-setup-weight-learner"
+BOT = "bull-bot"
+
+PART_DECLARATION = PartDeclaration(
+    part_id="bull-setup-weight-learner",
+    consumes=("bot-scorecard", "instruction-scorecard"),
+    produces=("bull-setup-weight", "part-health"),
+    resource_class="compute-bound",
+    rate_risk="latency-only",
+    skipped_tick_effect="delays",
+)
+
+
+@dataclass
+class LearnerStanding:
+    detectors_tracked: int = 0
+    weights_published: int = 0
+    trades_learned_from: int = 0
+    detectors_at_the_floor: int = 0
+    highest_weight: float = 0.0
+    by_detector: dict = field(default_factory=dict)
+
+
+class BullSetupWeightLearner:
+    """Turns closed long trades into a per-detector weight the filter can apply."""
+
+    def __init__(
+        self,
+        prior_hit_rate: float,
+        prior_weight: float,
+        half_life_observations: float,
+        minimum_observations: int,
+        minimum_weight: float,
+        maximum_weight: float,
+        now_ns=time.time_ns,
+    ) -> None:
+        if not 0.0 <= minimum_weight < maximum_weight:
+            raise ValueError(
+                "the floor must sit below the cap and at or above zero; a floor of zero would "
+                "end the evidence for a detector permanently"
+            )
+        self._prior_hit_rate = prior_hit_rate
+        self._prior_weight = prior_weight
+        self._half_life = half_life_observations
+        self._minimum = minimum_observations
+        self._minimum_weight = minimum_weight
+        self._maximum_weight = maximum_weight
+        self._now_ns = now_ns
+        self._by_detector: dict[str, RateEstimator] = {}
+        self._base_rate = RateEstimator(
+            prior=prior_hit_rate, prior_weight=prior_weight,
+            half_life_observations=half_life_observations,
+        )
+        self._instruction_of: dict[str, str] = {}
+        self.standing = LearnerStanding()
+
+    def observe_closed_trade(self, detector: str, was_win: bool) -> None:
+        """One closed long trade attributed to the detector that proposed it."""
+        self._estimator_for(detector).observe(was_win)
+        self._base_rate.observe(was_win)
+        self.standing.trades_learned_from += 1
+        self.standing.detectors_tracked = len(self._by_detector)
+
+    def observe_scorecard(self, scorecard) -> None:
+        """Adopt the bot's durable record, so a restart does not relearn from nothing."""
+        for detector, record in scorecard.describe()["by_detector"].items():
+            for _ in range(record["wins"]):
+                self.observe_closed_trade(detector, True)
+            for _ in range(record["trades"] - record["wins"]):
+                self.observe_closed_trade(detector, False)
+
+    def observe_instruction_scorecard(self, instruction_id: str, detector: str, wins: int, trades: int) -> None:
+        """A detector that came from a learned instruction carries that instruction's record.
+
+        Without this a newly compiled instruction would start at the base rate
+        even though the hypothesis behind it was already tested -- and the
+        evidence that justified compiling it would be thrown away.
+        """
+        if trades < 0 or not 0 <= wins <= trades:
+            raise ValueError("an instruction cannot have won more trades than it took")
+        self._instruction_of[detector] = instruction_id
+        for _ in range(wins):
+            self.observe_closed_trade(detector, True)
+        for _ in range(trades - wins):
+            self.observe_closed_trade(detector, False)
+
+    def weight_for(self, detector: str) -> SetupWeight:
+        """This detector's hit rate against the bot's own, floored and capped."""
+        estimator = self._estimator_for(detector)
+        hit_rate = estimator.estimate(self._minimum)
+        base = self._base_rate.estimate(self._minimum)
+
+        if base.value <= 0:
+            ratio = 1.0
+            provenance = (
+                "the bot has no base rate above zero yet, so every detector carries the "
+                "same weight and none is favoured by an accident of ordering"
+            )
+        else:
+            ratio = hit_rate.value / base.value
+            provenance = (
+                f"{hit_rate.value:.1%} over {hit_rate.observations} long trades against this "
+                f"bot's own {base.value:.1%} base rate"
+                + ("" if hit_rate.is_fitted else ", still pulled toward the prior")
+            )
+
+        weight = min(self._maximum_weight, max(self._minimum_weight, ratio))
+        if weight == self._minimum_weight:
+            self.standing.detectors_at_the_floor += 1
+        self.standing.highest_weight = max(self.standing.highest_weight, weight)
+        self.standing.weights_published += 1
+        self.standing.by_detector[detector] = weight
+
+        instruction = self._instruction_of.get(detector)
+        return SetupWeight(
+            bot=BOT,
+            detector=detector,
+            weight=weight,
+            hit_rate=hit_rate,
+            trades_judged=hit_rate.observations,
+            reason=(
+                f"{detector} weighted {weight:.2f}: {provenance}"
+                + (f"; carries the record of instruction {instruction}" if instruction else "")
+                + (
+                    f"; held at the {self._minimum_weight:.2f} floor so it keeps being sampled "
+                    f"and can be found to work again"
+                    if weight == self._minimum_weight
+                    else ""
+                )
+            ),
+            learned_at_ns=self._now_ns(),
+        )
+
+    def all_weights(self) -> tuple[SetupWeight, ...]:
+        return tuple(self.weight_for(detector) for detector in sorted(self._by_detector))
+
+    @property
+    def base_rate(self) -> Estimate:
+        return self._base_rate.estimate(self._minimum)
+
+    def _estimator_for(self, detector: str) -> RateEstimator:
+        estimator = self._by_detector.get(detector)
+        if estimator is None:
+            estimator = RateEstimator(
+                prior=self._prior_hit_rate, prior_weight=self._prior_weight,
+                half_life_observations=self._half_life,
+            )
+            self._by_detector[detector] = estimator
+        return estimator
+
+
+def describe_setup_weights(learner: BullSetupWeightLearner) -> dict:
+    base = learner.base_rate
+    return {
+        "part_id": PART_ID,
+        "detectors_tracked": learner.standing.detectors_tracked,
+        "trades_learned_from": learner.standing.trades_learned_from,
+        "weights_published": learner.standing.weights_published,
+        "base_hit_rate": base.value,
+        "base_hit_rate_is_measured": base.is_fitted,
+        "highest_weight": learner.standing.highest_weight,
+        "weights": dict(sorted(learner.standing.by_detector.items())),
+    }
+
+
+def run_bull_setup_weight_learner(
+    learner: BullSetupWeightLearner, control_socket, read_scorecards, publish_weights,
+    health_interval_seconds: float, emit_health,
+) -> int:
+    def tick() -> None:
+        read_scorecards(learner)
+        publish_weights(learner.all_weights())
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=control_socket,
+        do_one_tick=tick,
+        emit_health=emit_health,
+        health_interval_seconds=health_interval_seconds,
+    )
