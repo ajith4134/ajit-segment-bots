@@ -115,6 +115,12 @@ class InstrumentChoice:
     state: str
     reason: str
     chosen_at_ns: int
+    # What the symbol last traded at when this choice was made. Carried because the
+    # parts downstream have to size a position against a price and none of them
+    # consumes market-data: the sizer's risk is a distance from an entry, and an
+    # entry price that arrived separately would be a price from a different moment
+    # than the choice it belongs to. None when nothing has traded yet.
+    reference_price: float | None = None
 
     @property
     def is_actionable(self) -> bool:
@@ -138,6 +144,7 @@ class InstrumentSelector:
         self,
         built_segments: tuple,
         maximum_cost_fraction: float,
+        round_trip_cost_fraction: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not built_segments:
@@ -149,6 +156,11 @@ class InstrumentSelector:
             raise ValueError("the cost ceiling is a fraction of notional and must be inside (0, 1)")
         self._built_segments = tuple(built_segments)
         self._maximum_cost = maximum_cost_fraction
+        # What a round trip costs on the perpetual this part registers from live
+        # trades. None means it registers none, which is the right behaviour for a
+        # caller that did not say what trading costs.
+        self._round_trip_cost_fraction = round_trip_cost_fraction
+        self._prices: dict[tuple[str, str], float] = {}
         self._now_ns = now_ns
         self._listed: dict[tuple[str, str], list] = {}
         self.standing = SelectorStanding()
@@ -192,6 +204,44 @@ class InstrumentSelector:
             held = min(1.0, horizon_seconds / instrument.seconds_to_expiry)
             return instrument.premium_fraction * (1.0 - math.sqrt(1.0 - held))
         return None
+
+    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+        """The last trade for a symbol, which is also how this part learns the
+        symbol is tradeable at all.
+
+        The perpetual is registered from the fact that it traded rather than from a
+        catalogue this part does not consume: a symbol printing trades on a venue is
+        a symbol that venue lists, and the round trip is the fee schedule the
+        operator set. What is deliberately left None is funding -- unknown is not
+        zero, and a carry cost invented here would make a perpetual look cheaper
+        than a dated future nobody priced.
+        """
+        key = (venue_id, symbol)
+        self._prices[key] = price
+        if self._round_trip_cost_fraction is None:
+            return
+        if key not in self._listed:
+            self._listed[key] = []
+        if not any(i.instrument_kind == PERPETUAL_FUTURE for i in self._listed[key]):
+            self._listed[key].append(
+                ListedInstrument(
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    instrument_kind=PERPETUAL_FUTURE,
+                    contract_symbol=symbol,
+                    funding_rate_per_settlement=None,
+                    settlements_per_day=None,
+                    basis_fraction=None,
+                    premium_fraction=None,
+                    seconds_to_expiry=None,
+                    supports_short=True,
+                    supports_convexity=False,
+                    round_trip_cost_fraction=self._round_trip_cost_fraction,
+                    absorbable_quote=None,
+                    seconds_to_fill=None,
+                )
+            )
+            self.standing.instruments_seen = sum(len(v) for v in self._listed.values())
 
     def select(self, intent) -> InstrumentChoice:
         """One intent, priced against everything listed for its symbol."""
@@ -357,6 +407,7 @@ class InstrumentSelector:
             state=state,
             reason=reason,
             chosen_at_ns=self._now_ns(),
+            reference_price=self._prices.get((intent.venue_id, intent.symbol)),
         )
 
 
@@ -390,4 +441,50 @@ def run_instrument_selector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Which segments are built is a fact about this system, not a market fact: futures
+    is built and spot and options are declared and honestly empty (RL-050, RL-062).
+    The selector needs it so that when an unbuilt segment would have been the better
+    instrument it can say so rather than silently choosing the second best --
+    `unbuilt_segment_would_have_won` is how that becomes visible.
+    """
+    from runtime.input_assembly import Batch
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
+    grades = Batch(read=context.bus.reader("liquidity-grade"))
+    timed = Batch(read=context.bus.reader("timed-intent"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_choices = context.bus.publisher_for("instrument-choice")
+
+    def read_intents_and_instruments(selector):
+        # Everything that describes what could be traded arrives as its own type;
+        # the selector holds them and the intents are what ask a question.
+        for instrument in list(surfaces.payloads()) + list(grades.payloads()):
+            selector.observe_listed_instrument(instrument)
+        for trade in trades.payloads():
+            selector.observe_price(trade.venue_id, trade.symbol, trade.price)
+        timed.payloads()
+        return intents.payloads()
+
+    return run_instrument_selector(
+        selector=InstrumentSelector(
+            built_segments=(context.setting("segment_id").value,),
+            maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
+            # A perpetual's round trip is two crossings of the spread at the taker
+            # rate. Nothing lists instruments for this system yet, so the venue's
+            # own perpetual is registered from the trades that arrive and priced at
+            # the fee schedule the operator set.
+            round_trip_cost_fraction=2 * context.number("taker_fee_rate"),
+        ),
+        control_socket=context.control_socket,
+        read_intents_and_instruments=read_intents_and_instruments,
+        publish_choices=publish_choices,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )

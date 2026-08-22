@@ -388,3 +388,94 @@ def run_opinion_arbiter(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The arbiter judges a symbol at a time: every opinion currently held about it,
+    against the regime it is in, any ruling that has been made about the conflict,
+    and any counter-argument raised. Opinions are levels per (bot, symbol) -- a bot
+    holds its view until it changes it -- and the arbitration is driven by whichever
+    symbols had an opinion arrive this tick.
+
+    In the first runs only the bull bot is on, so every opinion is sole and every
+    one is discounted by the sole-opinion penalty. That is correct: an unopposed
+    view is weaker evidence than an agreed one, and with the floor at 0.55 and the
+    penalty at 0.05 a lone conviction must reach 0.60 to act.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    regimes = LatestByKey(
+        read=context.bus.reader("market-regime"),
+        key_of=lambda regime: (regime.venue_id, regime.symbol),
+    )
+    rulings = LatestByKey(
+        read=context.bus.reader("conflict-ruling"),
+        key_of=lambda ruling: (ruling.venue_id, ruling.symbol),
+    )
+    counters = LatestByKey(
+        read=context.bus.reader("counter-argument"),
+        key_of=lambda counter: (counter.venue_id, counter.symbol),
+    )
+    weights = Batch(read=context.bus.reader("bot-weight"))
+    biases = Batch(read=context.bus.reader("forecast-bias"))
+    breaks = Batch(read=context.bus.reader("regime-break-alert"))
+    competences = Batch(read=context.bus.reader("competence-map"))
+    coverages = Batch(read=context.bus.reader("coverage-report"))
+    publish_intents = context.bus.publisher_for("trade-intent")
+
+    # Every opinion currently held, by symbol and then by bot. Held across ticks
+    # because an opinion is a level: the bull bot does not restate its view every
+    # tick, and an arbiter that only saw this tick's arrivals would arbitrate one
+    # bot against silence rather than against the others' current positions.
+    held: dict[tuple[str, str], dict[str, object]] = {}
+
+    def read_opinions_and_context(arbiter):
+        for weight in weights.payloads():
+            arbiter.observe_bot_weight(weight)
+        for bias in biases.payloads():
+            arbiter.observe_forecast_bias(bias)
+        for alert in breaks.payloads():
+            arbiter.observe_regime_break(alert.regime, alert.has_broken)
+        for competence in competences.payloads():
+            arbiter.observe_competence(competence.venue_id, competence.symbol, competence)
+        for coverage in coverages.payloads():
+            arbiter.observe_coverage(coverage.venue_id, coverage.symbol, coverage)
+
+        regime_by_symbol = regimes.mapping()
+        ruling_by_symbol = rulings.mapping()
+        counter_by_symbol = counters.mapping()
+
+        arriving = set()
+        for opinion in opinions.payloads():
+            key = (opinion.venue_id, opinion.symbol)
+            held.setdefault(key, {})[opinion.bot] = opinion
+            arriving.add(key)
+
+        return tuple(
+            (
+                tuple(held[key].values()),
+                regime_by_symbol.get(key),
+                ruling_by_symbol.get(key),
+                counter_by_symbol.get(key),
+            )
+            for key in sorted(arriving)
+        )
+
+    return run_opinion_arbiter(
+        arbiter=OpinionArbiter(
+            minimum_conviction=context.number("arbiter_minimum_conviction"),
+            agreement_bonus=context.number("arbiter_agreement_bonus"),
+            sole_opinion_penalty=context.number("arbiter_sole_opinion_penalty"),
+            maximum_forecast_shade=context.number("arbiter_maximum_forecast_shade"),
+            minimum_competence=context.number("arbiter_minimum_competence"),
+            minimum_coverage=context.number("arbiter_minimum_coverage"),
+        ),
+        control_socket=context.control_socket,
+        read_opinions_and_context=read_opinions_and_context,
+        publish_intents=publish_intents,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

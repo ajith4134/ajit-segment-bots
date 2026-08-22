@@ -214,3 +214,46 @@ def run_order_destination_router(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The switch that decides whether money is real, and the dullest part in the
+    block on purpose. Two rules it does not bend: no money mode, no order -- an
+    unread mode goes nowhere rather than defaulting to paper, which would silently
+    drop a live trade, or to live, which would spend real money on an unread
+    setting. And an unstamped order is refused, because it could not be retried
+    safely.
+
+    The money mode is a level: it is what the operator set, until they set something
+    else. Orders are events.
+    """
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+
+    stamped = Batch(read=context.bus.reader("stamped-order"))
+    modes = LatestValue(read=context.bus.reader("money-mode"))
+    schedules = LatestByKey(
+        read=context.bus.reader("execution-schedule"),
+        key_of=lambda schedule: (schedule.venue_id, schedule.symbol),
+    )
+    bounded = Batch(read=context.bus.reader("bounded-order"))
+    publish_requests = context.bus.publisher_for("order-request")
+
+    def read_orders():
+        bounded.payloads()  # the gate's output arrives here too; the stamper's is what is routed
+        mode = modes.value()
+        schedule_by_symbol = schedules.mapping()
+        return tuple(
+            (order, mode, schedule_by_symbol.get((order.venue_id, order.symbol)))
+            for order in stamped.payloads()
+        )
+
+    return run_order_destination_router(
+        router=OrderDestinationRouter(),
+        control_socket=context.control_socket,
+        read_orders=read_orders,
+        publish_requests=publish_requests,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

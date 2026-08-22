@@ -270,3 +270,81 @@ def run_paper_fill_simulator(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Where the first paper fill happens. It refuses anything whose money mode is not
+    exactly paper -- a live order is filled by the venue, not simulated here -- so
+    the paper-only guarantee is enforced twice, once by the router addressing the
+    order and once here by refusing to pretend.
+
+    The market price it fills against is the last trade this part saw for that
+    symbol, live off the bus. A cost estimate or a book-walk price would be better
+    and neither is running, so an order with neither is filled at the last price and
+    the fill says which it used.
+    """
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+
+    requests = Batch(read=context.bus.reader("order-request"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    modes = LatestValue(read=context.bus.reader("money-mode"))
+    costs = Batch(read=context.bus.reader("cost-estimate"))
+    delayed = Batch(read=context.bus.reader("delayed-order-request"))
+    jumps = Batch(read=context.bus.reader("feed-jump"))
+    consolidated = Batch(read=context.bus.reader("consolidated-price"))
+    prices = LatestByKey(
+        read=context.bus.reader("fill-price-estimate"),
+        key_of=lambda estimate: (estimate.venue_id, estimate.symbol),
+    )
+    publish_fills = context.bus.publisher_for("fill")
+
+    last_price: dict[tuple[str, str], float] = {}
+
+    def read_orders(simulator):
+        for trade in trades.payloads():
+            last_price[(trade.venue_id, trade.symbol)] = trade.price
+        for jump in jumps.payloads():
+            simulator.observe_feed_jump(jump.venue_id, jump.symbol)
+        costs.payloads()
+        consolidated.payloads()
+        estimate_by_symbol = prices.mapping()
+        mode = modes.value()
+        mode_name = getattr(mode, "mode", None)
+
+        orders = []
+        for request in list(requests.payloads()) + list(delayed.payloads()):
+            if not request.may_be_sent:
+                continue
+            key = (request.venue_id, request.symbol)
+            orders.append(
+                {
+                    "client_order_id": request.client_order_id,
+                    "venue_id": request.venue_id,
+                    "symbol": request.symbol,
+                    "side": request.side,
+                    "quantity": request.quantity,
+                    "order_type": LIMIT if request.limit_price else MARKET,
+                    "limit_price": request.limit_price or None,
+                    # None when the mode could not be read, which this part refuses
+                    # rather than treating as paper.
+                    "money_mode": mode_name,
+                    "is_in_flight": False,
+                    "fill_price_estimate": estimate_by_symbol.get(key),
+                    "market_price": last_price.get(key),
+                }
+            )
+        return tuple(orders)
+
+    return run_paper_fill_simulator(
+        simulator=PaperFillSimulator(
+            taker_fee_rate=context.number("taker_fee_rate"),
+            maker_fee_rate=context.number("maker_fee_rate"),
+        ),
+        control_socket=context.control_socket,
+        read_orders=read_orders,
+        publish_fills=publish_fills,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

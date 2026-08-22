@@ -245,3 +245,52 @@ def run_paper_account_keeper(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The paper account starts at what the operator allocated and only there --
+    `capital-allotment` is where that number comes from, and until it arrives the
+    account has no money and every fill is refused for insufficient cash. That is
+    the correct behaviour for an account nobody has funded, and it is why the
+    allotment reader is started before this part.
+
+    Mark prices come off `market-data` so unrealised profit is measured against
+    what the market is doing rather than against the entry price, which would make
+    every open position look flat forever.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    fills = Batch(read=context.bus.reader("fill"))
+    allotments = LatestValue(read=context.bus.reader("capital-allotment"))
+    modes = Batch(read=context.bus.reader("money-mode"))
+    rates = Batch(read=context.bus.reader("paper-currency-rate"))
+    publish_balance = context.bus.publisher_for("account-balance")
+    segment = str(context.setting("segment_id").value)
+    keeper = PaperAccountKeeper(
+        segment=segment,
+        # The currency comes from that segment's own capital settings, which the
+        # context loaded beside the runtime scope. A currency in the runtime scope
+        # would be one currency for every segment.
+        currency=str(context.setting("quote_currency", scope=segment).value),
+    )
+    funded_at = [None]
+
+    def read_fills(_keeper):
+        allotment = allotments.value()
+        if allotment is not None and allotment.allotted != funded_at[0]:
+            keeper.set_allotment(allotment.allotted)
+            funded_at[0] = allotment.allotted
+        modes.payloads()
+        rates.payloads()
+        return fills.payloads()
+
+    return run_paper_account_keeper(
+        keeper=keeper,
+        control_socket=context.control_socket,
+        read_fills=read_fills,
+        publish_balance=lambda balance: publish_balance([balance]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

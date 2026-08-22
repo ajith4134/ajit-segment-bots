@@ -151,3 +151,72 @@ def run_trade_lifecycle_recorder(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The five stages of a trade, journalled in order and correlated by one id. The
+    id is the client order id wherever the order has been stamped, and the symbol
+    before that: the stamper is what gives a trade its identity, and the stages
+    before it can only be correlated by what they are about.
+
+    The journal writes to a file as well as holding the chain in memory, because a
+    ledger that only exists in a process is a ledger that a restart erases -- and
+    this is the record of what the system decided, which is the one thing that
+    cannot be re-derived from the tape.
+    """
+    import pathlib
+    from dataclasses import asdict, is_dataclass
+
+    from runtime.input_assembly import Batch
+    from runtime.journal import Journal
+
+    stages = {
+        stage: Batch(read=context.bus.reader(stage))
+        for stage in LIFECYCLE_STAGES
+        if stage in context.declaration.consumes
+    }
+    publish_entries = context.bus.publisher_for("journal-entry")
+
+    journal_path = pathlib.Path(str(context.setting("journal_path").value)).expanduser()
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        # Opened per append and flushed: a recorder is killed the same way every
+        # part is, and a buffered ledger loses exactly the entries that were about
+        # to matter.
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    def as_payload(item) -> dict:
+        return asdict(item) if is_dataclass(item) else {"value": repr(item)}
+
+    def trade_id_of(item, stage: str) -> str:
+        """What correlates the stages of one trade.
+
+        The client order id once one exists; before that, the symbol it is about.
+        A journal keyed by nothing would be five streams of unrelated events, which
+        is the failure this argument exists to prevent.
+        """
+        stamped = getattr(item, "client_order_id", None)
+        if stamped:
+            return str(stamped)
+        return f"{getattr(item, 'venue_id', 'unknown')}:{getattr(item, 'symbol', stage)}"
+
+    def read_stages():
+        recorded = []
+        for stage, batch in stages.items():
+            for item in batch.payloads():
+                recorded.append((stage, trade_id_of(item, stage), as_payload(item)))
+        return tuple(recorded)
+
+    return run_trade_lifecycle_recorder(
+        recorder=TradeLifecycleRecorder(journal=Journal(append_line=append_line)),
+        control_socket=context.control_socket,
+        read_stages=read_stages,
+        publish_entries=publish_entries,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

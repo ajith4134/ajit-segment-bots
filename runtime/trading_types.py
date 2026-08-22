@@ -15,6 +15,29 @@ SHORT = "short"
 FLAT = "flat"
 
 
+def order_side_for(position_side: str) -> str:
+    """The side an order is placed on to open a position of this side.
+
+    Two vocabularies meet here and both are correct in their own half: a position
+    is long or short, an order is bought or sold. The brain speaks the first and
+    the venue speaks the second, and a part that compared one against the other
+    would read a long intent as a sell -- which puts the stop on the wrong side of
+    the entry and refuses every trade for a reason that is about vocabulary.
+
+    Passes an order side through unchanged, so the translation is safe to apply
+    wherever the two meet without knowing which one arrived.
+    """
+    if position_side in (LONG, BUY):
+        return BUY
+    if position_side in (SHORT, SELL):
+        return SELL
+    raise ValueError(
+        f"{position_side!r} is neither a position side ({LONG}/{SHORT}) nor an order "
+        f"side ({BUY}/{SELL}), and guessing which was meant would place a trade the "
+        f"wrong way round"
+    )
+
+
 @dataclass(frozen=True)
 class Fill:
     """One execution, as the venue reported it."""

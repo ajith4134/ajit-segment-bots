@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED
-from runtime.trading_types import BUY, LONG, SELL, SHORT
+from runtime.trading_types import BUY, LONG, SELL, SHORT, order_side_for
 
 PART_ID = "position-sizer"
 
@@ -267,4 +267,135 @@ def run_position_sizer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Eleven declared inputs, and a size cannot be computed without four of them: the
+    intent, the plan that says where the stop goes, the allotment the risk is a
+    fraction of, and the binding risk limit. An intent missing any of those is not
+    sized -- it is left, and the reason is in the standing. Sizing a position
+    against a missing risk limit would be sizing it against no limit at all.
+
+    The quantity increment is a single global setting and the coarsest number in
+    the system: every venue publishes a per-symbol lot size and nothing consumes it
+    yet. It is named as temporary where it is set.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    publish_sized_orders = context.bus.publisher_for("sized-order")
+
+    def by_symbol(data_type: str) -> LatestByKey:
+        return LatestByKey(
+            read=context.bus.reader(data_type),
+            key_of=lambda payload: (payload.venue_id, payload.symbol),
+        )
+
+    instruments = by_symbol("instrument-choice")
+    leverages = by_symbol("leverage-choice")
+    stop_plans = by_symbol("stop-target-plan")
+    increments = by_symbol("price-increment")
+    hints = by_symbol("size-hint")
+    slippage = by_symbol("slippage-profile")
+    allotments = LatestByKey(
+        read=context.bus.reader("account-balance"),
+        key_of=lambda balance: balance.segment,
+    )
+    locked = LatestByKey(
+        read=context.bus.reader("locked-allocation"),
+        key_of=lambda lock: lock.segment,
+    )
+    # The binding limit is the smallest fraction any limiter allows, so they are
+    # kept per limiter and the minimum is taken: a limiter that says nothing must
+    # not be able to raise a limit another one lowered.
+    limits = LatestByKey(
+        read=context.bus.reader("risk-limit"),
+        key_of=lambda limit: limit.limiter,
+    )
+    timed = Batch(read=context.bus.reader("timed-intent"))
+
+    quantity_increment = context.number("order_quantity_increment")
+    segment = str(context.setting("segment_id").value)
+
+    def read_intents():
+        timed.payloads()
+        instrument_by_symbol = instruments.mapping()
+        leverage_by_symbol = leverages.mapping()
+        plan_by_symbol = stop_plans.mapping()
+        increment_by_symbol = increments.mapping()
+        hint_by_symbol = hints.mapping()
+        slippage.mapping()
+        locked.mapping()
+        balance_by_segment = allotments.mapping()
+        every_limit = limits.mapping()
+
+        balance = balance_by_segment.get(segment)
+        binding = min(
+            (limit.fraction_of_allotment for limit in every_limit.values()),
+            default=None,
+        )
+
+        sizable = []
+        for intent in intents.payloads():
+            key = (intent.venue_id, intent.symbol)
+            plan = plan_by_symbol.get(key)
+            leverage = leverage_by_symbol.get(key)
+            hint = hint_by_symbol.get(key)
+            increment = increment_by_symbol.get(key)
+            instrument = instrument_by_symbol.get(key)
+
+            # A stop-target-plan refines the stop against clusters and measured
+            # excursions, and stop-target-placer refuses to make one until it has a
+            # volatility forecast or excursion history -- neither of which exists
+            # before any trade has closed. The intent already carries the stop the
+            # bot's own exit plan proposed, and the instrument choice carries what
+            # the symbol last traded at, so both numbers are available from inputs
+            # this part declares. The plan is preferred when it exists, because it
+            # is the refined one.
+            entry_price = getattr(plan, "entry_price", None) or getattr(
+                instrument, "reference_price", None
+            )
+            stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
+            if entry_price is None or stop_price is None or balance is None or binding is None:
+                continue
+            sizable.append(
+                {
+                    "venue_id": intent.venue_id,
+                    "symbol": intent.symbol,
+                    # Translated once, here, where the brain's vocabulary meets the
+                    # venue's: the sizer reasons about an order, and an untranslated
+                    # "long" would read as not-a-buy and put the stop on the wrong
+                    # side of the entry.
+                    "side": order_side_for(intent.side),
+                    "entry_price": entry_price,
+                    "stop_price": stop_price,
+                    # Equity rather than cash: the fraction risked is a fraction of
+                    # what the account is worth, and cash alone would shrink the
+                    # risk budget every time a position was opened -- sizing each
+                    # new trade smaller because earlier ones are still open, which
+                    # is a rule nobody stated.
+                    "allotment": balance.equity,
+                    "risk_limit_fraction": binding,
+                    "leverage": leverage.leverage if leverage is not None else 1.0,
+                    "price_increment": getattr(increment, "increment", None),
+                    "quantity_increment": quantity_increment,
+                    "minimum_quantity": quantity_increment,
+                    "size_hint": getattr(hint, "quantity", None),
+                }
+            )
+        return tuple(sizable)
+
+    return run_position_sizer(
+        sizer=PositionSizer(
+            taker_fee_rate=context.number("taker_fee_rate"),
+            slippage_fraction=context.number("entry_slippage_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_intents=read_intents,
+        publish_sized_orders=publish_sized_orders,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )

@@ -167,3 +167,35 @@ def run_order_idempotency_stamper(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Gives each order the identity that makes a retry safe. The id it stamps is
+    derived from the order rather than from a counter, so the same order stamped
+    twice carries the same id and the venue rejects the duplicate instead of filling
+    it -- which is the whole reason this part exists between the gate and the router.
+    """
+    from runtime.input_assembly import Batch
+
+    bounded = Batch(read=context.bus.reader("bounded-order"))
+    publish_stamped = context.bus.publisher_for("stamped-order")
+
+    def read_bounded_orders():
+        # The intent id and any existing id travel with the order itself. Nothing
+        # upstream in this run assigns either, so both are None and the stamper
+        # derives an id from the order's own fields, which is its documented path.
+        return tuple(
+            (order, getattr(order, "intent_id", None), getattr(order, "client_order_id", None))
+            for order in bounded.payloads()
+        )
+
+    return run_order_idempotency_stamper(
+        stamper=OrderIdempotencyStamper(),
+        control_socket=context.control_socket,
+        read_bounded_orders=read_bounded_orders,
+        publish_stamped=publish_stamped,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

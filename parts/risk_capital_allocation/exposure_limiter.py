@@ -181,3 +181,46 @@ def run_exposure_limiter(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Publishes a limit every tick whether or not anything is open, because a limit
+    is a level: the sizer needs to know what it may risk now, and silence would be
+    indistinguishable from a limit of zero. With nothing open the limit is the full
+    per-position fraction, which is the correct answer to "how much may I risk"
+    when nothing is at risk yet.
+    """
+    from runtime.input_assembly import Batch
+
+    positions = Batch(read=context.bus.reader("position"))
+    views = Batch(read=context.bus.reader("exposure-view"))
+    clusters = Batch(read=context.bus.reader("correlation-cluster"))
+    trade_clusters = Batch(read=context.bus.reader("trade-cluster"))
+    publish_limit = context.bus.publisher_for("risk-limit")
+
+    def read_exposure(limiter):
+        # Exposure views and clusters are drained so a slow reader cannot fill an
+        # inbox, and used where the limiter has somewhere to put them. Nothing
+        # produces either in the first runs; the positions do the work.
+        views.payloads()
+        clusters.payloads()
+        trade_clusters.payloads()
+        for position in positions.payloads():
+            limiter.observe_position(
+                position.venue_id, position.symbol, getattr(position, "exposure_fraction", 0.0)
+            )
+
+    return run_exposure_limiter(
+        limiter=ExposureLimiter(
+            maximum_per_position_fraction=context.number("risk_maximum_per_position_fraction"),
+            maximum_total_fraction=context.number("risk_maximum_total_fraction"),
+            maximum_per_cluster_fraction=context.number("risk_maximum_per_cluster_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_exposure=read_exposure,
+        publish_limit=lambda limit: publish_limit([limit]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

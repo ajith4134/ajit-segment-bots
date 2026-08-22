@@ -185,3 +185,31 @@ def run_capital_allotment_reader(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Consumes nothing: it reads the operator's capital settings for one segment and
+    publishes what they say. Two types come out of one read because the allotment
+    and the per-trade bounds are the same document read for two different questions
+    -- how much this segment may use in total, and how much one trade may commit.
+
+    A segment whose settings do not read cleanly publishes nothing at all. There is
+    no default for how much money something may use, and a part downstream receiving
+    a guess would size a real position against it.
+    """
+    publish_allotment_type = context.bus.publisher_for("capital-allotment")
+    publish_bounds_type = context.bus.publisher_for("trade-capital-bounds")
+
+    def publish_allotment(allotment) -> None:
+        publish_allotment_type([allotment])
+        publish_bounds_type([allotment.bounds])
+
+    return run_capital_allotment_reader(
+        reader=CapitalAllotmentReader(segment=str(context.setting("segment_id").value)),
+        control_socket=context.control_socket,
+        publish_allotment=publish_allotment,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

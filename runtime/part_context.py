@@ -22,7 +22,13 @@ from dataclasses import dataclass
 from runtime.bus import HEALTH_TYPE, PartBus
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import PartHealth
-from runtime.settings_reader import SettingEntry, SettingsDocument, load_settings_document, settings_directory
+from runtime.settings_reader import (
+    SettingEntry,
+    SettingsDocument,
+    SettingsParseRefused,
+    load_settings_document,
+    settings_directory,
+)
 from runtime.wiring_plan import PartWiring, create_inbox_root, derive_wiring
 
 RUNTIME_SCOPE = "runtime"
@@ -34,6 +40,13 @@ MAXIMUM_MESSAGE_SETTING = "maximum_message_bytes"
 ABSENT_RECHECK_SETTING = "publisher_absent_recheck_interval"
 HEALTH_INTERVAL_SETTING = "part_health_interval"
 TICK_FLOOR_SETTING = "part_tick_floor"
+
+# Which segment this build is running. Named in the runtime scope, and used to load
+# that segment's own capital settings alongside it -- a segment's allocated balance
+# and quote currency are facts about that segment's account, not about the runtime,
+# and a part that had to name the file itself would carry the segment as a literal.
+SEGMENT_SETTING = "segment_id"
+SEGMENTS_DIRECTORY_NAME = "segments"
 
 
 class SettingMissing(KeyError):
@@ -127,6 +140,12 @@ def load_scope(scope: str, directory: pathlib.Path | None = None) -> SettingsDoc
     return load_settings_document(root / f"{scope}.toml", scope)
 
 
+def load_segment_scope(segment: str, directory: pathlib.Path | None = None) -> SettingsDocument:
+    """One segment's capital settings, from settings/segments/<segment>.toml."""
+    root = directory if directory is not None else settings_directory()
+    return load_settings_document(root / SEGMENTS_DIRECTORY_NAME / f"{segment}.toml", segment)
+
+
 def open_part_context(
     part_id: str,
     control_socket,
@@ -148,6 +167,19 @@ def open_part_context(
     create_inbox_root(runtime_directory)
 
     documents = {RUNTIME_SCOPE: load_scope(RUNTIME_SCOPE, settings_directory_path)}
+    segment_entry = documents[RUNTIME_SCOPE].entries.get(SEGMENT_SETTING)
+    if segment_entry is not None:
+        # Loaded for every part rather than only for the ones that ask, because the
+        # alternative is each part naming its own settings file -- and a part that
+        # names a file is a part carrying a path it could get wrong. A segment with
+        # no settings file yet is not an error here: the part that needs the numbers
+        # refuses when it asks for one, which is where the refusal means something.
+        try:
+            documents[str(segment_entry.value)] = load_segment_scope(
+                str(segment_entry.value), settings_directory_path
+            )
+        except SettingsParseRefused:
+            pass
     for scope in extra_scopes:
         documents[scope] = load_scope(scope, settings_directory_path)
 

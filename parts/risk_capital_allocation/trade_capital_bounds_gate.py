@@ -227,3 +227,39 @@ def run_trade_capital_bounds_gate(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The last gate before an order carries an identity. It bounds a sized order
+    against what the operator said one trade may commit, and it needs the capital
+    settings to have been validated: a bound checked against settings nobody
+    verified is a bound with no authority behind it.
+
+    Nothing validates capital settings in this run -- `capital-settings-validator`
+    is not started -- so `settings_are_valid` arrives as None and the gate treats
+    that as unverified rather than as valid. Whether that refuses every order is one
+    of the things the first run finds out, and it is the correct direction to fail.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    sized = Batch(read=context.bus.reader("sized-order"))
+    bounds = LatestValue(read=context.bus.reader("trade-capital-bounds"))
+    verdicts = LatestValue(read=context.bus.reader("capital-settings-verdict"))
+    publish_bounded_orders = context.bus.publisher_for("bounded-order")
+
+    def read_sized_orders():
+        current_bounds = bounds.value()
+        verdict = verdicts.value()
+        is_valid = getattr(verdict, "is_valid", None) if verdict is not None else None
+        return tuple((order, current_bounds, is_valid) for order in sized.payloads())
+
+    return run_trade_capital_bounds_gate(
+        gate=TradeCapitalBoundsGate(quantity_increment=context.number("order_quantity_increment")),
+        control_socket=context.control_socket,
+        read_sized_orders=read_sized_orders,
+        publish_bounded_orders=publish_bounded_orders,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

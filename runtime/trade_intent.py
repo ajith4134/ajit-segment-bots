@@ -30,6 +30,8 @@ from runtime.learned_estimator import Estimate
 
 LONG = "long"
 SHORT = "short"
+BUY = "buy"
+SELL = "sell"
 
 # What an intent asks for. From `state_vocabulary`, and closed on purpose: a
 # brain that could ask for something not on this list would be asking for
@@ -73,6 +75,20 @@ class TradeIntent:
     evidence: dict
     reason: str
     formed_at_ns: int
+
+    @property
+    def is_long(self) -> bool:
+        """Which way this intent points, in either vocabulary.
+
+        The arbiter forms intents in the brain's terms -- long or short -- and parts
+        further along speak the venue's, buy or sell. Both are accepted here so that
+        a reader never has to know which half of the system its input came from.
+        """
+        return self.side in (LONG, BUY)
+
+    @property
+    def is_short(self) -> bool:
+        return self.side in (SHORT, SELL)
 
     @property
     def is_actionable(self) -> bool:

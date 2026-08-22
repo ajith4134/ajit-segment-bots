@@ -186,3 +186,22 @@ def run_money_mode_reader(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The part that decides whether money is real. It consumes nothing and reads one
+    setting, and the reader refuses anything that is not exactly 'paper' or 'live':
+    real money is never a default and never a typo. Everything downstream treats an
+    unreadable mode as a reason to send no order at all.
+    """
+    publish_mode = context.bus.publisher_for("money-mode")
+
+    return run_money_mode_reader(
+        reader=MoneyModeReader(segment=str(context.setting("segment_id").value)),
+        control_socket=context.control_socket,
+        publish_mode=lambda mode: publish_mode([mode]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

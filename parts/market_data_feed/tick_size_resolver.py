@@ -150,3 +150,41 @@ def run_tick_size_resolver(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The venue's declared increment where the catalogue gives one, and an increment
+    inferred from live bid/ask spacing where it does not. Both paths are declared
+    inputs: `symbol-universe` carries what the venue said, `order-book-snapshot`
+    carries what it is doing.
+
+    In the first runs no book reader is on, so every increment comes from the
+    catalogue -- which is the better source anyway, and the inference exists for the
+    symbols a venue lists without one.
+    """
+    from runtime.input_assembly import Batch
+
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_increments = context.bus.publisher_for("price-increment")
+
+    def read_books():
+        for entry in universe.payloads():
+            resolver.declare_from_catalogue(entry.venue_id, entry.symbol, entry.price_increment)
+        return tuple(
+            (book.venue_id, book.symbol, book.bids, book.asks) for book in books.payloads()
+        )
+
+    resolver = TickSizeResolver(
+        minimum_observations=int(context.number("tick_size_minimum_observations"))
+    )
+    return run_tick_size_resolver(
+        resolver=resolver,
+        control_socket=context.control_socket,
+        read_books=read_books,
+        publish_increments=publish_increments,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

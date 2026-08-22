@@ -168,3 +168,22 @@ def run_main_account_settings_reader(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Consumes nothing: it reads the operator's own account file and publishes what it
+    says. Everything that judges whether a segment's allotment is coherent judges it
+    against this, so a segment allotted more than the account holds is a settings
+    mistake caught before a position rather than by one.
+    """
+    publish_setting = context.bus.publisher_for("main-account-setting")
+
+    return run_main_account_settings_reader(
+        reader=MainAccountSettingsReader(),
+        control_socket=context.control_socket,
+        publish_setting=lambda setting: publish_setting([setting]),
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

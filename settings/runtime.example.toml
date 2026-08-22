@@ -457,3 +457,88 @@ note  = "operator, 2026-08-22: how many recent feature vectors the bull convicti
 value = 5.0
 unit  = "seconds"
 note  = "operator, 2026-08-22: how long a producer leaves an inbox alone after finding nobody bound to it, before trying again. Measured on the first live run: 59 of market-data's 66 consumers were off, so 89% of every publish was a syscall to nobody -- and the sends that mattered were being refused against a full buffer while that work was being done. A part switched on is picked up within one interval; switching a part on is measured at 8.4 ms, so five seconds is the delay before its first message rather than a delay in the switch itself."
+
+[segment_id]
+value = "futures"
+unit  = "segment"
+note  = "operator, 2026-08-22: which segment the parts that are per-segment belong to -- the capital reader, the money-mode reader and the paper account keeper each read the settings file named for it. Futures because RL-050 builds futures first and fully, with spot and options declared and honestly empty until it is done."
+
+[taker_fee_rate]
+value = 0.00055
+unit  = "fraction of notional"
+note  = "operator, 2026-08-22: what crossing the spread costs per side. The venues' published base-tier schedules are 0.0500% taker on binance-usdm and 0.0550% on bybit-linear; the higher of the two is used everywhere, so a cost estimate is never optimistic about which venue a fill lands on. Not measurable from public endpoints -- the per-account rate needs an authenticated call this phase deliberately cannot make -- so it is the published schedule, and it should be re-read from the venue once keys exist."
+
+[maker_fee_rate]
+value = 0.0002
+unit  = "fraction of notional"
+note  = "operator, 2026-08-22: what resting on the book costs per side. Both venues publish 0.0200% maker at the base tier, so unlike the taker rate there is no disagreement to resolve conservatively. Same caveat: the published schedule, not this account's measured rate."
+
+[entry_slippage_fraction]
+value = 0.0005
+unit  = "fraction of price"
+note  = "operator, 2026-08-22: how far past the stop a stop actually fills, as a fraction of price -- a stop is a trigger, not a guarantee, and sizing that ignores this under-risks every trade. Five basis points, matched to bull_entry_prior_entry_cost_fraction so the sizer and the entry timer assume the same cost of crossing. A prior: slippage-learner replaces it with what fills actually cost once trades exist (RL-060)."
+
+[order_quantity_increment]
+value = 0.001
+unit  = "base units"
+note  = "operator, 2026-08-22: the quantity step an order is snapped to. **This is the coarsest number in the system and it is temporary.** Every venue publishes a per-symbol lot size, and nothing in the blueprint consumes it yet -- symbol-catalogue-reader reads price increments and not quantity ones. A single global step is wrong for a symbol priced at 78000 and a symbol priced at 0.0001; it is here so the first paper order can be placed at all, and the honest fix is a per-symbol venue fact carried on instrument-choice."
+
+[arbiter_minimum_conviction]
+value = 0.55
+unit  = "calibrated probability"
+note  = "operator, 2026-08-22: below this the arbiter forms no intent from an opinion. The same floor the bull bot uses to have the opinion at all, deliberately: two different floors would mean a conviction worth an opinion but not worth acting on, which is a distinction nobody has evidence for yet."
+
+[arbiter_agreement_bonus]
+value = 0.05
+unit  = "added to the calibrated probability"
+note  = "operator, 2026-08-22: how much two bots agreeing adds to the conviction the arbiter acts on. Small on purpose: bull and bear reading the same market from opposite sides and agreeing is genuine evidence, but they share their inputs, so treating agreement as independent confirmation would double-count one feed. Judgement -- what would settle it is the realised hit rate of agreed against sole opinions, which needs both bots running and closed trades."
+
+[arbiter_sole_opinion_penalty]
+value = 0.05
+unit  = "subtracted from the calibrated probability"
+note  = "operator, 2026-08-22: how much a single unopposed opinion is discounted. In the first runs only the bull bot is on, so every opinion is sole and every one is discounted -- which is correct and is one of the things the first run finds out: with the floor at 0.55, a conviction must reach 0.60 to act while it is the only voice in the room."
+
+[arbiter_maximum_forecast_shade]
+value = 0.1
+unit  = "fraction of the conviction"
+note  = "operator, 2026-08-22: the most a forecast bias may move the arbiter's conviction. A cap rather than a free hand: a forecaster that drifts must be able to tilt a decision without being able to make it."
+
+[arbiter_minimum_competence]
+value = 0.0
+unit  = "competence score"
+note  = "operator, 2026-08-22: the competence a bot must have shown on a symbol before its opinion is acted on. Zero while nothing has measured competence yet -- self-model-reporter is not running, so a positive floor would refuse every opinion for a reason that is about the absence of a measurement rather than about the bot. Raise it the moment competence is being measured; leaving it at zero once it is would be trusting a bot that has been shown not to know the symbol."
+
+[arbiter_minimum_coverage]
+value = 0.0
+unit  = "fraction of candidates covered"
+note  = "operator, 2026-08-22: how much of the candidate space a bot must have an opinion on before its opinions count. Zero for the same reason as the competence floor, and to be raised for the same reason: abstention-coverage-auditor is not running, so this measures nothing yet."
+
+[instrument_maximum_cost_fraction]
+value = 0.002
+unit  = "fraction of notional"
+note  = "operator, 2026-08-22: the most a chosen instrument's round trip may cost before the selector refuses it. Twenty basis points is twice the taker round trip on the worse venue, so an instrument whose spread and fees exceed the move signal-outcome-labeller calls a hit is refused rather than traded. The two numbers are deliberately the same size: a cost above the threshold that defines a successful signal is a trade that cannot win."
+
+[journal_path]
+value = "~/.local/share/ajit-segment-bots/journal.sqlite"
+unit  = "path"
+note  = "operator, 2026-08-22: where the trade lifecycle journal is written. Beside the tape rather than inside it: the tape is what the venue said and the journal is what this system decided, and mixing them would put our own reasoning into the record we promise is the venue's. Not under /tmp -- that is tmpfs on this box, and a journal that vanishes on reboot is not a journal."
+
+[risk_maximum_per_position_fraction]
+value = 0.01
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-22: the most one position may risk, as a fraction of the segment's allotment. One percent is the conventional single-trade risk and it is the number the position sizer turns into a quantity: at the 10000 USDT paper balance that is 100 USDT at risk per trade, and a stop 0.5% away therefore buys about 20000 USDT of notional -- which the per-trade capital ceiling then cuts to 1000. The two limits are deliberately both live: one bounds the loss, the other bounds the exposure."
+
+[risk_maximum_total_fraction]
+value = 0.05
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-22: the most every open position may risk together. Five times the single-position limit, so five trades at full size is the point at which nothing new is opened -- a bot that is right about one symbol is usually right about five correlated ones, and the total limit is what stops that being one bet wearing five names."
+
+[risk_maximum_per_cluster_fraction]
+value = 0.02
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-22: the most one correlated cluster may risk. Twice a single position and well under the total: symbols that move together are one bet, and this is the limit that says so before the total limit has to. Nothing measures clusters yet -- correlation-cluster has no producer running -- so in the first runs every position is its own cluster, which is the permissive reading and is recorded here as such."
+
+[tick_size_minimum_observations]
+value = 20
+unit  = "book updates"
+note  = "operator, 2026-08-22: how many bid/ask spacings tick-size-resolver needs before inferring an increment a venue did not declare. Twenty, because the inference is a greatest-common-divisor over observed spacings and a handful of them would infer a coarser step than the venue really uses -- which would snap prices to a grid the venue rejects."

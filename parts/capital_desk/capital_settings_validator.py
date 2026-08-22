@@ -221,3 +221,53 @@ def run_capital_settings_validator(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The gate before an order is bounded refuses anything this part has not judged
+    valid, which makes this the part that decides whether any order is ever placed.
+    It judges the segment's own allotment against the operator's main account: an
+    allotment larger than the account, or bounds that cross, are the settings
+    mistakes that would otherwise be discovered by a position.
+
+    It judges on every tick rather than only when settings change, because a verdict
+    is a level: the gate needs to know the settings are valid *now*, and a verdict
+    published once would have to be remembered by every part that reads it.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    allotments = LatestValue(read=context.bus.reader("capital-allotment"))
+    accounts = LatestValue(read=context.bus.reader("main-account-setting"))
+    bounds = Batch(read=context.bus.reader("trade-capital-bounds"))
+    ceilings = Batch(read=context.bus.reader("leverage-ceiling"))
+    instruments = LatestValue(read=context.bus.reader("instrument-choice"))
+    publish_verdicts = context.bus.publisher_for("capital-settings-verdict")
+    segment = str(context.setting("segment_id").value)
+
+    def read_settings():
+        bounds.payloads()
+        ceilings.payloads()
+        allotment = allotments.value()
+        account = accounts.value()
+        chosen = instruments.value()
+        return (
+            {
+                "segment": segment,
+                "allotment": allotment,
+                "main_balance": getattr(account, "balance", None),
+                "instrument_maximum_leverage": getattr(
+                    getattr(chosen, "chosen", None), "maximum_leverage", None
+                ),
+            },
+        )
+
+    return run_capital_settings_validator(
+        validator=CapitalSettingsValidator(),
+        control_socket=context.control_socket,
+        read_settings=read_settings,
+        publish_verdicts=publish_verdicts,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )
