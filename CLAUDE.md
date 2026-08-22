@@ -110,6 +110,26 @@ history accrues only in real time and cannot be recovered later.
 The research behind the runtime, with citations and its own UNVERIFIED sections, is
 in `~/research/segment-bots-runtime/` (`ajith4134/trading-system-research`).
 
+## The tape is recording — since 2026-08-22
+
+Phase 1 started capture on the day it became possible. Both venues, the 30
+highest-volume symbols on each, trades to disk at
+`~/.local/share/ajit-segment-bots/tape/{venue}/{symbol}/{day}.{index,blob}`.
+
+**Do not stop it without a reason, and never leave it stopped.** History accrues
+only in real time: every other part can be built against a tape that exists, and
+an hour not captured is gone permanently.
+
+    operate/README.md          how to start, stop, and see what it has captured
+    operate/keep_capture_running.sh   the supervisor that restarts it if it dies
+
+It survives a crash and a logout. **It does not survive a reboot** — that needs
+one root command, and `operate/README.md` has it. If the supervisor log's last
+line is old, capture is not running.
+
+`operate/` is not parts. It stands in for `stream-budget-planner` and the
+governor until those exist, and should be deleted when they do.
+
 ## Startup
 
 `~/.bash_aliases` defines a `claude` shell function that runs Claude Code from

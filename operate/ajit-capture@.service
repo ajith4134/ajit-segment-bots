@@ -1,0 +1,34 @@
+[Unit]
+# One capture per venue: `ajit-capture@binance-usdm`, `ajit-capture@bybit-linear`.
+#
+# Not installed, because it cannot be made to work from here. A systemd --user
+# service only survives the end of a login session if the user has lingering
+# enabled, and `loginctl enable-linger` needs root, which this box does not grant
+# without a password. So this file is ready and the two commands that make it
+# live are in operate/README.md -- until they are run, capture is kept alive by
+# operate/keep_capture_running.sh, which survives a logout and a crash but not a
+# reboot.
+Description=ajit-segment-bots market data capture (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ajit-segment-bots
+ExecStart=%h/ajit-segment-bots/.venv/bin/python %h/ajit-segment-bots/operate/start_trade_capture.py %i
+# Always, not on-failure: a capture that exits cleanly for any reason is still a
+# capture that has stopped, and the market does not wait. Every restart is
+# recorded by the part's own health log, so a service that flaps is visible
+# rather than merely alive.
+Restart=always
+# Long enough that a venue outage cannot become a connection storm against an IP
+# that both venues ban per IP, short enough that a transient fault costs seconds
+# of tape rather than minutes.
+RestartSec=5
+# SIGTERM runs the part's close path, which flushes both tape files. SIGKILL is
+# safe too -- the format is built against it -- but a clean stop costs nothing.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
