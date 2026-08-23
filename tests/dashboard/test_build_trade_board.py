@@ -86,9 +86,13 @@ def test_an_edited_entry_makes_the_record_fail(board, durable_tmp_path):
     path.write_text("\n".join(lines) + "\n")
 
     entries, unreadable = board.read_journal_entries(path)
-    result = board.probe_journal_chain(entries, unreadable, path)
+    # Verified per file, because a chain is a property of one writer: two
+    # recorders appending to one path interleave into no chain at all, which is
+    # what broke this tile on 2026-08-23.
+    result = board.probe_journal_chain({path: (entries, unreadable)}, unreadable, path)
     assert result.state == board.FAILING
     assert "does not hash" in result.proof
+    assert path.name in result.proof, "a broken chain must name the file it is in"
 
 
 def test_a_line_that_will_not_parse_fails_rather_than_being_skipped(board, durable_tmp_path):
@@ -550,3 +554,44 @@ def test_no_claim_having_come_right_is_its_own_state(board, monkeypatch):
     result = board.probe_exit_plans()
     assert result.state == board.WAITING
     assert "no claim has come right yet" in result.value
+
+
+# ---- the gap between what the bot thought and what it got ----------------------
+
+def test_decision_freshness_measures_the_decision_price_against_the_fill(board):
+    """The measurement that was invisible, and the one that mattered most.
+
+    On the live run of 2026-08-23 a trade was decided at an ENAUSDT price of
+    0.17019 -- the real market fifty-six minutes earlier -- and filled at 0.18043.
+    Both numbers were already on the ledger; nothing read them against each other.
+    """
+    entries = [
+        {"kind": "bounded-order", "recorded_at_ns": 1,
+         "payload": {"venue_id": "binance-usdm", "symbol": "ENAUSDT", "entry_price": 0.17019}},
+        {"kind": "fill", "recorded_at_ns": 2,
+         "payload": {"venue_id": "binance-usdm", "symbol": "ENAUSDT", "price": 0.18043,
+                     "quantity": 1.0, "side": "buy"}},
+    ]
+    result = board.probe_decision_freshness(entries)
+    assert result.state == board.FAILING
+    assert "ENAUSDT" in result.proof
+    assert "0.17019" in result.proof and "0.18043" in result.proof
+
+
+def test_a_decision_that_filled_where_it_expected_reads_ok(board):
+    entries = [
+        {"kind": "bounded-order", "recorded_at_ns": 1,
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "entry_price": 77_500.0}},
+        {"kind": "fill", "recorded_at_ns": 2,
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "price": 77_512.0,
+                     "quantity": 0.01, "side": "buy"}},
+    ]
+    result = board.probe_decision_freshness(entries)
+    assert result.state == board.OK
+
+
+def test_nothing_filled_reads_as_waiting_not_as_healthy(board):
+    """Rule 8: an unmeasured gap is its own state, never a passing one."""
+    result = board.probe_decision_freshness([])
+    assert result.state == board.WAITING
+    assert "nothing has filled yet" in result.value

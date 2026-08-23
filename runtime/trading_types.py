@@ -143,6 +143,13 @@ class OrderRequest:
     routed_at_ns: int
     cancels_client_order_id: str | None = None
     order_type: str = MARKET
+    # The price the decision behind this order was made at. Carried as evidence,
+    # never as an instruction -- a market order is still a market order. It exists
+    # so the venue side can refuse an order whose decision has gone stale: on
+    # 2026-08-23 the decision half was reading prices up to 56 minutes old while
+    # the book filled at the live price, so every such trade opened six per cent
+    # away from where it thought it was and its exits fired on arrival.
+    decided_at_price: float = 0.0
 
     @property
     def is_live_money(self) -> bool:

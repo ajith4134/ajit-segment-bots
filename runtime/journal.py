@@ -150,3 +150,24 @@ class Journal:
         if self._append_line is not None:
             self._append_line(entry.as_line())
         return entry
+
+
+def journal_path_for(base_path, part_id: str):
+    """Where one recorder's own journal lives, beside the base the settings name.
+
+    **One writer per chain.** Every entry carries the digest of the one before it,
+    so a file two processes append to interleaved has no chain at all: each entry
+    points at whatever the *other* recorder happened to write last, and every
+    verification fails. That is what happened on 2026-08-23 once
+    `position-recorder` was wired to the same `journal_path` as
+    `trade-lifecycle-recorder` -- the board's record and tamper tiles both went red,
+    correctly.
+
+    A file each, named for the part, so every chain is whole and verifiable on its
+    own. What is lost is a single file to read; what is kept is the only property
+    the chain was for.
+    """
+    import pathlib as _pathlib
+
+    base = _pathlib.Path(base_path)
+    return base.with_name(f"{base.stem}.{part_id}{base.suffix}")

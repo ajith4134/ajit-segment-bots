@@ -1003,3 +1003,45 @@ def test_an_unfitted_excursion_profile_is_not_evidence_of_no_risk():
         "a profile that reports itself unfitted is the only signal a reader has "
         "that its zero is an absence rather than a measurement"
     )
+
+
+def test_exits_are_priced_against_what_the_entry_actually_cost():
+    """The defect that closed two positions one second after opening them.
+
+    On the live run of 2026-08-23 10:25 the plan was computed against an ENAUSDT
+    price of 0.17019 and the entry filled at 0.18043 -- six per cent away, because
+    the decision half was reading an hour-old price. The exits carried the
+    absolute numbers from decision time, so the take-profit sat far below the
+    market, was already through its trigger, and fired on arrival: zero profit and
+    two lots of fees.
+
+    A stop 1.5% below entry means 1.5% below the price actually obtained.
+    """
+    chainer = ExitOrderChainer()
+    chainer.register_plan(VENUE, SYMBOL, BUY, stop_price=98.5, target_price=103.0,
+                          entry_price=100.0)
+    exits = chainer.observe_entry_fill(
+        fill_id="f1", entry_order_id="o1", venue_id=VENUE, symbol=SYMBOL,
+        entry_side=BUY, filled_quantity=1.0, fill_price=200.0,
+    )
+    assert exits.outcome == CHAINED
+    # 1.5% below and 3% above the fill, not the numbers from decision time.
+    assert exits.stop_price == pytest.approx(197.0)
+    assert exits.target_price == pytest.approx(206.0)
+    assert exits.stop_price < 200.0 < exits.target_price, (
+        "both exits must straddle the price actually paid, or they fire on arrival"
+    )
+    assert chainer.standing.exits_repriced_onto_the_fill == 1
+
+
+def test_a_plan_with_no_reference_price_keeps_its_absolute_exits_and_says_so():
+    """The fallback, counted apart because it is a different claim about the trade."""
+    chainer = ExitOrderChainer()
+    chainer.register_plan(VENUE, SYMBOL, BUY, stop_price=98.0, target_price=None)
+    exits = chainer.observe_entry_fill(
+        fill_id="f1", entry_order_id="o1", venue_id=VENUE, symbol=SYMBOL,
+        entry_side=BUY, filled_quantity=1.0, fill_price=200.0,
+    )
+    assert exits.stop_price == pytest.approx(98.0)
+    assert chainer.standing.exits_from_the_decision_price == 1
+    assert chainer.standing.exits_repriced_onto_the_fill == 0

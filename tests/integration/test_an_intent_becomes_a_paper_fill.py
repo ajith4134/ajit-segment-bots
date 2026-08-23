@@ -368,9 +368,15 @@ def test_an_intent_becomes_a_paper_fill(
         catalogue.close()
         brain.close()
 
-    assert isolated_settings.journal_path.exists(), (
-        f"nothing was journalled to {isolated_settings.journal_path}; if the parts wrote a "
-        f"ledger at all they wrote the operator's, which this test must never touch"
+    # Each recorder writes its own file beside the base the settings name, because
+    # a chain is a property of one writer and two recorders appending to one path
+    # interleave into no chain at all.
+    from runtime.journal import journal_path_for
+
+    recorded_to = journal_path_for(isolated_settings.journal_path, "trade-lifecycle-recorder")
+    assert recorded_to.exists(), (
+        f"nothing was journalled to {recorded_to}; if the parts wrote a ledger at all they "
+        f"wrote the operator's, which this test must never touch"
     )
 
     assert still_running == list(TRADING_HALF), (

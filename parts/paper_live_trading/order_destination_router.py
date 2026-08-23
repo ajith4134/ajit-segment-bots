@@ -126,6 +126,10 @@ class OrderDestinationRouter:
                     # it belongs, as evidence rather than as an instruction.
                     limit_price=0.0,
                     order_type=MARKET,
+                    # What the decision behind this order thought the market was.
+                    # The order is still a market order; this is what lets the
+                    # book refuse one whose decision has gone stale.
+                    decided_at_price=stamped_order.entry_price,
                     # The protective stop this entry will need once it fills.
                     # Carried, not acted on: what makes an order wait for a
                     # trigger is its type, never the presence of this number.

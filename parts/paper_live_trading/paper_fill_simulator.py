@@ -72,6 +72,17 @@ HELD_IN_FLIGHT = "held-until-the-round-trip-elapses"
 REFUSED_FEED_JUMP = "refused-price-jumped"
 REFUSED_NO_PRICE = "refused-no-price"
 REFUSED_LIVE_ORDER = "refused-live-orders-are-not-simulated"
+# The decision behind this order was made at a price the market has left. Filling
+# it would open a position somewhere the bot never looked, with exits computed
+# around a price that no longer exists -- which is what happened on 2026-08-23:
+# the decision half was reading prices up to 56 minutes old, every such trade
+# opened six per cent away from where it thought it was, and both its exits were
+# already through their triggers before they were placed.
+#
+# A live venue would fill this. That is the point: the refusal is a guard on the
+# decision, not a simulation of the venue, and it is named so nobody reads it as
+# the venue's behaviour.
+REFUSED_DECISION_PRICE_STALE = "refused-the-decision-was-priced-at-a-market-that-has-gone"
 # The id has already been filled for everything it asked for. Its own outcome
 # rather than a refusal for no price: nothing is wrong with the order or the
 # book, and an operator reading "no price" for a duplicate would look at the feed.
@@ -141,6 +152,10 @@ class SimulatorStanding:
     stops_triggered: int = 0
     cancelled: int = 0
     cancels_for_an_unknown_order: int = 0
+    # Orders refused because the decision behind them was priced at a market that
+    # has since moved away. Counted separately from every other refusal: this one
+    # is about the bot's own freshness, not about the order or the book.
+    refused_decision_stale: int = 0
 
 
 class PaperFillSimulator:
@@ -309,6 +324,8 @@ class PaperFillSimulator:
         market_price: float | None = None,
         stop_price: float | None = None,
         cancels_client_order_id: str | None = None,
+        decided_at_price: float | None = None,
+        maximum_decision_drift: float | None = None,
     ) -> PaperFillResult:
         self.standing.orders_seen += 1
 
@@ -380,6 +397,25 @@ class PaperFillSimulator:
                 order, RESTING_STOP,
                 f"a {side} {what} at {stop_price:g} is on the book"
                 + (f"; the market is at {market_price:g}" if market_price is not None else ""),
+            )
+
+        # The decision's own price against the price this would fill at. Checked
+        # before the fill and not after, because after it there is a position.
+        if (
+            decided_at_price
+            and market_price
+            and maximum_decision_drift is not None
+            and abs(market_price - decided_at_price) / decided_at_price > maximum_decision_drift
+        ):
+            drift = abs(market_price - decided_at_price) / decided_at_price
+            self.standing.refused_decision_stale += 1
+            return self._result(
+                client_order_id, venue_id, symbol, side, REFUSED_DECISION_PRICE_STALE, None,
+                0.0, quantity, None, 0.0, None,
+                f"the decision was priced at {decided_at_price:g} and the market is at "
+                f"{market_price:g}, {drift:.2%} away, past the {maximum_decision_drift:.2%} this "
+                f"book will fill across; a position opened here would sit somewhere the bot "
+                f"never looked and its exits would already be through their triggers",
             )
 
         if fill_price_estimate is None or fill_price_estimate.average_price is None:
@@ -546,6 +582,7 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "stops_triggered": simulator.standing.stops_triggered,
         "cancelled": simulator.standing.cancelled,
         "cancels_for_an_unknown_order": simulator.standing.cancels_for_an_unknown_order,
+        "refused_because_the_decision_was_stale": simulator.standing.refused_decision_stale,
         "held_in_flight": simulator.standing.held_in_flight,
         "refused_feed_jump": simulator.standing.refused_feed_jump,
         "refused_no_price": simulator.standing.refused_no_price,
@@ -610,6 +647,7 @@ def start_part(context) -> int:
     publish_fills = context.bus.publisher_for("fill")
 
     last_price: dict[tuple[str, str], float] = {}
+    maximum_decision_drift = context.number("maximum_decision_price_drift")
 
     def read_orders(simulator):
         for trade in trades.payloads():
@@ -668,6 +706,10 @@ def start_part(context) -> int:
                     # entry wait for the market to fall to its own stop.
                     "stop_price": request.trigger_price,
                     "cancels_client_order_id": request.cancels_client_order_id,
+                    # What the decision thought the market was, and how far the
+                    # market may have left it before this book refuses to fill.
+                    "decided_at_price": getattr(request, "decided_at_price", 0.0) or None,
+                    "maximum_decision_drift": maximum_decision_drift,
                 }
             )
         return tuple(orders)

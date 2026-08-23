@@ -75,6 +75,11 @@ class ChainerStanding:
     duplicates_ignored: int = 0
     fills_without_a_plan: int = 0
     naked_positions_prevented: int = 0
+    # Which price the exits were computed against. A plan carrying no reference
+    # price can only use the absolute numbers from decision time, and that is a
+    # different claim about the trade -- so the two are counted apart.
+    exits_repriced_onto_the_fill: int = 0
+    exits_from_the_decision_price: int = 0
 
 
 class ExitOrderChainer:
@@ -86,6 +91,14 @@ class ExitOrderChainer:
         # and a side. Not by an order id -- the plan is made before an order is
         # stamped, so a plan filed under an order id could only ever be filed
         # under an id nobody had assigned yet.
+        # Held as *distances* from the price the plan was made at, not as absolute
+        # prices. A plan says "stop 1.5% below entry"; which price that is depends
+        # on the price actually obtained, and until 2026-08-23 the absolute price
+        # from decision time was sent instead. Measured on the live run at
+        # 10:25:15: an exit computed around 0.1707 was placed against a market at
+        # 0.18043, already through its trigger, so it fired on arrival and closed
+        # the position one second after opening it for zero profit and two lots of
+        # fees.
         self._plans: dict[tuple[str, str, str], tuple[float, float | None]] = {}
         self._filled: dict[str, float] = {}
         self._seen_fills: set[str] = set()
@@ -98,14 +111,47 @@ class ExitOrderChainer:
         entry_side: str,
         stop_price: float,
         target_price: float | None,
+        entry_price: float | None = None,
     ) -> None:
-        """Hold the exits for a position before its entry is sent.
+        """Hold the exits for a position before its entry is sent, as distances.
 
         Before, not after: a plan registered on the fill would be a plan made
         while the position was already naked.
+
+        `entry_price` is the price the plan was computed against. With it, the
+        stop and target are kept as fractions of that price and re-priced against
+        whatever the entry actually fills at -- which is the only version that
+        survives the market moving between the decision and the fill. Without it
+        the absolute prices are kept, which is what a caller with no reference
+        price is asking for and is recorded as such.
         """
-        self._plans[(venue_id, symbol, entry_side)] = (stop_price, target_price)
+        stop_fraction = target_fraction = None
+        if entry_price and entry_price > 0:
+            stop_fraction = (entry_price - stop_price) / entry_price
+            if target_price:
+                target_fraction = (target_price - entry_price) / entry_price
+        self._plans[(venue_id, symbol, entry_side)] = (
+            stop_price, target_price, stop_fraction, target_fraction
+        )
         self.standing.plans_held = len(self._plans)
+
+    def _exit_prices(self, plan, fill_price: float | None) -> tuple:
+        """The stop and target for this fill, re-priced onto what it cost.
+
+        A stop 1.5% below entry means 1.5% below the price actually obtained. The
+        absolute prices from decision time are used only when the plan carried no
+        reference price to take a fraction of, and that case is counted.
+        """
+        stop_price, target_price, stop_fraction, target_fraction = plan
+        if fill_price and fill_price > 0 and stop_fraction is not None:
+            repriced_stop = fill_price * (1.0 - stop_fraction)
+            repriced_target = (
+                fill_price * (1.0 + target_fraction) if target_fraction is not None else None
+            )
+            self.standing.exits_repriced_onto_the_fill += 1
+            return repriced_stop, repriced_target
+        self.standing.exits_from_the_decision_price += 1
+        return stop_price, target_price
 
     def observe_entry_fill(
         self,
@@ -115,8 +161,16 @@ class ExitOrderChainer:
         symbol: str,
         entry_side: str,
         filled_quantity: float,
+        fill_price: float | None = None,
     ) -> ExitOrders | None:
-        """One entry fill; returns the exits that must now exist for it."""
+        """One entry fill; returns the exits that must now exist for it.
+
+        `fill_price` is what the entry actually cost. The exits are priced against
+        it rather than against the price the plan was made at, because those are
+        not the same number the moment the market moves -- and on 2026-08-23 they
+        differed by six per cent, which put both exits through their triggers
+        before they were ever placed.
+        """
         self.standing.fills_seen += 1
 
         if fill_id in self._seen_fills:
@@ -139,7 +193,7 @@ class ExitOrderChainer:
                 chained_at_ns=self._now_ns(),
             )
 
-        stop_price, target_price = plan
+        stop_price, target_price = self._exit_prices(plan, fill_price)
         already = self._filled.get(entry_order_id, 0.0)
         self._filled[entry_order_id] = already + filled_quantity
         outcome = EXTENDED if already > 0 else CHAINED
@@ -239,6 +293,9 @@ def start_part(context) -> int:
                 "entry_side": plan.side,
                 "stop_price": plan.stop_price,
                 "target_price": plan.target_price,
+                # What the plan was computed against, so its stop and target can
+                # be kept as distances and re-priced onto the fill.
+                "entry_price": plan.entry_price,
             }
             for plan in plans.payloads()
             if plan.is_placeable
@@ -251,6 +308,7 @@ def start_part(context) -> int:
                 "symbol": fill.symbol,
                 "entry_side": fill.side,
                 "filled_quantity": fill.quantity,
+                "fill_price": fill.price,
             }
             for fill in fills.payloads()
         )

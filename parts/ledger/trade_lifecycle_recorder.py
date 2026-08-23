@@ -170,7 +170,7 @@ def start_part(context) -> int:
     from dataclasses import asdict, is_dataclass
 
     from runtime.input_assembly import Batch
-    from runtime.journal import Journal, read_journal_tail
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
 
     stages = {
         stage: Batch(read=context.bus.reader(stage))
@@ -179,7 +179,13 @@ def start_part(context) -> int:
     }
     publish_entries = context.bus.publisher_for("journal-entry")
 
-    journal_path = pathlib.Path(str(context.setting("journal_path").value)).expanduser()
+    # This recorder's own file, beside the base the settings name. One writer per
+    # chain: two processes appending to one file interleave, and every entry then
+    # points at whatever the other wrote last, which is no chain at all.
+    journal_path = journal_path_for(
+        pathlib.Path(str(context.setting("journal_path").value)).expanduser(),
+        "trade-lifecycle-recorder",
+    )
     journal_path.parent.mkdir(parents=True, exist_ok=True)
 
     def append_line(line: str) -> None:

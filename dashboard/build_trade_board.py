@@ -95,6 +95,21 @@ COLUMNS_A_PART_WOULD_FILL = {
     "forecast price": ("kronos-forecaster", "price-forecast"),
 }
 
+# How many recent decisions the freshness probe ages against the tape. Each one
+# walks the tape for that symbol, so this is a cost, and the worst of a few dozen
+# is what the tile is about rather than an average over everything ever decided.
+MOST_DECISIONS_AGED = 25
+# How wide a window around the decision the tape is read over. Wide enough that a
+# quiet symbol still has a print in it, narrow enough that the price found is the
+# price at the decision rather than a later one.
+DECISION_WINDOW_NS = 30_000_000_000
+# A decision this far from the market is drifting; this far is broken. Both are
+# multiples of the 0.133% BTCUSDT traded through in the 28 captured seconds of
+# 2026-08-22: ordinary movement between a decision and its record is well under
+# the first, and the 6% seen on 2026-08-23 is far past the second.
+DRIFTED_DECISION = 0.004
+BADLY_STALE_DECISION = 0.02
+
 OK = "OK"
 NOT_BUILT = "NOT BUILT"
 FAILING = "FAILING"
@@ -234,6 +249,28 @@ def read_journal_path() -> pathlib.Path:
     """Where the operator's settings say the journal is written."""
     document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
     return pathlib.Path(str(document.read_value("journal_path"))).expanduser()
+
+
+def journal_paths() -> list[pathlib.Path]:
+    """Every journal file on this machine: the base, and one per recorder.
+
+    Each recorder writes its own file, because every entry carries the digest of
+    the one before it and two processes appending to one file interleave into no
+    chain at all. So the board reads them all and verifies each on its own -- a
+    break in one recorder's chain is a fact about that recorder, and merging them
+    would report it as a fact about the ledger.
+
+    The base path is included because it is where the record lived before the
+    recorders were split, and a board that stopped reading it would lose every
+    trade made before 2026-08-23.
+    """
+    base = read_journal_path()
+    found = [base] if base.exists() else []
+    found.extend(sorted(
+        path for path in base.parent.glob(f"{base.stem}.*{base.suffix}")
+        if path != base
+    ))
+    return found
 
 
 def read_journal_entries(path: pathlib.Path) -> tuple[list[dict], str | None]:
@@ -696,19 +733,43 @@ def probe_closed(running: dict[str, int]) -> ProbeResult:
     )
 
 
-def probe_journal_chain(entries: list[dict], unreadable: str | None, path: pathlib.Path) -> ProbeResult:
+def probe_journal_chain(per_file: dict, unreadable: str | None, path: pathlib.Path) -> ProbeResult:
+    """Every recorder's chain, verified on its own file.
+
+    On its own file, because a chain is a property of one writer. Two recorders
+    appending to one path interleave, and every entry then points at whatever the
+    other wrote last -- which is what broke this tile on 2026-08-23, once
+    `position-recorder` was wired to the same file as `trade-lifecycle-recorder`.
+    Merging the entries and verifying once would report that as a broken ledger
+    rather than as two ledgers written into one file.
+    """
     if unreadable:
         return ProbeResult("The record", FAILING, "unreadable", unreadable)
-    if not entries:
+    total = sum(len(read) for read, _ in per_file.values())
+    if not total:
         return ProbeResult("The record", WAITING, "empty", f"{path} holds no entries")
-    chains, broken = verify_journal_chain(entries)
-    if broken:
-        return ProbeResult("The record", FAILING, "chain broken", broken)
+
+    verdicts = {}
+    broken_files = []
+    for journal, (read, _problem) in per_file.items():
+        if not read:
+            continue
+        chains, broken = verify_journal_chain(read)
+        verdicts[journal.name] = (len(read), chains, broken)
+        if broken:
+            broken_files.append(f"{journal.name}: {broken}")
+    if broken_files:
+        return ProbeResult(
+            "The record", FAILING, f"{len(broken_files)} of {len(verdicts)} chain(s) broken",
+            "; ".join(broken_files),
+        )
+    proof = "; ".join(
+        f"{name}: {count} entries in {chains} chain(s)"
+        for name, (count, chains, _broken) in sorted(verdicts.items())
+    )
     return ProbeResult(
-        "The record",
-        OK,
-        f"{len(entries)} entries in {chains} chain(s)",
-        f"every digest in {path} recomputed from its own content and its predecessor",
+        "The record", OK, f"{total} entries across {len(verdicts)} file(s)",
+        f"every digest recomputed from its own content and its predecessor -- {proof}",
     )
 
 
@@ -725,7 +786,17 @@ def probe_chain_continuity(entries: list[dict]) -> ProbeResult:
         )
     chains, broken = verify_journal_chain(entries)
     if broken:
-        return ProbeResult("Tamper evidence", FAILING, "chain broken", broken)
+        # Merged entries from several recorders are expected not to chain: each
+        # file is its own chain and "The record" verifies them separately. What
+        # this tile answers is the different question of whether a whole run could
+        # be removed unnoticed, and a break here says only that more than one
+        # recorder wrote.
+        return ProbeResult(
+            "Tamper evidence", NOT_BUILT, "one chain per recorder, per run",
+            "each recorder writes its own file and starts a fresh chain when it starts, so an "
+            "edit inside one run is detected and a whole run removed from a file is not; "
+            "the per-file chains are verified by the record probe above",
+        )
     if chains > 1:
         return ProbeResult(
             "Tamper evidence",
@@ -867,6 +938,59 @@ def probe_exit_plans() -> ProbeResult:
     )
 
 
+def probe_decision_freshness(entries: list[dict]) -> ProbeResult:
+    """How far the price a decision was made at sits from the price it filled at.
+
+    The measurement that was invisible until 2026-08-23, and the one that mattered
+    most. Each part keeps a per-symbol price level that updates only when a
+    market-data message for that symbol reaches it, so under input loss a symbol
+    can freeze while the part still looks busy and its health still reads fine. On
+    the live run at 10:25:15 a trade was decided at an ENAUSDT price of 0.17019 --
+    the real market at 09:29:08, fifty-six minutes earlier -- and filled at
+    0.18043, six per cent away, with both exits already through their triggers
+    before they were ever placed.
+
+    Both numbers are already in the ledger: the decision price the recorder
+    journalled on the order, and the price the book filled it at. No part has to
+    report anything and no tape has to be walked -- the gap between what the bot
+    thought the market was and what it actually got is the whole measurement.
+    """
+    decided = {}
+    drifts = []
+    for entry in entries:
+        payload = entry.get("payload") or {}
+        symbol = payload.get("symbol")
+        if entry.get("kind") == "bounded-order" and payload.get("entry_price"):
+            decided[(payload.get("venue_id"), symbol)] = float(payload["entry_price"])
+        elif entry.get("kind") == "fill" and payload.get("price"):
+            at = decided.get((payload.get("venue_id"), symbol))
+            if at and at > 0:
+                filled = float(payload["price"])
+                drifts.append((abs(filled - at) / at, symbol, at, filled))
+
+    if not drifts:
+        return ProbeResult(
+            "Decision freshness", WAITING, "nothing has filled yet",
+            "this compares the price each decision was made at against the price it filled "
+            "at; no order has both numbers on the ledger yet",
+        )
+
+    recent = drifts[-MOST_DECISIONS_AGED:]
+    recent.sort(reverse=True)
+    worst, symbol, at, filled = recent[0]
+    median = recent[len(recent) // 2][0]
+    proof = (
+        f"{len(recent)} most recent fill(s) against the price their decision was made at: "
+        f"median gap {median:.2%}, worst {worst:.2%} on {symbol}, decided at {at:g} and "
+        f"filled at {filled:g}"
+    )
+    if worst > BADLY_STALE_DECISION:
+        return ProbeResult("Decision freshness", FAILING, f"worst {worst:.1%} adrift", proof)
+    if worst > DRIFTED_DECISION:
+        return ProbeResult("Decision freshness", WAITING, f"worst {worst:.1%} adrift", proof)
+    return ProbeResult("Decision freshness", OK, f"worst {worst:.2%} adrift", proof)
+
+
 def run_all_probes():
     """Every probe, the trades, and the closed trades -- from one read of the journal.
 
@@ -875,7 +999,18 @@ def run_all_probes():
     as long to say the same thing.
     """
     journal_path = read_journal_path()
-    entries, unreadable = read_journal_entries(journal_path)
+    # Read every recorder's file. The entries are merged in recorded order for the
+    # tables, and each file's chain is verified on its own -- those are different
+    # questions and answering the second on merged entries reports a break at
+    # every point where two recorders interleaved.
+    per_file = {path: read_journal_entries(path) for path in journal_paths()}
+    entries = sorted(
+        (entry for read, _ in per_file.values() for entry in read),
+        key=lambda entry: entry.get("recorded_at_ns", 0),
+    )
+    unreadable = next(
+        (problem for _read, problem in per_file.values() if problem), None
+    )
     live_from_ns = find_first_live_recorder_start_ns()
     trades = collect_trades(entries, live_from_ns)
     closed = collect_closed_trades(entries)
@@ -887,10 +1022,11 @@ def run_all_probes():
         probe_noticed(entries, live_from_ns),
         probe_opened(trades, journal_path),
         probe_closed(running),
-        probe_journal_chain(entries, unreadable, journal_path),
+        probe_journal_chain(per_file, unreadable, journal_path),
         probe_chain_continuity(entries),
         probe_learning(),
         probe_exit_plans(),
+        probe_decision_freshness(entries),
     ]
     return results, trades, journal_path, live_from_ns, closed
 

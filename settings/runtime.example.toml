@@ -54,9 +54,9 @@ unit  = "venue ids"
 note  = "operator, 2026-08-22: which venue adapters are live. A venue id resolves to runtime/venues/<id with underscores>.py, so adding a third venue is this line plus that module and nothing else -- the user's condition of 2026-08-21, 'mark it so if the 2 are not enough we can add more later'. binance-usdm and bybit-linear turned on 2026-08-22 as their adapters landed. An id named here with no module is refused loudly by adapter_registry rather than skipped quietly."
 
 [captured_symbol_count]
-value = 100
+value = 30
 unit  = "symbols per venue"
-note  = "operator, 2026-08-23: how many symbols to capture per venue, ordered by symbol_selection_metric. Raised from 30 to 100 as the first step of the measured walk towards the full universe (RL-009: the brain must not skip symbols with profit potential). 0 means every symbol the venue lists -- 1,295 perpetuals across the two venues as measured on 2026-08-21 -- and the descriptor ceiling the spec feared is not the blocker: RLIMIT_NOFILE soft is 524288 on this box and a 30-symbol capture holds 68. What scales instead is the pair sweep, which grows as the square, and the tape: measured 2026-08-23 at 30/venue, 65 symbols wrote 80.7 KiB/s, 7.14 GB/day against 229 GB free. The added symbols are lower volume by construction, so bytes grow sub-linearly with symbol count. Each step is measured before the next."
+note  = "operator, 2026-08-23: how many symbols to capture per venue, ordered by symbol_selection_metric. Stepped 30 -> 100 at 08:0x as step 1 of the measured walk towards the full universe (RL-009), and stepped back to 30 at 10:3x because the measurement came back negative: at 100 per venue the decision half cannot keep up. Measured on the live run of 2026-08-23 10:25:15 -- a trade was decided at an ENAUSDT price of 0.17019, which was the real market at 09:29:08. Fifty-six minutes stale. Each part keeps a per-symbol price level that only updates when a market-data message for that symbol reaches it, so under input loss a symbol can freeze for the better part of an hour while the part still looks busy. The fill simulator stayed current, so every such trade was decided at an hour-old price and filled at the real one, and its exits fired on arrival. What the walk costs is exactly this, and it is why it is walked rather than jumped: the next step is 50, taken only once decision staleness is probed and holding at 30."
 
 [symbol_selection_metric]
 value = "quote-volume-24h"
@@ -622,3 +622,8 @@ note  = "operator, 2026-08-23: how many of the venue's own prints must fall insi
 value = 4000
 unit  = "trade prints per symbol"
 note  = "operator, 2026-08-23: how many recent prints per symbol the proposer keeps so a range can be measured over the horizon the detector claimed. Four thousand covers a 60s horizon on the busiest symbol measured (BTCUSDT at ~4 prints a second leaves 16x headroom) and is bounded because this is a process's memory -- an unbounded price history is a leak with a good excuse, and T-3 says an off part releases its memory."
+
+[maximum_decision_price_drift]
+value = 0.004
+unit  = "fraction of the decision price"
+note  = "operator, 2026-08-23: how far the market may have moved from the price a decision was made at before the book refuses to fill it. Measured, not chosen: BTCUSDT traded through 0.133% in the 28 seconds captured on 2026-08-22, so four tenths of a per cent is roughly three of those windows -- wide enough that ordinary movement between a decision and its fill passes, narrow enough that the 6% gap seen on 2026-08-23 at 10:25:15 does not. That gap was a decision priced at an ENAUSDT market 56 minutes gone. A live venue would fill such an order without complaint; this refusal is a guard on the decision, never a simulation of the venue, and paper-fill-simulator names it separately for exactly that reason. It comes down as decision staleness is measured and fixed rather than guarded against."
