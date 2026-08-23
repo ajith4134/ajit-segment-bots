@@ -295,3 +295,49 @@ def run_limit_price_walker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.order_book import OrderBookSnapshot
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_reprices = context.bus.publisher_for("order-reprice")
+    walker = LimitPriceWalker(
+        cadence_seconds=context.number("limit_walk_cadence"),
+        prior_step_fraction=context.number("limit_walk_prior_step_fraction"),
+        maximum_total_walk_fraction=context.number("limit_walk_maximum_total_fraction"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        window=int(context.number("execution_window")),
+    )
+
+    def read_events(_walker) -> None:
+        for order in orders.payloads():
+            if order.order_type == "limit" and order.limit_price > 0 and order.outcome == "routed":
+                walker.observe_order_placed(order.client_order_id, order.venue_id, order.symbol, order.side, order.limit_price)
+            elif order.cancels_client_order_id:
+                walker.observe_order_cancelled(order.cancels_client_order_id)
+        for book in books.payloads():
+            if isinstance(book, OrderBookSnapshot) and book.best_bid and book.best_ask:
+                walker.observe_touch(book.venue_id, book.symbol, book.best_bid, book.best_ask)
+        trades.payloads()
+
+    def publish(reprices) -> None:
+        kept = tuple(item for item in reprices if item is not None)
+        if kept:
+            publish_reprices(kept)
+
+    return run_limit_price_walker(
+        walker=walker,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_reprices=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -242,3 +242,56 @@ def run_order_state_poller(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every order routed to a live venue is watched until a status resolves
+    it; the poll decisions are published as raw statuses asking the venue.
+    No venue socket is held in phase 1, so a poll decision is the request
+    the router would make, and the answer never comes -- which the poller
+    reports as overdue, correctly.
+    """
+    from runtime.input_assembly import Batch
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    publish_polls = context.bus.publisher_for("raw-venue-order-status")
+    poller = OrderStatePoller(
+        prior_resolution_seconds=context.number("order_poll_prior_resolution"),
+        minimum_poll_interval_seconds=context.number("order_poll_minimum_interval"),
+        maximum_poll_interval_seconds=context.number("order_poll_maximum_interval"),
+        overdue_multiple=context.number("order_poll_overdue_multiple"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        window=int(context.number("execution_window")),
+    )
+
+    def read_events(_poller) -> None:
+        for order in orders.payloads():
+            if order.destination != "paper-book" and order.outcome == "routed":
+                poller.observe_order_sent(order.client_order_id, order.venue_id, order.symbol)
+
+    def publish(decisions) -> None:
+        if decisions:
+            publish_polls(
+                tuple(
+                    RawVenueOrderStatus(
+                        client_order_id=d.client_order_id, venue_id=d.venue_id, symbol=d.symbol,
+                        action="poll", outcome=d.state, venue_response=None,
+                        reason=f"poll after {d.open_seconds:.1f}s open, next in {d.poll_interval_seconds:.1f}s",
+                        requested_at_ns=d.decided_at_ns, responded_at_ns=None,
+                    )
+                    for d in decisions
+                )
+            )
+
+    return run_order_state_poller(
+        poller=poller,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_polls=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

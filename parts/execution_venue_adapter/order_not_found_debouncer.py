@@ -232,3 +232,45 @@ def run_order_not_found_debouncer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    statuses = Batch(read=context.bus.reader("raw-venue-order-status"))
+    publish_verdicts = context.bus.publisher_for("order-reject-reason")
+    debouncer = OrderNotFoundDebouncer(
+        prior_threshold=int(context.number("order_not_found_prior_threshold")),
+        maximum_threshold=int(context.number("order_not_found_maximum_threshold")),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        window=int(context.number("execution_window")),
+    )
+
+    def read_statuses():
+        denials, appearances, resolutions = [], [], []
+        for status in statuses.payloads():
+            text = f"{status.outcome} {status.reason}".lower()
+            if "not found" in text or "unknown order" in text or "does not exist" in text:
+                denials.append((status.client_order_id, status.venue_id))
+            elif status.outcome in ("filled", "cancelled", "rejected"):
+                resolutions.append(status.client_order_id)
+            elif status.outcome == "sent" or status.venue_response:
+                appearances.append((status.client_order_id, status.venue_id))
+        return tuple(denials), tuple(appearances), tuple(resolutions)
+
+    def publish(verdicts) -> None:
+        kept = tuple(item for item in verdicts if item is not None)
+        if kept:
+            publish_verdicts(kept)
+
+    return run_order_not_found_debouncer(
+        debouncer=debouncer,
+        control_socket=context.control_socket,
+        read_statuses=read_statuses,
+        publish_verdicts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -191,3 +191,39 @@ def run_venue_position_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No venue client is held in phase 1; a venue named by a key standing is
+    read and refused for no key, and nothing is invented about positions.
+    """
+    from runtime.input_assembly import LatestByKey
+
+    keys = LatestByKey(read=context.bus.reader("key-standing"), key_of=lambda k: (k.venue_id, k.key_id))
+    publish_reports = context.bus.publisher_for("venue-position-report")
+    reader = VenuePositionReader(
+        clients={},
+        read_key_standing=lambda venue_id: next(
+            (s for (v, _k), s in keys.mapping().items() if v == venue_id and s.state == "serving"), None
+        ),
+    )
+
+    def read_venues():
+        return tuple((venue_id, None) for (venue_id, _k) in keys.mapping())
+
+    def publish(reports) -> None:
+        if reports:
+            publish_reports(reports)
+
+    return run_venue_position_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_venues=read_venues,
+        publish_reports=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

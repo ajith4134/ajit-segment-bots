@@ -237,3 +237,62 @@ def run_venue_order_status_translator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A raw status with a venue response is translated into this project's
+    status words; a fill in the response becomes a fill on the bus, a
+    rejection becomes a reject reason. Statuses with no response -- the
+    router's own refusals, the poller's requests -- carry nothing to
+    translate and are passed over.
+    """
+    from runtime.input_assembly import Batch
+
+    statuses = Batch(read=context.bus.reader("raw-venue-order-status"))
+    publish_fills = context.bus.publisher_for("fill")
+    publish_reasons = context.bus.publisher_for("order-reject-reason")
+    translator = VenueOrderStatusTranslator()
+
+    def read_raw_statuses():
+        requests = []
+        for status in statuses.payloads():
+            response = status.venue_response if isinstance(status.venue_response, dict) else None
+            if not response:
+                continue
+            requests.append({
+                "order_id": status.client_order_id, "venue_id": status.venue_id, "symbol": status.symbol,
+                "venue_status": str(response.get("status") or response.get("orderStatus") or status.outcome),
+                "filled_quantity": float(response.get("filled") or response.get("cumExecQty") or 0.0),
+                "fill_price": float(response.get("average") or response.get("avgPrice") or 0.0),
+                "fill_id": response.get("id") or response.get("orderId"),
+            })
+        return tuple(requests)
+
+    def publish(translations) -> None:
+        fills = tuple(t.fill for t in translations if t.fill is not None)
+        if fills:
+            publish_fills(fills)
+        # A rejection is published as the venue's own words; the classifier
+        # reads the raw status for the code and names the reason.
+        rejected = tuple(t for t in translations if t.status == REJECTED and t.reject_message)
+        if rejected:
+            publish_reasons(
+                tuple(
+                    {"order_id": t.order_id, "venue_id": t.venue_id, "symbol": t.symbol,
+                     "reason": t.reject_message, "translated_at_ns": t.translated_at_ns}
+                    for t in rejected
+                )
+            )
+
+    return run_venue_order_status_translator(
+        translator=translator,
+        control_socket=context.control_socket,
+        read_raw_statuses=read_raw_statuses,
+        publish_translations=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

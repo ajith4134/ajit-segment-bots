@@ -252,3 +252,47 @@ def run_resting_order_cancel_policy(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_decisions = context.bus.publisher_for("cancel-decision")
+    policy = RestingOrderCancelPolicy(
+        prior_time_to_live_seconds=context.number("resting_order_prior_time_to_live"),
+        maximum_time_to_live_seconds=context.number("resting_order_maximum_time_to_live"),
+        prior_distance_fraction=context.number("resting_order_prior_distance_fraction"),
+        maximum_distance_fraction=context.number("resting_order_maximum_distance_fraction"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        window=int(context.number("execution_window")),
+    )
+
+    def read_events(_policy) -> None:
+        for order in orders.payloads():
+            if order.cancels_client_order_id:
+                policy.observe_order_finished(order.cancels_client_order_id)
+            elif order.order_type == "limit" and order.limit_price > 0 and order.outcome == "routed":
+                policy.observe_order_placed(order.client_order_id, order.venue_id, order.symbol, order.limit_price)
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                policy.observe_price(trade.venue_id, trade.symbol, trade.price)
+
+    def publish(decisions) -> None:
+        acted = tuple(d for d in decisions if d.action != HOLD)
+        if acted:
+            publish_decisions(acted)
+
+    return run_resting_order_cancel_policy(
+        policy=policy,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_decisions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

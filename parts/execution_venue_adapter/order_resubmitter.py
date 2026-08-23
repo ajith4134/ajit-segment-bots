@@ -262,3 +262,59 @@ def run_order_resubmitter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A classified rejection is decided on; the order it belongs to is looked
+    up from the requests seen, and a resubmission is published as a new order
+    request for the same order. A rejection cleared is observed when the
+    order is later seen filled or sent.
+    """
+    from dataclasses import replace
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    rejections = Batch(read=context.bus.reader("order-reject-reason"))
+    orders = Batch(read=context.bus.reader("order-request"))
+    budgets = LatestByKey(read=context.bus.reader("venue-rate-budget"), key_of=lambda b: (b.venue_id, b.request_class))
+    publish_requests = context.bus.publisher_for("order-request")
+    resubmitter = OrderResubmitter(
+        attempts_allowed=int(context.number("order_resubmit_attempts_allowed")),
+        retry_rate_threshold=context.number("order_reject_retry_threshold"),
+        prior_clear_seconds=context.number("order_resubmit_prior_clear_seconds"),
+        maximum_wait_seconds=context.number("order_resubmit_maximum_wait"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        window=int(context.number("execution_window")),
+        has_rate_budget=lambda venue_id: (
+            (b := budgets.mapping().get((venue_id, "order"))) is None or b.remaining > 0
+        ),
+    )
+    seen_orders: dict[str, object] = {}
+
+    def read_rejections():
+        for order in orders.payloads():
+            seen_orders[order.client_order_id] = order
+        return tuple(rejections.payloads()), (), ()
+
+    def publish(decisions) -> None:
+        requests = []
+        for decision in decisions:
+            order = seen_orders.get(decision.client_order_id)
+            if order is None:
+                continue
+            requests.append(replace(order, reason=f"resubmission {decision.attempt} of {decision.attempts_allowed}: {decision.reject_reason}", routed_at_ns=decision.decided_at_ns if hasattr(decision, "decided_at_ns") else order.routed_at_ns))
+        if requests:
+            publish_requests(tuple(requests))
+
+    return run_order_resubmitter(
+        resubmitter=resubmitter,
+        control_socket=context.control_socket,
+        read_rejections=read_rejections,
+        publish_requests=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

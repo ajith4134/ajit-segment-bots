@@ -252,3 +252,48 @@ def run_venue_rate_budgeter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every order routed to a live venue spends one request of that venue's
+    order budget; the venue's standing withholds the budget when the venue
+    is banned. Budgets go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    standings = Batch(read=context.bus.reader("venue-standing"))
+    publish_budgets = context.bus.publisher_for("venue-rate-budget")
+    budgeter = VenueRateBudgeter()
+    last_publish = [float("-inf")]
+
+    def read_events(_budgeter) -> None:
+        for standing in standings.payloads():
+            budgeter.set_venue_standing(standing.venue_id, standing.state)
+        for order in orders.payloads():
+            if order.destination != "paper-book":
+                budgeter.spend(order.venue_id, "order")
+
+    def tick() -> None:
+        read_events(budgeter)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        budgets = budgeter.read_all()
+        if budgets:
+            publish_budgets(budgets)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

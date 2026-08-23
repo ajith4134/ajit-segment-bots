@@ -264,3 +264,50 @@ def run_order_reject_classifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A rejected status is classified by the venue's own code and message; a
+    later status for the same order says whether a retry succeeded.
+    """
+    from runtime.input_assembly import Batch
+
+    statuses = Batch(read=context.bus.reader("raw-venue-order-status"))
+    publish_reasons = context.bus.publisher_for("order-reject-reason")
+    classifier = OrderRejectClassifier(
+        retry_threshold=context.number("order_reject_retry_threshold"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    rejected: dict[str, tuple[str, str]] = {}
+
+    def read_statuses():
+        rejections, outcomes = [], []
+        for status in statuses.payloads():
+            response = status.venue_response if isinstance(status.venue_response, dict) else {}
+            if status.outcome == "rejected":
+                code = response.get("code")
+                rejections.append((status.client_order_id, status.venue_id, status.symbol, None if code is None else str(code), status.reason))
+                rejected[status.client_order_id] = (status.venue_id, status.reason)
+            elif status.client_order_id in rejected and status.outcome in ("sent", "filled"):
+                venue_id, reason = rejected.pop(status.client_order_id)
+                outcomes.append((venue_id, reason, True))
+        return tuple(rejections), tuple(outcomes)
+
+    def publish(reasons) -> None:
+        if reasons:
+            publish_reasons(reasons)
+
+    return run_order_reject_classifier(
+        classifier=classifier,
+        control_socket=context.control_socket,
+        read_statuses=read_statuses,
+        publish_reasons=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

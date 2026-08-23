@@ -183,3 +183,48 @@ def run_venue_balance_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No venue client is held in phase 1 -- no key exists -- so the reader has
+    no venue to read and publishes nothing; its standing counts the reads it
+    refused for no key once a key standing names a venue. Honest rather than
+    a balance of zero, which would read as an empty account.
+    """
+    import time as _time
+
+    from runtime.input_assembly import LatestByKey
+
+    keys = LatestByKey(read=context.bus.reader("key-standing"), key_of=lambda k: (k.venue_id, k.key_id))
+    publish_balances = context.bus.publisher_for("account-balance")
+    reader = VenueBalanceReader(
+        clients={},
+        read_key_standing=lambda venue_id: next(
+            (s for (v, _k), s in keys.mapping().items() if v == venue_id and s.state == "serving"), None
+        ),
+        settlement_currency=str(context.setting("settlement_currency").value),
+        freshness_seconds=context.number("venue_balance_freshness"),
+    )
+    last_read = [float("-inf")]
+
+    def tick() -> None:
+        now = _time.monotonic()
+        if now - last_read[0] < context.number("venue_balance_freshness"):
+            keys.mapping()
+            return
+        last_read[0] = now
+        balances = tuple(reader.read(venue_id) for (venue_id, _k) in keys.mapping())
+        if balances:
+            publish_balances(balances)
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

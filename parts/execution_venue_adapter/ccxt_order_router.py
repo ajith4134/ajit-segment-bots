@@ -315,3 +315,75 @@ def run_ccxt_order_router(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No venue client is held in phase 1: no key exists, so every order routed to
+    a live venue is refused by name with REFUSED_NO_KEY, which is the state the
+    router was built to report. Only orders whose destination is the live venue
+    reach it; the paper book's orders are filled by the simulator.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    budgets = LatestByKey(read=context.bus.reader("venue-rate-budget"), key_of=lambda b: (b.venue_id, b.request_class))
+    cancels = Batch(read=context.bus.reader("cancel-decision"))
+    reprices = Batch(read=context.bus.reader("order-reprice"))
+    keys = LatestByKey(read=context.bus.reader("key-standing"), key_of=lambda k: (k.venue_id, k.key_id))
+    publish_statuses = context.bus.publisher_for("raw-venue-order-status")
+
+    def has_rate_budget(venue_id: str) -> bool:
+        budget = budgets.mapping().get((venue_id, "order"))
+        return budget is None or budget.remaining > 0
+
+    def read_venue_standing(venue_id: str) -> str:
+        return "serving"
+
+    def read_key_standing(venue_id: str):
+        for (venue, _key_id), standing in keys.mapping().items():
+            if venue == venue_id and standing.state == "serving":
+                return standing
+        return None
+
+    router = CcxtOrderRouter(
+        clients={},
+        has_rate_budget=has_rate_budget,
+        read_venue_standing=read_venue_standing,
+        read_key_standing=read_key_standing,
+    )
+
+    def read_requests():
+        places = [
+            {
+                "venue_id": order.venue_id, "symbol": order.symbol, "side": order.side,
+                "quantity": order.quantity, "price": order.limit_price or None,
+                "intent_id": order.client_order_id, "order_type": order.order_type,
+            }
+            for order in orders.payloads() if order.destination != "paper-book"
+        ]
+        cancel_requests = [
+            {"client_order_id": decision.order_id, "venue_id": decision.venue_id, "symbol": decision.symbol}
+            for decision in cancels.payloads() if decision.action != "hold"
+        ]
+        reprice_requests = [
+            {"client_order_id": reprice.order_id, "venue_id": reprice.venue_id, "symbol": reprice.symbol, "new_price": reprice.to_price}
+            for reprice in reprices.payloads() if reprice.action == "stepped"
+        ]
+        return tuple(places), tuple(cancel_requests), tuple(reprice_requests)
+
+    def publish(statuses) -> None:
+        if statuses:
+            publish_statuses(statuses)
+
+    return run_ccxt_order_router(
+        router=router,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_statuses=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

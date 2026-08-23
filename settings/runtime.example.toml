@@ -1917,3 +1917,108 @@ note  = "operator, 2026-08-23: how far the cash and position value a fill moved 
 value = 10.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how long probe-runner gives one probe before recording it as timed out. Ten seconds: the slowest probe measured -- counting the tape's records over nine gigabytes -- takes under five, and a probe that hangs must not stop the ones behind it."
+
+[limit_walk_cadence]
+value = 2.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how often limit-price-walker steps a resting limit order towards the touch. Two seconds, a few prints on the captured symbols; faster would chase every tick, slower leaves the order behind a moving book."
+
+[limit_walk_prior_step_fraction]
+value = 0.0002
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the step a walk takes before the walker has measured how far the touch moves between its own steps. Two basis points, about the spread on the liquid captured symbols."
+
+[limit_walk_maximum_total_fraction]
+value = 0.004
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the most a limit order may be walked from where it was placed. The same 0.4% as maximum_decision_price_drift: past it the order is no longer the decision that placed it."
+
+[order_not_found_prior_threshold]
+value = 3
+unit  = "denials"
+note  = "operator, 2026-08-23: how many times a venue may answer that an order does not exist before order-not-found-debouncer believes it, until the venue's own lag has been measured. Three: both venues answer not-found for a few hundred milliseconds after accepting an order, and one poll inside that window is the lag, not the truth."
+
+[order_not_found_maximum_threshold]
+value = 10
+unit  = "denials"
+note  = "operator, 2026-08-23: the most denials the debouncer will ever wait for, however slow a venue has measured. Ten; past that an order that never appeared did not exist."
+
+[order_reject_retry_threshold]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: the learned chance a retry succeeds above which a rejection is classed as retryable. A coin flip: a reason that clears half the time is worth one more attempt at the venue's cost of a request."
+
+[order_resubmit_attempts_allowed]
+value = 3
+unit  = "attempts"
+note  = "operator, 2026-08-23: how many times an order may be resubmitted after a retryable rejection. Three, so a transient venue error is retried and a persistent one is not hammered -- both venues escalate repeated rejections to a ban."
+
+[order_resubmit_prior_clear_seconds]
+value = 2.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long to wait before a first resubmission, until the time a venue's transient rejections take to clear has been measured. Two seconds, past the window both venues hold a rate-limit rejection."
+
+[order_resubmit_maximum_wait]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the longest a resubmission is held. A minute, the spread-reversion horizon; an order held longer is an order for a market that has gone."
+
+[order_poll_prior_resolution]
+value = 4.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long an order is assumed to take to resolve at the venue before resolution times have been measured. Four seconds, twenty times the measured 80-200 ms order round trip, so the first poll does not land before the venue has an answer."
+
+[order_poll_minimum_interval]
+value = 0.5
+unit  = "seconds"
+note  = "operator, 2026-08-23: the fastest order-state-poller polls one order. Half a second: faster would spend the venue's rate budget on an answer that has not changed."
+
+[order_poll_maximum_interval]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the slowest the poller polls a resting order. Thirty seconds, so a fill is never unseen for longer than half the decision horizon."
+
+[order_poll_overdue_multiple]
+value = 10.0
+unit  = "multiple of the resolution time"
+note  = "operator, 2026-08-23: how many times its usual resolution time an order may take before the poller calls it overdue. Ten: an order ten times slower than usual is stuck at the venue, not slow."
+
+[resting_order_prior_time_to_live]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a resting order is left before resting-order-cancel-policy cancels it, until fill times have been measured. Thirty seconds, half the decision horizon."
+
+[resting_order_maximum_time_to_live]
+value = 600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the longest any resting order is left whatever the measurement says. Ten minutes."
+
+[resting_order_prior_distance_fraction]
+value = 0.002
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far the market may move away from a resting order before it is cancelled, until the distance at which orders stop filling has been measured. Twenty basis points, ten spreads on the liquid symbols."
+
+[resting_order_maximum_distance_fraction]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the furthest the market may be from a resting order before it is cancelled regardless. One percent."
+
+[execution_minimum_observations]
+value = 10
+unit  = "observations"
+note  = "operator, 2026-08-23: how many measured outcomes the execution learners -- walk steps, denial lags, retry rates, resolution times, fill distances -- need before they use the measurement over the prior. Ten, the least a quantile of a small sample can mean; the execution path measures faster than the trading path and needs fewer."
+
+[execution_window]
+value = 200
+unit  = "observations"
+note  = "operator, 2026-08-23: how many recent observations the execution learners keep. Two hundred, about a day of orders at today's paper rate."
+
+[venue_balance_freshness]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old a venue balance reading may be before venue-balance-reader reads it again. Thirty seconds; a balance moves with fills and funding, and thirty seconds is one order's maximum poll interval."
+
+[settlement_currency]
+value = "USDT"
+unit  = "currency"
+note  = "operator, 2026-08-23: the currency both venues settle the traded perpetuals in, and the one the paper account keeps. USDT on binance-usdm and bybit-linear."
