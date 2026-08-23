@@ -143,3 +143,41 @@ def run_part_restart_budgeter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A restart request from the warden and a fault from a detector both count
+    against the part's budget: each is a reason the spine would start it
+    again, and the budget is a statement about how often that may happen.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("restart-request"))
+    faults = Batch(read=context.bus.reader("part-fault"))
+    publish_budgets = context.bus.publisher_for("restart-budget")
+    budgeter = PartRestartBudgeter(
+        restarts_allowed=int(context.number("part_restarts_allowed")),
+        window_seconds=context.number("part_restart_window"),
+    )
+
+    def read_requests():
+        ids = [request.part_id for request in requests.payloads()]
+        ids.extend(fault.part_id for fault in faults.payloads())
+        return tuple(ids)
+
+    def publish(budgets) -> None:
+        if budgets:
+            publish_budgets(budgets)
+
+    return run_part_restart_budgeter(
+        budgeter=budgeter,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_budgets=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

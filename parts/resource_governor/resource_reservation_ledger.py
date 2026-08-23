@@ -141,3 +141,51 @@ def run_resource_reservation_ledger(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A floor is reserved for every part whose stated priority rank is at or
+    below reservation_priority_ceiling, sized by the two per-part settings,
+    and settled against the latest capacity reading once per health interval.
+    Unstated parts take no floor: a guarantee nobody asked for is a cost
+    everybody pays.
+    """
+    import time as _time
+
+    from runtime.input_assembly import LatestByKey, LatestValue
+
+    priorities = LatestByKey(read=context.bus.reader("part-priority"), key_of=lambda p: p.part_id)
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
+    publish_reservations = context.bus.publisher_for("resource-reservation")
+    ledger = ResourceReservationLedger()
+    ceiling = int(context.number("reservation_priority_ceiling"))
+    cpu_floor = context.number("reserved_cpu_cores_per_critical_part")
+    memory_floor = int(context.number("reserved_memory_bytes_per_critical_part"))
+    last_settled = [float("-inf")]
+
+    def tick() -> None:
+        for part_id, priority in priorities.mapping().items():
+            if priority.is_stated and priority.priority <= ceiling:
+                ledger.reserve(part_id, cpu_floor, memory_floor, priority.priority)
+            else:
+                ledger.release(part_id)
+        current = capacity.value()
+        now = _time.monotonic()
+        if current is None or now - last_settled[0] < context.health_interval_seconds:
+            return
+        settled = ledger.settle(current)
+        if settled:
+            publish_reservations(settled)
+        last_settled[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

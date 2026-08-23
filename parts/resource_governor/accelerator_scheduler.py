@@ -158,3 +158,46 @@ def run_accelerator_scheduler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The only request signal this part is given is part-priority; it answers
+    every stated priority with a slot decision once per health interval, and
+    on this machine -- which the scheduler measured at start to have no
+    accelerator -- every answer is a refusal that says so. A capacity reading
+    is consumed so a device that appears later is seen on the next scan.
+    """
+    import time as _time
+
+    from runtime.input_assembly import LatestByKey, LatestValue
+
+    priorities = LatestByKey(read=context.bus.reader("part-priority"), key_of=lambda p: p.part_id)
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
+    publish_slots = context.bus.publisher_for("accelerator-slot")
+    scheduler = AcceleratorScheduler(slot_seconds=context.number("accelerator_slot_seconds"))
+    last_answer = [float("-inf")]
+
+    def read_requests():
+        capacity.value()
+        now = _time.monotonic()
+        if now - last_answer[0] < context.health_interval_seconds:
+            return ()
+        last_answer[0] = now
+        return tuple((p.part_id, p.priority) for p in priorities.mapping().values())
+
+    def publish(slots) -> None:
+        if slots:
+            publish_slots(slots)
+
+    return run_accelerator_scheduler(
+        scheduler=scheduler,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_slots=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -148,3 +148,41 @@ def run_memory_pressure_forecaster(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every usage report is a sample; the forecast is made against the latest
+    capacity reading and published once per health interval, because a
+    forecast re-fitted on every arriving sample is the same forecast forty
+    times a second.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestValue
+
+    usages = Batch(read=context.bus.reader("part-resource-usage"))
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
+    publish_forecast = context.bus.publisher_for("memory-forecast")
+    forecaster = MemoryPressureForecaster(window_samples=int(context.number("memory_forecast_window")))
+    last_forecast = [float("-inf")]
+
+    def tick() -> None:
+        forecaster.observe(usages.payloads())
+        current = capacity.value()
+        now = _time.monotonic()
+        if current is None or now - last_forecast[0] < context.health_interval_seconds:
+            return
+        publish_forecast((forecaster.forecast(current),))
+        last_forecast[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

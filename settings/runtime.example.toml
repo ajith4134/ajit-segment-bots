@@ -672,3 +672,83 @@ note  = "operator, 2026-08-23: how many feed gaps in a row on one venue, with no
 value = 600.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how long api-key-pool-rotator rests a key after a venue rejects it before offering it again. Ten minutes, which is the least Bybit holds a 403 (code 20003) before lifting it automatically, so a key offered sooner would be rejected again and count twice. Binance escalates 429 to 418 with a ban of two minutes to three days, so on that venue ten minutes is the floor, not the ceiling. No keys are held in phase 1 (RL-062); the rest applies the day one exists."
+
+[hog_multiple_of_fair_share]
+value = 3.0
+unit  = "multiple"
+note  = "operator, 2026-08-23: how many times a running part's fair share of a contended resource it must use before hog-detector names it. Fair share is one part's equal slice of the cores or RAM among the parts running, so at 47 parts on 12 cores it is 2.1% of the machine. Measured on the live run of 2026-08-23 12:0x: regime-classifier, reclassifying sixty symbols on every wake, sat at 21.5% of a core while every other part sat under 4% -- ten times its share, and the one part losing its feed. Three names that part and leaves a busy feed reader at twice its share alone. A judgement above one measured hog; what would settle it is the share distribution over a full day."
+
+[cpu_contention_fraction]
+value = 0.8
+unit  = "fraction of logical cores"
+note  = "operator, 2026-08-23: how much of the machine's CPU must be in use across all parts before hog-detector reports anyone at all. A hog on an idle machine is using what nobody wanted, and naming it would train the governor to switch off work that costs nothing. Four fifths leaves a fifth for the kernel, the tape writer's fsync and a board build; measured on 2026-08-23 the whole spine used 40% of one core of twelve, so this is far from binding today."
+
+[memory_contention_fraction]
+value = 0.8
+unit  = "fraction of total RAM"
+note  = "operator, 2026-08-23: how much of RAM must be in use before hog-detector reports a memory hog. This box has no swap, so exhaustion is an OOM kill; four fifths leaves six of thirty gigabytes for the page cache the tape reader relies on. Measured 2026-08-23: 2.4 GB used of 30, so not binding today."
+
+[memory_forecast_window]
+value = 300
+unit  = "samples"
+note  = "operator, 2026-08-23: how many of each part's memory readings memory-pressure-forecaster fits a growth rate over. part-appetite-meter reports once per part_health_interval (1 s), so three hundred is five minutes -- long enough that a part which spikes on a burst and settles does not read as growing forever, short enough that a leak of a megabyte a second is forecast well before memory_exhaustion_warning. Not yet measured against a real leak; what would settle it is the first part whose forecast came true."
+
+[accelerator_slot_seconds]
+value = 600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long accelerator-scheduler grants one device to one part before the slot expires. Ten minutes: a Kronos forecast over a window is seconds, a fine-tune is minutes, and a slot that outlives its holder's work starves the next part for the rest of it. This box has no accelerator (measured by the scheduler at start), so today every slot is a refusal that says so; the length applies the day one exists."
+
+[duty_cycle_quiet_hours_wanted]
+value = 4
+unit  = "hours of the day"
+note  = "operator, 2026-08-23: how many UTC hours duty-cycle-planner books for heavy work, chosen from the quietest it has observed. Four, because a retrain over a day of tape runs in well under that, and booking more would put heavy work into hours that are only moderately quiet. Which hours they are is learned from message counts per hour, never assumed."
+
+[duty_cycle_minimum_days_observed]
+value = 3
+unit  = "days"
+note  = "operator, 2026-08-23: how many days of per-hour activity the planner needs before it names quiet hours rather than allowing every hour with a reason that says it has no evidence. Three, so one weekend day cannot define the week; the tape has recorded since 2026-08-22, so this is met on 2026-08-25."
+
+[duty_cycle_heavy_cpu_fraction]
+value = 0.5
+unit  = "cores"
+note  = "operator, 2026-08-23: how much of a core a part must be using, as part-appetite-meter measures it, before the planner treats it as heavy work to be scheduled into quiet hours. Half a core: measured on the live spine of 2026-08-23, no steady part used more than 0.22 of a core and the one that did was a defect; a part above half a core for a whole health interval is doing work of the kind retraining is."
+
+[part_restarts_allowed]
+value = 3
+unit  = "restarts"
+note  = "operator, 2026-08-23: how many restarts of one part part-restart-budgeter allows inside part_restart_window before it withholds the next. The live spine backs off restarts from 1 s to a 60 s ceiling, so three inside five minutes is a part dying as fast as it is allowed to be started -- a crash loop, not a transient."
+
+[part_restart_window]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window part_restarts_allowed is counted over. Five minutes, five times the spine's restart backoff ceiling, so a part that genuinely recovered after one restart has its count forgotten within the hour."
+
+[reservation_priority_ceiling]
+value = 10
+unit  = "priority rank"
+note  = "operator, 2026-08-23: parts whose stated priority rank is at or below this number (lower is more important; the unstated middle is 50) are given a guaranteed resource floor by resource-reservation-ledger. Ten leaves room for the operator to rank the feed reader, the recorders and the collector among the first ten without every part stated in part-priority.toml taking a floor."
+
+[reserved_cpu_cores_per_critical_part]
+value = 0.5
+unit  = "cores"
+note  = "operator, 2026-08-23: the CPU floor reserved for each part at or below reservation_priority_ceiling. Half a core is more than twice what any spine part used on 2026-08-23 (the busiest steady part at 0.22 of a core), so the floor holds under load without reserving cores nobody uses; ten such parts reserve five of twelve."
+
+[reserved_memory_bytes_per_critical_part]
+value = 268435456
+unit  = "bytes"
+note  = "operator, 2026-08-23: the memory floor reserved for each part at or below reservation_priority_ceiling. 256 MiB, against a forkserver child that starts at about 60 MB with numpy loaded and the feed reader's drain buffers on top; ten such parts reserve 2.5 of 30 GB."
+
+[switch_transitions_before_flap]
+value = 4
+unit  = "transitions"
+note  = "operator, 2026-08-23: how many on/off transitions of one part inside switch_flap_window switch-oscillation-damper needs before it calls the part flapping and asks for a hold. Four is off-on-off-on: a part switched off for pressure and back on when pressure eased is two, which is the governor working; the same again inside the window is the governor chasing its own tail."
+
+[switch_flap_window]
+value = 120.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window switch_transitions_before_flap is counted over. Two minutes, which is twice memory_exhaustion_warning -- the horizon the switching planner acts on -- so an oscillation at the planner's own period is seen."
+
+[switch_flap_base_hold]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a flapping part is held in its current state the first time it flaps; the damper doubles it on each repeat. One minute equals the spine's restart backoff ceiling, so a hold is never shorter than the substrate's own patience."

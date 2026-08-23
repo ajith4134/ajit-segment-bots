@@ -21,6 +21,9 @@ PART_DECLARATION = PartDeclaration(
 
 ON = "on"
 OFF = "off"
+# What gate-actuator writes on a record for a switch the launcher made. The
+# string rather than the import: a part names data, never another part (T-4).
+FLIPPED_OUTCOME = "flipped"
 
 
 @dataclass(frozen=True)
@@ -130,4 +133,39 @@ def run_switch_oscillation_damper(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Only a switch the launcher actually made is a transition; a refused or
+    failed one changed nothing and must not count towards a flap.
+    """
+    from runtime.input_assembly import Batch
+
+    records = Batch(read=context.bus.reader("switch-record"))
+    publish_flaps = context.bus.publisher_for("flap-report")
+    damper = SwitchOscillationDamper(
+        transitions_before_flap=int(context.number("switch_transitions_before_flap")),
+        window_seconds=context.number("switch_flap_window"),
+        base_hold_seconds=context.number("switch_flap_base_hold"),
+    )
+
+    def read_switch_records():
+        return tuple(
+            (record.part_id, ON if record.action == ON else OFF)
+            for record in records.payloads()
+            if record.outcome == FLIPPED_OUTCOME
+        )
+
+    return run_switch_oscillation_damper(
+        damper=damper,
+        control_socket=context.control_socket,
+        read_switch_records=read_switch_records,
+        publish_flap=lambda report: publish_flaps((report,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

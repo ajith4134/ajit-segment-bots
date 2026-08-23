@@ -147,3 +147,23 @@ def run_io_pressure_meter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No inputs: it reads the kernel's own pressure file and the network counters
+    on every tick, which with nothing to wake it is once per health interval.
+    """
+    publish_pressure = context.bus.publisher_for("io-pressure")
+    meter = IoPressureMeter()
+
+    return run_io_pressure_meter(
+        meter=meter,
+        control_socket=context.control_socket,
+        publish_pressure=lambda pressure: publish_pressure((pressure,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

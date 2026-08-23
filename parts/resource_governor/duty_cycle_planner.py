@@ -131,3 +131,66 @@ def run_duty_cycle_planner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Market activity is counted from market-data per UTC hour and published
+    as a plan per heavy part once per health interval. A heavy part is one
+    part-appetite-meter has measured above duty_cycle_heavy_cpu_fraction of a
+    core; which parts are heavy is measured, never listed (T-4).
+    """
+    import datetime
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    market_data = Batch(read=context.bus.reader("market-data"))
+    usages = LatestByKey(read=context.bus.reader("part-resource-usage"), key_of=lambda u: u.part_id)
+    publish_duty_cycles = context.bus.publisher_for("duty-cycle")
+    planner = DutyCyclePlanner(
+        quiet_hours_wanted=int(context.number("duty_cycle_quiet_hours_wanted")),
+        minimum_days_observed=int(context.number("duty_cycle_minimum_days_observed")),
+    )
+    heavy_fraction = context.number("duty_cycle_heavy_cpu_fraction")
+    counts: dict[tuple[int, int], int] = {}
+    first_day = [None]
+    last_plan = [float("-inf")]
+
+    def read_activity():
+        # Counted per (hour, day) as messages arrive; handed over as totals so
+        # far, which the planner keeps as the latest figure for that hour.
+        for item in market_data.payloads():
+            when = datetime.datetime.fromtimestamp(item.venue_time_ns / 1e9, datetime.UTC)
+            if first_day[0] is None:
+                first_day[0] = when.date()
+            day_index = (when.date() - first_day[0]).days
+            counts[(when.hour, day_index)] = counts.get((when.hour, day_index), 0) + 1
+        return tuple((hour, day, messages) for (hour, day), messages in counts.items())
+
+    def read_heavy_parts():
+        now = _time.monotonic()
+        if now - last_plan[0] < context.health_interval_seconds:
+            return ()
+        last_plan[0] = now
+        return tuple(
+            part_id for part_id, usage in sorted(usages.mapping().items())
+            if usage.cpu_seconds_per_second is not None and usage.cpu_seconds_per_second >= heavy_fraction
+        )
+
+    def publish(cycles) -> None:
+        if cycles:
+            publish_duty_cycles(cycles)
+
+    return run_duty_cycle_planner(
+        planner=planner,
+        control_socket=context.control_socket,
+        read_activity=read_activity,
+        read_heavy_parts=read_heavy_parts,
+        publish_duty_cycles=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

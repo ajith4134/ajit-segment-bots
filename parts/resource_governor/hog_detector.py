@@ -160,3 +160,41 @@ def run_hog_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Usage is the latest per part from part-appetite-meter; capacity the latest
+    from hardware-scanner. Without a capacity reading there is no fair share to
+    measure against, and no report is made rather than one against a guess.
+    """
+    from runtime.input_assembly import LatestByKey, LatestValue
+
+    usages = LatestByKey(read=context.bus.reader("part-resource-usage"), key_of=lambda u: u.part_id)
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
+    publish_reports = context.bus.publisher_for("hog-report")
+    detector = HogDetector(
+        hog_multiple_of_fair_share=context.number("hog_multiple_of_fair_share"),
+        cpu_contention_fraction=context.number("cpu_contention_fraction"),
+        memory_contention_fraction=context.number("memory_contention_fraction"),
+    )
+
+    def tick() -> None:
+        current = capacity.value()
+        seen = tuple(usages.mapping().values())
+        if current is None or not seen:
+            return
+        reports = detector.detect(seen, current)
+        if reports:
+            publish_reports(reports)
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )
