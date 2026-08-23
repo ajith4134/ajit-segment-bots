@@ -64,6 +64,11 @@ class FundingStanding:
     total_paid: float = 0.0
     total_received: float = 0.0
     by_symbol: dict = field(default_factory=dict)
+    # Positions held while no funding source was on any declared input. The
+    # blueprint gives this part position and market-data, and market-data
+    # carries trades, candles and books -- never a funding settlement. Counted
+    # so the gap is a number on the board, not a silence (RL-062).
+    positions_held_without_a_funding_source: int = 0
 
 
 class FundingSettlementRecorder:
@@ -199,4 +204,62 @@ def run_funding_settlement_recorder(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Positions are observed so a settlement, when one arrives, is charged to
+    the holder. No settlement arrives: the blueprint gives this part position
+    and market-data, and market-data carries trades, candles and books, never
+    a funding payment. The positions held meanwhile are counted on the
+    standing as held without a funding source (RL-062); the fix is a
+    blueprint edit that declares where a settlement comes from, not a rate
+    read from a type this part does not consume.
+    """
+    from runtime.input_assembly import Batch
+    import pathlib as _pathlib
+
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
+
+    journal_path = journal_path_for(
+        _pathlib.Path(str(context.setting("journal_path").value)).expanduser(), PART_ID
+    )
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
+
+    positions = Batch(read=context.bus.reader("position"))
+    market_data = Batch(read=context.bus.reader("market-data"))
+    publish_settlements = context.bus.publisher_for("funding-settlement")
+    context.bus.publisher_for("journal-entry")
+    recorder = FundingSettlementRecorder(journal=journal)
+
+    def read_positions_and_funding():
+        seen = tuple(positions.payloads())
+        market_data.payloads()
+        recorder.standing.positions_held_without_a_funding_source += sum(
+            1 for position in seen if not position.is_flat
+        )
+        return seen, ()
+
+    def publish(settlements) -> None:
+        if settlements:
+            publish_settlements(settlements)
+
+    return run_funding_settlement_recorder(
+        recorder=recorder,
+        control_socket=context.control_socket,
+        read_positions_and_funding=read_positions_and_funding,
+        publish_settlements=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

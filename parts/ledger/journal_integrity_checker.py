@@ -77,10 +77,22 @@ class JournalIntegrityChecker:
 
     def check(self, entries) -> tuple[JournalGap, ...]:
         """Every break in this journal, in the order they occur."""
+        gaps, _digest, _sequence = self.check_continuing(entries, GENESIS_DIGEST, 1)
+        return gaps
+
+    def check_continuing(
+        self, entries, previous_digest: str, expected_sequence: int
+    ) -> tuple[tuple[JournalGap, ...], str, int]:
+        """Check entries that continue a chain already checked up to (digest, sequence).
+
+        Returns the gaps and where the chain now stands, so a long-running
+        checker keeps one digest and one number per recorder rather than every
+        entry it has ever seen: a trade-lifecycle journal grows by tens of
+        thousands of entries an hour, and a checker that re-read all of them on
+        every wake would be the part whose tick is slower than its feed.
+        """
         self.standing.checks += 1
         gaps: list[JournalGap] = []
-        previous_digest = GENESIS_DIGEST
-        expected_sequence = 1
 
         for entry in entries:
             self.standing.entries_checked += 1
@@ -133,7 +145,7 @@ class JournalIntegrityChecker:
 
         if not gaps:
             self.standing.last_verified_sequence = expected_sequence - 1
-        return tuple(gaps)
+        return tuple(gaps), previous_digest, expected_sequence
 
     def observe_replay_mismatch(self, subject: str, expected: str, observed: str) -> JournalGap:
         """A replay that did not reproduce what the journal says happened.
@@ -187,4 +199,52 @@ def run_journal_integrity_checker(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every recorder's entries arrive on one type; each recorder is its own
+    chain, so the checker keeps where each chain stands -- the last digest and
+    the next sequence -- and checks only what arrived since. A replay
+    mismatch from the verifier is reported as a gap in trust rather than in
+    the chain.
+    """
+    from runtime.input_assembly import Batch
+
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    mismatches = Batch(read=context.bus.reader("replay-mismatch"))
+    publish_gaps = context.bus.publisher_for("journal-gap")
+    checker = JournalIntegrityChecker()
+    chains: dict[str, tuple[str, int]] = {}
+
+    def tick() -> None:
+        by_recorder: dict[str, list] = {}
+        for entry in entries.payloads():
+            by_recorder.setdefault(entry.part_id, []).append(entry)
+        found = []
+        for recorder, batch in by_recorder.items():
+            batch.sort(key=lambda entry: entry.sequence)
+            digest, sequence = chains.get(recorder, (GENESIS_DIGEST, batch[0].sequence))
+            gaps, digest, sequence = checker.check_continuing(batch, digest, sequence)
+            chains[recorder] = (digest, sequence)
+            found.extend(gaps)
+        for mismatch in mismatches.payloads():
+            found.append(
+                checker.observe_replay_mismatch(
+                    mismatch.trade_id, str(mismatch.journal_value), str(mismatch.venue_value)
+                )
+            )
+        if found:
+            publish_gaps(tuple(found))
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

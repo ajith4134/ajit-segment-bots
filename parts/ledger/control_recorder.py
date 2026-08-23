@@ -181,3 +181,61 @@ def run_control_recorder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Its own journal file, one writer per chain, picked up from what the file
+    already holds. Each control-plane event becomes one entry under the kind
+    the recorder names it, with the event's own fields as the payload.
+    """
+    from dataclasses import asdict, is_dataclass
+
+    from runtime.input_assembly import Batch
+    import pathlib as _pathlib
+
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
+
+    journal_path = journal_path_for(
+        _pathlib.Path(str(context.setting("journal_path").value)).expanduser(), PART_ID
+    )
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
+
+    sources = {
+        SWITCH_RECORD: Batch(read=context.bus.reader("switch-record")),
+        POLICY_DECISION: Batch(read=context.bus.reader("policy-decision")),
+        MODIFICATION_RECORD: Batch(read=context.bus.reader("modification-record")),
+        KNOWLEDGE_SNAPSHOT: Batch(read=context.bus.reader("knowledge-snapshot")),
+    }
+    publish_entries = context.bus.publisher_for("journal-entry")
+
+    def as_payload(item) -> dict:
+        return asdict(item) if is_dataclass(item) else {"value": repr(item)}
+
+    def read_events():
+        return tuple(
+            (kind, as_payload(item)) for kind, source in sources.items() for item in source.payloads()
+        )
+
+    def publish(entries) -> None:
+        if entries:
+            publish_entries(entries)
+
+    return run_control_recorder(
+        recorder=ControlRecorder(journal=journal),
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_entries=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -178,3 +178,56 @@ def run_liquidation_price_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Positions from the reconciler, leverage from the selector's choice per
+    symbol, the mark from the latest trade, and the maintenance rate from the
+    one setting every liquidation distance is built from. Recomputed for
+    every tracked position once per health interval: a liquidation price
+    moves with the position, not with every print.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = Batch(read=context.bus.reader("position"))
+    choices = Batch(read=context.bus.reader("leverage-choice"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_liquidations = context.bus.publisher_for("liquidation-price")
+    maintenance_rate = context.number("maintenance_margin_rate")
+    tracker = LiquidationPriceTracker()
+    last_compute = [float("-inf")]
+
+    def read_inputs(_tracker) -> None:
+        for position in positions.payloads():
+            tracker.observe_position(position)
+            tracker.set_maintenance_margin_rate(position.venue_id, position.symbol, maintenance_rate)
+        for choice in choices.payloads():
+            tracker.set_leverage(choice.venue_id, choice.symbol, choice.leverage)
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                tracker.observe_price(trade.venue_id, trade.symbol, trade.price)
+
+    def tick() -> None:
+        read_inputs(tracker)
+        now = _time.monotonic()
+        if now - last_compute[0] < context.health_interval_seconds:
+            return
+        computed = tracker.compute_all()
+        if computed:
+            publish_liquidations(computed)
+        last_compute[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

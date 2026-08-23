@@ -145,3 +145,61 @@ def run_learning_recorder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Six kinds of claim, each journalled under its type name with the claim's
+    fields as payload. The forward-looking kinds carry the time their subject
+    resolved where the type states one; a claim stamped after its subject
+    resolved is refused by the recorder, which is what it is for.
+    """
+    from dataclasses import asdict, is_dataclass
+
+    from runtime.input_assembly import Batch
+    import pathlib as _pathlib
+
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
+
+    journal_path = journal_path_for(
+        _pathlib.Path(str(context.setting("journal_path").value)).expanduser(), PART_ID
+    )
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
+
+    sources = {kind: Batch(read=context.bus.reader(kind)) for kind in RECORDED_KINDS}
+    publish_entries = context.bus.publisher_for("journal-entry")
+
+    def as_payload(item) -> dict:
+        return asdict(item) if is_dataclass(item) else {"value": repr(item)}
+
+    def resolved_at(item):
+        return getattr(item, "subject_resolved_at_ns", None)
+
+    def read_claims():
+        return tuple(
+            (kind, as_payload(item), resolved_at(item))
+            for kind, source in sources.items() for item in source.payloads()
+        )
+
+    def publish(entries) -> None:
+        if entries:
+            publish_entries(entries)
+
+    return run_learning_recorder(
+        recorder=LearningRecorder(journal=journal),
+        control_socket=context.control_socket,
+        read_claims=read_claims,
+        publish_entries=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

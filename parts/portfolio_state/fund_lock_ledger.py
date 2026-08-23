@@ -159,3 +159,42 @@ def run_fund_lock_ledger(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A bounded order locks its capital under the decision that produced it;
+    a fill carrying that order id releases it. The free balance it locks
+    against is the segment's cash as the account keeper publishes it.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    orders = Batch(read=context.bus.reader("bounded-order"))
+    fills = Batch(read=context.bus.reader("fill"))
+    balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
+    publish_locks = context.bus.publisher_for("locked-allocation")
+    segment = str(context.setting("segment_id").value)
+    ledger = FundLockLedger()
+
+    def read_events(_ledger) -> None:
+        balance = balances.mapping().get(segment)
+        if balance is not None:
+            ledger.set_account_balance(balance.cash)
+        for order in orders.payloads():
+            if order.quantity > 0 and order.intent_id:
+                ledger.lock(order.intent_id, order.venue_id, order.symbol, order.capital_used)
+        for fill in fills.payloads():
+            if fill.order_id:
+                ledger.release(fill.order_id)
+
+    return run_fund_lock_ledger(
+        ledger=ledger,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_locks=publish_locks,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
