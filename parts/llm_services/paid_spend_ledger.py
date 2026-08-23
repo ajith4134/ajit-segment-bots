@@ -248,3 +248,26 @@ def run_paid_spend_ledger(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    records = Batch(read=context.bus.reader("llm-call-record"))
+    publish_spend = context.bus.publisher_for("llm-spend-state")
+    ledger = PaidSpendLedger(
+        period_seconds=context.number("llm_spend_period_seconds"),
+        ceiling=context.number("llm_spend_ceiling"),
+    )
+
+    return run_paid_spend_ledger(
+        ledger=ledger,
+        control_socket=context.control_socket,
+        read_records=lambda: records.payloads(),
+        publish_spend=lambda spend: publish_spend((spend,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

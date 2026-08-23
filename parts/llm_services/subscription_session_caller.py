@@ -315,3 +315,36 @@ def run_subscription_session_caller(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No session is installed on this box, so every routed request is
+    answered NO_SESSION by name with its record. `install_session` is the
+    one way a session gets in, and the retry and backoff rules apply from
+    that moment.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("subscription-llm-request"))
+    publish_responses = context.bus.publisher_for("llm-response")
+    publish_records = context.bus.publisher_for("llm-call-record")
+    caller = SubscriptionSessionCaller(
+        maximum_retries=int(context.number("llm_maximum_retries")),
+        initial_backoff_seconds=context.number("llm_initial_backoff_seconds"),
+        backoff_multiplier=context.number("llm_backoff_multiplier"),
+        quota_cost_per_call=context.number("llm_quota_cost_per_call"),
+    )
+
+    return run_subscription_session_caller(
+        caller=caller,
+        control_socket=context.control_socket,
+        read_requests=lambda: requests.payloads(),
+        publish_responses=lambda response: publish_responses((response,)),
+        publish_records=lambda record: publish_records((record,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

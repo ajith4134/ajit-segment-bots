@@ -245,3 +245,53 @@ def run_llm_response_cache(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A rendered request is looked up by its fingerprint against the age of
+    the facts it was rendered over; a response is stored against the
+    request it answered. The cache's own served responses come back on the
+    same channel marked cached, and are not stored again.
+    """
+    from runtime.input_assembly import Batch
+
+    rendered_requests = Batch(read=context.bus.reader("rendered-llm-request"))
+    responses = Batch(read=context.bus.reader("llm-response"))
+    publish_responses = context.bus.publisher_for("llm-response")
+    cache = LlmResponseCache(
+        maximum_entries=int(context.number("llm_cache_maximum_entries")),
+        time_to_live_by_purpose={},
+        default_time_to_live_seconds=context.number("llm_cache_default_time_to_live_seconds"),
+    )
+    rendered_by_id: dict[str, object] = {}
+
+    def facts_age_of(rendered) -> int:
+        facts = rendered.facts
+        measured = getattr(facts, "measured_at_ns", None)
+        return int(measured) if measured is not None else int(rendered.rendered_at_ns)
+
+    def read_lookups():
+        jobs = []
+        for rendered in rendered_requests.payloads():
+            rendered_by_id[rendered.rendered_id] = rendered
+            jobs.append((rendered, facts_age_of(rendered), None))
+        for response in responses.payloads():
+            if response.was_cached:
+                continue
+            rendered = rendered_by_id.pop(response.rendered_id, None)
+            if rendered is not None:
+                jobs.append((rendered, facts_age_of(rendered), response))
+        return tuple(jobs)
+
+    return run_llm_response_cache(
+        cache=cache,
+        control_socket=context.control_socket,
+        read_lookups=read_lookups,
+        publish_responses=lambda response: publish_responses((response,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

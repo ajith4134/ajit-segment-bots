@@ -314,3 +314,52 @@ def run_llm_request_router(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Quota, spend, backpressure, budgets and model choices are observed as
+    they arrive; a rendered request is routed under the context that asked
+    for it. No local model is loaded on this box, and the router is told
+    so rather than left to assume.
+    """
+    from runtime.input_assembly import Batch
+
+    rendered_requests = Batch(read=context.bus.reader("rendered-llm-request"))
+    quotas = Batch(read=context.bus.reader("llm-quota-state"))
+    spends = Batch(read=context.bus.reader("llm-spend-state"))
+    choices = Batch(read=context.bus.reader("llm-model-choice"))
+    backpressures = Batch(read=context.bus.reader("llm-backpressure"))
+    budgets = Batch(read=context.bus.reader("llm-part-budget"))
+    publish_subscription = context.bus.publisher_for("subscription-llm-request")
+    publish_paid = context.bus.publisher_for("paid-llm-request")
+    publish_local = context.bus.publisher_for("local-llm-request")
+    router = LlmRequestRouter()
+    router.observe_local_availability(False)
+
+    def read_rendered():
+        for quota in quotas.payloads():
+            router.observe_quota(quota)
+        for spend in spends.payloads():
+            router.observe_spend(spend)
+        for backpressure in backpressures.payloads():
+            router.observe_backpressure(backpressure)
+        for budget in budgets.payloads():
+            router.observe_budget(budget)
+        for choice in choices.payloads():
+            router.observe_model_choice(choice)
+        return tuple((rendered, str(rendered.context_id), None) for rendered in rendered_requests.payloads())
+
+    return run_llm_request_router(
+        router=router,
+        control_socket=context.control_socket,
+        read_rendered=read_rendered,
+        publish_subscription=lambda routed: publish_subscription((routed,)),
+        publish_paid=lambda routed: publish_paid((routed,)),
+        publish_local=lambda routed: publish_local((routed,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

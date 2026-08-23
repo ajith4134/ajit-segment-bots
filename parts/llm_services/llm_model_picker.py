@@ -287,3 +287,45 @@ def run_llm_model_picker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No model is declared on this box -- no subscription session, no paid
+    endpoint, no local weights -- so every request is answered NO_MODELS by
+    name and nothing is chosen. The quality a model shows is learned from
+    call records, so the moment a model is declared its record starts.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("llm-request"))
+    records = Batch(read=context.bus.reader("llm-call-record"))
+    publish_choices = context.bus.publisher_for("llm-model-choice")
+    picker = LlmModelPicker(
+        exploration_share=context.number("llm_exploration_share"),
+        minimum_observations=int(context.number("decoding_minimum_trades")),
+        prior_quality=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    quality_bar = context.number("llm_quality_bar")
+
+    def read_requests():
+        for record in records.payloads():
+            picker.observe_outcome(record.model_id, record.purpose, bool(record.succeeded))
+        return tuple(
+            (f"{request.purpose}:{request.venue_id}:{request.symbol}:{request.requested_at_ns}", request.purpose, quality_bar)
+            for request in requests.payloads()
+        )
+
+    return run_llm_model_picker(
+        picker=picker,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_choices=lambda choice: publish_choices((choice,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

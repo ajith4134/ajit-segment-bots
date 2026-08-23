@@ -289,3 +289,35 @@ def run_local_model_caller(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No local model is loaded on this box: no weights are installed and
+    there is no accelerator. Every routed request is answered
+    NO_MODEL_LOADED by name, with its call record, and nothing is
+    generated. `load_model` is the one way a model gets in.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("local-llm-request"))
+    publish_responses = context.bus.publisher_for("llm-response")
+    publish_records = context.bus.publisher_for("llm-call-record")
+    caller = LocalModelCaller(
+        maximum_concurrent_generations=int(context.number("llm_local_maximum_concurrent_generations")),
+        maximum_seconds_per_call=context.number("llm_local_maximum_seconds_per_call"),
+        tokens_per_second=context.number("llm_local_tokens_per_second"),
+    )
+
+    return run_local_model_caller(
+        caller=caller,
+        control_socket=context.control_socket,
+        read_requests=lambda: requests.payloads(),
+        publish_responses=lambda response: publish_responses((response,)),
+        publish_records=lambda record: publish_records((record,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

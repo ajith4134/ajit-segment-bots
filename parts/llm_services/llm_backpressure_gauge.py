@@ -293,3 +293,45 @@ def run_llm_backpressure_gauge(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The latest quota, spend and survival tier are what the gauge measures
+    from. Part budgets are read and drained: the gauge answers for the
+    subsystem, and the router answers per part.
+    """
+    from runtime.input_assembly import Batch
+
+    quotas = Batch(read=context.bus.reader("llm-quota-state"))
+    spends = Batch(read=context.bus.reader("llm-spend-state"))
+    tiers = Batch(read=context.bus.reader("survival-tier"))
+    budgets = Batch(read=context.bus.reader("llm-part-budget"))
+    publish_backpressure = context.bus.publisher_for("llm-backpressure")
+    gauge = LlmBackpressureGauge(
+        throttle_begins_at=context.number("llm_throttle_begins_at"),
+        pace_tolerance=context.number("llm_pace_tolerance"),
+        minimum_admit_fraction=context.number("llm_minimum_admit_fraction"),
+    )
+
+    def read_state(_gauge) -> None:
+        budgets.payloads()
+        for quota in quotas.payloads():
+            gauge.observe_quota(quota)
+        for spend in spends.payloads():
+            gauge.observe_spend(spend)
+        for reading in tiers.payloads():
+            tier = getattr(reading, "tier", reading)
+            gauge.observe_survival_tier(str(getattr(tier, "tier", tier)))
+
+    return run_llm_backpressure_gauge(
+        gauge=gauge,
+        control_socket=context.control_socket,
+        read_state=read_state,
+        publish_backpressure=lambda backpressure: publish_backpressure((backpressure,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -3017,3 +3017,123 @@ note  = "operator, 2026-08-23: how far a signature may sit from a remembered one
 value = 604800.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how long after listing a symbol's every profile field is treated as thin. A week."
+
+[llm_throttle_begins_at]
+value = 0.8
+unit  = "fraction of allowance used"
+note  = "operator, 2026-08-23: how much of the quota or the money may be used before llm-backpressure-gauge starts admitting fewer calls. Four fifths."
+
+[llm_pace_tolerance]
+value = 1.2
+unit  = "ratio"
+note  = "operator, 2026-08-23: how far ahead of the clock the burn may run before the gauge throttles on pace. A fifth ahead."
+
+[llm_minimum_admit_fraction]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: the fewest calls the gauge admits while throttled and not stopped. A tenth: a gauge that admitted none while calling itself throttled would be stopped under another name."
+
+[llm_exploration_share]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of requests llm-model-picker spends measuring a model nothing is known about. A tenth."
+
+[llm_quality_bar]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: the measured quality a model must show on a purpose before the picker chooses it for that purpose. Three in five."
+
+[llm_cache_maximum_entries]
+value = 1000
+unit  = "responses"
+note  = "operator, 2026-08-23: how many responses llm-response-cache keeps. A thousand."
+
+[llm_cache_default_time_to_live_seconds]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old the facts behind a cached response may be before it is not served again, for a purpose with no life of its own. Five minutes, the feed coverage window: a market answer older than that is an answer about a different market."
+
+[llm_local_maximum_concurrent_generations]
+value = 1
+unit  = "generations"
+note  = "operator, 2026-08-23: how many local generations may run at once. One: this box has no accelerator and every generation takes the cores the parts need."
+
+[llm_local_maximum_seconds_per_call]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the wall-clock limit on one local generation. Thirty seconds."
+
+[llm_local_tokens_per_second]
+value = 5.0
+unit  = "tokens per second"
+note  = "operator, 2026-08-23: the generation rate local-model-caller plans against until it has measured its own. Five, a small model on CPU; no local model is loaded on this box today, and this number is overwritten by measurement the moment one is."
+
+[llm_metered_per_call_ceiling]
+value = 0.05
+unit  = "USDT"
+note  = "operator, 2026-08-23: the most one metered call may cost. Five cents."
+
+[llm_characters_per_token]
+value = 4.0
+unit  = "characters"
+note  = "operator, 2026-08-23: the characters per token metered-api-caller uses to estimate a call's cost before making it. Four, the common English average."
+
+[llm_estimated_output_tokens]
+value = 400
+unit  = "tokens"
+note  = "operator, 2026-08-23: the output length assumed when estimating a call's cost. Four hundred, enough for the sentence budget every prompt carries."
+
+[llm_estimate_safety_multiplier]
+value = 1.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: how much the cost estimate is inflated before it is checked against the budget. Half again: an estimate that ran under would let the budget be overrun by the call that exposed it."
+
+[llm_spend_period_seconds]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the period paid-spend-ledger counts metered spend over. A day."
+
+[llm_spend_ceiling]
+value = 1.0
+unit  = "USDT"
+note  = "operator, 2026-08-23: how much metered spend the ledger may count per period before it says the ceiling is reached. One dollar: the ledger refuses a ceiling of zero, because forbidding paid calls is the router's policy and not a ledger with no room. No paid endpoint is installed in phase 1, so nothing can spend against this; it is the ceiling the day an endpoint is installed, and raising it is a decision taken out loud."
+
+[llm_quota_window_seconds]
+value = 18000.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window a subscription quota refills on. Five hours, the subscription's own window."
+
+[llm_quota_calls_allowed]
+value = 200
+unit  = "calls"
+note  = "operator, 2026-08-23: the working allowance of subscription calls per window. The provider publishes no call count for the operator's subscription, so this is the operator's own pacing figure; subscription-quota-watch reports the divergence from the provider's header the moment a session is installed, and none is installed on this box today."
+
+[llm_quota_tokens_allowed]
+value = 2000000
+unit  = "tokens"
+note  = "operator, 2026-08-23: the working allowance of subscription tokens per window, on the same footing as the call count: the operator's pacing figure, corrected against the provider once a session exists."
+
+[llm_quota_divergence_tolerance]
+value = 2
+unit  = "calls"
+note  = "operator, 2026-08-23: how far the local call count may differ from the provider's before the watch reports a divergence. Two."
+
+[llm_maximum_retries]
+value = 3
+unit  = "retries"
+note  = "operator, 2026-08-23: how many times subscription-session-caller retries a rate-limited call. Three."
+
+[llm_initial_backoff_seconds]
+value = 2.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the first wait after a rate limit. Two seconds."
+
+[llm_backoff_multiplier]
+value = 2.0
+unit  = "multiple"
+note  = "operator, 2026-08-23: how much each successive wait grows. Doubling."
+
+[llm_quota_cost_per_call]
+value = 1.0
+unit  = "calls"
+note  = "operator, 2026-08-23: what one subscription call costs against the quota. One."

@@ -324,3 +324,38 @@ def run_metered_api_caller(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No endpoint is installed and no metered spend is authorised (the spend
+    ceiling is zero), so every routed request is refused NO_ENDPOINT by
+    name with its record. The money left handed to each call is the
+    authorised ceiling, which is nothing: the caller refuses before it
+    could spend, and the refusal is the state.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("paid-llm-request"))
+    publish_responses = context.bus.publisher_for("llm-response")
+    publish_records = context.bus.publisher_for("llm-call-record")
+    caller = MeteredApiCaller(
+        per_call_ceiling=context.number("llm_metered_per_call_ceiling"),
+        characters_per_token=context.number("llm_characters_per_token"),
+        estimated_output_tokens=int(context.number("llm_estimated_output_tokens")),
+        estimate_safety_multiplier=context.number("llm_estimate_safety_multiplier"),
+    )
+    money_authorised = context.number("llm_spend_ceiling")
+
+    return run_metered_api_caller(
+        caller=caller,
+        control_socket=context.control_socket,
+        read_requests=lambda: tuple((routed, money_authorised) for routed in requests.payloads()),
+        publish_responses=lambda response: publish_responses((response,)),
+        publish_records=lambda record: publish_records((record,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

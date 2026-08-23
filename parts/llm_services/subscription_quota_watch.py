@@ -243,3 +243,33 @@ def run_subscription_quota_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The window allows what the settings say, which on this box is nothing:
+    no subscription session is installed, and the watch reports the window
+    spent rather than a quota nobody has.
+    """
+    from runtime.input_assembly import Batch
+
+    records = Batch(read=context.bus.reader("llm-call-record"))
+    publish_quota = context.bus.publisher_for("llm-quota-state")
+    watch = SubscriptionQuotaWatch(
+        window_seconds=context.number("llm_quota_window_seconds"),
+        calls_allowed=int(context.number("llm_quota_calls_allowed")),
+        tokens_allowed=int(context.number("llm_quota_tokens_allowed")),
+        divergence_tolerance=int(context.number("llm_quota_divergence_tolerance")),
+    )
+
+    return run_subscription_quota_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_records=lambda: records.payloads(),
+        publish_quota=lambda quota: publish_quota((quota,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

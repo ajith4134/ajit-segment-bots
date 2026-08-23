@@ -255,3 +255,51 @@ def run_ground_truth_snapshot_builder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A print is the last trade; a book update is the bid and the ask, from
+    which mid and spread are derived inside the builder. A snapshot is
+    built for every venue and symbol touched in a tick, requiring what the
+    feed measures: the last trade always, and the top of book once a book
+    has been seen there. Funding, open interest and tick size are on no
+    input this part declares and are not required, so a snapshot does not
+    fail for facts nothing here could measure.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+
+    market = Batch(read=context.bus.reader("market-data"))
+    publish_snapshots = context.bus.publisher_for("verified-snapshot")
+    builder = GroundTruthSnapshotBuilder(maximum_staleness_seconds=context.number("feed_coverage_window"))
+    books_seen: set[tuple[str, str]] = set()
+
+    def read_requests(_builder):
+        touched: set[tuple[str, str]] = set()
+        for item in market.payloads():
+            key = (item.venue_id, item.symbol)
+            if isinstance(item, NormalisedTrade):
+                builder.observe_fact(item.venue_id, item.symbol, LAST_TRADE, item.price, item.venue_time_ns)
+                touched.add(key)
+            elif isinstance(item, BookUpdate) and item.bids and item.asks:
+                builder.observe_fact(item.venue_id, item.symbol, BID, float(item.bids[0][0]), item.venue_time_ns)
+                builder.observe_fact(item.venue_id, item.symbol, ASK, float(item.asks[0][0]), item.venue_time_ns)
+                books_seen.add(key)
+                touched.add(key)
+        return tuple(
+            (venue_id, symbol, (LAST_TRADE, BID, ASK) if (venue_id, symbol) in books_seen else (LAST_TRADE,))
+            for venue_id, symbol in sorted(touched)
+        )
+
+    return run_ground_truth_snapshot_builder(
+        builder=builder,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_snapshots=lambda snapshot: publish_snapshots((snapshot,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
