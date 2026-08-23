@@ -257,3 +257,56 @@ def run_instruction_performance_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A closed trade's episode names the detector that raised it; when that
+    detector is a learned instruction -- one the writer has published -- the
+    trade is observed against the instruction. Scorecards go out once per
+    health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    instructions = Batch(read=context.bus.reader("opportunity-instruction"))
+    publish_scorecards = context.bus.publisher_for("instruction-scorecard")
+    tracker = InstructionPerformanceTracker(
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_trades=int(context.number("learning_minimum_observations")),
+        gap_threshold=context.number("instruction_replay_gap_threshold"),
+    )
+    known_instructions: set[str] = set()
+    last_publish = [float("-inf")]
+
+    def read_episodes(_tracker) -> None:
+        for instruction in instructions.payloads():
+            known_instructions.add(instruction.instruction_id)
+        for episode in episodes.payloads():
+            if episode.detector in known_instructions:
+                tracker.observe_trade(episode.detector, episode.realised > 0, episode.realised)
+
+    def tick() -> None:
+        read_episodes(tracker)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        cards = tracker.score_all()
+        if cards:
+            publish_scorecards(cards)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

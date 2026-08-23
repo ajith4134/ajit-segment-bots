@@ -281,3 +281,59 @@ def run_model_registry(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A retrain request that reached the started state registers a new version
+    of that model as a challenger, versioned by the request's own timestamp;
+    the refutation verdicts and trial ledgers that arrive are recorded
+    against it. The validation score a registration needs is not on the
+    request -- the trainer that produces it is not a part of this phase -- so
+    a version is registered with the score unmeasured, zero, and its reason
+    says so.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("retrain-request"))
+    refutations = Batch(read=context.bus.reader("refutation-verdict"))
+    ledgers = Batch(read=context.bus.reader("trial-ledger"))
+    publish_versions = context.bus.publisher_for("model-version")
+    registry = ModelRegistry()
+    windows_seen: dict[str, int] = {}
+
+    def read_requests(_registry):
+        for verdict in refutations.payloads():
+            registry.observe_refutation_verdict(verdict.instruction_id, verdict.verdict)
+        for ledger in ledgers.payloads():
+            registry.observe_trial_ledger(ledger.family, ledger.trials, ledger.corrected_significance)
+        registrations = []
+        for request in requests.payloads():
+            if request.state != "scheduled":
+                continue
+            windows_seen[request.model_name] = windows_seen.get(request.model_name, 0) + 1
+            registrations.append({
+                "model_name": request.model_name,
+                "version": f"{request.model_name}@{request.scheduled_at_ns}",
+                "role": request.role,
+                "trained_on_windows": windows_seen[request.model_name],
+                "validation_score": 0.0,
+                "family": request.model_name,
+            })
+        return tuple(registrations)
+
+    def publish(versions) -> None:
+        if versions:
+            publish_versions(versions)
+
+    return run_model_registry(
+        registry=registry,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_versions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

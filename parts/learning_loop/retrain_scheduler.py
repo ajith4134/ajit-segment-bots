@@ -262,3 +262,62 @@ def run_retrain_scheduler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Labels, drift alerts and forgetting reports each name the model they
+    are about; the duty cycle the planner grants is read as the fraction of
+    the current UTC hour that is allowed. Every model that received a signal
+    this wake is considered.
+    """
+    import datetime
+
+    from runtime.input_assembly import Batch
+
+    drift = Batch(read=context.bus.reader("model-drift-alert"))
+    forgetting = Batch(read=context.bus.reader("forgetting-report"))
+    labels = Batch(read=context.bus.reader("training-label"))
+    cycles = Batch(read=context.bus.reader("duty-cycle"))
+    publish_requests = context.bus.publisher_for("retrain-request")
+    scheduler = RetrainScheduler(
+        labels_for_drift=int(context.number("retrain_labels_for_drift")),
+        labels_for_forgetting=int(context.number("retrain_labels_for_forgetting")),
+        labels_for_cadence=int(context.number("retrain_labels_for_cadence")),
+        minimum_duty_cycle=context.number("retrain_minimum_duty_cycle"),
+    )
+
+    def read_signals(_scheduler):
+        touched = set()
+        for label in labels.payloads():
+            # A label is evidence for the bot that trades the detector's side;
+            # the detector name is the model family it trains.
+            scheduler.observe_label(label.detector)
+            touched.add(label.detector)
+        for alert in drift.payloads():
+            scheduler.observe_drift_alert(alert.model_name, alert.reason)
+            touched.add(alert.model_name)
+        for report in forgetting.payloads():
+            for era in report.forgotten_eras:
+                scheduler.observe_forgetting_report(report.model_name, str(era))
+            touched.add(report.model_name)
+        hour = datetime.datetime.now(datetime.UTC).hour
+        for cycle in cycles.payloads():
+            scheduler.observe_duty_cycle(1.0 if hour in cycle.allowed_hours else 0.0)
+        return tuple(sorted(touched))
+
+    def publish(requests) -> None:
+        if requests:
+            publish_requests(requests)
+
+    return run_retrain_scheduler(
+        scheduler=scheduler,
+        control_socket=context.control_socket,
+        read_signals=read_signals,
+        publish_requests=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

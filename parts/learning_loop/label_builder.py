@@ -264,3 +264,79 @@ def run_label_builder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Excursions arrive while a position is open and are kept per symbol until
+    the closed trade arrives; the builder then labels the trade. The closed
+    trade on the bus carries no detector or regime, so both are "unknown"
+    here -- the signal labeller's labels carry the detector, and this part's
+    labels are about the trade's own stages: setup, entry, exit, size.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.trading_types import LONG, SHORT
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    excursions = Batch(read=context.bus.reader("peak-excursion"))
+    costs = Batch(read=context.bus.reader("cost-estimate"))
+    publish_labels = context.bus.publisher_for("training-label")
+    builder = LabelBuilder(
+        favourable_threshold=context.number("label_favourable_threshold"),
+        adverse_entry_threshold=context.number("label_adverse_entry_threshold"),
+        exit_capture_threshold=context.number("label_exit_capture_threshold"),
+        size_survival_multiple=context.number("label_size_survival_multiple"),
+    )
+    horizon = context.number("spread_reversion_horizon") * context.number("bull_exit_conviction_horizon_multiple")
+    latest_excursion: dict[tuple[str, str], object] = {}
+
+    def read_closed_trades(_builder):
+        for estimate in costs.payloads():
+            if estimate.notional > 0:
+                builder.observe_cost_estimate(
+                    estimate.venue_id, estimate.symbol,
+                    (estimate.fee + estimate.half_spread + estimate.expected_impact) / estimate.notional,
+                )
+        for excursion in excursions.payloads():
+            latest_excursion[(excursion.venue_id, excursion.symbol)] = excursion
+        records = []
+        for trade in closed.payloads():
+            excursion = latest_excursion.pop((trade.venue_id, trade.symbol), None)
+            if excursion is not None:
+                entry = trade.entry_price or 1.0
+                builder.observe_excursion(
+                    trade.venue_id, trade.symbol, trade.opened_at_ns,
+                    ExcursionRecord(
+                        peak_favourable_fraction=abs(excursion.best_price - entry) / entry,
+                        peak_adverse_fraction=abs(excursion.worst_price - entry) / entry,
+                        seconds_to_peak_favourable=0.0,
+                        seconds_to_peak_adverse=0.0,
+                        observations=excursion.samples,
+                    ),
+                )
+            records.append(
+                ClosedTradeRecord(
+                    venue_id=trade.venue_id, symbol=trade.symbol, detector="unknown", regime="unknown",
+                    side=LONG if trade.direction == LONG else SHORT,
+                    entry_price=trade.entry_price, exit_price=trade.exit_price, quantity=trade.quantity,
+                    opened_at_ns=trade.opened_at_ns, closed_at_ns=trade.closed_at_ns,
+                    horizon_seconds=horizon, features={},
+                )
+            )
+        return tuple(records)
+
+    def publish(labels) -> None:
+        if labels:
+            publish_labels(labels)
+
+    return run_label_builder(
+        builder=builder,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_labels=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

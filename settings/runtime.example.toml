@@ -1262,3 +1262,228 @@ note  = "operator, 2026-08-23: how many recent trades' quote volume the grader s
 value = 1000.0
 unit  = "USDT"
 note  = "operator, 2026-08-23: the order size the grader walks the book with. The per-trade capital cap the capital desk sets, so a grade answers the question the sizer will ask."
+
+[learning_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: the rate every learning-loop learner assumes before it has a scored record -- a bot's hit rate, an instruction's, a forecaster's accuracy, a feature's reliability, an exit's capture. A coin flip, the one prior that claims nothing."
+
+[learning_prior_weight]
+value = 4.0
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations the learning loop's priors are worth. Four, as in the bots and the brain: a prior that outvoted a week of evidence would be a rule in disguise."
+
+[learning_half_life_observations]
+value = 500.0
+unit  = "observations"
+note  = "operator, 2026-08-23: how quickly the learning loop's rates forget. Five hundred, as elsewhere: a measurement, not a memory of a regime that ended last month."
+
+[learning_minimum_observations]
+value = 20
+unit  = "observations"
+note  = "operator, 2026-08-23: how many scored observations a learning-loop rate needs before it is read as a frequency. Twenty, the floor used throughout."
+
+[learning_window]
+value = 200
+unit  = "observations"
+note  = "operator, 2026-08-23: how many recent observations the windowed learners keep -- regret, exit timing, slippage. Two hundred, about a day of paper trades at today's rate, so a learner speaks about this week's market."
+
+[champion_minimum_improvement]
+value = 0.02
+unit  = "score"
+note  = "operator, 2026-08-23: how much a challenger model must beat the champion by, on the data both were scored on, before champion-challenger-gate promotes it. Two points of validation score, above the run-to-run noise of retraining on a day more of labels; a challenger that wins by less has not won."
+
+[champion_minimum_recall]
+value = 0.7
+unit  = "fraction"
+note  = "operator, 2026-08-23: the least of what the champion knew that a challenger must still recall, by the forgetting auditor's replay, to be promoted. Seven tenths: a model that forgets a third of the eras it was trained on has traded one edge for another, not gained one."
+
+[graduation_minimum_hit_rate]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the hit rate a bot needs in a regime to graduate from exploration. Just above the coin flip, at the required sample size; the break-even arithmetic in edge_arithmetic is what decides whether that rate pays, this is only whether it is an edge at all."
+
+[graduation_minimum_decision_quality]
+value = 0.6
+unit  = "score"
+note  = "operator, 2026-08-23: the decision-quality score a bot needs to graduate -- profit without good decisions is not repeatable. Six tenths on the critic's scale, where a half is a decision the critic could neither fault nor credit."
+
+[graduation_minimum_coverage]
+value = 0.2
+unit  = "fraction of opportunities"
+note  = "operator, 2026-08-23: the least share of the opportunities seen in a regime a bot must have acted on for its record to be about the regime rather than a slice it selected. A fifth; a bot that acts on one opportunity in fifty has a record about those, not about the market."
+
+[graduation_default_required_trades]
+value = 40
+unit  = "closed trades"
+note  = "operator, 2026-08-23: the trades a bot needs in a regime before it can graduate, when power-estimator has not stated a sample size for it. Forty, at which a 55% hit rate separates from a coin flip at one standard error; the estimator's figure replaces it when one arrives."
+
+[exit_good_capture]
+value = 0.6
+unit  = "fraction of the peak"
+note  = "operator, 2026-08-23: the share of a trade's peak favourable excursion an exit must capture to count as a good exit for exit-timing-learner. Six tenths; capturing everything is hindsight and half is a coin flip on when to leave."
+
+[feature_extreme_deviation]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far from its mean a feature's value must be for feature-reliability-scorer to count the observation as extreme -- the cases a feature's reliability is judged on. Two, the outer 5% under a normal distribution, as for the detectors."
+
+[feature_minimum_extreme_observations]
+value = 10
+unit  = "observations"
+note  = "operator, 2026-08-23: how many extreme observations of a feature the scorer needs before its lift means anything. Ten, the least a quantile of a small sample can mean."
+
+[feature_reliability_threshold]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: the scored reliability above which a feature is worth weighting in a model. Six tenths; at a half the feature is noise."
+
+[feature_moments_minimum_observations]
+value = 5
+unit  = "observations"
+note  = "operator, 2026-08-23: how many values of a feature the scorer needs before its mean and deviation are used to call a value extreme. Five, the least a deviation can be computed from."
+
+[forecast_trust_minimum_follows]
+value = 20
+unit  = "follows"
+note  = "operator, 2026-08-23: how many followed forecasts the trust learner needs per forecaster per situation before its trust is a measurement. Twenty, the observation floor."
+
+[forecast_trust_threshold]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the directional accuracy at which a forecaster is trusted at all. Just above the coin flip; the same bar the brain's bias weigher applies."
+
+[forecast_trust_maximum]
+value = 0.9
+unit  = "probability"
+note  = "operator, 2026-08-23: the most trust a forecaster may be given, as a weight inside (0, 1]. Nine tenths, short of one: the learner refuses a weight of one on its own rule -- no forecaster becomes the decision, because an unbounded weight would let one member's failure be the system's. The launch test caught a first value above one."
+
+[instruction_replay_gap_threshold]
+value = 0.005
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: how far an instruction's live expectancy may fall below its replayed expectancy before instruction-performance-tracker flags the gap. Half a percent of notional, the order of the costs a replay can misprice; a wider gap means live is not what the replay said."
+
+[label_favourable_threshold]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far a closed trade must have gone in its favour at peak for label-builder to call the setup right. Half a percent, about twice signal_label_move_fraction because a trade's label is judged over its whole life, not a sixty-second claim."
+
+[label_adverse_entry_threshold]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far a trade must have gone against the entry at peak for the builder to call the entry timing wrong. One percent, two thirds of the stop the plans set: an entry that sat that far under water was mistimed whether or not it recovered."
+
+[label_exit_capture_threshold]
+value = 0.5
+unit  = "fraction of the peak"
+note  = "operator, 2026-08-23: the share of the peak favourable excursion an exit must have captured for the builder to call the exit right. Half; below it more was left than taken."
+
+[label_size_survival_multiple]
+value = 1.0
+unit  = "multiple of the adverse excursion"
+note  = "operator, 2026-08-23: how many times the trade's adverse excursion the size could have survived for the builder to call the sizing right. One: a size that would have been stopped by its own worst moment was too large."
+
+[regret_cost_fraction]
+value = 0.0011
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: the round-trip cost charged against a passed-over opinion when regret-tracker asks what acting on it would have made. Two taker fees at the higher venue's rate, the same round trip every other part prices."
+
+[retrain_labels_for_drift]
+value = 100
+unit  = "labels"
+note  = "operator, 2026-08-23: how many new labels retrain-scheduler needs after a drift alert before it schedules a retrain. A hundred, bull_minimum_training_observations: fewer is a model retrained on less than it takes to be fitted."
+
+[retrain_labels_for_forgetting]
+value = 50
+unit  = "labels"
+note  = "operator, 2026-08-23: how many new labels after a forgetting report before a retrain. Fifty, half the drift figure, because the scheduler's own rule is that forgetting needs less new data than drift: the fix is to replay what was lost, not to learn something new. The first value written here was larger and the launch test caught it."
+
+[retrain_labels_for_cadence]
+value = 1000
+unit  = "labels"
+note  = "operator, 2026-08-23: how many new labels before a routine retrain with no alert. A thousand, about a quarter of a day of labels at the rate measured on 2026-08-23 (3,869 in a session), so a quiet model is refreshed a few times a day."
+
+[retrain_minimum_duty_cycle]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: the least duty cycle the planner must grant before a retrain runs. A fifth of the hour; a retrain that cannot get that is deferred to a quieter hour, which is what the duty cycle is for."
+
+[reward_maximum]
+value = 3.0
+unit  = "risk units"
+note  = "operator, 2026-08-23: the most a shaped learning reward may be, in units of the risk reference, so one windfall trade cannot dominate what the model learns."
+
+[reward_risk_reference_fraction]
+value = 0.01
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: the unit a reward is measured in -- risk_maximum_per_position_fraction, one percent of the allotment, so a reward of one is a trade that made what it risked."
+
+[reward_horizon_half_life]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how quickly a reward decays with the time the trade took. A day: a trade that took a day to make what it risked is worth half of one that took no time."
+
+[reward_minimum_significance]
+value = 1.0
+unit  = "standardised outcome"
+note  = "operator, 2026-08-23: the standardised outcome below which luck-skill-separator's verdict makes reward-shaper withhold the reward. One standard error; an outcome inside the noise teaches nothing."
+
+[sample_weight_half_life]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how quickly a training label's weight decays with age. A day, so a week of labels spans a factor of a hundred and the model is about the market now."
+
+[sample_weight_minimum]
+value = 0.1
+unit  = "weight"
+note  = "operator, 2026-08-23: the least weight a label may carry, so an old or odd label still counts for something rather than vanishing."
+
+[sample_weight_maximum]
+value = 5.0
+unit  = "weight"
+note  = "operator, 2026-08-23: the most weight a label may carry, so a rare class is up-weighted but no single label is worth more than five ordinary ones."
+
+[sample_weight_partial_fill_multiple]
+value = 0.3
+unit  = "multiple"
+note  = "operator, 2026-08-23: the weight multiple for a label from a trade that only partly filled; its outcome is about a smaller trade than was decided."
+
+[sample_weight_broken_regime_multiple]
+value = 0.2
+unit  = "multiple"
+note  = "operator, 2026-08-23: the weight multiple for a label from a regime that has since broken; it is evidence about a market that no longer exists."
+
+[sample_weight_unresolved_multiple]
+value = 0.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: the weight multiple for a label whose claim did not resolve within its horizon."
+
+[sample_weight_rarity_power]
+value = 1.0
+unit  = "exponent"
+note  = "operator, 2026-08-23: how strongly a rare class is up-weighted: one is inverse frequency, zero is none."
+
+[slippage_size_bands]
+value = "1000,10000,100000"
+unit  = "USDT notional boundaries"
+note  = "operator, 2026-08-23: the order-size bands slippage-learner measures cost within. One, ten and a hundred thousand USDT: the per-trade cap sits at the first boundary, so paper fills populate the first band and the rest wait for live sizes."
+
+[slippage_typical_quantile]
+value = 0.5
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of measured cost reported as typical. The median."
+
+[slippage_tail_quantile]
+value = 0.9
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of measured cost reported as the tail. The ninetieth, so one in ten fills is worse than the figure the sizer plans for."
+
+[slippage_prior_cost_fraction]
+value = 0.001
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the cost assumed before enough fills have been measured in a band. Ten basis points, a spread and a fee on a liquid symbol."
+
+[slippage_prior_fill_rate]
+value = 0.9
+unit  = "probability"
+note  = "operator, 2026-08-23: the fill rate assumed for a resting order before measured. Nine in ten; a market order fills, a limit order usually does."

@@ -260,3 +260,55 @@ def run_sample_weight_assigner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every label is weighted as it arrives; class balance per component is
+    learned from the labels themselves. Episodes are read so a regime that
+    has since broken marks the labels from it -- an episode's regime named
+    as broken in its conditions is the signal this part has.
+    """
+    from runtime.input_assembly import Batch
+
+    labels = Batch(read=context.bus.reader("training-label"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_weights = context.bus.publisher_for("sample-weight")
+    assigner = SampleWeightAssigner(
+        half_life_seconds=context.number("sample_weight_half_life"),
+        minimum_weight=context.number("sample_weight_minimum"),
+        maximum_weight=context.number("sample_weight_maximum"),
+        partial_fill_multiple=context.number("sample_weight_partial_fill_multiple"),
+        broken_regime_multiple=context.number("sample_weight_broken_regime_multiple"),
+        unresolved_multiple=context.number("sample_weight_unresolved_multiple"),
+        rarity_power=context.number("sample_weight_rarity_power"),
+    )
+
+    def read_labels(_assigner):
+        for episode in episodes.payloads():
+            flag = episode.conditions.get("regime_flag") if isinstance(episode.conditions, dict) else None
+            broken = bool(getattr(flag, "has_broken", False)) if flag is not None else False
+            assigner.observe_regime_break(episode.regime, broken)
+        requests = []
+        for label in labels.payloads():
+            for component, value in label.labels.items():
+                if isinstance(value, bool):
+                    assigner.observe_class(component, value)
+            requests.append((label, 1.0, None))
+        return tuple(requests)
+
+    def publish(weights) -> None:
+        if weights:
+            publish_weights(weights)
+
+    return run_sample_weight_assigner(
+        assigner=assigner,
+        control_socket=context.control_socket,
+        read_labels=read_labels,
+        publish_weights=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

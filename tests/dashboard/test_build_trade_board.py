@@ -203,9 +203,18 @@ def test_how_far_a_part_is_built_tells_running_from_startable_from_absent(board)
     assert board.how_far_a_part_is_built("paper-fill-simulator", {}) == "startable"
     # A part with real code and no start_part yet: the launcher has nothing to
     # fork, which is a different state from unwritten and must read as one.
-    assert board.how_far_a_part_is_built(
-        "bull-position-invalidation-watcher", {}
-    ) == "no start_part"
+    # Found rather than named, because parts gain start_part as they are built
+    # and a named example stopped being one on 2026-08-23.
+    from runtime.part_launcher import PART_ENTRY_POINT, resolve_part_module
+    from runtime.wiring_plan import load_blueprint
+    import importlib
+    unlaunchable = next(
+        (feature["id"] for feature in load_blueprint()["features"]
+         if not callable(getattr(importlib.import_module(resolve_part_module(feature["id"])), PART_ENTRY_POINT, None))),
+        None,
+    )
+    if unlaunchable is not None:
+        assert board.how_far_a_part_is_built(unlaunchable, {}) == "no start_part"
     assert board.how_far_a_part_is_built("a-part-nobody-wrote", {}) == "no module"
 
 

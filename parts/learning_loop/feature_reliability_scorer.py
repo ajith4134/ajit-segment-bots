@@ -314,3 +314,67 @@ def run_feature_reliability_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every vector seen teaches the scorer each feature's distribution; an
+    attribution names the features behind one conviction for a symbol, and
+    the episode that closes a trade on that symbol says whether the model
+    was right, so the attribution is held until its episode arrives. Scores
+    go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    vol_features = Batch(read=context.bus.reader("vol-feature-set"))
+    attributions = Batch(read=context.bus.reader("feature-attribution"))
+    publish_reliability = context.bus.publisher_for("feature-reliability")
+    scorer = FeatureReliabilityScorer(
+        extreme_deviation=context.number("feature_extreme_deviation"),
+        minimum_extreme_observations=int(context.number("feature_minimum_extreme_observations")),
+        reliability_threshold=context.number("feature_reliability_threshold"),
+        prior_reliability=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        moments_half_life=context.number("learning_half_life_observations"),
+        minimum_moment_observations=int(context.number("feature_moments_minimum_observations")),
+    )
+    pending: dict[tuple[str, str], object] = {}
+    last_publish = [float("-inf")]
+
+    def read_episodes(_scorer) -> None:
+        for feature_set in vol_features.payloads():
+            scorer.observe_vector(feature_set.features)
+        for attribution in attributions.payloads():
+            scorer.observe_vector(attribution.contributions)
+            pending[(attribution.venue_id, attribution.symbol)] = attribution
+        for episode in episodes.payloads():
+            attribution = pending.pop((episode.venue_id, episode.symbol), None)
+            if attribution is None:
+                continue
+            for feature, value in attribution.contributions.items():
+                scorer.observe_outcome(feature, float(value), episode.regime, episode.realised > 0)
+
+    def tick() -> None:
+        read_episodes(scorer)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        scores = scorer.score_all()
+        if scores:
+            publish_reliability(scores)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

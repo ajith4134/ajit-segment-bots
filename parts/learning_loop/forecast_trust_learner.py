@@ -258,3 +258,66 @@ def run_forecast_trust_learner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A forecast accuracy report carries a forecaster's scored record for a
+    symbol and horizon; each report's newly scored forecasts are observed
+    as follows, right in the proportion the report states. Episodes are
+    consumed so a closed trade wakes the learner; the realised figure per
+    follow is what the accuracy report implies. Trust goes out once per
+    health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    accuracies = Batch(read=context.bus.reader("forecast-accuracy"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_trust = context.bus.publisher_for("forecast-trust")
+    learner = ForecastTrustLearner(
+        minimum_follows=int(context.number("forecast_trust_minimum_follows")),
+        trust_threshold=context.number("forecast_trust_threshold"),
+        maximum_trust=context.number("forecast_trust_maximum"),
+        prior_accuracy=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    scored_so_far: dict[tuple[str, str], int] = {}
+    last_publish = [float("-inf")]
+
+    def read_follows(_learner) -> None:
+        episodes.payloads()
+        for report in accuracies.payloads():
+            key = (report.forecaster, f"{report.symbol}@{report.horizon_seconds:.0f}s")
+            new = report.forecasts_scored - scored_so_far.get(key, 0)
+            if new <= 0:
+                continue
+            accuracy = report.directional_accuracy
+            right = int(round(accuracy.value * new)) if accuracy is not None else 0
+            realised = 0.0 if report.mean_absolute_error is None else -abs(report.mean_absolute_error)
+            for index in range(new):
+                learner.observe_follow(report.forecaster, key[1], index < right, realised)
+            scored_so_far[key] = report.forecasts_scored
+
+    def tick() -> None:
+        read_follows(learner)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        trust = learner.all_trust()
+        if trust:
+            publish_trust(trust)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

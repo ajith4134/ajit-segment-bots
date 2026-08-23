@@ -212,3 +212,91 @@ def run_bot_scorekeeper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An opinion is remembered until the episode that closed the trade it led
+    to arrives; the episode says what the trade realised, the pair verdict
+    or counterfactual says what the passed-over opinion would have, the
+    significance says how much noise the outcome carries, and the cluster
+    says how many effective bets it was. Scorecards go out once per health
+    interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    counterfactuals = Batch(read=context.bus.reader("counterfactual-outcome"))
+    rewards = Batch(read=context.bus.reader("learning-reward"))
+    clusters = Batch(read=context.bus.reader("trade-cluster"))
+    significances = LatestByKey(read=context.bus.reader("outcome-significance"), key_of=lambda s: s.trade_id)
+    verdicts = Batch(read=context.bus.reader("pair-verdict"))
+    costs = Batch(read=context.bus.reader("decision-cost"))
+    publish_scorecards = context.bus.publisher_for("bot-scorecard")
+    scorekeeper = BotScorekeeper(
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+    # The last acting opinion per bot per symbol: what the bot said before the
+    # trade the episode closes. Bounded by symbols the bots have opinions on.
+    last_opinion: dict[tuple[str, str, str], object] = {}
+    cluster_of: dict[str, str] = {}
+    last_publish = [float("-inf")]
+
+    def read_outcomes(_scorekeeper) -> None:
+        for opinion in opinions.payloads():
+            if opinion.is_a_call_to_act:
+                last_opinion[(opinion.bot, opinion.venue_id, opinion.symbol)] = opinion
+        for cluster in clusters.payloads():
+            for trade_id in cluster.trade_ids:
+                cluster_of[trade_id] = cluster.cluster_id
+        for reward in rewards.payloads():
+            if reward.reward is not None:
+                scorekeeper.observe_learning_reward(reward.detector, reward.reward)
+        counterfactuals.payloads()
+        verdicts.payloads()
+        costs.payloads()
+        by_trade = significances.mapping()
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if "-" in episode.episode_id else episode.episode_id
+            significance = by_trade.get(trade_id)
+            for (bot, venue_id, symbol), opinion in list(last_opinion.items()):
+                if (venue_id, symbol) != (episode.venue_id, episode.symbol):
+                    continue
+                scorekeeper.record_opinion_outcome(
+                    bot=bot, detector=episode.detector, regime=episode.regime,
+                    stated_probability=opinion.conviction.value,
+                    the_opinion_was_right=episode.realised > 0,
+                    realised=episode.realised,
+                    significance=(
+                        significance.standardised if significance is not None and significance.standardised is not None else 1.0
+                    ),
+                    cluster_id=cluster_of.get(trade_id),
+                )
+                del last_opinion[(bot, venue_id, symbol)]
+
+    def tick() -> None:
+        read_outcomes(scorekeeper)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        cards = tuple(scorekeeper.scorecard_for(bot) for bot in sorted(scorekeeper._scorecards))
+        if cards:
+            publish_scorecards(cards)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

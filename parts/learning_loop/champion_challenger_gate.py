@@ -307,3 +307,69 @@ def run_champion_challenger_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    versions = Batch(read=context.bus.reader("model-version"))
+    refutations = Batch(read=context.bus.reader("refutation-verdict"))
+    ledgers = Batch(read=context.bus.reader("trial-ledger"))
+    forgetting = Batch(read=context.bus.reader("forgetting-report"))
+    publish_choices = context.bus.publisher_for("champion-choice")
+    gate = ChampionChallengerGate(
+        minimum_improvement=context.number("champion_minimum_improvement"),
+        minimum_recall=context.number("champion_minimum_recall"),
+    )
+    # The ledger is a threshold the family's search implies; whether a version
+    # clears it is that version's own corrected significance against it.
+    ledger_by_family: dict[str, object] = {}
+    significance_by_model: dict[str, float] = {}
+
+    def judge_trials(model_name: str) -> None:
+        ledger = ledger_by_family.get(model_name)
+        p_value = significance_by_model.get(model_name)
+        if ledger is not None and p_value is not None:
+            gate.observe_trial_verdict(model_name, ledger.clears(p_value))
+
+    def read_versions(_gate):
+        touched = set()
+        for version in versions.payloads():
+            if version.corrected_significance is not None:
+                significance_by_model[version.model_name] = version.corrected_significance
+            if version.role == "champion" or version.promoted:
+                gate.observe_champion(version.model_name, version.version, version.validation_score)
+            else:
+                gate.observe_challenger(version.model_name, version.version, version.validation_score)
+            if version.refutation_verdict:
+                gate.observe_refutation_verdict(version.model_name, version.refutation_verdict)
+            touched.add(version.model_name)
+        for verdict in refutations.payloads():
+            gate.observe_refutation_verdict(verdict.instruction_id, verdict.verdict)
+            touched.add(verdict.instruction_id)
+        for ledger in ledgers.payloads():
+            ledger_by_family[ledger.family] = ledger
+            touched.add(ledger.family)
+        for model_name in touched:
+            judge_trials(model_name)
+        for report in forgetting.payloads():
+            if report.overall_recall is not None:
+                gate.observe_forgetting_report(report.model_name, report.overall_recall)
+                touched.add(report.model_name)
+        return tuple(sorted(touched))
+
+    def publish(choices) -> None:
+        if choices:
+            publish_choices(choices)
+
+    return run_champion_challenger_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_versions=read_versions,
+        publish_choices=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

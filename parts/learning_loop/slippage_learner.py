@@ -291,3 +291,70 @@ def run_slippage_learner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A bounded order says what was decided; the fill carrying its intent says
+    what was obtained, and the difference in price is the cost. Market
+    orders under calm conditions are what paper produces; the condition is
+    read off the shortfall decomposer's breakdown when one names the trade.
+    A profile is published for every symbol whose fill arrived.
+    """
+    from runtime.input_assembly import Batch
+
+    fills = Batch(read=context.bus.reader("fill"))
+    orders = Batch(read=context.bus.reader("bounded-order"))
+    breakdowns = Batch(read=context.bus.reader("shortfall-breakdown"))
+    publish_profiles = context.bus.publisher_for("slippage-profile")
+    bands = tuple(float(x) for x in str(context.setting("slippage_size_bands").value).split(",") if x)
+    learner = SlippageLearner(
+        size_bands=bands,
+        typical_quantile=context.number("slippage_typical_quantile"),
+        tail_quantile=context.number("slippage_tail_quantile"),
+        window=int(context.number("learning_window")),
+        minimum_fills=int(context.number("learning_minimum_observations")),
+        prior_cost_fraction=context.number("slippage_prior_cost_fraction"),
+        prior_fill_rate=context.number("slippage_prior_fill_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    decided: dict[str, object] = {}
+    condition_of: dict[str, str] = {}
+
+    def read_fills(_learner):
+        for breakdown in breakdowns.payloads():
+            condition_of[breakdown.trade_id] = FAST if breakdown.delay_cost > breakdown.spread_cost else CALM
+        for order in orders.payloads():
+            if order.intent_id:
+                decided[order.intent_id] = order
+        requests = []
+        for fill in fills.payloads():
+            order = decided.get(fill.order_id or "")
+            if order is None or order.entry_price <= 0:
+                continue
+            notional = fill.price * fill.quantity
+            condition = condition_of.get(fill.order_id or "", CALM)
+            cost = (fill.price - order.entry_price) / order.entry_price
+            if fill.side != order.side:
+                continue  # an exit fill is not this order's slippage
+            signed = cost if fill.side == "buy" else -cost
+            learner.observe_fill(fill.venue_id, fill.symbol, notional, MARKET, condition, signed)
+            requests.append((fill.venue_id, fill.symbol, notional, MARKET, condition))
+        return tuple(requests)
+
+    def publish(profiles) -> None:
+        if profiles:
+            publish_profiles(profiles)
+
+    return run_slippage_learner(
+        learner=learner,
+        control_socket=context.control_socket,
+        read_fills=read_fills,
+        publish_profiles=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

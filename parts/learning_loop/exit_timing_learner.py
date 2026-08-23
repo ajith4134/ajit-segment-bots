@@ -315,3 +315,76 @@ def run_exit_timing_learner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An exit quality names a trade; the episode for that trade names the
+    instruction and regime. Both are kept until the other arrives.
+    """
+    from runtime.input_assembly import Batch
+
+    qualities = Batch(read=context.bus.reader("exit-quality"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
+    publish_scorecards = context.bus.publisher_for("instruction-scorecard")
+    learner = ExitTimingLearner(
+        good_capture=context.number("exit_good_capture"),
+        window=int(context.number("learning_window")),
+        minimum_trades=int(context.number("learning_minimum_observations")),
+        prior_capture=context.number("learning_prior_hit_rate"),
+        prior_early_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    episode_of: dict[str, object] = {}
+    pending_quality: dict[str, object] = {}
+    pending_counterfactual: dict[str, list] = {}
+
+    def trade_id_of(episode) -> str:
+        parts = episode.episode_id.split("-")
+        return parts[1] if len(parts) > 2 else episode.episode_id
+
+    def read_exits(_learner):
+        touched = set()
+        for episode in episodes.payloads():
+            episode_of[trade_id_of(episode)] = episode
+        for quality in qualities.payloads():
+            pending_quality[quality.trade_id] = quality
+        for counterfactual in counterfactuals.payloads():
+            pending_counterfactual.setdefault(counterfactual.trade_id, []).append(counterfactual)
+        for trade_id, quality in list(pending_quality.items()):
+            episode = episode_of.get(trade_id)
+            if episode is None or not quality.is_measurable or quality.captured_fraction is None:
+                continue
+            key = (episode.detector, episode.regime)
+            learner.observe_exit(
+                instruction_id=episode.detector, regime=episode.regime,
+                realised=episode.realised,
+                peak_favourable=quality.peak_price if quality.peak_price is not None else quality.exit_price,
+                exited_before_peak=(quality.gave_back or 0.0) <= 0.0 and quality.captured_fraction < 1.0,
+            )
+            for counterfactual in pending_counterfactual.pop(trade_id, []):
+                if counterfactual.realised_pnl is not None and not counterfactual.is_hindsight:
+                    learner.observe_counterfactual(
+                        episode.detector, episode.regime, episode.realised, counterfactual.realised_pnl
+                    )
+            touched.add(key)
+            del pending_quality[trade_id]
+        return tuple(sorted(touched))
+
+    def publish(cards) -> None:
+        if cards:
+            publish_scorecards(cards)
+
+    return run_exit_timing_learner(
+        learner=learner,
+        control_socket=context.control_socket,
+        read_exits=read_exits,
+        publish_scorecards=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -253,3 +253,68 @@ def run_regret_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An intent that stood aside with dissenting bots, or acted on fewer than
+    had a view, is a passed-over opinion per bot; the counterfactual for that
+    symbol says what acting on it would have made, and the episode says what
+    was done. Regret per bot per regime goes out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    counterfactuals = Batch(read=context.bus.reader("counterfactual-outcome"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    publish_regret = context.bus.publisher_for("bot-regret")
+    tracker = RegretTracker(
+        window=int(context.number("learning_window")),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+        cost_fraction=context.number("regret_cost_fraction"),
+    )
+    passed_over: dict[tuple[str, str], list] = {}
+    done: dict[tuple[str, str], float] = {}
+    last_publish = [float("-inf")]
+
+    def read_counterfactuals(_tracker) -> None:
+        regime_by_symbol = regimes.mapping()
+        for intent in intents.payloads():
+            key = (intent.venue_id, intent.symbol)
+            cause = NOT_ACTED_ON if not intent.is_actionable else OVERRULED
+            for bot in intent.dissenting_bots:
+                passed_over.setdefault(key, []).append((bot, cause))
+        for episode in episodes.payloads():
+            done[(episode.venue_id, episode.symbol)] = episode.realised
+        for outcome in counterfactuals.payloads():
+            key = (outcome.venue_id, outcome.symbol)
+            if outcome.realised_fraction is None:
+                continue
+            regime = regime_by_symbol.get(key)
+            regime_name = regime.regime if regime is not None else "unclassified"
+            for bot, cause in passed_over.pop(key, []):
+                tracker.record(bot, regime_name, cause, done.get(key, 0.0), outcome.realised_fraction)
+
+    def tick() -> None:
+        read_counterfactuals(tracker)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        regret = tracker.all_regret()
+        if regret:
+            publish_regret(regret)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

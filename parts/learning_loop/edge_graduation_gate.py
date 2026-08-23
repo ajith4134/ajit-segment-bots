@@ -304,3 +304,83 @@ def run_edge_graduation_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A bot's trades per regime are adopted from its scorecard: the difference
+    between the scorecard's count and what the gate has already counted is
+    new closed trades, with wins in the same proportion. Every bot and regime
+    the scorecards name is judged once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    qualities = Batch(read=context.bus.reader("decision-quality-score"))
+    refutations = Batch(read=context.bus.reader("refutation-verdict"))
+    ledgers = Batch(read=context.bus.reader("trial-ledger"))
+    coverage = Batch(read=context.bus.reader("coverage-report"))
+    verdicts = Batch(read=context.bus.reader("pair-verdict"))
+    clusters = Batch(read=context.bus.reader("trade-cluster"))
+    publish_maturity = context.bus.publisher_for("bot-maturity")
+    gate = EdgeGraduationGate(
+        minimum_hit_rate=context.number("graduation_minimum_hit_rate"),
+        minimum_decision_quality=context.number("graduation_minimum_decision_quality"),
+        minimum_coverage=context.number("graduation_minimum_coverage"),
+        default_required_trades=int(context.number("graduation_default_required_trades")),
+    )
+    counted: dict[tuple[str, str], tuple[int, int]] = {}
+    known: set[tuple[str, str]] = set()
+    last_judged = [float("-inf")]
+
+    def read_records(_gate):
+        for scorecard in scorecards.payloads():
+            for regime, record in scorecard.describe()["by_regime"].items():
+                key = (scorecard.bot, regime)
+                seen_trades, seen_wins = counted.get(key, (0, 0))
+                for _ in range(max(0, record["wins"] - seen_wins)):
+                    gate.observe_closed_trade(scorecard.bot, regime, True)
+                for _ in range(max(0, (record["trades"] - record["wins"]) - (seen_trades - seen_wins))):
+                    gate.observe_closed_trade(scorecard.bot, regime, False)
+                counted[key] = (record["trades"], record["wins"])
+                known.add(key)
+        for quality in qualities.payloads():
+            # A decision-quality score names a symbol, not a bot; it is the
+            # quality of the brain's decision and applies to every bot judged
+            # in the regime it was scored in, which the score does not name.
+            for bot, regime in known:
+                gate.observe_decision_quality(bot, regime, quality.score)
+        for verdict in refutations.payloads():
+            gate.observe_refutation_verdict(verdict.instruction_id, verdict.verdict)
+        for ledger in ledgers.payloads():
+            gate.observe_trial_verdict(ledger.family, ledger.expected_false_positives < 1.0)
+        for report in coverage.payloads():
+            if report.coverage is not None:
+                for bot, regime in known:
+                    if regime == report.regime:
+                        gate.observe_coverage(bot, regime, report.coverage)
+        verdicts.payloads()
+        clusters.payloads()
+        now = _time.monotonic()
+        if now - last_judged[0] < context.health_interval_seconds:
+            return ()
+        last_judged[0] = now
+        return tuple(sorted(known))
+
+    def publish(maturities) -> None:
+        if maturities:
+            publish_maturity(maturities)
+
+    return run_edge_graduation_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_records=read_records,
+        publish_maturity=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

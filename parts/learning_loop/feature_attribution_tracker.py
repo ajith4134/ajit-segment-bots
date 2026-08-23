@@ -263,3 +263,53 @@ def run_feature_attribution_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A raw conviction from either bot is attributed against the model version
+    that is live for that bot; feature vectors are consumed so the tracker is
+    woken as the bots build them.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    versions = LatestByKey(read=context.bus.reader("model-version"), key_of=lambda v: v.model_name)
+    bull_vectors = Batch(read=context.bus.reader("bull-feature-vector"))
+    bear_vectors = Batch(read=context.bus.reader("bear-feature-vector"))
+    bull_convictions = Batch(read=context.bus.reader("bull-raw-conviction"))
+    bear_convictions = Batch(read=context.bus.reader("bear-raw-conviction"))
+    publish_attributions = context.bus.publisher_for("feature-attribution")
+    tracker = FeatureAttributionTracker(
+        half_life_observations=context.number("learning_half_life_observations"),
+        recent_kept=int(context.number("learning_window")),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+
+    def read_convictions(_tracker):
+        bull_vectors.payloads()
+        bear_vectors.payloads()
+        live = versions.mapping()
+        requests = []
+        for bot, source in (("bull-bot", bull_convictions), ("bear-bot", bear_convictions)):
+            version = live.get(bot)
+            label = version.version if version is not None else "unregistered"
+            for conviction in source.payloads():
+                requests.append((bot, label, conviction))
+        return tuple(requests)
+
+    def publish(attributions) -> None:
+        kept = tuple(item for item in attributions if item is not None)
+        if kept:
+            publish_attributions(kept)
+
+    return run_feature_attribution_tracker(
+        tracker=tracker,
+        control_socket=context.control_socket,
+        read_convictions=read_convictions,
+        publish_attributions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

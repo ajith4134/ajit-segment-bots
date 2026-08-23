@@ -293,3 +293,76 @@ def run_reward_shaper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A closed trade is shaped once its USDT statement has arrived, keyed by
+    venue, symbol and opening time; the excursion, attribution and
+    significance that arrive for the same trade refine it. The detector
+    that raised the trade is not on the closed trade, so it is "unknown"
+    here; the scorekeeper attributes rewards by what it knows.
+    """
+    from runtime.input_assembly import Batch
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    excursions = Batch(read=context.bus.reader("peak-excursion"))
+    attributions = Batch(read=context.bus.reader("pnl-attribution"))
+    significances = Batch(read=context.bus.reader("outcome-significance"))
+    publish_rewards = context.bus.publisher_for("learning-reward")
+    shaper = RewardShaper(
+        maximum_reward=context.number("reward_maximum"),
+        risk_reference_fraction=context.number("reward_risk_reference_fraction"),
+        horizon_half_life_seconds=context.number("reward_horizon_half_life"),
+        minimum_significance=context.number("reward_minimum_significance"),
+    )
+    opened_at: dict[tuple[str, str], int] = {}
+    held_for: dict[tuple[str, str, int], float] = {}
+    last_excursion: dict[tuple[str, str], object] = {}
+
+    def read_closed_trades(_shaper):
+        for excursion in excursions.payloads():
+            last_excursion[(excursion.venue_id, excursion.symbol)] = excursion
+        ready = []
+        for trade in closed.payloads():
+            key = (trade.venue_id, trade.symbol, trade.opened_at_ns)
+            opened_at[(trade.venue_id, trade.symbol)] = trade.opened_at_ns
+            held_for[key] = (trade.closed_at_ns - trade.opened_at_ns) / 1e9
+            excursion = last_excursion.get((trade.venue_id, trade.symbol))
+            if excursion is not None and trade.entry_price:
+                shaper.observe_peak_adverse_excursion(
+                    trade.venue_id, trade.symbol, trade.opened_at_ns,
+                    abs(excursion.worst_price - trade.entry_price) / trade.entry_price,
+                )
+        for statement in statements.payloads():
+            at = opened_at.get((statement.venue_id, statement.symbol))
+            if at is None:
+                continue
+            shaper.observe_usdt_result(
+                statement.venue_id, statement.symbol, at, statement.net_pnl_usdt, statement.conversion_rate
+            )
+            ready.append((statement.venue_id, statement.symbol, "unknown", at, held_for.get((statement.venue_id, statement.symbol, at), statement.holding_seconds)))
+        for attribution in attributions.payloads():
+            at = opened_at.get((attribution.venue_id, attribution.symbol))
+            setup = attribution.components.get("setup") if isinstance(attribution.components, dict) else None
+            if at is not None and setup is not None and attribution.realised_pnl:
+                shaper.observe_attribution(attribution.venue_id, attribution.symbol, at, float(setup) / attribution.realised_pnl)
+        significances.payloads()
+        return tuple(ready)
+
+    def publish(rewards) -> None:
+        if rewards:
+            publish_rewards(rewards)
+
+    return run_reward_shaper(
+        shaper=shaper,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_rewards=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
