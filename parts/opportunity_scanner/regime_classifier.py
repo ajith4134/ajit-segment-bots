@@ -196,10 +196,29 @@ def run_regime_classifier(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    import time as _time
+
+    last_full_publish = [float("-inf")]
+
     def tick() -> None:
+        # Only the symbols whose price moved are reclassified. The part now
+        # wakes on every arriving burst (2026-08-23), and classifying all sixty
+        # symbols -- a Hurst exponent over each window -- on each wake made its
+        # tick slower than the feed, so it lost market-data at about nine
+        # messages a second while using a fifth of a core. A regime for a symbol
+        # with no new price is the regime already published. The full set still
+        # goes out once per health interval, so a consumer started later holds
+        # every symbol within a second.
+        touched = set()
         for venue_id, symbol, price in read_prices():
             classifier.observe_price(venue_id, symbol, price)
-        publish_regimes(classifier.classify_all())
+            touched.add((venue_id, symbol))
+        now = _time.monotonic()
+        if now - last_full_publish[0] >= health_interval_seconds:
+            publish_regimes(classifier.classify_all())
+            last_full_publish[0] = now
+        elif touched:
+            publish_regimes(tuple(classifier.classify(v, s) for v, s in sorted(touched)))
 
     return run_part(
         declaration=PART_DECLARATION,
