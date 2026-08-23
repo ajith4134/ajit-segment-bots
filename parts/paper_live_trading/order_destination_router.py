@@ -25,6 +25,15 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.trading_types import (
+    LIVE_VENUE,
+    MARKET,
+    PAPER_BOOK,
+    REFUSED_NO_MODE,
+    REFUSED_UNSTAMPED,
+    ROUTED,
+    OrderRequest,
+)
 
 PART_ID = "order-destination-router"
 
@@ -37,43 +46,13 @@ PART_DECLARATION = PartDeclaration(
     skipped_tick_effect="corrupts",
 )
 
-PAPER_BOOK = "paper-book"
-LIVE_VENUE = "live-venue"
-
-ROUTED = "routed"
-REFUSED_NO_MODE = "refused-money-mode-unknown"
-REFUSED_UNSTAMPED = "refused-order-carries-no-client-id"
+# The destinations and outcomes live in runtime.trading_types now that two parts
+# construct an OrderRequest -- this part for entries and stop-order-manager for
+# the exits that close a position. Re-exported by the import above so that every
+# reader of this module keeps the names it already used.
 
 PAPER = "paper"
 LIVE = "live"
-
-
-@dataclass(frozen=True)
-class OrderRequest:
-    """One order, addressed to exactly one destination."""
-
-    client_order_id: str
-    destination: str
-    venue_id: str
-    symbol: str
-    side: str
-    quantity: float
-    limit_price: float
-    stop_price: float
-    slice_sequence: int
-    slice_count: int
-    at_second: float
-    outcome: str
-    reason: str
-    routed_at_ns: int
-
-    @property
-    def is_live_money(self) -> bool:
-        return self.destination == LIVE_VENUE
-
-    @property
-    def may_be_sent(self) -> bool:
-        return self.outcome == ROUTED and self.quantity > 0
 
 
 @dataclass
@@ -138,7 +117,18 @@ class OrderDestinationRouter:
                     symbol=stamped_order.symbol,
                     side=stamped_order.side,
                     quantity=quantity,
-                    limit_price=stamped_order.entry_price,
+                    # An entry is a market order (operator, 2026-08-23). It was
+                    # routed as a limit at the price the decision was made at,
+                    # which meant it filled only if the market came back -- and a
+                    # decision to be long is not a decision to be long at one
+                    # price. The price the decision was made at is not lost: it
+                    # is on the stamped order and in the journal, which is where
+                    # it belongs, as evidence rather than as an instruction.
+                    limit_price=0.0,
+                    order_type=MARKET,
+                    # The protective stop this entry will need once it fills.
+                    # Carried, not acted on: what makes an order wait for a
+                    # trigger is its type, never the presence of this number.
                     stop_price=stamped_order.stop_price,
                     slice_sequence=index,
                     slice_count=len(slices),

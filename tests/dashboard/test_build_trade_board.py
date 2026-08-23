@@ -197,7 +197,11 @@ def test_how_far_a_part_is_built_tells_running_from_startable_from_absent(board)
         "running"
     )
     assert board.how_far_a_part_is_built("paper-fill-simulator", {}) == "startable"
-    assert board.how_far_a_part_is_built("fill-reconciler", {}) == "no start_part"
+    # A part with real code and no start_part yet: the launcher has nothing to
+    # fork, which is a different state from unwritten and must read as one.
+    assert board.how_far_a_part_is_built(
+        "bull-position-invalidation-watcher", {}
+    ) == "no start_part"
     assert board.how_far_a_part_is_built("a-part-nobody-wrote", {}) == "no module"
 
 
@@ -299,6 +303,8 @@ def test_the_generated_page_is_self_contained_and_theme_aware(board):
         tiles="",
         listed_note="",
         trades="",
+        closed_note="",
+        closed_trades="",
         live_from="2026-08-22 17:37:10",
     )
     assert "<title>" in page
@@ -353,3 +359,107 @@ def test_a_candidate_alone_is_not_a_trade_worth_listing(board, durable_tmp_path)
     trades = board.collect_trades([noticed], live_from_ns=None)
     assert len(trades) == 1
     assert board.trades_worth_listing(trades) == []
+
+
+# ---- closed trades, and what an open position has in it -----------------------
+
+def a_closed_trade_entry(**overrides):
+    """One `closed-trade` entry as position-recorder writes it."""
+    payload = dict(
+        venue_id="binance-usdm", symbol="BTCUSDT", direction="long", quantity=0.01,
+        entry_price=77419.2, exit_price=77480.0, realised_pnl=0.608, fees_paid=0.62,
+        holding_seconds=41.0, best_unrealised=0.7, worst_unrealised=-0.2,
+        opened_at_ns=1_787_000_000_000_000_000, closed_at_ns=1_787_000_041_000_000_000,
+    )
+    payload.update(overrides)
+    return {"kind": "closed-trade", "payload": payload,
+            "recorded_at_ns": payload["closed_at_ns"]}
+
+
+def test_a_closed_trade_is_read_from_the_ledger_not_recomputed(board):
+    """The close detector resolved the lots; the board reports what it decided.
+
+    Recomputing it here would be a second implementation of the same arithmetic,
+    free to disagree with the one the system actually acted on.
+    """
+    closed = board.collect_closed_trades([a_closed_trade_entry()])
+    assert len(closed) == 1
+    trade = closed[0]
+    assert trade.direction == "long"
+    assert trade.exit_price == 77480.0
+    assert trade.capital_in_quote == pytest.approx(774.192)
+    assert trade.net_pnl == pytest.approx(0.608 - 0.62)
+
+
+def test_an_empty_closed_table_says_nothing_has_closed_rather_than_nothing_is_built(board):
+    """Rule 8: absence of a close is its own state, and it is not a missing part."""
+    assert board.collect_closed_trades([]) == []
+    note = board.compose_closed_note([])
+    assert "Nothing has closed yet" in note
+    assert "unbuilt" in note
+    assert "NOTHING YET" in board.render_closed_trades([])
+
+
+def test_the_closed_table_says_what_the_round_trips_made_after_fees(board):
+    entries = [
+        a_closed_trade_entry(realised_pnl=2.0, fees_paid=0.5),
+        a_closed_trade_entry(realised_pnl=-1.0, fees_paid=0.5,
+                             closed_at_ns=1_787_000_100_000_000_000),
+    ]
+    closed = board.collect_closed_trades(entries)
+    note = board.compose_closed_note(closed)
+    assert "2 round trip(s)" in note
+    assert "1 of them profitable" in note
+    rendered = board.render_closed_trades(closed)
+    assert "capital in (usdt)" in rendered
+    assert "held for" in rendered
+
+
+def test_an_exit_fill_reduces_the_position_rather_than_adding_to_it(board):
+    """A trade's fills are not all entries once positions can close.
+
+    An exit arrives as a fill on the opposite side, and adding it would report a
+    closed position as twice the size it ever was -- and as still open.
+    """
+    entries = [
+        {"kind": "entry-candidate", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 1},
+        {"kind": "trade-intent", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 2},
+        {"kind": "bounded-order", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 3},
+        {"kind": "order-request", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 4},
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 0.01, "price": 77419.2, "fee": 0.31},
+         "recorded_at_ns": 5},
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "sell",
+                                     "quantity": 0.01, "price": 77480.0, "fee": 0.31},
+         "recorded_at_ns": 6},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.fills == 2
+    assert trade.quantity == pytest.approx(0.0)
+    assert trade.is_open is False, "a position sold back is closed, and the fills say so"
+    assert trade.exit_price == pytest.approx(77480.0)
+
+
+def test_an_open_position_says_what_capital_went_into_it(board):
+    """Operator, 2026-08-23: the USDT in each open trade, on the table."""
+    entries = [
+        {"kind": "entry-candidate", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 1},
+        {"kind": "trade-intent", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 2},
+        {"kind": "bounded-order", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 3},
+        {"kind": "order-request", "payload": {"trade_id": "t1", "symbol": "BTCUSDT"},
+         "recorded_at_ns": 4},
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 0.01, "price": 77419.2, "fee": 0.31},
+         "recorded_at_ns": 5},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.is_open is True
+    assert trade.capital_in_quote == pytest.approx(774.192)
+    assert "capital in (usdt)" in board.render_trades([trade], pathlib.Path("/tmp/journal.jsonl"))

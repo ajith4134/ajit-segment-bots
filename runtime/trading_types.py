@@ -72,6 +72,102 @@ class Fill:
         return self.quantity if self.side == BUY else -self.quantity
 
 
+# Where an order is addressed. The distinction that keeps paper money paper:
+# every part that can send an order checks it, and a run that produced a
+# LIVE_VENUE destination while the segment is on paper is the one failure this
+# phase cannot recover from (RL-005).
+PAPER_BOOK = "paper-book"
+LIVE_VENUE = "live-venue"
+
+# What an order is asking for. `ROUTED` is the only outcome that may be sent;
+# the rest exist so a refusal travels with the order it refused rather than
+# disappearing into a log.
+ROUTED = "routed"
+REFUSED_NO_MODE = "refused-money-mode-unknown"
+REFUSED_UNSTAMPED = "refused-order-carries-no-client-id"
+
+# What kind of order this is, stated rather than inferred from which price fields
+# happen to be set. Inferring it was a live defect: an entry carries the stop
+# price that will protect it once it fills, and a reader that treated any order
+# with a stop price as a stop order turned every entry into a trigger waiting for
+# the market to fall to it.
+#
+# **Entries and exits are market orders** (operator, 2026-08-23). A limit order
+# fills only if the market comes back to the price the decision was made at, and
+# a decision to be in the market is not a decision to be in it at one price. The
+# two triggered types are market orders too -- they wait for a price and then
+# take whatever the book gives, which is what a venue's stop-market does and what
+# the slippage of a real stop actually costs.
+MARKET = "market"
+LIMIT = "limit"
+STOP_MARKET = "stop-market"
+TAKE_PROFIT_MARKET = "take-profit-market"
+
+# The order types that wait for a trigger price before becoming market orders.
+TRIGGERED_ORDER_TYPES = (STOP_MARKET, TAKE_PROFIT_MARKET)
+
+
+@dataclass(frozen=True)
+class OrderRequest:
+    """One order, addressed to exactly one destination.
+
+    Shared vocabulary rather than one part's private class. Two parts construct
+    these -- `order-destination-router` for entries and `stop-order-manager` for
+    the exits that close a position -- and a part importing another part's
+    dataclass is a part wired to a part (T-4).
+
+    `stop_price` and `limit_price` are 0.0 when absent, never None, because they
+    arrive from settings and from venue fields that use zero for "not set", and a
+    type that accepted both would need every reader to handle two spellings of
+    nothing.
+
+    `cancels_client_order_id` is how one order withdraws another, which is what a
+    venue's cancel-replace actually is. It matters for exits specifically: a
+    target that fills leaves a stop resting for a position that no longer exists,
+    and a stop that triggers on nothing opens the opposite position.
+    """
+
+    client_order_id: str
+    destination: str
+    venue_id: str
+    symbol: str
+    side: str
+    quantity: float
+    limit_price: float
+    stop_price: float
+    slice_sequence: int
+    slice_count: int
+    at_second: float
+    outcome: str
+    reason: str
+    routed_at_ns: int
+    cancels_client_order_id: str | None = None
+    order_type: str = MARKET
+
+    @property
+    def is_live_money(self) -> bool:
+        return self.destination == LIVE_VENUE
+
+    @property
+    def may_be_sent(self) -> bool:
+        return self.outcome == ROUTED and self.quantity > 0
+
+    @property
+    def waits_for_a_trigger(self) -> bool:
+        """Whether this order sits until the market reaches `stop_price`.
+
+        A stop and a take-profit are the same mechanism pointed in opposite
+        directions -- a sell stop triggers below the market and a sell
+        take-profit triggers above it -- so the type is what decides the test,
+        never the sign of the price.
+        """
+        return self.order_type in TRIGGERED_ORDER_TYPES
+
+    @property
+    def trigger_price(self) -> float | None:
+        return self.stop_price if self.waits_for_a_trigger else None
+
+
 @dataclass(frozen=True)
 class Position:
     """What is held in one symbol right now, and what it cost to get there."""

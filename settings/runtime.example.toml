@@ -542,3 +542,38 @@ note  = "operator, 2026-08-22: the most one correlated cluster may risk. Twice a
 value = 20
 unit  = "book updates"
 note  = "operator, 2026-08-22: how many bid/ask spacings tick-size-resolver needs before inferring an increment a venue did not declare. Twenty, because the inference is a greatest-common-divisor over observed spacings and a handful of them would infer a coarser step than the venue really uses -- which would snap prices to a grid the venue rejects."
+
+[learned_state_root]
+value = "~/.local/share/ajit-segment-bots/learned"
+unit  = "path"
+note  = "operator, 2026-08-23: where a learned part's coefficients wait for the next process. Put through storage_facts.require_durable_directory by runtime/learned_state.py, which refuses a memory-backed filesystem -- /tmp is tmpfs on this box, so a model checkpointed there would measure as learning right up until the machine restarted. Beside the tape rather than inside it: the tape is what arrived and this is what was concluded from it, and an operator clearing one must not silently clear the other."
+
+[learned_state_checkpoint_interval]
+value = 25
+unit  = "training observations"
+note  = "operator, 2026-08-23: how many labelled outcomes a learned part may accumulate before its state is written to disk. Twenty-five against the hundred bull_minimum_training_observations needs, so a crash costs at most a quarter of the way to the bot's first decision. Not measured from the label rate, because no run has yet produced a labelled outcome to measure one from -- this is a judgement, and what would settle it is the observed labels-per-minute of the first run that trains, against the fsync cost this writes into the io_stall_fraction the governor already watches."
+
+[risk_minimum_reward_to_risk]
+value = 1.5
+unit  = "reward per unit of risk"
+note  = "operator, 2026-08-23: the least a trade must aim to make per unit it risks before risk will place a stop and target for it. A judgement, not a measurement -- what would settle it is the realised win rate, since a 1.5 ratio needs to be right 40% of the time to break even before costs and nothing has closed enough trades to say what the rate is. Deliberately a separate number from bull_exit_minimum_reward_to_risk: the bot's own gate is the bot judging its own setup, and a risk limit that read the same setting would not be an independent check."
+
+[risk_maximum_stop_fraction]
+value = 0.05
+unit  = "fraction of entry price"
+note  = "operator, 2026-08-23: the furthest a stop may sit from entry, whatever produced the distance. Five per cent, against a measured BTCUSDT range of 77415.1-77518.1 over the 28 seconds captured on 2026-08-22 -- 0.13% -- so the cap is far outside ordinary noise and bites only on a distance some upstream estimate got wrong. It is a ceiling on the damage a bad estimate can do, not a view about where stops belong."
+
+[stop_cluster_clearance_fraction]
+value = 0.002
+unit  = "fraction of the cluster price"
+note  = "operator, 2026-08-23: how far beyond a liquidation cluster a stop is moved when it would otherwise sit inside one. Beyond rather than short of: a stop placed just before a pool is hit by the very cascade the pool causes. Two tenths of a per cent is above the 0.13% range that BTCUSDT traded through in the captured run, so a stop moved clear of a cluster is clear of it by more than a normal half-minute of movement. Nothing produces liquidation-map yet, so this has no effect until liquidation-cluster-mapper runs."
+
+[stop_excursion_minimum_observations]
+value = 30
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many recorded adverse excursions a symbol needs before risk places its stop from measurement rather than from what the bot proposed. Thirty, because the placer takes the 85th percentile and a quantile that high estimated from fewer is decided by one or two observations. Below it the estimate reports itself unfitted and the proposal is used with that fact attached."
+
+[stop_excursion_window]
+value = 200
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many recent excursions the quantile is estimated over. Two hundred keeps roughly a season of a symbol's behaviour rather than all of its history: a stop distance learned across a regime that has ended is a stop placed for a market that no longer exists."

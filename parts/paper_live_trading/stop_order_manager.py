@@ -27,7 +27,19 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, LONG, SELL, SHORT
+from runtime.trading_types import (
+    BUY,
+    LIVE_VENUE,
+    LONG,
+    MARKET,
+    PAPER_BOOK,
+    ROUTED,
+    SELL,
+    SHORT,
+    STOP_MARKET,
+    TAKE_PROFIT_MARKET,
+    OrderRequest,
+)
 
 PART_ID = "stop-order-manager"
 
@@ -42,13 +54,15 @@ PART_DECLARATION = PartDeclaration(
 
 PLACE_NEW = "place-new-stop"
 REPLACE = "replace-existing-stop"
+# The other half of an exit. A position that can only close on its stop is a
+# position that can only lose: the plan that placed the stop named a target in
+# the same breath, and a target nobody places is a plan half carried out.
+PLACE_TARGET = "place-target"
+CANCEL_EXIT = "cancel-the-other-exit"
 REFUSED_WIDENING = "refused-would-widen-the-stop"
 REFUSED_NO_POSITION = "refused-no-position-to-protect"
 REFUSED_NO_MODE = "refused-money-mode-unknown"
-
-PAPER_BOOK = "paper-book"
-LIVE_VENUE = "live-venue"
-
+REFUSED_NO_TARGET = "refused-no-target-price-was-given"
 
 @dataclass(frozen=True)
 class StopOrderAction:
@@ -69,20 +83,37 @@ class StopOrderAction:
 
     @property
     def is_actionable(self) -> bool:
-        return self.action in (PLACE_NEW, REPLACE)
+        return self.action in (PLACE_NEW, REPLACE, PLACE_TARGET, CANCEL_EXIT)
+
+    @property
+    def is_cancel_only(self) -> bool:
+        """Withdraws an order without placing one. Quantity is not what it is for."""
+        return self.action == CANCEL_EXIT
 
 
 @dataclass
 class _RestingStop:
+    """The exits this manager believes are resting for one position.
+
+    Both of them, because they are one instruction: whichever fills, the other
+    must be withdrawn. A stop left resting on a position that has already closed
+    opens the opposite position when it triggers.
+    """
+
     order_id: str
     stop_price: float
     quantity: float
+    target_order_id: str | None = None
+    target_price: float | None = None
 
 
 @dataclass
 class ManagerStanding:
     placed: int = 0
     replaced: int = 0
+    targets_placed: int = 0
+    exits_withdrawn: int = 0
+    refused_no_target: int = 0
     refused_widening: int = 0
     refused_no_position: int = 0
     refused_no_mode: int = 0
@@ -99,9 +130,98 @@ class StopOrderManager:
         self._sequence = 0
         self.standing = ManagerStanding()
 
-    def observe_position_closed(self, venue_id: str, symbol: str) -> None:
-        self._resting.pop((venue_id, symbol), None)
+    def observe_position_closed(self, venue_id: str, symbol: str) -> tuple:
+        """The position is flat; withdraw whatever exits were protecting it.
+
+        Returns the cancels rather than performing them silently. The orders are
+        resting at the venue -- or in the paper book, which must behave the same
+        way -- and this part cannot remove them by forgetting them. Forgetting was
+        the bug shape: the manager's own count went to zero while the book still
+        held a stop that would open a short the moment price fell through it.
+        """
+        held = self._resting.pop((venue_id, symbol), None)
         self.standing.stops_resting = len(self._resting)
+        if held is None:
+            return ()
+        cancels = []
+        for order_id, what in (
+            (held.order_id, "stop"), (held.target_order_id, "target"),
+        ):
+            if not order_id:
+                continue
+            self.standing.exits_withdrawn += 1
+            cancels.append(self._action(
+                venue_id, symbol, CANCEL_EXIT, "", None, order_id, "", 0.0, 0.0, None,
+                f"the position is flat; withdrawing the resting {what} so it cannot open "
+                f"the opposite position when the market reaches it",
+            ))
+        return tuple(cancels)
+
+    def place_target(
+        self,
+        venue_id: str,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        target_price: float | None,
+        money_mode,
+    ) -> StopOrderAction:
+        """Rest the take-profit for a position, once, on the side that closes it.
+
+        Once: a target is not tightened the way a stop is. Re-placing it on every
+        adjustment would put a second resting order on the book for the same
+        quantity, and both filling is a position opened in the other direction.
+        """
+        if money_mode is None:
+            self.standing.refused_no_mode += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_MODE, "", None, None, "", quantity,
+                0.0, None,
+                "the money mode could not be read; a target must not be guessed into a destination",
+            )
+        if not target_price:
+            self.standing.refused_no_target += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_TARGET, "", None, None, "", quantity, 0.0, None,
+                "the plan named no target; the position closes on its stop or not at all",
+            )
+        if quantity <= 0:
+            self.standing.refused_no_position += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_POSITION, "", None, None, "", 0.0, 0.0, None,
+                "there is no open position to take profit on",
+            )
+
+        held = self._resting.get((venue_id, symbol))
+        if held is not None and held.target_order_id:
+            self.standing.refused_no_target += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_TARGET, "", None, None, "", quantity, 0.0, None,
+                f"a target is already resting at {held.target_price:g} for this position; a "
+                f"second one would close a quantity that is not held",
+            )
+
+        destination = LIVE_VENUE if money_mode.mode == "live" else PAPER_BOOK
+        side = SELL if direction == LONG else BUY
+        self._sequence += 1
+        target_order_id = f"target-{venue_id}-{symbol}-{self._sequence}"
+        if held is None:
+            self._resting[(venue_id, symbol)] = _RestingStop(
+                order_id="", stop_price=0.0, quantity=quantity,
+                target_order_id=target_order_id, target_price=target_price,
+            )
+        else:
+            held.target_order_id = target_order_id
+            held.target_price = target_price
+        self.standing.targets_placed += 1
+        self.standing.stops_resting = len(self._resting)
+        return self._action(
+            venue_id, symbol, PLACE_TARGET, destination, target_order_id, None,
+            side, quantity, target_price, None,
+            f"resting a {side} take-profit trigger at {target_price:g}; it waits there exactly "
+            f"as it would at the venue, fills at market when the price is reached, and may "
+            f"never be reached at all",
+        )
 
     def apply_adjustment(
         self,
@@ -147,8 +267,12 @@ class StopOrderManager:
         self._sequence += 1
         new_order_id = f"stop-{venue_id}-{symbol}-{self._sequence}"
 
-        if held is None:
-            self._resting[key] = _RestingStop(new_order_id, stop_price, quantity)
+        if held is None or not held.order_id:
+            self._resting[key] = _RestingStop(
+                new_order_id, stop_price, quantity,
+                target_order_id=held.target_order_id if held else None,
+                target_price=held.target_price if held else None,
+            )
             self.standing.placed += 1
             self.standing.stops_resting = len(self._resting)
             return self._action(
@@ -160,7 +284,12 @@ class StopOrderManager:
         # Place first, cancel second. Two stops briefly is recoverable and
         # visible; no stop briefly is an unbounded loss.
         previous = held.stop_price
-        self._resting[key] = _RestingStop(new_order_id, stop_price, quantity)
+        # The target rides along unchanged. Rebuilding the record without it
+        # would lose the id this part needs to withdraw it when the stop fills.
+        self._resting[key] = _RestingStop(
+            new_order_id, stop_price, quantity,
+            target_order_id=held.target_order_id, target_price=held.target_price,
+        )
         self.standing.replaced += 1
         self.standing.unprotected_windows += 0
         return self._action(
@@ -195,15 +324,34 @@ def describe_stop_orders(manager: StopOrderManager) -> dict:
         "refused_no_position": manager.standing.refused_no_position,
         "refused_no_mode": manager.standing.refused_no_mode,
         "stops_resting": manager.standing.stops_resting,
+        "targets_placed": manager.standing.targets_placed,
+        "exits_withdrawn": manager.standing.exits_withdrawn,
+        "refused_no_target": manager.standing.refused_no_target,
     }
 
 
 def run_stop_order_manager(
     manager: StopOrderManager, control_socket, read_adjustments, publish_orders,
-    health_interval_seconds: float, emit_health,
+    health_interval_seconds: float, emit_health, read_flat_positions=None,
 ) -> int:
+    """`read_flat_positions` names the positions that have gone flat this tick.
+
+    Their resting exits are withdrawn, and the withdrawals are published like any
+    other order. A cancel that is not sent is a stop still sitting at the venue.
+    """
     def tick() -> None:
-        actions = [manager.apply_adjustment(**adjustment) for adjustment in read_adjustments()]
+        actions = []
+        for adjustment in read_adjustments():
+            target_price = adjustment.pop("target_price", None)
+            actions.append(manager.apply_adjustment(**adjustment))
+            actions.append(manager.place_target(
+                venue_id=adjustment["venue_id"], symbol=adjustment["symbol"],
+                direction=adjustment["direction"], quantity=adjustment["quantity"],
+                target_price=target_price, money_mode=adjustment["money_mode"],
+            ))
+        if read_flat_positions is not None:
+            for venue_id, symbol in read_flat_positions():
+                actions.extend(manager.observe_position_closed(venue_id, symbol))
         publish_orders(tuple(action for action in actions if action.is_actionable))
 
     return run_part(
@@ -212,4 +360,133 @@ def run_stop_order_manager(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This is the part that makes a position closeable. Everything before it decides
+    where the exits belong; this turns them into orders that actually rest, and
+    the paper book fills them when a live price reaches them exactly as a venue
+    would (RL-071 -- the prices are the ones arriving now, never a replay).
+
+    It publishes `order-request`, the same type `order-destination-router`
+    publishes for entries, because `paper-fill-simulator` reads one type and an
+    exit that arrived as a different shape would be an order the book could not
+    read. The destination is decided from the money mode this part reads for
+    itself, which is the third of the three independent paper-only checks.
+
+    Two shapes may arrive on `stop-adjustment`: the exits `exit-order-chainer`
+    emits the instant an entry fills, and the raised stops `profit-lock` emits as
+    a trade goes into profit. Only the first is produced by anything running, and
+    an adjustment this part cannot read is counted and named rather than guessed
+    at -- a misread stop price is a position protected at the wrong number.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    adjustments = Batch(read=context.bus.reader("stop-adjustment"))
+    positions = Batch(read=context.bus.reader("position"))
+    modes = LatestValue(read=context.bus.reader("money-mode"))
+    publish_orders = context.bus.publisher_for("order-request")
+
+    # Positions seen flat since the last tick. Held here rather than asked of the
+    # manager, because "this position just closed" is a fact about the position
+    # stream and the manager's job starts once it is known.
+    gone_flat: list[tuple[str, str]] = []
+    held_quantity: dict[tuple[str, str], float] = {}
+    unreadable = {"count": 0, "last": None}
+
+    def read_adjustments():
+        mode = modes.value()
+        for position in positions.payloads():
+            key = (position.venue_id, position.symbol)
+            was_held = held_quantity.get(key, 0.0)
+            if position.is_flat:
+                if was_held:
+                    gone_flat.append(key)
+                held_quantity.pop(key, None)
+            else:
+                held_quantity[key] = position.quantity
+
+        readable = []
+        for adjustment in adjustments.payloads():
+            exit_side = getattr(adjustment, "exit_side", None)
+            stop_price = getattr(adjustment, "stop_price", None)
+            if exit_side is None or stop_price is None:
+                unreadable["count"] += 1
+                unreadable["last"] = type(adjustment).__name__
+                continue
+            if not getattr(adjustment, "should_be_sent", True):
+                continue
+            readable.append({
+                "venue_id": adjustment.venue_id,
+                "symbol": adjustment.symbol,
+                # The exit is the opposite side of the position, so the position's
+                # own direction is the opposite of the exit's side.
+                "direction": LONG if exit_side == SELL else SHORT,
+                "quantity": adjustment.quantity,
+                "stop_price": stop_price,
+                "target_price": getattr(adjustment, "target_price", None),
+                "money_mode": mode,
+            })
+        return readable
+
+    def read_flat_positions():
+        closed = tuple(gone_flat)
+        gone_flat.clear()
+        return closed
+
+    def publish_as_order_requests(actions) -> None:
+        publish_orders(tuple(as_order_request(action) for action in actions))
+
+    return run_stop_order_manager(
+        manager=StopOrderManager(),
+        control_socket=context.control_socket,
+        read_adjustments=read_adjustments,
+        publish_orders=publish_as_order_requests,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+        read_flat_positions=read_flat_positions,
+    )
+
+
+def as_order_request(action: StopOrderAction):
+    """One exit decision, as the order type the book reads.
+
+    A stop carries its trigger in `stop_price` and a target carries its price in
+    `limit_price`, which is the difference between the two instructions: a sell
+    stop below the market takes the loss, a sell limit above it takes the profit.
+    A cancel carries neither and names the order it withdraws.
+    """
+    if action.action == PLACE_TARGET:
+        order_type = TAKE_PROFIT_MARKET
+    elif action.is_cancel_only:
+        # A cancel places nothing. Typed as a market order carrying no quantity,
+        # which is what `may_be_sent` already refuses to send -- the book acts on
+        # the id it withdraws, not on the order it arrives as.
+        order_type = MARKET
+    else:
+        order_type = STOP_MARKET
+    return OrderRequest(
+        client_order_id=action.place_order_id or f"cancel-{action.cancel_order_id}",
+        destination=action.destination or PAPER_BOOK,
+        venue_id=action.venue_id,
+        symbol=action.symbol,
+        side=action.side,
+        quantity=action.quantity,
+        # Both exits are market orders that wait for a price (operator,
+        # 2026-08-23). The trigger rides in `stop_price` for both, and the type
+        # is what says which direction it fires in: a sell stop below the market,
+        # a sell take-profit above it.
+        limit_price=0.0,
+        stop_price=action.stop_price,
+        order_type=order_type,
+        slice_sequence=1,
+        slice_count=1,
+        at_second=0.0,
+        outcome=ROUTED,
+        reason=action.reason,
+        routed_at_ns=action.decided_at_ns,
+        cancels_client_order_id=action.cancel_order_id,
     )

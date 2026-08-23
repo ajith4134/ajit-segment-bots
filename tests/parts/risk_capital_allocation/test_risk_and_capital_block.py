@@ -611,8 +611,8 @@ def test_the_trail_follows_this_symbols_own_retracements():
 def test_the_exits_exist_the_moment_the_entry_fills():
     """The window between a fill and its stop is when the position is naked."""
     chainer = ExitOrderChainer()
-    chainer.register_plan("o1", VENUE, SYMBOL, BUY, stop_price=98.0, target_price=105.0)
-    exits = chainer.observe_entry_fill("f1", "o1", filled_quantity=2.0)
+    chainer.register_plan(VENUE, SYMBOL, BUY, stop_price=98.0, target_price=105.0)
+    exits = chainer.observe_entry_fill("f1", "o1", VENUE, SYMBOL, BUY, filled_quantity=2.0)
     assert exits.outcome == CHAINED
     assert exits.exit_side == SELL
     assert exits.quantity == 2.0
@@ -622,9 +622,9 @@ def test_the_exits_exist_the_moment_the_entry_fills():
 def test_a_partial_fill_gets_exits_for_what_actually_filled():
     """Exits sized to the order would leave a stop for a position never taken."""
     chainer = ExitOrderChainer()
-    chainer.register_plan("o1", VENUE, SYMBOL, BUY, 98.0, None)
-    first = chainer.observe_entry_fill("f1", "o1", 1.0)
-    second = chainer.observe_entry_fill("f2", "o1", 3.0)
+    chainer.register_plan(VENUE, SYMBOL, BUY, 98.0, None)
+    first = chainer.observe_entry_fill("f1", "o1", VENUE, SYMBOL, BUY, 1.0)
+    second = chainer.observe_entry_fill("f2", "o1", VENUE, SYMBOL, BUY, 3.0)
     assert first.quantity == 1.0
     assert second.quantity == 3.0
     assert second.outcome == EXTENDED
@@ -633,14 +633,14 @@ def test_a_partial_fill_gets_exits_for_what_actually_filled():
 
 def test_a_repeated_fill_does_not_place_a_second_stop():
     chainer = ExitOrderChainer()
-    chainer.register_plan("o1", VENUE, SYMBOL, BUY, 98.0, None)
-    chainer.observe_entry_fill("f1", "o1", 1.0)
-    assert chainer.observe_entry_fill("f1", "o1", 1.0) is None
+    chainer.register_plan(VENUE, SYMBOL, BUY, 98.0, None)
+    chainer.observe_entry_fill("f1", "o1", VENUE, SYMBOL, BUY, 1.0)
+    assert chainer.observe_entry_fill("f1", "o1", VENUE, SYMBOL, BUY, 1.0) is None
 
 
 def test_a_fill_with_no_plan_is_reported_as_a_naked_position():
     chainer = ExitOrderChainer()
-    exits = chainer.observe_entry_fill("f1", "unknown", 1.0)
+    exits = chainer.observe_entry_fill("f1", "unknown", VENUE, SYMBOL, BUY, 1.0)
     assert exits.outcome == NO_PLAN
     assert "naked" in exits.reason
 

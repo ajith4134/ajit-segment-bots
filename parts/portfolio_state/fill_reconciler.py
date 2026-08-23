@@ -192,3 +192,45 @@ def run_fill_reconciler(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This is where a fill becomes a position, and therefore where every part that
+    watches an open trade gets something to watch. Nothing downstream of a fill --
+    the excursion tracker, the stop manager, the invalidation watcher, the close
+    detector -- has an input until this part is running.
+
+    `venue-position-report` has no producer while the segment is on paper: there
+    is no venue holding a paper position to ask. So every reconciliation is
+    reported UNCHECKED, which is the honest state and is not the same as agreed.
+    The comparison switches itself on the moment `venue-position-reader` runs.
+    """
+    from runtime.input_assembly import Batch
+
+    fills = Batch(read=context.bus.reader("fill"))
+    reports = Batch(read=context.bus.reader("venue-position-report"))
+    publish_positions = context.bus.publisher_for("position")
+
+    def read_fills_and_reports():
+        venue_quantities = tuple(
+            (report.venue_id, report.symbol, report.quantity) for report in reports.payloads()
+        )
+        return tuple(fills.payloads()), venue_quantities
+
+    return run_fill_reconciler(
+        reconciler=FillReconciler(
+            # How far our quantity may sit from the venue's before it is a
+            # divergence rather than rounding. Read from the increment the venue
+            # itself publishes, because a tolerance smaller than one tradeable
+            # step would report every position as diverged, and one larger than a
+            # step would hide a genuinely missing fill.
+            quantity_tolerance=context.number("order_quantity_increment"),
+        ),
+        control_socket=context.control_socket,
+        read_fills_and_reports=read_fills_and_reports,
+        publish_positions=publish_positions,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

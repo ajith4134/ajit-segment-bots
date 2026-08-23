@@ -155,3 +155,49 @@ def run_position_close_detector(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The part that says a trade is over. Every closed-trade reader in the system --
+    the pnl accountant, the label builder, the whole closed-trade-decoding block --
+    has an empty inbox until this runs, which is why a system that could open a
+    position but not close one could also not learn from one.
+
+    It decides from fills rather than from a position going flat. A position
+    reaching zero says the quantity is gone; the fills say at what price, in what
+    order, and against which lots -- which is the difference between knowing a
+    trade closed and knowing what it made.
+    """
+    from runtime.input_assembly import Batch
+
+    fills = Batch(read=context.bus.reader("fill"))
+    positions = Batch(read=context.bus.reader("position"))
+    excursions = Batch(read=context.bus.reader("peak-excursion"))
+    publish_closed_trade = context.bus.publisher_for("closed-trade")
+
+    def read_fills():
+        # Excursions first: a closed trade carries the best and worst it went
+        # through, and one applied after the close would be attached to the next
+        # trade in that symbol instead of to the one that just ended.
+        for excursion in excursions.payloads():
+            detector.observe_excursion(
+                excursion.venue_id, excursion.symbol,
+                excursion.best_unrealised, excursion.worst_unrealised,
+            )
+        # `position` is declared and drained. The close is decided from fills, and
+        # a second source of truth for the same event would let the two disagree
+        # about when a trade ended.
+        positions.payloads()
+        return tuple(fills.payloads())
+
+    detector = PositionCloseDetector()
+    return run_position_close_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_fills=read_fills,
+        publish_closed_trade=publish_closed_trade,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

@@ -147,3 +147,42 @@ def run_peak_excursion_tracker(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    How far each open position has gone in favour and against, measured against
+    live prices as they arrive (RL-071). This is the input that makes a closed
+    trade readable afterwards: without it, a trade that ran to +3% and closed at
+    -1% and a trade that went straight to -1% are the same row.
+    """
+    from runtime.input_assembly import Batch
+
+    positions = Batch(read=context.bus.reader("position"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    bases = Batch(read=context.bus.reader("cost-basis"))
+    publish_excursion = context.bus.publisher_for("peak-excursion")
+
+    def read_positions_and_prices():
+        # `cost-basis` is declared and drained, and this part measures against the
+        # position's own average entry price rather than against it. The two agree
+        # for a position built from fills this system made; they diverge for one
+        # partly closed, where the lot book knows which lots are left and the
+        # position's average does not. Using it here is a change to what an
+        # excursion means, which is a decision for the part that owns the meaning
+        # -- so the input is read and named, not silently half-applied.
+        bases.payloads()
+        prices = tuple(
+            (trade.venue_id, trade.symbol, trade.price) for trade in trades.payloads()
+        )
+        return tuple(positions.payloads()), prices
+
+    return run_peak_excursion_tracker(
+        tracker=PeakExcursionTracker(),
+        control_socket=context.control_socket,
+        read_positions_and_prices=read_positions_and_prices,
+        publish_excursion=publish_excursion,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

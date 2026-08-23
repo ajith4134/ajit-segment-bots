@@ -136,3 +136,26 @@ def run_cost_basis_tracker(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    What each open position actually cost, fee included, lot by lot. The excursion
+    tracker measures against this rather than against a fill price, because a
+    position built from three fills has no single entry price and measuring the
+    best excursion against the last one would report a profit the trade never had.
+    """
+    from runtime.input_assembly import Batch
+
+    fills = Batch(read=context.bus.reader("fill"))
+    publish_cost_basis = context.bus.publisher_for("cost-basis")
+
+    return run_cost_basis_tracker(
+        tracker=CostBasisTracker(),
+        control_socket=context.control_socket,
+        read_fills=fills.payloads,
+        publish_cost_basis=publish_cost_basis,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

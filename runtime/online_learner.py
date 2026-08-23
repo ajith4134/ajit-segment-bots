@@ -113,6 +113,26 @@ class RunningMoments:
             return None
         return (value - self._mean) / deviation
 
+    def state(self) -> dict:
+        """Everything needed to carry this feature's normal range into a new process.
+
+        The half-life is not stored here: it is a setting, and
+        `runtime.learned_state` refuses a checkpoint whose settings moved rather
+        than restoring moments whose decay was computed under a different one.
+        """
+        return {
+            "count": self.count,
+            "weight": self._weight,
+            "mean": self._mean,
+            "sum_squares": self._sum_squares,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        self.count = int(state["count"])
+        self._weight = float(state["weight"])
+        self._mean = float(state["mean"])
+        self._sum_squares = float(state["sum_squares"])
+
 
 @dataclass(frozen=True)
 class ModelBelief:
@@ -296,6 +316,49 @@ class OnlineLogisticModel:
             "features_tracked": len(self._moments),
         }
 
+    # -- carrying what was learned across the off switch ---------------------
+
+    def learned_settings(self) -> dict:
+        """The settings that give the stored numbers their meaning.
+
+        `learning_rate` and `l2_regularisation` are deliberately absent. They
+        govern the *next* step, not the interpretation of the ones already taken,
+        so changing either is ordinary tuning and must not throw away a model.
+        The three below are different: the half-life is baked into every stored
+        moment, and the two minimums decide which stored moments may be used at
+        all.
+        """
+        return {
+            "feature_half_life_observations": self.feature_half_life_observations,
+            "minimum_feature_observations": self.minimum_feature_observations,
+            "minimum_training_observations": self.minimum_training_observations,
+        }
+
+    def state(self) -> dict:
+        return {
+            "bias": self._bias,
+            "observations": self._observations,
+            "positives": self._positives,
+            "weights": dict(sorted(self._weights.items())),
+            "moments": {name: moments.state() for name, moments in sorted(self._moments.items())},
+        }
+
+    def restore_state(self, state: dict) -> None:
+        """Adopt a stored model. The caller has already checked the settings match.
+
+        Moments are rebuilt with this model's own half-life rather than one read
+        from the document, so there is exactly one place the decay comes from.
+        """
+        self._bias = float(state["bias"])
+        self._observations = int(state["observations"])
+        self._positives = int(state["positives"])
+        self._weights = {name: float(value) for name, value in state["weights"].items()}
+        self._moments = {}
+        for name, stored in state["moments"].items():
+            moments = RunningMoments(half_life_observations=self.feature_half_life_observations)
+            moments.restore_state(stored)
+            self._moments[name] = moments
+
 
 @dataclass
 class ProbabilityCalibrator:
@@ -446,3 +509,28 @@ class ProbabilityCalibrator:
             "bins": self.bin_count,
             "reliability": self.reliability(),
         }
+
+    # -- carrying what was learned across the off switch ---------------------
+
+    def learned_settings(self) -> dict:
+        """What the stored bins mean. All three: the bin count decides which band
+        a stored weight belongs to, the half-life is the decay already applied to
+        every one of them, and the minimum decides whether the mapping may be used.
+        """
+        return {
+            "bin_count": self.bin_count,
+            "minimum_observations": self.minimum_observations,
+            "half_life_observations": self.half_life_observations,
+        }
+
+    def state(self) -> dict:
+        return {"bins": [[count, positives] for count, positives in self._bins]}
+
+    def restore_state(self, state: dict) -> None:
+        bins = state["bins"]
+        if len(bins) != self.bin_count:
+            raise ValueError(
+                f"a checkpoint with {len(bins)} bins cannot be read into a calibrator with "
+                f"{self.bin_count}: a stored band would be reinterpreted as a different band"
+            )
+        self._bins = [[float(count), float(positives)] for count, positives in bins]

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, LONG
+from runtime.trading_types import BUY, LONG, SELL
 
 PART_ID = "stop-target-placer"
 
@@ -131,10 +131,22 @@ class StopTargetPlacer:
         entry_price: float,
         volatility_forecast: float | None,
         target_price: float | None = None,
+        proposed_stop_distance_fraction: float | None = None,
     ) -> StopTargetPlan:
+        """Where risk puts the stop, given what the bot proposed and what is known.
+
+        `proposed_stop_distance_fraction` is the distance the bot's own exit plan
+        arrived at, as a fraction of entry. Risk does not adopt it and does not
+        ignore it: it is used only when this part has neither enough measured
+        excursions nor a volatility forecast, it is capped by `maximum_stop`
+        exactly as any other distance is, and it is still moved clear of any
+        liquidation cluster it sits inside. That is the division the blueprint
+        draws by having this part consume `bull-exit-plan` -- the bot says where
+        it thinks the trade is wrong, and risk says where a stop may go.
+        """
         self.standing.plans += 1
         key = (venue_id, symbol)
-        estimate = self._distance_estimate(key, volatility_forecast)
+        estimate = self._distance_estimate(key, volatility_forecast, proposed_stop_distance_fraction)
 
         if estimate is None:
             self.standing.refused_no_distance += 1
@@ -179,8 +191,20 @@ class StopTargetPlacer:
             + (f"; moved clear of the cluster at {nearest:g}" if outcome == MOVED_CLEAR_OF_CLUSTER else ""),
         )
 
-    def _distance_estimate(self, key, volatility_forecast: float | None) -> Estimate | None:
-        """Measured excursions where there are enough, the forecast otherwise."""
+    def _distance_estimate(
+        self, key, volatility_forecast: float | None,
+        proposed_stop_distance_fraction: float | None = None,
+    ) -> Estimate | None:
+        """Measured excursions first, then a forecast, then the bot's own proposal.
+
+        In that order, and the order is the point. A measured excursion quantile
+        is what this symbol has actually done; a volatility forecast is a model's
+        view of the same thing; the bot's proposal is the least independent of the
+        three, because the bot also decided to take the trade. It is used because
+        the alternative on a cold system is no stop at all, and a position with no
+        stop is the one thing risk exists to prevent -- but it never displaces a
+        measurement, and it is marked unfitted so nothing downstream reads it as one.
+        """
         estimator = self._excursions.get(key)
         if estimator is not None:
             estimate = estimator.estimate(
@@ -189,18 +213,34 @@ class StopTargetPlacer:
             )
             if estimate.is_fitted:
                 return estimate
-        if volatility_forecast is None or volatility_forecast <= 0:
-            return None
-        return Estimate(
-            value=min(volatility_forecast, self._maximum_stop),
-            is_fitted=False,
-            observations=estimator.observations if estimator else 0,
-            prior=volatility_forecast,
-            was_clamped=volatility_forecast > self._maximum_stop,
-            bound_low=0.0,
-            bound_high=self._maximum_stop,
-            reason="the volatility forecast, until this symbol has enough excursion history",
-        )
+        observations = estimator.observations if estimator else 0
+        if volatility_forecast is not None and volatility_forecast > 0:
+            return Estimate(
+                value=min(volatility_forecast, self._maximum_stop),
+                is_fitted=False,
+                observations=observations,
+                prior=volatility_forecast,
+                was_clamped=volatility_forecast > self._maximum_stop,
+                bound_low=0.0,
+                bound_high=self._maximum_stop,
+                reason="the volatility forecast, until this symbol has enough excursion history",
+            )
+        if proposed_stop_distance_fraction is not None and proposed_stop_distance_fraction > 0:
+            return Estimate(
+                value=min(proposed_stop_distance_fraction, self._maximum_stop),
+                is_fitted=False,
+                observations=observations,
+                prior=proposed_stop_distance_fraction,
+                was_clamped=proposed_stop_distance_fraction > self._maximum_stop,
+                bound_low=0.0,
+                bound_high=self._maximum_stop,
+                reason=(
+                    "the distance the bot's own exit plan arrived at, capped by the maximum "
+                    "stop; no excursion history and no volatility forecast exist for this "
+                    "symbol yet, and the alternative to this is a position with no stop"
+                ),
+            )
+        return None
 
     def _clear_of_clusters(self, key, side, entry_price, stop) -> tuple[float, float | None]:
         """Move a stop that sits inside a liquidation pool to the far side of it.
@@ -274,4 +314,130 @@ def run_stop_target_placer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Risk's own answer to where the stop goes, which is not the bot's. The bot says
+    where its reason for the trade stops being true; this part caps that distance,
+    moves it clear of any liquidation pool it sits inside, and refuses a trade
+    whose reward does not justify the risk it would take.
+
+    **Where the entry price comes from.** A `trade-intent` deliberately carries no
+    price -- naming one would be an order decision made by a part that does not
+    make orders. The exit plan carries both the stop and `risk_fraction`, the
+    fraction of entry that stop sits below, so the entry it was computed against
+    is `stop_price / (1 - risk_fraction)` for a long and the mirror for a short.
+    Recovered rather than assumed, and it agrees with the price the bot used to
+    within the tick the stop was rounded to.
+
+    **One target, not the plan's ladder.** The exit plan names several targets with
+    fractions to scale out at, and the nearest is used here for the whole quantity.
+    Scaling out needs one resting order per rung and something to size each rung
+    against the quantity still held; `participation-capped-order-splitter` is the
+    part for that and it is not running. Taking the nearest target for everything
+    closes earlier than the plan intends -- it understates what a winner makes,
+    which is the direction an unbuilt part should err in.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    bull_plans = LatestByKey(
+        read=context.bus.reader("bull-exit-plan"),
+        key_of=lambda plan: (plan.venue_id, plan.symbol),
+    )
+    bear_plans = LatestByKey(
+        read=context.bus.reader("bear-exit-plan"),
+        key_of=lambda plan: (plan.venue_id, plan.symbol),
+    )
+    tail_plans = LatestByKey(
+        read=context.bus.reader("tail-exit-plan"),
+        key_of=lambda plan: (plan.venue_id, plan.symbol),
+    )
+    forecasts = LatestByKey(
+        read=context.bus.reader("volatility-forecast"),
+        key_of=lambda forecast: (forecast.venue_id, forecast.symbol),
+    )
+    maps = Batch(read=context.bus.reader("liquidation-map"))
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    audits = Batch(read=context.bus.reader("stop-audit"))
+    excursions = Batch(read=context.bus.reader("excursion-profile"))
+    publish_plans = context.bus.publisher_for("stop-target-plan")
+
+    placer = StopTargetPlacer(
+        # Risk's own gate, not the bull bot's. A limit that read the bot's
+        # setting would be the bot checking itself.
+        minimum_reward_to_risk=context.number("risk_minimum_reward_to_risk"),
+        cluster_clearance_fraction=context.number("stop_cluster_clearance_fraction"),
+        maximum_stop_fraction=context.number("risk_maximum_stop_fraction"),
+        minimum_observations=int(context.number("stop_excursion_minimum_observations")),
+        window=int(context.number("stop_excursion_window")),
+    )
+
+    def entry_price_of(plan) -> float | None:
+        """The price the bot's stop was computed against, recovered from the plan."""
+        if not plan.risk_fraction or plan.risk_fraction >= 1.0:
+            return None
+        if plan.side in (LONG, BUY):
+            return plan.stop_price / (1.0 - plan.risk_fraction)
+        return plan.stop_price / (1.0 + plan.risk_fraction)
+
+    def read_intents():
+        for cluster_map in maps.payloads():
+            placer.set_liquidation_clusters(
+                cluster_map.venue_id, cluster_map.symbol, cluster_map.cluster_prices
+            )
+        for profile in excursions.payloads():
+            placer.observe_adverse_excursion(
+                profile.venue_id, profile.symbol, profile.adverse_excursion
+            )
+        # Declared, drained, and not yet used: `symbol-profile` and `stop-audit`
+        # have no producer running, and a stop widened by an audit nobody made
+        # would be a stop widened by nothing.
+        profiles.payloads()
+        audits.payloads()
+
+        by_symbol = {}
+        for mapping in (tail_plans.mapping(), bear_plans.mapping(), bull_plans.mapping()):
+            by_symbol.update(mapping)
+        forecast_by_symbol = forecasts.mapping()
+
+        requests = []
+        for intent in intents.payloads():
+            key = (intent.venue_id, intent.symbol)
+            plan = by_symbol.get(key)
+            if plan is None:
+                # No bot published an exit plan for this intent, so there is no
+                # entry price to place a stop against. Skipped rather than
+                # guessed: the alternative is a stop placed around a price this
+                # part invented.
+                continue
+            entry_price = entry_price_of(plan)
+            if entry_price is None:
+                continue
+            targets = tuple(sorted(
+                (target.price for target in plan.targets),
+                reverse=intent.is_short,
+            ))
+            forecast = forecast_by_symbol.get(key)
+            requests.append({
+                "venue_id": intent.venue_id,
+                "symbol": intent.symbol,
+                "side": BUY if intent.is_long else SELL,
+                "entry_price": entry_price,
+                "volatility_forecast": getattr(forecast, "expected_move_fraction", None),
+                "target_price": targets[0] if targets else None,
+                "proposed_stop_distance_fraction": plan.risk_fraction,
+            })
+        return tuple(requests)
+
+    return run_stop_target_placer(
+        placer=placer,
+        control_socket=context.control_socket,
+        read_intents=read_intents,
+        publish_plans=publish_plans,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )

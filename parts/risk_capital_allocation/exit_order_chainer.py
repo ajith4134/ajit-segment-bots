@@ -82,30 +82,39 @@ class ExitOrderChainer:
 
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
-        self._plans: dict[str, tuple[str, str, str, float, float | None]] = {}
+        # Keyed by what a stop-target plan actually identifies: a venue, a symbol
+        # and a side. Not by an order id -- the plan is made before an order is
+        # stamped, so a plan filed under an order id could only ever be filed
+        # under an id nobody had assigned yet.
+        self._plans: dict[tuple[str, str, str], tuple[float, float | None]] = {}
         self._filled: dict[str, float] = {}
         self._seen_fills: set[str] = set()
         self.standing = ChainerStanding()
 
     def register_plan(
         self,
-        entry_order_id: str,
         venue_id: str,
         symbol: str,
         entry_side: str,
         stop_price: float,
         target_price: float | None,
     ) -> None:
-        """Hold the exits for an order before it is sent.
+        """Hold the exits for a position before its entry is sent.
 
         Before, not after: a plan registered on the fill would be a plan made
         while the position was already naked.
         """
-        self._plans[entry_order_id] = (venue_id, symbol, entry_side, stop_price, target_price)
+        self._plans[(venue_id, symbol, entry_side)] = (stop_price, target_price)
         self.standing.plans_held = len(self._plans)
 
     def observe_entry_fill(
-        self, fill_id: str, entry_order_id: str, filled_quantity: float
+        self,
+        fill_id: str,
+        entry_order_id: str,
+        venue_id: str,
+        symbol: str,
+        entry_side: str,
+        filled_quantity: float,
     ) -> ExitOrders | None:
         """One entry fill; returns the exits that must now exist for it."""
         self.standing.fills_seen += 1
@@ -115,21 +124,22 @@ class ExitOrderChainer:
             return None
         self._seen_fills.add(fill_id)
 
-        plan = self._plans.get(entry_order_id)
+        plan = self._plans.get((venue_id, symbol, entry_side))
         if plan is None:
             self.standing.fills_without_a_plan += 1
             return ExitOrders(
-                venue_id="", symbol="", entry_order_id=entry_order_id,
+                venue_id=venue_id, symbol=symbol, entry_order_id=entry_order_id,
                 exit_side="", quantity=0.0, stop_price=0.0, target_price=None,
                 outcome=NO_PLAN, filled_quantity_so_far=filled_quantity,
                 reason=(
-                    f"a fill arrived for {entry_order_id} with no stop-target plan held; "
-                    f"the position is naked and nothing here can size its exits"
+                    f"a fill arrived for {entry_order_id} on {symbol} with no stop-target plan "
+                    f"held for a {entry_side}; the position is naked and nothing here can size "
+                    f"its exits"
                 ),
                 chained_at_ns=self._now_ns(),
             )
 
-        venue_id, symbol, entry_side, stop_price, target_price = plan
+        stop_price, target_price = plan
         already = self._filled.get(entry_order_id, 0.0)
         self._filled[entry_order_id] = already + filled_quantity
         outcome = EXTENDED if already > 0 else CHAINED
@@ -158,10 +168,9 @@ class ExitOrderChainer:
             chained_at_ns=self._now_ns(),
         )
 
-    def forget_order(self, entry_order_id: str) -> None:
-        """Drop a finished order's plan so it cannot chain exits again."""
-        self._plans.pop(entry_order_id, None)
-        self._filled.pop(entry_order_id, None)
+    def forget_position(self, venue_id: str, symbol: str, entry_side: str) -> None:
+        """Drop a closed position's plan so it cannot chain exits again."""
+        self._plans.pop((venue_id, symbol, entry_side), None)
         self.standing.plans_held = len(self._plans)
 
     def filled_quantity(self, entry_order_id: str) -> float:
@@ -198,4 +207,60 @@ def run_exit_order_chainer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The part that closes the window between an entry filling and its stop
+    existing. It holds each plan by the position it is for, and the instant a fill
+    for that position arrives it emits the exits sized to what actually filled.
+
+    A fill with no plan held is emitted as NO_PLAN rather than dropped. That is a
+    naked position, and it must be visible: an exit chainer that silently produced
+    nothing would look identical to one with nothing to do.
+    """
+    from runtime.input_assembly import Batch
+
+    plans = Batch(read=context.bus.reader("stop-target-plan"))
+    fills = Batch(read=context.bus.reader("fill"))
+    publish_exits = context.bus.publisher_for("stop-adjustment")
+
+    # Which side each symbol's plan was made for, so a fill can find its plan.
+    # A fill names its own side, and for an entry that side is the plan's side --
+    # an exit fill arrives on the opposite side and finds no plan, which is
+    # exactly right: exits do not chain exits.
+    def read_plans_and_fills():
+        registered = tuple(
+            {
+                "venue_id": plan.venue_id,
+                "symbol": plan.symbol,
+                "entry_side": plan.side,
+                "stop_price": plan.stop_price,
+                "target_price": plan.target_price,
+            }
+            for plan in plans.payloads()
+            if plan.is_placeable
+        )
+        seen_fills = tuple(
+            {
+                "fill_id": fill.fill_id,
+                "entry_order_id": fill.order_id or fill.fill_id,
+                "venue_id": fill.venue_id,
+                "symbol": fill.symbol,
+                "entry_side": fill.side,
+                "filled_quantity": fill.quantity,
+            }
+            for fill in fills.payloads()
+        )
+        return registered, seen_fills
+
+    return run_exit_order_chainer(
+        chainer=ExitOrderChainer(),
+        control_socket=context.control_socket,
+        read_plans_and_fills=read_plans_and_fills,
+        publish_exits=publish_exits,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )

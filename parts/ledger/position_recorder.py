@@ -174,3 +174,59 @@ def run_position_recorder(
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The record of what was actually held, what it became, and how far it went
+    while it was open. `trade-lifecycle-recorder` journals the decision that
+    opened a trade; this journals the position that decision produced and the
+    closed trade it ended as, which is the half a reader needs to check one
+    against the other.
+
+    It writes into the same journal file, continuing the same hash chain, because
+    two files would be two chains and a reader could not tell whether an entry
+    missing from one was deleted or simply belonged to the other.
+    """
+    import pathlib
+
+    from runtime.input_assembly import Batch
+    from runtime.journal import Journal, read_journal_tail
+
+    positions = Batch(read=context.bus.reader("position"))
+    closed_trades = Batch(read=context.bus.reader("closed-trade"))
+    excursions = Batch(read=context.bus.reader("peak-excursion"))
+    publish_entries = context.bus.publisher_for("journal-entry")
+
+    journal_path = pathlib.Path(str(context.setting("journal_path").value)).expanduser()
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        # Opened per append and flushed, for the same reason the lifecycle
+        # recorder does it: a part is killed the way every part is killed, and a
+        # buffered ledger loses exactly the entries that were about to matter.
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    def read_events():
+        return (
+            tuple(positions.payloads()),
+            tuple(closed_trades.payloads()),
+            tuple(excursions.payloads()),
+        )
+
+    return run_position_recorder(
+        recorder=PositionRecorder(
+            journal=Journal(
+                append_line=append_line,
+                continues_from=read_journal_tail(journal_path),
+            )
+        ),
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_entries=publish_entries,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
+    )

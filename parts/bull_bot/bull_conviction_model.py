@@ -29,10 +29,16 @@ wearing the same type as a measurement.
 
 from __future__ import annotations
 
+import pathlib
 import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import LONG, RawConviction
+from runtime.learned_state import (
+    STARTED_COLD_UNREADABLE,
+    CheckpointSchedule,
+    LearnedStateStore,
+)
 from runtime.online_learner import OnlineLogisticModel
 from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.part_declaration import PartDeclaration
@@ -40,6 +46,11 @@ from runtime.part_process import run_part
 
 PART_ID = "bull-conviction-model"
 BOT = "bull-bot"
+
+# What this part stores under its own name in the learned-state directory. A part
+# may hold more than one learned thing, so the checkpoint is addressed by
+# (part, component) rather than by part alone.
+COMPONENT = "conviction"
 
 PART_DECLARATION = PartDeclaration(
     part_id="bull-conviction-model",
@@ -73,9 +84,18 @@ class ModelStanding:
     retrains: int = 0
     champion_swaps: int = 0
     rewards_applied: int = 0
+    rewards_uninterpretable: int = 0
+    last_uninterpretable_reward: str | None = None
     live_model: str = CHAMPION
     mean_absolute_error: float = 0.0
     by_symbol: dict = field(default_factory=dict)
+    # Where this process's model came from, and what it has written since. Held on
+    # the standing rather than kept privately because "the bot started cold again"
+    # is exactly the fact an operator needs and the one a restart hides.
+    checkpoint_verdict: str | None = None
+    checkpoint_detail: str | None = None
+    checkpoint_saved_at_ns: int | None = None
+    checkpoints_written: int = 0
 
 
 @dataclass(frozen=True)
@@ -167,6 +187,21 @@ class BullConvictionModel:
             raise ValueError("a non-positive multiplier would unlearn or erase the example")
         self._reward_multipliers[detector] = min(multiplier, self._maximum_sample_weight)
         self.standing.rewards_applied += 1
+
+    def note_uninterpretable_reward(self, reason: str) -> None:
+        """A `learning-reward` arrived that cannot be read as a weight multiplier.
+
+        `reward-shaper` publishes a shaped, signed figure in units nobody has
+        stated a conversion for, and this part's multiplier is a positive number
+        around one. Turning one into the other is a decision -- and a wrong one
+        would silently scale every future training step -- so it is refused and
+        counted here rather than guessed at the call site.
+
+        The multiplier that *is* defined arrives separately as `sample-weight`,
+        which this part already reads and applies per example.
+        """
+        self.standing.rewards_uninterpretable += 1
+        self.standing.last_uninterpretable_reward = reason
 
     def apply_champion_choice(self, chosen: str) -> None:
         """Promote a model to live. The decision is made elsewhere (T-2)."""
@@ -285,6 +320,66 @@ class BullConvictionModel:
     def model(self, name: str) -> OnlineLogisticModel:
         return self._models[name]
 
+    # -- what this part carries across the off switch ------------------------
+
+    def learned_settings(self) -> dict:
+        """The settings that give the stored coefficients their meaning.
+
+        Taken from the champion, because both models are constructed from the same
+        `self._settings` and a divergence between them would be a bug in this
+        class rather than a state a checkpoint should try to express.
+        """
+        return self._models[CHAMPION].learned_settings()
+
+    def state(self) -> dict:
+        """Both models, which one is live, and what training has cost so far.
+
+        The challenger is stored beside the champion because it is the thing a
+        promotion would make live: dropping it would mean every restart threw away
+        the only candidate that could replace a decaying champion, and the bot
+        would be permanently stuck with whichever model it happened to hold.
+
+        The error total is stored so that `mean_absolute_error` after a restart is
+        the mean over everything this model trained on rather than over whatever
+        arrived since the process started -- a training error that resets is a
+        number that looks like improvement every time the machine reboots.
+        """
+        return {
+            "live": self._live,
+            "models": {name: model.state() for name, model in self._models.items()},
+            "labels_trained_on": self.standing.labels_trained_on,
+            "absolute_error_total": self._absolute_error_total,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        for name, stored in state["models"].items():
+            if name not in self._models:
+                raise ValueError(
+                    f"the checkpoint holds a model named {name!r} that this part does not run"
+                )
+            self._models[name].restore_state(stored)
+        live = state["live"]
+        if live not in self._models:
+            raise ValueError(f"the checkpoint names {live!r} live and this part does not hold it")
+        self._live = live
+        self.standing.live_model = live
+        self.standing.labels_trained_on = int(state["labels_trained_on"])
+        self._absolute_error_total = float(state["absolute_error_total"])
+        if self.standing.labels_trained_on:
+            self.standing.mean_absolute_error = (
+                self._absolute_error_total / self.standing.labels_trained_on
+            )
+
+    @property
+    def training_observations(self) -> int:
+        """How many labelled outcomes the live model has been trained on.
+
+        The live model's own count, not the standing's: the standing counts what
+        this part did, and after a `retrain-request` the retrained model's count
+        is the one that decides whether it is fitted.
+        """
+        return self._models[self._live].observations
+
 
 def describe_conviction(model: BullConvictionModel) -> dict:
     return {
@@ -298,15 +393,51 @@ def describe_conviction(model: BullConvictionModel) -> dict:
         "mean_absolute_training_error": model.standing.mean_absolute_error,
         "retrains": model.standing.retrains,
         "champion_swaps": model.standing.champion_swaps,
+        "checkpoint_verdict": model.standing.checkpoint_verdict,
+        "checkpoint_detail": model.standing.checkpoint_detail,
+        "checkpoint_saved_at_ns": model.standing.checkpoint_saved_at_ns,
+        "checkpoints_written": model.standing.checkpoints_written,
         "champion": model.model(CHAMPION).describe(),
         "challenger": model.model(CHALLENGER).describe(),
     }
 
 
+def restore_or_start_cold(model: BullConvictionModel, store, part_id: str = PART_ID) -> None:
+    """Adopt the previous process's model, or record why this one starts cold.
+
+    Never raises past a part's start. A checkpoint that cannot be adopted is a
+    reason to begin learning again, not a reason for the bot to refuse to run --
+    and the reason is put on the standing so the board reports a cold start
+    instead of showing an untrained model with no explanation.
+    """
+    restoration = store.restore(part_id, COMPONENT, model.learned_settings())
+    model.standing.checkpoint_saved_at_ns = restoration.saved_at_ns
+    if not restoration.was_restored:
+        model.standing.checkpoint_verdict = restoration.verdict
+        model.standing.checkpoint_detail = restoration.detail
+        return
+    try:
+        model.restore_state(restoration.state)
+    except (KeyError, TypeError, ValueError) as refusal:
+        model.standing.checkpoint_verdict = STARTED_COLD_UNREADABLE
+        model.standing.checkpoint_detail = f"{restoration.detail}, but it could not be adopted: {refusal}"
+        return
+    model.standing.checkpoint_verdict = restoration.verdict
+    model.standing.checkpoint_detail = restoration.detail
+
+
 def run_bull_conviction_model(
     model: BullConvictionModel, control_socket, read_vectors_flags_and_labels,
     publish_convictions, health_interval_seconds: float, emit_health,
+    checkpoint=None,
 ) -> int:
+    """`checkpoint` is called with the model whenever it may be worth storing.
+
+    Called on every tick rather than only after training, because whether enough
+    has been learned to be worth an fsync is the schedule's decision and not this
+    loop's -- and because a part that only checkpointed inside the training branch
+    would never write the very first one on a quiet market.
+    """
     def tick() -> None:
         vectors_with_flags = read_vectors_flags_and_labels(model)
         convictions = []
@@ -315,6 +446,8 @@ def run_bull_conviction_model(
             if conviction is not None:
                 convictions.append(conviction)
         publish_convictions(tuple(convictions))
+        if checkpoint is not None:
+            checkpoint(model)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -384,11 +517,24 @@ def start_part(context) -> int:
         for forecast in forecasts.payloads():
             model.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
         for flag in forecast_flags.payloads():
-            model.observe_forecast_flag(flag)
+            model.observe_forecast_flag(flag.venue_id, flag.symbol, flag.is_out_of_distribution)
         for window in kline_windows.payloads():
-            model.observe_kline_window(window)
+            # The window carries candles; the model wants the three series it
+            # shapes features from. Unpacked here rather than in the model, which
+            # must not know the shape of a type another block publishes (T-4).
+            model.observe_kline_window(
+                window.venue_id,
+                window.symbol,
+                [candle.close for candle in window.candles],
+                [candle.high for candle in window.candles],
+                [candle.low for candle in window.candles],
+            )
         for reward in rewards.payloads():
-            model.observe_learning_reward(reward)
+            model.note_uninterpretable_reward(
+                f"{reward.detector} sent a shaped reward of {reward.reward!r} in state "
+                f"{reward.state!r}; no conversion from a shaped reward to a weight "
+                f"multiplier has been decided, and sample-weight is the input that carries one"
+            )
 
         weight_by_symbol = weights.mapping()
         for label in labels.payloads():
@@ -417,19 +563,46 @@ def start_part(context) -> int:
             judged.append((vector, bool(flag.is_out_of_distribution) if flag else False))
         return judged
 
+    model = BullConvictionModel(
+        learning_rate=context.number("bull_learning_rate"),
+        l2_regularisation=context.number("bull_l2_regularisation"),
+        feature_half_life_observations=context.number("bull_feature_half_life_observations"),
+        minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
+        minimum_training_observations=int(context.number("bull_minimum_training_observations")),
+        default_sample_weight=context.number("bull_default_sample_weight"),
+        maximum_sample_weight=context.number("bull_maximum_sample_weight"),
+    )
+
+    # What this bot has learned, carried across the off switch. Without it the
+    # model was rebuilt empty on every fork, and since it needs
+    # bull_minimum_training_observations outcomes of each class before its
+    # conviction is a measurement, a bot that was restarted more often than that
+    # took could never form an opinion at all. Measured on the run of 2026-08-22
+    # 17:37-18:42: 184 412 candidates noticed, no opinion formed, count back to
+    # zero at the next start.
+    store = LearnedStateStore(
+        pathlib.Path(str(context.setting("learned_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    restore_or_start_cold(model, store)
+    schedule = CheckpointSchedule(
+        int(context.number("learned_state_checkpoint_interval"))
+    )
+
+    def checkpoint(model: BullConvictionModel) -> None:
+        observations = model.training_observations
+        if not schedule.is_due(observations):
+            return
+        store.save(PART_ID, COMPONENT, model.state(), model.learned_settings())
+        schedule.record_written(observations)
+        model.standing.checkpoints_written += 1
+
     return run_bull_conviction_model(
-        model=BullConvictionModel(
-            learning_rate=context.number("bull_learning_rate"),
-            l2_regularisation=context.number("bull_l2_regularisation"),
-            feature_half_life_observations=context.number("bull_feature_half_life_observations"),
-            minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
-            minimum_training_observations=int(context.number("bull_minimum_training_observations")),
-            default_sample_weight=context.number("bull_default_sample_weight"),
-            maximum_sample_weight=context.number("bull_maximum_sample_weight"),
-        ),
+        model=model,
         control_socket=context.control_socket,
         read_vectors_flags_and_labels=read_vectors_flags_and_labels,
         publish_convictions=publish_convictions,
         health_interval_seconds=context.health_interval_seconds,
         emit_health=context.emit_health,
+        checkpoint=checkpoint,
     )

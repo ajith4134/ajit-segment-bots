@@ -32,8 +32,9 @@ from parts.paper_live_trading.paper_account_keeper import (
     APPLIED, REFUSED_DUPLICATE, REFUSED_INSUFFICIENT, REFUSED_LIVE_FILL, PaperAccountKeeper,
 )
 from parts.paper_live_trading.paper_fill_simulator import (
-    ALREADY_FILLED, FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED, REFUSED_FEED_JUMP,
-    REFUSED_NO_PRICE, RESTING, PaperFillSimulator,
+    ALREADY_FILLED, CANCELLED, FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED,
+    REFUSED_FEED_JUMP, REFUSED_NO_PRICE, RESTING, RESTING_STOP, STOP_MARKET,
+    TAKE_PROFIT_MARKET, PaperFillSimulator,
 )
 from parts.paper_live_trading.paper_liquidation_simulator import (
     LIQUIDATED, NOT_WATCHED, SURVIVED, PaperLiquidationSimulator,
@@ -671,3 +672,211 @@ def test_a_paper_trade_end_to_end_costs_what_it_should():
     # the instant the trade is done -- which is the truth a naive simulator hides.
     assert balance.equity < 10_000.0
     assert balance.fees_total > 0
+
+
+# ---- the paper book: orders that wait, and the position that closes ----------
+#
+# The defect these cover was measured, not imagined. Before the book existed, an
+# order the market had not reached was reported RESTING once and then discarded,
+# so nothing could ever be waiting when the market came to it -- and a stop is an
+# order whose entire purpose is to wait. On the live run of 2026-08-22 17:37-18:42
+# no entry filled at all, because every entry was routed as a limit at the price
+# the decision was made at and dropped the moment the market moved off it.
+#
+# The prices below are the real BTCUSDT trades captured on 2026-08-22 (RL-063).
+# A stop tested against a made-up series proves the comparison operator works; a
+# stop tested against a real one proves it fires where a real move would fire it.
+
+@pytest.fixture(scope="module")
+def real_btc_prices(read_captured_payloads):
+    import json
+
+    prices = []
+    for _, payload in read_captured_payloads("binance-usdm", "2026-08-22-btcusdt-aggtrade-run.jsonl"):
+        message = json.loads(payload)
+        if message.get("e") == "aggTrade":
+            prices.append(float(message["p"]))
+    assert len(prices) >= 500, f"only {len(prices)} real trades were read"
+    return prices
+
+
+def a_stop(**overrides):
+    order = dict(
+        client_order_id="stop-1", venue_id=VENUE, symbol=SYMBOL, side=SELL, quantity=1.0,
+        order_type=STOP_MARKET, limit_price=None, money_mode="paper", is_in_flight=False,
+        fill_price_estimate=None, market_price=None, stop_price=99.0,
+    )
+    order.update(overrides)
+    return order
+
+
+def test_a_sell_stop_rests_until_a_live_price_falls_through_it(real_btc_prices):
+    """The whole close path in one test, on prices BTCUSDT actually traded at."""
+    subject = fill_simulator()
+    entry = real_btc_prices[0]
+    lowest = min(real_btc_prices)
+    # Halfway into the fall this run actually made. A stop at a round fraction
+    # would be outside the 0.005% the captured 28 seconds covered and would never
+    # trigger -- which would make the test pass by never testing anything.
+    stop_price = entry - (entry - lowest) / 2
+    assert lowest < stop_price < entry, (
+        f"the captured run did not move ({entry} to {lowest}); this test would prove nothing"
+    )
+
+    rested = subject.simulate(**a_stop(stop_price=stop_price, market_price=entry))
+    assert rested.outcome == RESTING_STOP
+    assert rested.fill is None
+    assert subject.standing.orders_on_the_book == 1
+
+    fills = []
+    for price in real_btc_prices:
+        fills.extend(subject.evaluate_resting({(VENUE, SYMBOL): price}))
+        if fills:
+            break
+
+    assert len(fills) == 1, "a stop must fill exactly once"
+    assert fills[0].outcome == FILLED
+    assert fills[0].fill.side == SELL
+    assert fills[0].fill.price <= stop_price, (
+        "a stop fills at the price the trigger found, which is at or through the stop"
+    )
+    assert subject.standing.orders_on_the_book == 0, "a filled stop leaves the book"
+    assert subject.standing.stops_triggered == 1
+
+
+def test_a_take_profit_triggers_above_the_market_and_a_stop_below_it():
+    """Same side, same mechanism, opposite directions.
+
+    Getting this backwards is not a small error: a sell take-profit that tested
+    downwards would fire the instant the trade went against it, closing every
+    loser at a profit price it never reached.
+    """
+    subject = fill_simulator()
+    assert subject.is_triggered(STOP_MARKET, SELL, 99.0, 98.0) is True
+    assert subject.is_triggered(STOP_MARKET, SELL, 99.0, 100.0) is False
+    assert subject.is_triggered(TAKE_PROFIT_MARKET, SELL, 105.0, 106.0) is True
+    assert subject.is_triggered(TAKE_PROFIT_MARKET, SELL, 105.0, 104.0) is False
+    # The mirror, for a short being closed by a buy.
+    assert subject.is_triggered(STOP_MARKET, BUY, 101.0, 102.0) is True
+    assert subject.is_triggered(TAKE_PROFIT_MARKET, BUY, 95.0, 94.0) is True
+
+
+def test_a_triggered_order_fills_at_the_market_not_at_its_trigger():
+    """The slippage a real stop pays, which a paper book must not hide.
+
+    A book that filled at the stop price would report a loss smaller than the one
+    the strategy actually takes -- and that error is invisible until real money is
+    behind it.
+    """
+    subject = fill_simulator()
+    subject.simulate(**a_stop(stop_price=99.0, market_price=100.0))
+    fills = subject.evaluate_resting({(VENUE, SYMBOL): 97.5})
+    assert len(fills) == 1
+    assert fills[0].fill.price == pytest.approx(97.5)
+    assert fills[0].fill.fee > 0, "a triggered stop is a taker"
+
+
+def test_a_stop_already_through_its_trigger_fills_on_arrival():
+    """A venue does not rest an order the market has already passed."""
+    subject = fill_simulator()
+    result = subject.simulate(**a_stop(stop_price=99.0, market_price=98.0))
+    assert result.outcome == FILLED
+    assert subject.standing.orders_on_the_book == 0
+
+
+def test_a_resting_order_is_not_duplicated_by_a_repeated_message():
+    """Two stops on one position close twice the position that exists."""
+    subject = fill_simulator()
+    subject.simulate(**a_stop())
+    subject.simulate(**a_stop())
+    assert subject.standing.orders_on_the_book == 1
+
+
+def test_the_other_exit_is_withdrawn_when_one_of_them_fills():
+    """A stop left resting on a closed position opens the opposite position.
+
+    This is the failure that makes an unmanaged paper book worse than no book:
+    the trade closes at its target, the stop stays, price falls back through it,
+    and the account is now short something nobody decided to be short.
+    """
+    subject = fill_simulator()
+    subject.simulate(**a_stop(client_order_id="stop-1", stop_price=99.0, market_price=100.0))
+    subject.simulate(**a_stop(
+        client_order_id="target-1", order_type=TAKE_PROFIT_MARKET,
+        stop_price=105.0, market_price=100.0,
+    ))
+    assert subject.standing.orders_on_the_book == 2
+
+    filled = subject.evaluate_resting({(VENUE, SYMBOL): 106.0})
+    assert len(filled) == 1 and filled[0].client_order_id == "target-1"
+
+    withdrawn = subject.cancel("stop-1", "the position closed on its target")
+    assert withdrawn is not None
+    assert withdrawn.outcome == CANCELLED
+    assert subject.standing.orders_on_the_book == 0
+
+
+def test_a_cancel_for_an_order_the_book_does_not_hold_is_counted_not_crashed():
+    subject = fill_simulator()
+    assert subject.cancel("never-placed", "tidying up") is None
+    assert subject.standing.cancels_for_an_unknown_order == 1
+
+
+def test_a_replacement_withdraws_the_order_it_replaces():
+    """Cancel-replace is one instruction; leaving both is two stops on one position."""
+    subject = fill_simulator()
+    subject.simulate(**a_stop(client_order_id="stop-1", stop_price=99.0, market_price=100.0))
+    subject.simulate(**a_stop(
+        client_order_id="stop-2", stop_price=99.5, market_price=100.0,
+        cancels_client_order_id="stop-1",
+    ))
+    assert subject.standing.orders_on_the_book == 1
+    assert subject.resting_orders[0].client_order_id == "stop-2"
+
+
+def test_nothing_on_the_book_triggers_across_a_feed_jump():
+    """A gap is not a trade, and a stop fired on one is a loss nobody took."""
+    subject = fill_simulator()
+    subject.simulate(**a_stop(stop_price=99.0, market_price=100.0))
+    subject.observe_feed_jump(VENUE, SYMBOL)
+    assert subject.evaluate_resting({(VENUE, SYMBOL): 90.0}) == ()
+    assert subject.standing.orders_on_the_book == 1
+
+
+def test_a_quiet_symbol_does_not_lose_its_protection():
+    """No new price is not a reason to withdraw a stop."""
+    subject = fill_simulator()
+    subject.simulate(**a_stop(stop_price=99.0, market_price=100.0))
+    assert subject.evaluate_resting({}) == ()
+    assert subject.standing.orders_on_the_book == 1
+
+
+def test_a_triggered_order_with_no_trigger_price_is_refused():
+    subject = fill_simulator()
+    result = subject.simulate(**a_stop(stop_price=None))
+    assert result.outcome == REFUSED_NO_PRICE
+    assert "waits for nothing" in result.reason
+
+
+# ---- entries are market orders ----------------------------------------------
+
+def test_an_entry_is_routed_as_a_market_order_not_a_limit():
+    """Operator, 2026-08-23: market orders, not limit orders.
+
+    A limit at the decision price fills only if the market comes back to it, and
+    a decision to be long is not a decision to be long at one price. The price the
+    decision was made at is still on the stamped order, as evidence.
+    """
+    router = OrderDestinationRouter()
+    stamped = StampedStub()
+    stamped.stop_price = 97.0
+    requests = router.route(stamped, Mode("paper"))
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.order_type == MARKET
+    assert request.limit_price == 0.0
+    assert request.waits_for_a_trigger is False, (
+        "an entry carries the stop that will protect it; that must not make the entry itself "
+        "wait for the market to fall to that stop"
+    )
+    assert request.stop_price == 97.0

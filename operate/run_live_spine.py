@@ -124,6 +124,12 @@ LIVE_SPINE = (
     "instrument-selector",
     "tick-size-resolver",
     "exposure-limiter",
+    # Where the exits go, decided before the entry is ever sent. Risk's own stop,
+    # capped and moved clear of liquidation pools, and the target that closes the
+    # trade in profit. It runs before the sizer because the sizer sizes the trade
+    # against the distance to that stop -- a position sized without one is a
+    # position whose risk nobody computed.
+    "stop-target-placer",
     # The size, and the two bounds it must survive: what one trade may risk and
     # what one trade may commit.
     "paper-account-keeper",
@@ -135,8 +141,20 @@ LIVE_SPINE = (
     "order-idempotency-stamper",
     "order-destination-router",
     "paper-fill-simulator",
-    # The record. Without it a fill happened and nothing can say what decided it.
+    # Closing the position. A fill becomes a held position, the exits are chained
+    # to it the instant it fills, and both rest in the paper book until a live
+    # price reaches one of them (RL-071). Whichever fills, the other is withdrawn.
+    "fill-reconciler",
+    "cost-basis-tracker",
+    "peak-excursion-tracker",
+    "exit-order-chainer",
+    "stop-order-manager",
+    "position-close-detector",
+    "usdt-pnl-accountant",
+    # The record. Without it a fill happened and nothing can say what decided it,
+    # and a position closed with nothing to say what it was worth.
     "trade-lifecycle-recorder",
+    "position-recorder",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked

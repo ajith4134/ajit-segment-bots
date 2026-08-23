@@ -107,17 +107,26 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
     # The parts inside a feedback cycle, stated rather than discovered: each reads
     # something produced by a part started after it, and that is the design.
     #
-    # Two cycles, and both are the system working. The learning loop: the labeller
-    # scores the detectors, the model trains on its labels, and what the model
-    # decides eventually feeds the labeller again. The money loop: the account
-    # keeper reads the fills the simulator produces and publishes the balance the
-    # sizer sizes against, so the money that goes out is what comes back.
+    # Three cycles, and all three are the system working. The learning loop: the
+    # labeller scores the detectors, the model trains on its labels, and what the
+    # model decides eventually feeds the labeller again. The money loop: the
+    # account keeper reads the fills the simulator produces and publishes the
+    # balance the sizer sizes against, so the money that goes out is what comes
+    # back. The exit loop: the simulator's fill becomes a position, the position's
+    # exits become orders, and those orders come back to the simulator -- which is
+    # what closing a trade is, and there is no ordering of the two that makes it
+    # a line instead of a circle.
     INSIDE_A_FEEDBACK_CYCLE = {
         "signal-outcome-labeller",
         "bull-conviction-model",
         "bull-conviction-calibrator",
         "capital-settings-validator",
         "paper-account-keeper",
+        "paper-fill-simulator",
+        # The exposure limiter is inside the money loop rather than upstream of
+        # it: it limits the sizer, and what it limits against is the positions the
+        # sizer's own orders produced. There is no ordering that makes that a line.
+        "exposure-limiter",
     }
 
     for part_id, inputs in consumes.items():

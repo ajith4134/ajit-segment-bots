@@ -40,6 +40,7 @@ PROJECT_HOME = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_HOME) not in sys.path:
     sys.path.insert(0, str(PROJECT_HOME))
 
+from parts.ledger.position_recorder import TRADE_CLOSED as CLOSED_TRADE_KIND  # noqa: E402
 from parts.ledger.trade_lifecycle_recorder import (  # noqa: E402
     LIFECYCLE_STAGES,
     REPEATABLE_STAGES,
@@ -140,6 +141,13 @@ class RecordedTrade:
     notional: float = 0.0
     fees: float = 0.0
     fills: int = 0
+    # The side the first fill opened on, and what has been sold back since. A
+    # trade's fills are not all entries once positions can close: an exit arrives
+    # as a fill on the opposite side, and adding it to the quantity would report a
+    # closed position as twice the size it ever was.
+    opened_side: str | None = None
+    exit_quantity: float = 0.0
+    exit_notional: float = 0.0
     # True only when a fill of this trade was recorded after the trading half was
     # first started live. A trade nobody filled is not an opened trade, and a test
     # run's fill does not become one because a detector saw the symbol again.
@@ -161,9 +169,31 @@ class RecordedTrade:
         return self.notional / self.quantity if self.quantity else None
 
     @property
+    def capital_in_quote(self) -> float | None:
+        """What was actually put into this position, in the quote currency.
+
+        Entry price times quantity -- the notional the position was opened at.
+        Not the margin posted: margin is notional divided by the leverage the
+        trade was opened at, and nothing records a per-trade leverage yet, so
+        stating a margin figure would mean inventing the divisor.
+        """
+        return self.notional or None
+
+    @property
     def is_open(self) -> bool:
-        """Filled and never closed. Every trade is open: nothing can close one yet."""
-        return self.fills > 0
+        """Filled, and not sold back.
+
+        Measured from the fills rather than asserted. A trade whose exit fills
+        have taken the quantity to zero is closed, and the quantity is what says
+        so -- there is no separate flag for a reader to trust instead.
+        """
+        if self.fills <= 0:
+            return False
+        return self.quantity > 0
+
+    @property
+    def exit_price(self) -> float | None:
+        return self.exit_notional / self.exit_quantity if self.exit_quantity else None
 
     @property
     def is_long(self) -> bool:
@@ -313,8 +343,17 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
             trade.fills += 1
             quantity = float(payload.get("quantity") or 0.0)
             price = float(payload.get("price") or 0.0)
-            trade.quantity += quantity
-            trade.notional += quantity * price
+            side = payload.get("side")
+            if trade.opened_side is None:
+                trade.opened_side = side
+            if side == trade.opened_side:
+                trade.quantity += quantity
+                trade.notional += quantity * price
+            else:
+                # The other side of the same trade: this is the exit closing it.
+                trade.quantity -= quantity
+                trade.exit_quantity += quantity
+                trade.exit_notional += quantity * price
             trade.fees += float(payload.get("fee") or 0.0)
             if live_from_ns is not None and recorded_at >= live_from_ns:
                 trade.is_from_a_live_run = True
@@ -722,11 +761,18 @@ def probe_learning() -> ProbeResult:
     )
 
 
-def run_all_probes() -> tuple[list[ProbeResult], list[RecordedTrade], pathlib.Path, int | None]:
+def run_all_probes():
+    """Every probe, the trades, and the closed trades -- from one read of the journal.
+
+    One read: the journal is hundreds of megabytes on a machine that has been
+    noticing setups for a day, and a board that walked it twice would take twice
+    as long to say the same thing.
+    """
     journal_path = read_journal_path()
     entries, unreadable = read_journal_entries(journal_path)
     live_from_ns = find_first_live_recorder_start_ns()
     trades = collect_trades(entries, live_from_ns)
+    closed = collect_closed_trades(entries)
     running = read_running_parts()
     results = [
         probe_money_mode(),
@@ -739,7 +785,7 @@ def run_all_probes() -> tuple[list[ProbeResult], list[RecordedTrade], pathlib.Pa
         probe_chain_continuity(entries),
         probe_learning(),
     ]
-    return results, trades, journal_path, live_from_ns
+    return results, trades, journal_path, live_from_ns, closed
 
 
 def as_time(nanoseconds: int | None) -> str:
@@ -756,6 +802,128 @@ def render_tile(result: ProbeResult) -> str:
         f'<div class="tile-value">{html.escape(result.value)}</div>'
         f'<div class="tile-proof">{html.escape(result.proof)}</div>'
         f"</article>"
+    )
+
+
+@dataclass
+class ClosedTrade:
+    """One round trip as `position-recorder` journalled it.
+
+    Read from the ledger rather than recomputed from fills: the close detector
+    resolved which lots the exit closed and what that realised, and a board that
+    re-derived it from the same fills would be a second implementation of the same
+    arithmetic, free to disagree with the one the system actually acted on.
+    """
+
+    venue_id: str | None
+    symbol: str | None
+    direction: str | None
+    quantity: float
+    entry_price: float | None
+    exit_price: float | None
+    realised_pnl: float
+    fees_paid: float
+    holding_seconds: float | None
+    best_unrealised: float | None
+    worst_unrealised: float | None
+    closed_at_ns: int | None
+
+    @property
+    def capital_in_quote(self) -> float | None:
+        """What was put into the position, in quote currency, at the entry price."""
+        if self.entry_price is None or not self.quantity:
+            return None
+        return self.entry_price * self.quantity
+
+    @property
+    def net_pnl(self) -> float:
+        """What the round trip made after the venue was paid for both fills."""
+        return self.realised_pnl - self.fees_paid
+
+
+def collect_closed_trades(entries: list[dict]) -> list[ClosedTrade]:
+    """Every round trip the ledger holds, newest first."""
+    closed = []
+    for entry in entries:
+        if entry.get("kind") != CLOSED_TRADE_KIND:
+            continue
+        payload = entry.get("payload") or {}
+        closed.append(ClosedTrade(
+            venue_id=payload.get("venue_id"),
+            symbol=payload.get("symbol"),
+            direction=payload.get("direction"),
+            quantity=float(payload.get("quantity") or 0.0),
+            entry_price=_as_float(payload.get("entry_price")),
+            exit_price=_as_float(payload.get("exit_price")),
+            realised_pnl=float(payload.get("realised_pnl") or 0.0),
+            fees_paid=float(payload.get("fees_paid") or 0.0),
+            holding_seconds=_as_float(payload.get("holding_seconds")),
+            best_unrealised=_as_float(payload.get("best_unrealised")),
+            worst_unrealised=_as_float(payload.get("worst_unrealised")),
+            closed_at_ns=int(entry["recorded_at_ns"]),
+        ))
+    return sorted(closed, key=lambda trade: trade.closed_at_ns or 0, reverse=True)
+
+
+def _as_float(value) -> float | None:
+    return None if value is None else float(value)
+
+
+def compose_closed_note(closed: list[ClosedTrade]) -> str:
+    if not closed:
+        return (
+            "Nothing has closed yet. The chain that closes a position is on the live spine "
+            "-- the exits rest in the paper book and fill when a live price reaches one of "
+            "them -- so an empty table here means no position has yet reached its stop or "
+            "its target, not that closing is unbuilt."
+        )
+    net = sum(trade.net_pnl for trade in closed)
+    won = sum(1 for trade in closed if trade.net_pnl > 0)
+    listed = min(len(closed), MOST_TRADES_LISTED)
+    note = (
+        f"{len(closed)} round trip(s) on the ledger, {won} of them profitable after fees, "
+        f"{net:+,.4f} in quote currency net."
+    )
+    if listed < len(closed):
+        note += f" The {listed} most recent are listed."
+    return note
+
+
+def render_closed_trades(closed: list[ClosedTrade]) -> str:
+    if not closed:
+        return (
+            '<div class="table-wrap"><table><thead><tr><th>closed trades</th></tr></thead>'
+            '<tbody><tr><td class="mono">NOTHING YET</td></tr></tbody></table></div>'
+        )
+    rows = []
+    for trade in closed:
+        rows.append(
+            "<tr>"
+            f'<td class="mono">{html.escape(trade.symbol or "—")}'
+            f'<span class="age">{as_time(trade.closed_at_ns)}</span></td>'
+            f'<td>{html.escape(trade.direction or "—")}</td>'
+            f'<td class="mono">{trade.quantity:g}</td>'
+            f'<td class="mono">{f"{trade.entry_price:,.2f}" if trade.entry_price else "—"}</td>'
+            f'<td class="mono">{f"{trade.exit_price:,.2f}" if trade.exit_price else "—"}</td>'
+            f'<td class="mono">'
+            f'{f"{trade.capital_in_quote:,.2f}" if trade.capital_in_quote else "—"}</td>'
+            f'<td class="mono">'
+            f'{f"{trade.holding_seconds:,.0f}s" if trade.holding_seconds is not None else "—"}</td>'
+            f'<td class="mono{profit_class(trade.best_unrealised)}">'
+            f'{as_money(trade.best_unrealised)}</td>'
+            f'<td class="mono{profit_class(trade.worst_unrealised)}">'
+            f'{as_money(trade.worst_unrealised)}</td>'
+            f'<td class="mono">{trade.fees_paid:,.4f}</td>'
+            f'<td class="mono{profit_class(trade.net_pnl)}">{as_money(trade.net_pnl)}</td>'
+            "</tr>"
+        )
+    return (
+        '<div class="table-wrap"><table>'
+        "<thead><tr>"
+        "<th>symbol</th><th>direction</th><th>quantity</th><th>entry</th><th>exit</th>"
+        "<th>capital in (usdt)</th><th>held for</th><th>peak profit</th><th>worst loss</th>"
+        "<th>fees</th><th>net</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
 
@@ -868,6 +1036,8 @@ def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> st
             f"<td>{html.escape(trade.side or '—')}</td>"
             f'<td class="mono">{trade.quantity:g}</td>'
             f'<td class="mono">{f"{entry:,.2f}" if entry else "—"}</td>'
+            f'<td class="mono">'
+            f'{f"{trade.capital_in_quote:,.2f}" if trade.capital_in_quote else "—"}</td>'
             + price_cell(trade.prices)
             + f'<td class="mono">{f"{trade.stop_price:,.2f}" if trade.stop_price else "—"}</td>'
             + not_built_cell("target")
@@ -887,6 +1057,7 @@ def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> st
         '<div class="table-wrap"><table>'
         "<thead><tr>"
         "<th>symbol</th><th>side</th><th>quantity</th><th>entry</th>"
+        "<th>capital in (usdt)</th>"
         "<th>price now</th><th>stop</th><th>target</th><th>trailing</th><th>forecast</th>"
         "<th>conviction</th><th>peak profit</th><th>worst loss</th><th>profit now</th>"
         "<th>fees</th><th>state</th>"
@@ -1013,6 +1184,12 @@ PAGE = """<title>Segment Bots Trade Board</title>
     {trades}
   </section>
 
+  <section>
+    <h2>Closed trades</h2>
+    <p class="note">{closed_note}</p>
+    {closed_trades}
+  </section>
+
   <footer>
     Generated by dashboard/build_trade_board.py. Every tile above is a probe this run
     executed; nothing on this page is written by hand, and anything a probe could not
@@ -1072,7 +1249,7 @@ def compose_listing_note(trades: list[RecordedTrade]) -> str:
 
 
 def build_page() -> str:
-    results, trades, journal_path, live_from_ns = run_all_probes()
+    results, trades, journal_path, live_from_ns, closed = run_all_probes()
     return PAGE.format(
         verdict=html.escape(compose_verdict(results, trades)),
         measured_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -1083,14 +1260,19 @@ def build_page() -> str:
         trades=render_trades(
             with_prices(trades_worth_listing(trades)[:MOST_TRADES_LISTED]), journal_path
         ),
+        closed_note=html.escape(compose_closed_note(closed)),
+        closed_trades=render_closed_trades(closed[:MOST_TRADES_LISTED]),
         live_from=html.escape(as_time(live_from_ns)) if live_from_ns else "no live run yet",
     )
 
 
 def main() -> int:
     BOARD_PATH.write_text(build_page())
-    results, trades, _path, _live = run_all_probes()
-    print(f"{BOARD_PATH}: {len(results)} probes, {len(trades)} trade(s) on the record")
+    results, trades, _path, _live, closed = run_all_probes()
+    print(
+        f"{BOARD_PATH}: {len(results)} probes, {len(trades)} trade(s) on the record, "
+        f"{len(closed)} closed"
+    )
     for result in results:
         print(f"  {result.state:<13} {result.label}: {result.value}")
     return 0
