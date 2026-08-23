@@ -350,3 +350,52 @@ def test_a_position_never_rests_without_a_stop(real_trades):
     assert naked.outcome != CHAINED
     assert "naked" in naked.reason
     assert chain.chainer.standing.fills_without_a_plan == 1
+
+
+# ---- a decision to do nothing must not become a trade -------------------------
+
+def test_an_intent_that_stands_aside_is_never_sized():
+    """The most expensive defect found on the live run of 2026-08-23.
+
+    `position-sizer` sized every intent it read, including the ones whose action
+    was stand-aside. A stand-aside intent carries a degenerate stop -- the stop
+    sits at the entry price, because no exit plan was built for a trade nobody
+    wanted -- so the size it produced was whatever the bounds gate happened to cut
+    it to. ZECUSDT opened 1.25 at 07:29:45 and ETHUSDT opened 0.418 at 07:31:59
+    from decisions the bot had explicitly made not to trade.
+
+    This asserts the property directly on the type every part reads, because the
+    guard belongs where the decision is stated rather than in each reader.
+    """
+    from runtime.trade_intent import OPEN, STAND_ASIDE, TradeIntent
+    from runtime.learned_estimator import Estimate
+
+    def an_intent(action: str) -> TradeIntent:
+        return TradeIntent(
+            venue_id=VENUE, symbol=SYMBOL, side="long", action=action,
+            conviction=Estimate(
+                value=0.6, is_fitted=True, observations=100, prior=0.5,
+                was_clamped=False, bound_low=None, bound_high=None, reason="measured",
+            ),
+            horizon_seconds=60.0, stop_price=100.0, agreement="only-one-bot-had-a-view",
+            contributing_bots=("bull-bot",), dissenting_bots=(), opinion_weights={},
+            evidence={}, reason="", formed_at_ns=1,
+        )
+
+    assert an_intent(STAND_ASIDE).is_actionable is False
+    assert an_intent(OPEN).is_actionable is True
+
+
+def test_the_sizer_skips_a_stand_aside_intent_and_counts_it():
+    """Skipped, and counted -- a refusal nobody can see is invisible input.
+
+    A bot whose every opinion is a stand-aside and a bot receiving no opinions at
+    all look identical from the sizer without this counter.
+    """
+    import parts.risk_capital_allocation.position_sizer as sizer_part
+
+    standing = sizer_part.SizerStanding()
+    assert standing.stood_aside == 0
+    assert "intents_that_stood_aside" in sizer_part.describe_sizing(
+        sizer_part.PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0005)
+    )

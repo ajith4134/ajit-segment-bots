@@ -31,7 +31,8 @@ from parts.bull_bot.bull_entry_timer import (
     BullEntryTimer, PlaybookRule,
 )
 from parts.bull_bot.bull_exit_plan_proposer import (
-    NO_EXCURSION_PROFILE, NO_HORIZON, REWARD_BELOW_RISK, BullExitPlanProposer,
+    NO_EXCURSION_PROFILE, NO_HORIZON, NO_RANGE, REWARD_BELOW_RISK,
+    BullExitPlanProposer,
     ExcursionProfile, HorizonProfile, StopAudit,
 )
 from parts.bull_bot.bull_feature_builder import FEATURE_NAMES, BullFeatureBuilder
@@ -753,12 +754,25 @@ def test_the_extension_cap_is_learned_per_detector():
 
 # ---- bull-exit-plan-proposer ------------------------------------------------
 
-def a_proposer(minimum_reward=1.0):
+# What the proposer builds a plan from before any trade has closed. Kept as
+# defaults here so the tests below that are about the *measured* path stay about
+# it, and the cold-start tests set what they need explicitly.
+COLD_START_STOP_MULTIPLE = 1.5
+COLD_START_REWARD_MULTIPLES = (1.0, 2.0)
+COLD_START_MINIMUM_PRINTS = 20
+COLD_START_PRICE_WINDOW = 4000
+
+
+def a_proposer(minimum_reward=1.0, cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS):
     return BullExitPlanProposer(
         stop_safety_multiple=1.5,
         target_quantiles=((0.5, 0.5), (0.8, 0.5)),
         minimum_reward_to_risk=minimum_reward,
         conviction_horizon_multiple=0.5,
+        cold_start_stop_range_multiple=COLD_START_STOP_MULTIPLE,
+        cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
+        cold_start_minimum_prints=cold_start_minimum_prints,
+        cold_start_price_window=COLD_START_PRICE_WINDOW,
     )
 
 
@@ -789,30 +803,111 @@ def test_a_plan_is_built_from_what_this_symbol_has_actually_done():
     assert plan.reward_to_risk > 1.0
 
 
-def test_a_symbol_with_no_excursion_record_gets_no_plan_and_no_default_stop():
-    """A stop invented from nothing is the most expensive placeholder there is."""
-    subject = a_proposer()
+def feed_a_range(subject, low=99.6, high=100.4, prints=COLD_START_MINIMUM_PRINTS):
+    """Print a symbol through a real range, so a stop can be measured from it.
+
+    Alternating so the window holds both ends: what the proposer measures is the
+    span the symbol traded through, which is what an ATR stop is measured from.
+    """
+    for index in range(prints):
+        subject.observe_price(VENUE, SYMBOL, low if index % 2 else high)
     subject.observe_price(VENUE, SYMBOL, 100.0)
+
+
+def test_a_symbol_with_no_excursion_record_is_planned_from_its_own_live_range():
+    """Learning improves the trade; it is not a precondition for making one.
+
+    Before this, a symbol with no closed trades produced no plan at all, so the
+    bot could notice thirty thousand setups an hour and never take one. The stop
+    here is still measured -- from the range this symbol actually traded through
+    in the window the detector claimed -- which is what makes it a measurement
+    rather than the default percentage RL-062 forbids.
+    """
+    subject = a_proposer()
+    feed_a_range(subject)
+    subject.observe_horizon_profile(a_horizon())
+    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert plan.stop_price < 100.0
+    assert plan.targets
+    assert "the-live-price-range" in plan.reason
+    assert subject.standing.plans_from_the_live_range == 1
+    assert subject.standing.plans_from_the_excursion_record == 0
+
+
+def test_a_wider_symbol_gets_a_wider_stop_without_anyone_tuning_it():
+    """The whole reason the stop is measured per symbol rather than set once."""
+    narrow = a_proposer()
+    feed_a_range(narrow, low=99.95, high=100.05)
+    narrow.observe_horizon_profile(a_horizon())
+    narrow_plan, _ = narrow.propose(a_side_candidate(), ConvictionStub(0.8))
+
+    wide = a_proposer()
+    feed_a_range(wide, low=98.0, high=102.0)
+    wide.observe_horizon_profile(a_horizon())
+    wide_plan, _ = wide.propose(a_side_candidate(), ConvictionStub(0.8))
+
+    assert narrow_plan is not None and wide_plan is not None
+    assert wide_plan.risk_fraction > narrow_plan.risk_fraction * 5, (
+        "a symbol swinging 4% must not get the same stop as one swinging 0.1%"
+    )
+
+
+def test_a_measured_record_replaces_the_live_range_the_moment_it_fits():
+    """The cold start sets the first trades, not all of them."""
+    subject = a_prepared_proposer(profile=a_profile())
+    feed_a_range(subject)
+    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert "the-excursion-record" in plan.reason
+    assert subject.standing.plans_from_the_excursion_record == 1
+    assert subject.standing.plans_from_the_live_range == 0
+
+
+def test_an_unfitted_excursion_record_falls_back_to_the_live_range():
+    subject = a_prepared_proposer(profile=a_profile(is_fitted=False))
+    feed_a_range(subject)
+    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert "the-live-price-range" in plan.reason
+
+
+def test_no_horizon_record_uses_the_horizon_the_detector_itself_claimed():
+    """The candidate has always carried it; demanding a measured one was a gate
+    that never needed to exist."""
+    subject = a_proposer()
+    feed_a_range(subject)
+    subject.observe_excursion_profile(a_profile())
+    candidate = a_side_candidate()
+    plan, outcome = subject.propose(candidate, ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert plan.horizon_seconds >= candidate.horizon_seconds
+    assert "the detector itself claimed" in plan.reason
+
+
+def test_a_window_with_too_few_prints_is_still_refused():
+    """The one refusal the cold start keeps.
+
+    A range over three prints is those three prints, and a stop placed from it is
+    a stop placed from noise.
+    """
+    subject = a_proposer()
+    feed_a_range(subject, prints=3)
     subject.observe_horizon_profile(a_horizon())
     plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert plan is None
-    assert outcome == NO_EXCURSION_PROFILE
+    assert outcome == NO_RANGE
 
 
-def test_an_unfitted_excursion_record_is_no_record():
-    subject = a_prepared_proposer(profile=a_profile(is_fitted=False))
-    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
-    assert plan is None
-    assert outcome == NO_EXCURSION_PROFILE
-
-
-def test_no_horizon_record_means_no_plan():
+def test_a_symbol_that_has_not_moved_gets_no_stop():
+    """A flat window gives a zero range, and a stop at the entry price is not one."""
     subject = a_proposer()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_excursion_profile(a_profile())
+    for _ in range(COLD_START_MINIMUM_PRINTS + 1):
+        subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_horizon_profile(a_horizon())
     plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert plan is None
-    assert outcome == NO_HORIZON
+    assert outcome == NO_RANGE
 
 
 def test_the_stop_sits_outside_what_winners_normally_survive():
@@ -866,6 +961,10 @@ def test_a_plan_that_never_takes_profit_is_refused_at_construction():
         BullExitPlanProposer(
             stop_safety_multiple=1.5, target_quantiles=(),
             minimum_reward_to_risk=1.0, conviction_horizon_multiple=0.5,
+            cold_start_stop_range_multiple=COLD_START_STOP_MULTIPLE,
+            cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
+            cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
+            cold_start_price_window=COLD_START_PRICE_WINDOW,
         )
 
 
@@ -874,6 +973,10 @@ def test_targets_that_do_not_close_the_position_are_refused_at_construction():
         BullExitPlanProposer(
             stop_safety_multiple=1.5, target_quantiles=((0.5, 0.3),),
             minimum_reward_to_risk=1.0, conviction_horizon_multiple=0.5,
+            cold_start_stop_range_multiple=COLD_START_STOP_MULTIPLE,
+            cold_start_reward_multiples=(1.0,),
+            cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
+            cold_start_price_window=COLD_START_PRICE_WINDOW,
         )
 
 

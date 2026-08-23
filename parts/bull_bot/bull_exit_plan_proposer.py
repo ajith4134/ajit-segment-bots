@@ -19,15 +19,36 @@ Three numbers, each from a measurement rather than a rule of thumb:
   taken to resolve. A trade past its horizon is not a trade any more, it is a
   position nobody decided to hold.
 
-**A plan that cannot be built is not built.** No default stop, no fallback
-percentage. A symbol with no excursion record produces no plan and the bot stands
-down, because a stop invented from nothing is the single most expensive
-placeholder in a trading system (RL-062).
+**Before any trade has closed, the same three numbers come from live prices.**
+Not from a rule of thumb and not from a default percentage -- from this symbol's
+own movement, right now:
+
+- **The stop** is a multiple of the range the symbol has actually traded through
+  in a window as long as the move the detector is claiming. That is what an ATR
+  stop is, and it needs no trade history: a symbol that moves 0.4% in a minute
+  gets a wider stop than one that moves 0.05%, automatically and per symbol.
+- **The targets** are reward-to-risk multiples of that stop, because before there
+  is an excursion record there is no measured quantile to place them at.
+- **The horizon** is the one the candidate already names. Every `entry-candidate`
+  carries `horizon_seconds` -- the detector saying how long it expects the move to
+  take -- and demanding a separately measured horizon before planning anything was
+  a gate that never needed to exist.
+
+**This is not the placeholder RL-062 forbids.** A placeholder is a number invented
+from nothing and presented as a measurement. Every number above is measured from
+the venue's own prints in the last N seconds, the plan says which source produced
+it, and each one is replaced the moment the learned profile for that symbol fits.
+Learning was meant to improve the trade, not to be a precondition for making one.
+
+What is still refused outright: a symbol with no price at all, and a window with
+too few prints in it to state a range. Those produce no plan, and the bot stands
+down.
 """
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import LONG, ExitPlan, ExitTarget
@@ -57,6 +78,16 @@ NO_EXCURSION_PROFILE = "no-excursion-record-for-this-symbol"
 NO_PRICE = "no-price-for-this-symbol"
 NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
 REWARD_BELOW_RISK = "reward-to-risk-below-floor"
+# Not enough prints inside the claimed horizon to state a range. The one refusal
+# the cold start keeps: a range over two ticks is those two ticks, and a stop
+# placed from it would be a stop placed from noise.
+NO_RANGE = "too-few-prints-in-the-window-to-measure-a-range"
+
+# Where a plan's numbers came from. Carried on the plan's reason so a reader can
+# tell a stop measured from a symbol's live range from one measured over its
+# closed trades -- they are different evidence and the board must not merge them.
+FROM_THE_EXCURSION_RECORD = "the-excursion-record"
+FROM_THE_LIVE_RANGE = "the-live-price-range"
 
 
 @dataclass(frozen=True)
@@ -87,6 +118,13 @@ class ProposerStanding:
     stops_widened_by_audit: int = 0
     by_refusal: dict = field(default_factory=dict)
     widest_stop_fraction: float = 0.0
+    # Which evidence each plan was built from. Counted separately because a plan
+    # from a symbol's live range and one from its closed-trade record are not the
+    # same claim, and a board that added them would report a maturity the system
+    # has not reached.
+    plans_from_the_excursion_record: int = 0
+    plans_from_the_live_range: int = 0
+    widest_live_range_fraction: float = 0.0
 
 
 class BullExitPlanProposer:
@@ -98,6 +136,10 @@ class BullExitPlanProposer:
         target_quantiles: tuple,
         minimum_reward_to_risk: float,
         conviction_horizon_multiple: float,
+        cold_start_stop_range_multiple: float,
+        cold_start_reward_multiples: tuple,
+        cold_start_minimum_prints: int,
+        cold_start_price_window: int,
         now_ns=time.time_ns,
     ) -> None:
         if stop_safety_multiple <= 1.0:
@@ -114,12 +156,36 @@ class BullExitPlanProposer:
                 "the target fractions must close the whole position, or the plan leaves "
                 "a remainder nobody decided to hold"
             )
+        if cold_start_stop_range_multiple <= 0:
+            raise ValueError("a stop at the price it was entered at is not a stop")
+        if not cold_start_reward_multiples:
+            raise ValueError("with no reward multiple there is nowhere to put a cold-start target")
+        if len(cold_start_reward_multiples) != len(target_quantiles):
+            raise ValueError(
+                f"{len(cold_start_reward_multiples)} cold-start reward multiple(s) against "
+                f"{len(target_quantiles)} target fraction(s). They are paired position by "
+                f"position with the same fractions the measured targets use, so a mismatch is "
+                f"a target with no size or a size with no target."
+            )
+        if cold_start_minimum_prints < 2:
+            raise ValueError(
+                "a range over one print is that print, reported with the authority of a range"
+            )
         self._stop_multiple = stop_safety_multiple
         self._target_quantiles = tuple(target_quantiles)
         self._minimum_reward_to_risk = minimum_reward_to_risk
         self._conviction_horizon_multiple = conviction_horizon_multiple
         self._now_ns = now_ns
+        self._cold_start_stop_multiple = cold_start_stop_range_multiple
+        self._cold_start_reward_multiples = tuple(cold_start_reward_multiples)
+        self._cold_start_minimum_prints = cold_start_minimum_prints
+        self._cold_start_price_window = cold_start_price_window
         self._prices: dict[tuple[str, str], float] = {}
+        # Recent prints per symbol, with when they arrived, so the range over the
+        # window the detector claimed can be measured rather than assumed. Bounded
+        # because this is a process's memory and an unbounded price history is a
+        # leak with a good excuse (T-3).
+        self._recent: dict[tuple[str, str], deque] = {}
         self._price_steps: dict[tuple[str, str], float] = {}
         self._excursions: dict[tuple[str, str], ExcursionProfile] = {}
         self._horizons: dict[str, HorizonProfile] = {}
@@ -127,7 +193,37 @@ class BullExitPlanProposer:
         self.standing = ProposerStanding()
 
     def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+        key = (venue_id, symbol)
+        self._prices[key] = price
+        window = self._recent.get(key)
+        if window is None:
+            window = deque(maxlen=self._cold_start_price_window)
+            self._recent[key] = window
+        window.append((self._now_ns(), price))
+
+    def live_range_fraction(self, venue_id: str, symbol: str, seconds: float):
+        """How far this symbol traded through the last `seconds`, as a fraction of price.
+
+        The cold-start stop distance, and the reason it needs no trade history: a
+        symbol that swings 0.4% in the claimed horizon gets a wider stop than one
+        that swings 0.05%, per symbol and automatically. Returns the fraction and
+        how many prints it was measured over, or None when there are too few.
+
+        The window is the horizon the detector itself claimed, so the range is
+        measured over exactly the span of the move being predicted rather than
+        over some fixed lookback that means a different thing for every detector.
+        """
+        window = self._recent.get((venue_id, symbol))
+        if not window:
+            return None
+        cutoff = self._now_ns() - int(max(0.0, seconds) * 1e9)
+        inside = [price for at_ns, price in window if at_ns >= cutoff]
+        if len(inside) < self._cold_start_minimum_prints:
+            return None
+        highest, lowest, last = max(inside), min(inside), inside[-1]
+        if last <= 0 or highest <= lowest:
+            return None
+        return (highest - lowest) / last, len(inside)
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, price_step: float) -> None:
         """The venue's tick size: a stop that is not on one is not a stop the venue will take."""
@@ -150,24 +246,64 @@ class BullExitPlanProposer:
         if price is None or price <= 0:
             return None, self._refuse(NO_PRICE)
 
-        profile = self._excursions.get(key)
-        if profile is None or not profile.is_fitted:
-            # No default stop. A stop invented from nothing is the most
-            # expensive placeholder a trading system can contain (RL-062).
-            return None, self._refuse(NO_EXCURSION_PROFILE)
-
+        # The horizon the detector itself claimed, unless a measured record for
+        # this kind of trade exists and is better. The candidate has always
+        # carried it; demanding a separately measured one before planning
+        # anything was a gate that never needed to exist.
         horizon = self._horizons.get(candidate.detector)
-        if horizon is None or not horizon.is_fitted:
+        claimed_seconds = float(getattr(candidate, "horizon_seconds", 0.0) or 0.0)
+        if horizon is not None and horizon.is_fitted:
+            base_horizon_seconds = horizon.median_seconds
+            horizon_source = f"{horizon.trades_observed} recorded outcome(s) for this detector"
+        elif claimed_seconds > 0:
+            base_horizon_seconds = claimed_seconds
+            horizon_source = "the horizon the detector itself claimed"
+        else:
             return None, self._refuse(NO_HORIZON)
 
-        stop_fraction, widened = self._stop_fraction(key, profile)
+        profile = self._excursions.get(key)
+        measured = profile is not None and profile.is_fitted
+
+        if measured:
+            source = FROM_THE_EXCURSION_RECORD
+            stop_fraction, widened = self._stop_fraction(key, profile)
+            evidence = (
+                f"{profile.trades_observed} recorded outcome(s) in {candidate.symbol} normally "
+                f"survive less than this"
+            )
+        else:
+            # No excursion record yet. The stop comes from what this symbol has
+            # actually traded through in a window as long as the move being
+            # claimed -- measured from the venue's own prints, not defaulted.
+            ranged = self.live_range_fraction(
+                candidate.venue_id, candidate.symbol, base_horizon_seconds
+            )
+            if ranged is None:
+                return None, self._refuse(NO_RANGE)
+            range_fraction, prints = ranged
+            source = FROM_THE_LIVE_RANGE
+            stop_fraction = range_fraction * self._cold_start_stop_multiple
+            widened = False
+            self.standing.widest_live_range_fraction = max(
+                self.standing.widest_live_range_fraction, range_fraction
+            )
+            evidence = (
+                f"{candidate.symbol} traded through {range_fraction:.2%} over the last "
+                f"{base_horizon_seconds:.0f}s across {prints} print(s), and this stop sits "
+                f"{self._cold_start_stop_multiple:g}x beyond that"
+            )
+
         stop_price = self._on_step(key, price * (1.0 - stop_fraction), round_down=True)
         if stop_price <= 0 or stop_price >= price:
-            return None, self._refuse(NO_EXCURSION_PROFILE)
+            return None, self._refuse(NO_EXCURSION_PROFILE if measured else NO_RANGE)
 
-        targets = self._targets(key, price, profile)
+        targets = (
+            self._targets(key, price, profile)
+            if measured
+            else self._cold_start_targets(key, price, stop_fraction)
+        )
         if not targets:
-            return None, self._refuse(NO_EXCURSION_PROFILE)
+            return None, self._refuse(NO_EXCURSION_PROFILE if measured else NO_RANGE)
 
         risk = price - stop_price
         weighted_reward = sum((target.price - price) * target.fraction for target in targets)
@@ -177,13 +313,17 @@ class BullExitPlanProposer:
             return None, self._refuse(REWARD_BELOW_RISK)
 
         # A conviction the bot is surer of is given longer to work, because the
-        # horizon record is the median over all such trades and the ones it was
-        # sure about are the ones worth waiting on.
-        horizon_seconds = horizon.median_seconds * (
+        # base horizon is a median over all such claims and the ones it was sure
+        # about are the ones worth waiting on.
+        horizon_seconds = base_horizon_seconds * (
             1.0 + self._conviction_horizon_multiple * conviction.probability
         )
 
         self.standing.plans_built += 1
+        if measured:
+            self.standing.plans_from_the_excursion_record += 1
+        else:
+            self.standing.plans_from_the_live_range += 1
         self.standing.widest_stop_fraction = max(self.standing.widest_stop_fraction, stop_fraction)
 
         return (
@@ -196,21 +336,17 @@ class BullExitPlanProposer:
                 targets=targets,
                 invalidation_reason=(
                     f"a close below {stop_price:.8g} is further against this long than "
-                    f"{profile.trades_observed} recorded trades in {candidate.symbol} normally "
-                    f"survive, so the reason for being long has stopped being true"
+                    f"{evidence}, so the reason for being long has stopped being true"
                 ),
                 horizon_seconds=horizon_seconds,
                 risk_fraction=stop_fraction,
                 reward_to_risk=reward_to_risk,
                 reason=(
-                    f"stop {stop_fraction:.2%} below {price:.8g}, which is "
-                    f"{self._stop_multiple:.2g}x the {profile.adverse_excursion:.2%} adverse "
-                    f"excursion winners in this symbol normally survive"
+                    f"stop {stop_fraction:.2%} below {price:.8g}, from {source}: {evidence}"
                     + (" and widened again by the stop audit" if widened else "")
-                    + f"; {len(targets)} target(s) at excursions actually reached, weighted "
-                    f"reward-to-risk {reward_to_risk:.2f}; resolved within "
-                    f"{horizon_seconds:.0f}s on a {horizon.median_seconds:.0f}s median for "
-                    f"{candidate.detector}"
+                    + f"; {len(targets)} target(s), weighted reward-to-risk "
+                    f"{reward_to_risk:.2f}; resolved within {horizon_seconds:.0f}s on "
+                    f"{horizon_source}"
                 ),
                 planned_at_ns=self._now_ns(),
             ),
@@ -229,6 +365,48 @@ class BullExitPlanProposer:
                 widened = True
                 self.standing.stops_widened_by_audit += 1
         return fraction, widened
+
+    def _cold_start_targets(self, key, price: float, stop_fraction: float) -> tuple:
+        """Take-profits at reward-to-risk multiples of the stop this symbol earned.
+
+        Multiples of the risk rather than quantiles of an excursion record,
+        because before any trade has closed there is no record to take a quantile
+        of. The risk itself is still measured -- it came from this symbol's own
+        range -- so a 2R target on a symbol that swings 0.4% and a 2R target on
+        one that swings 0.05% are different prices, which is the whole point.
+
+        The same fractions the measured targets use, so the position is closed
+        whole either way and switching sources does not change how much is sold
+        at each rung.
+        """
+        targets = []
+        for multiple, (_quantile, fraction) in zip(
+            self._cold_start_reward_multiples, self._target_quantiles, strict=True
+        ):
+            reach = stop_fraction * multiple
+            if reach <= 0:
+                continue
+            targets.append(
+                ExitTarget(
+                    price=self._on_step(key, price * (1.0 + reach), round_down=False),
+                    fraction=fraction,
+                    reason=(
+                        f"{multiple:g}x the {stop_fraction:.2%} this symbol's own range put "
+                        f"the stop at; no excursion record exists to place a quantile from yet"
+                    ),
+                )
+            )
+        if not targets:
+            return ()
+        allocated = sum(target.fraction for target in targets)
+        if allocated < 1.0:
+            last = targets[-1]
+            targets[-1] = ExitTarget(
+                price=last.price,
+                fraction=last.fraction + (1.0 - allocated),
+                reason=last.reason + "; carries what the other rungs could not price",
+            )
+        return tuple(targets)
 
     def _targets(self, key, price: float, profile: ExcursionProfile) -> tuple:
         """Scale-outs at excursions this symbol has actually reached."""
@@ -289,6 +467,9 @@ def describe_exit_planning(proposer: BullExitPlanProposer) -> dict:
         "plans_built": proposer.standing.plans_built,
         "refused_by_reason": dict(proposer.standing.by_refusal),
         "stops_widened_by_audit": proposer.standing.stops_widened_by_audit,
+        "plans_from_the_excursion_record": proposer.standing.plans_from_the_excursion_record,
+        "plans_from_the_live_range": proposer.standing.plans_from_the_live_range,
+        "widest_live_range_fraction": proposer.standing.widest_live_range_fraction,
         "widest_stop_fraction": proposer.standing.widest_stop_fraction,
         "symbols_with_an_excursion_profile": len(proposer._excursions),
         "detectors_with_a_horizon_profile": len(proposer._horizons),
@@ -385,6 +566,17 @@ def start_part(context) -> int:
             target_quantiles=_paired_targets(context),
             minimum_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
             conviction_horizon_multiple=context.number("bull_exit_conviction_horizon_multiple"),
+            # What the plan is built from before any trade has closed: this
+            # symbol's own range over the horizon the detector claimed. Every one
+            # of these is replaced the moment the excursion record for that
+            # symbol fits, so they set the first trades rather than all of them.
+            cold_start_stop_range_multiple=context.number("bull_cold_start_stop_range_multiple"),
+            cold_start_reward_multiples=tuple(
+                float(multiple)
+                for multiple in context.setting("bull_cold_start_reward_multiples").value
+            ),
+            cold_start_minimum_prints=int(context.number("bull_cold_start_minimum_prints")),
+            cold_start_price_window=int(context.number("bull_cold_start_price_window")),
         ),
         control_socket=context.control_socket,
         read_candidates_and_profiles=read_candidates_and_profiles,

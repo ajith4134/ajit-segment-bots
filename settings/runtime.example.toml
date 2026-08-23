@@ -54,9 +54,9 @@ unit  = "venue ids"
 note  = "operator, 2026-08-22: which venue adapters are live. A venue id resolves to runtime/venues/<id with underscores>.py, so adding a third venue is this line plus that module and nothing else -- the user's condition of 2026-08-21, 'mark it so if the 2 are not enough we can add more later'. binance-usdm and bybit-linear turned on 2026-08-22 as their adapters landed. An id named here with no module is refused loudly by adapter_registry rather than skipped quietly."
 
 [captured_symbol_count]
-value = 30
+value = 100
 unit  = "symbols per venue"
-note  = "operator, 2026-08-21: how many symbols to capture per venue, ordered by symbol_selection_metric. 30 is the user's decision of 2026-08-21. 0 means every symbol the venue lists, which is the full-universe path with no code change -- 1,295 perpetuals across the two venues as measured on 2026-08-21. Raising it past roughly 500 needs the file-descriptor ceiling of spec section 4.2 dealt with first: 2,590 open tape files against a 1024 soft limit."
+note  = "operator, 2026-08-23: how many symbols to capture per venue, ordered by symbol_selection_metric. Raised from 30 to 100 as the first step of the measured walk towards the full universe (RL-009: the brain must not skip symbols with profit potential). 0 means every symbol the venue lists -- 1,295 perpetuals across the two venues as measured on 2026-08-21 -- and the descriptor ceiling the spec feared is not the blocker: RLIMIT_NOFILE soft is 524288 on this box and a 30-symbol capture holds 68. What scales instead is the pair sweep, which grows as the square, and the tape: measured 2026-08-23 at 30/venue, 65 symbols wrote 80.7 KiB/s, 7.14 GB/day against 229 GB free. The added symbols are lower volume by construction, so bytes grow sub-linearly with symbol count. Each step is measured before the next."
 
 [symbol_selection_metric]
 value = "quote-volume-24h"
@@ -429,9 +429,9 @@ unit  = "calibrated probability"
 note  = "operator, 2026-08-22: the conviction below which the composer forms no opinion at all. The same floor as the entry timer's, deliberately: two different floors would mean a conviction that was worth timing an entry for but not worth having an opinion about."
 
 [bull_opinion_maximum_missing_features]
-value = 2
+value = 5
 unit  = "features"
-note  = "operator, 2026-08-22: how many features may be missing from a vector before the composer refuses to form an opinion on it. Missing is not zero -- the builder names what it could not measure -- and an opinion resting on a vector with holes in it is an opinion about a symbol nobody has finished looking at."
+note  = "operator, 2026-08-23: how many features may be missing from a vector before the composer refuses to form an opinion on it. Raised from 2 to 5 because 4 of the 12 features are structurally unavailable on the current spine and no amount of waiting changes that: book_imbalance, spread_fraction and depth_to_size_ratio all need order-book-snapshot, and order-book-reader has no start_part; funding_forecast_change needs funding-rate-forecaster, which is not started. At 2 the bull bot stood aside on every candidate with features-incomplete forever -- measured on the live run of 2026-08-23 07:21. Missing is still named, never defaulted: the model standardises only the features it actually has, so a missing one is absent from the decision rather than silently zero. Each producer that comes on lowers the real count, and this ceiling should come back down with it -- wiring order-book-reader alone restores three."
 
 [bull_opinion_require_measured_conviction]
 value = true
@@ -602,3 +602,23 @@ note  = "operator, 2026-08-23: how many recent settled claims per detector the m
 value = 30
 unit  = "settled claims"
 note  = "operator, 2026-08-23: how many settled claims a detector needs before its horizon reports itself fitted. Thirty, matching the excursion minimum: the two profiles gate the same exit plan, and a lower bar on one would let a plan be built on half a measurement."
+
+[bull_cold_start_stop_range_multiple]
+value = 1.5
+unit  = "multiples of the observed range"
+note  = "operator, 2026-08-23: how far beyond the range a symbol actually traded through the cold-start stop sits, before any trade has closed. One and a half, on the same reasoning as bull_exit_stop_safety_multiple: a stop inside the movement the symbol makes anyway is a machine for being stopped out of trades that were going to work. Lower than the excursion-record multiple because the range already spans the whole window rather than being a quantile of adverse moves -- it is a wider base to start from. A judgement, and what settles it is the realised stop-out rate of the first hundred cold-start trades against the ones planned from an excursion record."
+
+[bull_cold_start_reward_multiples]
+value = [1.0, 2.0, 3.0]
+unit  = "multiples of the risk"
+note  = "operator, 2026-08-23: where cold-start targets sit, as reward-to-risk multiples of the stop, paired position by position with bull_exit_target_fractions. Multiples of the risk rather than quantiles of an excursion record, because before a trade has closed there is no record to take a quantile of. The risk is still measured -- it came from the symbol's own range -- so 2R on a symbol that swings 0.4% and 2R on one that swings 0.05% are different prices. One, two and three so the nearest rung clears bull_exit_minimum_reward_to_risk on its own and the far one is left to run."
+
+[bull_cold_start_minimum_prints]
+value = 20
+unit  = "trade prints"
+note  = "operator, 2026-08-23: how many of the venue's own prints must fall inside the claimed horizon before a range may be measured from them. Twenty, because a range over a handful of prints is those prints rather than a range, and a stop placed from it would be a stop placed from noise. Measured on the tape 2026-08-22: BTCUSDT prints about 4 a second, so a 60s horizon carries roughly 240 -- the bar binds on quiet symbols, which is exactly where it should."
+
+[bull_cold_start_price_window]
+value = 4000
+unit  = "trade prints per symbol"
+note  = "operator, 2026-08-23: how many recent prints per symbol the proposer keeps so a range can be measured over the horizon the detector claimed. Four thousand covers a 60s horizon on the busiest symbol measured (BTCUSDT at ~4 prints a second leaves 16x headroom) and is bounded because this is a process's memory -- an unbounded price history is a leak with a good excuse, and T-3 says an off part releases its memory."

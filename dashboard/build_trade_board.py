@@ -1074,12 +1074,24 @@ def profit_class(amount: float | None) -> str:
     return " up" if amount > 0 else (" down" if amount < 0 else "")
 
 
-def not_built_cell(column: str) -> str:
-    """A column no part fills yet, saying which part would fill it."""
+def not_built_cell(column: str, running: dict | None = None) -> str:
+    """A column with no value for this trade, saying honestly why there is none.
+
+    Two different reasons, and they were reported as one until 2026-08-23. A part
+    that has never been written is a different fact from a part that is running and
+    simply published nothing for the trade in this row -- and calling a running
+    part "not built" is the board asserting something false about its own system.
+    """
     part_id, produces = COLUMNS_A_PART_WOULD_FILL[column]
+    state = how_far_a_part_is_built(part_id, running or {})
+    if state == "running":
+        return (
+            f'<td class="gap" title="{html.escape(part_id)} is running; it published no '
+            f'{html.escape(produces)} for this trade">none recorded</td>'
+        )
     return (
-        f'<td class="gap" title="{html.escape(part_id)} would publish {html.escape(produces)}">'
-        f"not built</td>"
+        f'<td class="gap" title="{html.escape(part_id)} would publish {html.escape(produces)} '
+        f'({html.escape(state)})">not built</td>'
     )
 
 
@@ -1121,7 +1133,9 @@ def with_prices(trades: list[RecordedTrade]) -> list[RecordedTrade]:
     return trades
 
 
-def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> str:
+def render_trades(
+    trades: list[RecordedTrade], journal_path: pathlib.Path, running: dict | None = None
+) -> str:
     if not trades:
         return (
             '<p class="empty">No position is open. '
@@ -1147,9 +1161,9 @@ def render_trades(trades: list[RecordedTrade], journal_path: pathlib.Path) -> st
             f'{f"{trade.capital_in_quote:,.2f}" if trade.capital_in_quote else "—"}</td>'
             + price_cell(trade.prices)
             + f'<td class="mono">{f"{trade.stop_price:,.2f}" if trade.stop_price else "—"}</td>'
-            + not_built_cell("target")
-            + not_built_cell("trailing stop")
-            + not_built_cell("forecast price")
+            + not_built_cell("target", running)
+            + not_built_cell("trailing stop", running)
+            + not_built_cell("forecast price", running)
             + f'<td class="mono">'
             f'{f"{trade.conviction:.0%}" if trade.conviction is not None else "—"}</td>'
             f'<td class="mono{profit_class(trade.peak_profit)}">{as_money(trade.peak_profit)}</td>'
@@ -1318,16 +1332,34 @@ def compose_verdict(results: list[ProbeResult], trades: list[RecordedTrade]) -> 
             + ". Nothing below is inferred — each is what a file on this machine says."
         )
     live = [trade for trade in trades if trade.is_from_a_live_run and trade.fills]
+    closed = [result for result in results if result.label == "Trades closed"]
     if live:
+        closing = closed[0].value if closed else "not measured"
         return (
-            f"{len(live)} trade(s) opened on the live run. None can close yet: the six parts "
-            f"that turn an exit plan into a closing order are not written."
+            f"{len(live)} trade(s) opened on the live run. Closing: {closing}. Every number "
+            f"below is what a file on this machine says, not what any part asserts."
+        )
+
+    # Which gate the bot is actually behind, taken from the probes rather than
+    # written down. The first version of this line named the conviction model, and
+    # kept naming it after the model had trained -- a verdict that goes stale is a
+    # board telling the reader something false with a fresh timestamp on it.
+    waiting = [
+        result for result in results
+        if result.state in (WAITING, UNMEASURED)
+        and result.label in ("Learning progress", "Exit plans")
+    ]
+    if waiting:
+        blocker = waiting[0]
+        return (
+            f"No trade has opened on a live run. The chain that opens one is proven and its "
+            f"parts are on; what stands between here and the first trade is "
+            f"{blocker.label.lower()} — {blocker.value}. It accrues in real time and cannot "
+            f"be caught up on."
         )
     return (
-        "No trade has opened on a live run. The chain that opens one is proven and the parts "
-        "are on, and what stands between here and the first trade is the bull bot's own "
-        "conviction model, which forms no opinion until it has been trained on labels that "
-        "accrue in real time."
+        "No trade has opened on a live run, and nothing measured says why. Every gate the "
+        "board can see is passed, which makes the next refusal one no probe covers yet."
     )
 
 
@@ -1365,7 +1397,9 @@ def build_page() -> str:
         tiles="".join(render_tile(result) for result in results),
         listed_note=html.escape(compose_listing_note(trades)),
         trades=render_trades(
-            with_prices(trades_worth_listing(trades)[:MOST_TRADES_LISTED]), journal_path
+            with_prices(trades_worth_listing(trades)[:MOST_TRADES_LISTED]),
+            journal_path,
+            read_running_parts(),
         ),
         closed_note=html.escape(compose_closed_note(closed)),
         closed_trades=render_closed_trades(closed[:MOST_TRADES_LISTED]),

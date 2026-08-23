@@ -95,6 +95,10 @@ class SizerStanding:
     refused_too_small: int = 0
     refused_no_increment: int = 0
     largest_risk_taken: float = 0.0
+    # Intents that said stand aside. Not a refusal by this part -- the decision
+    # was made upstream -- but counted, because a bot whose every opinion is a
+    # stand-aside and a bot with no opinions look the same from here.
+    stood_aside: int = 0
 
 
 class PositionSizer:
@@ -251,6 +255,7 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "refused_too_small": sizer.standing.refused_too_small,
         "refused_no_price_increment": sizer.standing.refused_no_increment,
         "largest_risk_taken": sizer.standing.largest_risk_taken,
+        "intents_that_stood_aside": sizer.standing.stood_aside,
     }
 
 
@@ -320,6 +325,11 @@ def start_part(context) -> int:
     quantity_increment = context.number("order_quantity_increment")
     segment = str(context.setting("segment_id").value)
 
+    sizer = PositionSizer(
+        taker_fee_rate=context.number("taker_fee_rate"),
+        slippage_fraction=context.number("entry_slippage_fraction"),
+    )
+
     def read_intents():
         timed.payloads()
         instrument_by_symbol = instruments.mapping()
@@ -340,6 +350,16 @@ def start_part(context) -> int:
 
         sizable = []
         for intent in intents.payloads():
+            # An intent that says stand aside is a decision, not a request. It was
+            # sized anyway until 2026-08-23, and because a stand-aside intent
+            # carries a degenerate stop the size it produced was whatever the
+            # bounds gate happened to cut it to -- which opened ZECUSDT and
+            # ETHUSDT on the live run at 07:29 and 07:31 from decisions the bot
+            # had made not to trade. Counted rather than dropped: a refusal
+            # nobody can see is indistinguishable from an input that never came.
+            if not intent.is_actionable:
+                sizer.standing.stood_aside += 1
+                continue
             key = (intent.venue_id, intent.symbol)
             plan = plan_by_symbol.get(key)
             leverage = leverage_by_symbol.get(key)
@@ -389,10 +409,7 @@ def start_part(context) -> int:
         return tuple(sizable)
 
     return run_position_sizer(
-        sizer=PositionSizer(
-            taker_fee_rate=context.number("taker_fee_rate"),
-            slippage_fraction=context.number("entry_slippage_fraction"),
-        ),
+        sizer=sizer,
         control_socket=context.control_socket,
         read_intents=read_intents,
         publish_sized_orders=publish_sized_orders,
