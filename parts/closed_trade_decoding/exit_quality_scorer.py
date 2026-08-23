@@ -235,3 +235,43 @@ def run_exit_quality_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trading_types import LONG
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    excursions = LatestByKey(read=context.bus.reader("peak-excursion"), key_of=lambda e: (e.venue_id, e.symbol))
+    publish_qualities = context.bus.publisher_for("exit-quality")
+    scorer = ExitQualityScorer(gave_back_threshold=context.number("exit_quality_gave_back_threshold"))
+
+    def read_exits():
+        latest = excursions.mapping()
+        jobs = []
+        for episode in episodes.payloads():
+            record = latest.get((episode.venue_id, episode.symbol))
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            entry = conditions.get("entry_price")
+            exit_price = conditions.get("exit_price")
+            if record is None or entry is None or exit_price is None:
+                continue
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            scorer.observe_excursion(
+                trade_id, float(entry), record.best_price, record.worst_price,
+                LONG if episode.action in ("open-long", "long") else episode.action, float(exit_price),
+            )
+            jobs.append((trade_id, float(exit_price)))
+        return tuple(jobs)
+
+    return run_exit_quality_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_exits=read_exits,
+        publish_qualities=lambda quality: publish_qualities((quality,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

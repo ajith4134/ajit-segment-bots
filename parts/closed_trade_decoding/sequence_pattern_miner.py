@@ -314,3 +314,43 @@ def run_sequence_pattern_miner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    import datetime
+
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    publish_patterns = context.bus.publisher_for("sequence-pattern")
+    miner = SequencePatternMiner(
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        effect_threshold=context.number("sequence_effect_threshold"),
+        shuffle_margin=context.number("sequence_shuffle_margin"),
+    )
+
+    def read_trades():
+        episodes.payloads()
+        jobs = []
+        for trade in closed.payloads():
+            opened = datetime.datetime.fromtimestamp(trade.opened_at_ns / 1e9, datetime.UTC)
+            jobs.append({
+                "trade_id": closed_trade_id(trade), "realised": trade.realised_pnl,
+                "notional": trade.quantity * trade.entry_price, "opened_at_ns": trade.opened_at_ns,
+                "seconds_into_session": float(opened.hour * 3600 + opened.minute * 60 + opened.second),
+            })
+        return tuple(jobs)
+
+    return run_sequence_pattern_miner(
+        miner=miner,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_patterns=lambda pattern: publish_patterns((pattern,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

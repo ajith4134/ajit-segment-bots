@@ -247,3 +247,57 @@ def run_shortfall_decomposer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A bounded order is the decision, the book at the time is the arrival,
+    the fill is what was achieved; the three are keyed by the order's intent
+    id and decomposed when the trade it belongs to closes.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.order_book import OrderBookSnapshot
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    fills = Batch(read=context.bus.reader("fill"))
+    orders = Batch(read=context.bus.reader("bounded-order"))
+    books = LatestByKey(read=context.bus.reader("order-book-snapshot"), key_of=lambda b: (b.venue_id, b.symbol))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_breakdowns = context.bus.publisher_for("shortfall-breakdown")
+    decomposer = ShortfallDecomposer()
+    order_of_symbol: dict[tuple[str, str], list] = {}
+
+    def read_orders():
+        trades.payloads()
+        latest_books = books.mapping()
+        for order in orders.payloads():
+            if not order.intent_id:
+                continue
+            decomposer.observe_decision(order.intent_id, order.entry_price, order.bounded_at_ns, order.side)
+            book = latest_books.get((order.venue_id, order.symbol))
+            if isinstance(book, OrderBookSnapshot) and book.best_bid and book.best_ask:
+                mid = (book.best_bid + book.best_ask) / 2.0
+                decomposer.observe_arrival(order.intent_id, mid, (book.best_ask - book.best_bid) / 2.0, book.venue_time_ns)
+            order_of_symbol.setdefault((order.venue_id, order.symbol), []).append(order.intent_id)
+        for fill in fills.payloads():
+            if fill.order_id:
+                decomposer.observe_fill(fill.order_id, fill.price, fill.quantity)
+        jobs = []
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            for order_id in order_of_symbol.pop((trade.venue_id, trade.symbol), []):
+                jobs.append((order_id, trade_id))
+        return tuple(jobs)
+
+    return run_shortfall_decomposer(
+        decomposer=decomposer,
+        control_socket=context.control_socket,
+        read_orders=read_orders,
+        publish_breakdowns=lambda b: publish_breakdowns((b,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -248,3 +248,35 @@ def run_regime_transition_tagger(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    regimes = Batch(read=context.bus.reader("market-regime"))
+    breaks = Batch(read=context.bus.reader("regime-break-alert"))
+    publish_flags = context.bus.publisher_for("regime-transition-flag")
+    tagger = RegimeTransitionTagger(
+        minimum_persistence_seconds=context.number("regime_tag_minimum_persistence"),
+        minimum_observations=int(context.number("regime_tag_minimum_observations")),
+    )
+
+    def read_trades():
+        breaks.payloads()
+        for regime in regimes.payloads():
+            tagger.observe_regime(regime.venue_id, regime.symbol, regime.regime, regime.classified_at_ns)
+        return tuple((closed_trade_id(trade), trade) for trade in closed.payloads())
+
+    return run_regime_transition_tagger(
+        tagger=tagger,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_flags=lambda flag: publish_flags((flag,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

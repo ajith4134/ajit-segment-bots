@@ -245,3 +245,45 @@ def run_luck_skill_separator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The noise an outcome is judged against is the symbol's forecast
+    volatility, scaled to a day; the profile is consumed so a symbol's
+    listing age is known to the separator's record.
+    """
+    import math
+
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    forecasts = Batch(read=context.bus.reader("volatility-forecast"))
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    publish_significance = context.bus.publisher_for("outcome-significance")
+    separator = LuckSkillSeparator(
+        significance_threshold=context.number("luck_significance_threshold"),
+        minimum_comparable_outcomes=int(context.number("luck_minimum_comparable_outcomes")),
+    )
+    day_seconds = 86400.0
+
+    def read_closed_trades():
+        profiles.payloads()
+        for forecast in forecasts.payloads():
+            if forecast.expected_volatility is not None and forecast.horizon_seconds > 0:
+                daily = forecast.expected_volatility * math.sqrt(day_seconds / forecast.horizon_seconds)
+                separator.observe_daily_volatility(forecast.venue_id, forecast.symbol, daily)
+        return tuple((closed_trade_id(trade), trade) for trade in closed.payloads())
+
+    return run_luck_skill_separator(
+        separator=separator,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_significance=lambda s: publish_significance((s,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

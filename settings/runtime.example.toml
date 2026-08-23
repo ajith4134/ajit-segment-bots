@@ -2022,3 +2022,168 @@ note  = "operator, 2026-08-23: how old a venue balance reading may be before ven
 value = "USDT"
 unit  = "currency"
 note  = "operator, 2026-08-23: the currency both venues settle the traded perpetuals in, and the one the paper account keeps. USDT on binance-usdm and bybit-linear."
+
+[decoding_minimum_trades]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many closed trades a decoder needs before its reading is a measurement -- an excursion profile, a holding-horizon curve, a winner pattern, a lesson. Twenty, the observation floor used throughout."
+
+[decoding_window]
+value = 200
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many recent closed trades the windowed decoders keep. Two hundred, about a day at today's paper rate."
+
+[entry_quality_window]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far before the entry entry-quality-scorer looks at prices to judge how much was given away by chasing. Sixty seconds, the spread-reversion horizon: a move that began earlier than the signal is not chasing, it is the setup."
+
+[entry_quality_minimum_prices]
+value = 5
+unit  = "prints"
+note  = "operator, 2026-08-23: how many prints inside the window the scorer needs to judge an entry. Five; fewer is a symbol that did not trade, not an entry that chased."
+
+[entry_quality_chasing_movements]
+value = 2.0
+unit  = "typical movements"
+note  = "operator, 2026-08-23: how many of the symbol's typical one-minute movements the price must have moved in the signal's direction before the entry, for the scorer to call it chased. Two: one is the move the signal saw, two is the move it missed."
+
+[exit_quality_gave_back_threshold]
+value = 0.5
+unit  = "fraction of the peak"
+note  = "operator, 2026-08-23: the share of the peak favourable excursion an exit may give back before exit-quality-scorer calls it a late exit. Half."
+
+[stop_audit_inside_noise_below]
+value = 1.0
+unit  = "typical movements"
+note  = "operator, 2026-08-23: a stop closer than this many of the symbol's typical movements is inside the noise; stop-placement-auditor says so. One: a stop within one ordinary move is reached by the ordinary."
+
+[stop_audit_too_wide_above]
+value = 5.0
+unit  = "typical movements"
+note  = "operator, 2026-08-23: a stop further than this many typical movements is too wide to be a stop. Five."
+
+[stop_audit_approach_fraction]
+value = 0.8
+unit  = "fraction of the stop distance"
+note  = "operator, 2026-08-23: how close to the stop the worst price must have come for the auditor to say the stop was nearly hit. Four fifths."
+
+[luck_significance_threshold]
+value = 1.0
+unit  = "standard errors"
+note  = "operator, 2026-08-23: how many standard errors of expected noise an outcome must exceed before luck-skill-separator calls it significant. One; inside it the outcome is what the symbol's volatility would have produced with no decision."
+
+[luck_minimum_comparable_outcomes]
+value = 5
+unit  = "outcomes"
+note  = "operator, 2026-08-23: how many comparable outcomes the separator needs before it assesses at all. Five."
+
+[regime_tag_minimum_persistence]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a regime reading must have held before regime-transition-tagger counts it as the regime the trade was in rather than a flicker. Sixty seconds, one classifier interval at the horizon the detectors claim."
+
+[regime_tag_minimum_observations]
+value = 2
+unit  = "readings"
+note  = "operator, 2026-08-23: how many regime readings over a trade's life the tagger needs to tag it. Two: one reading says nothing about a transition."
+
+[trade_cluster_window]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how close in time two trades must open for trade-cluster-detector to consider them one bet. Sixty seconds, the decision horizon."
+
+[trade_cluster_minimum_correlation]
+value = 0.7
+unit  = "correlation"
+note  = "operator, 2026-08-23: how correlated two symbols must be, by the correlation mapper, for trades in both to count as one bet. Seven tenths."
+
+[near_miss_horizon]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long near-miss-recorder follows a refused candidate to see what it would have made. Five minutes, the single-symbol detectors' horizon."
+
+[loss_cause_regime_share_threshold]
+value = 0.3
+unit  = "fraction of the trade's life"
+note  = "operator, 2026-08-23: the share of a losing trade's life spent in a regime other than the one it was entered in, above which loss-cause-classifier blames the regime change. Three tenths."
+
+[horizon_profile_horizons]
+value = [60.0, 300.0, 900.0, 3600.0]
+unit  = "seconds"
+note  = "operator, 2026-08-23: the holding horizons holding-horizon-profiler replays each setup at. One, five, fifteen and sixty minutes -- the detectors' claimed horizons and the next two doublings."
+
+[horizon_profile_winning_margin]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: how much better a horizon's realised result must be than the next for the profiler to prefer it. Half again."
+
+[horizon_profile_decay_fraction]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far a horizon's result may have decayed from the best before the profiler says the setup has expired by then. Half."
+
+[sequence_effect_threshold]
+value = 0.1
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: the least effect a sequence pattern -- a loss after a loss, a session, a size -- must show on realised results for sequence-pattern-miner to report it. A tenth of notional."
+
+[sequence_shuffle_margin]
+value = 0.05
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: how far a pattern's effect must exceed the same statistic on shuffled trades before it is significant. Five hundredths of notional."
+
+[winner_pattern_conditions]
+value = ["regime", "session", "detector"]
+unit  = "condition names"
+note  = "operator, 2026-08-23: the episode conditions winner-pattern-miner splits winners from losers on. The regime the trade was entered in, the session of the day, the detector that raised it -- the three a trade episode always carries."
+
+[winner_pattern_minimum_each_side]
+value = 10
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many trades with and without a condition the miner needs before it compares them. Ten each side."
+
+[winner_pattern_minimum_lift]
+value = 1.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: how much higher the win rate with a condition must be than without, for the miner to report the condition. One and a half times."
+
+[lesson_minimum_significant_fraction]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of a lesson's supporting trades that must be individually significant, by the luck-skill separator, before lesson-extractor writes the lesson as an instruction. Half: a lesson drawn mostly from noise is noise with a moral."
+
+[pair_maximum_opening_gap]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far apart the two legs of an exploration pair may open and still be one question. Five seconds."
+
+[pair_size_tolerance]
+value = 0.05
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far the two legs' notionals may differ before the decoder refuses to compare them. Five percent."
+
+[replay_quantity_tolerance]
+value = 1e-9
+unit  = "contracts"
+note  = "operator, 2026-08-23: how far the journal's fill quantity may differ from the venue's before trade-replay-verifier reports a mismatch. Effectively exact: both are the venue's number."
+
+[replay_price_tolerance]
+value = 1e-9
+unit  = "price"
+note  = "operator, 2026-08-23: the price tolerance of the replay verifier. Exact, as for quantity."
+
+[replay_fee_tolerance]
+value = 1e-6
+unit  = "USDT"
+note  = "operator, 2026-08-23: the fee tolerance of the replay verifier. A millionth of a USDT, the rounding of a fee computed from a snapped quantity."
+
+[replay_timestamp_tolerance]
+value = 1.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far the journal's fill time may differ from the venue's. One second, the clock skew the monitor warns at."
+
+[pnl_reconciliation_tolerance]
+value = 0.01
+unit  = "USDT"
+note  = "operator, 2026-08-23: how far the attributed components of a trade's result may fail to sum to the realised result before pnl-attributor says they do not reconcile. A cent."

@@ -261,3 +261,79 @@ def run_trade_episode_encoder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Each analysis of a trade arrives on its own type; the encoder keeps the
+    latest per trade and re-encodes when a new one lands, superseding the
+    earlier episode. The detector and action come from the journal's
+    entry-candidate and trade-intent for the symbol; absent, they are named
+    unknown.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    by_trade = {
+        kind: LatestByKey(read=context.bus.reader(kind), key_of=lambda item: item.trade_id)
+        for kind in ("pnl-attribution", "entry-quality", "outcome-significance", "regime-transition-flag")
+    }
+    near_misses = Batch(read=context.bus.reader("near-miss-episode"))
+    clusters = Batch(read=context.bus.reader("trade-cluster"))
+    publish_episodes = context.bus.publisher_for("trade-episode")
+    encoder = TradeEpisodeEncoder()
+    closed_by_id: dict[str, object] = {}
+    detector_of: dict[tuple[str, str], str] = {}
+    action_of: dict[tuple[str, str], str] = {}
+    cluster_of: dict[str, object] = {}
+
+    def read_trades():
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            key = (str(payload.get("venue_id", "")), str(payload.get("symbol", "")))
+            if entry.kind == "entry-candidate":
+                detector_of[key] = str(payload.get("detector", "unknown"))
+            elif entry.kind == "trade-intent" and payload.get("action") not in (None, "stand-aside"):
+                action_of[key] = str(payload.get("action"))
+        for cluster in clusters.payloads():
+            for trade_id in cluster.trade_ids:
+                cluster_of[trade_id] = cluster
+        near_misses.payloads()
+        touched = set()
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            closed_by_id[trade_id] = trade
+            touched.add(trade_id)
+        for source in by_trade.values():
+            for trade_id in source.mapping():
+                if trade_id in closed_by_id:
+                    touched.add(trade_id)
+        jobs = []
+        for trade_id in sorted(touched):
+            trade = closed_by_id[trade_id]
+            key = (trade.venue_id, trade.symbol)
+            jobs.append({
+                "trade_id": trade_id, "closed_trade": trade,
+                "detector": detector_of.get(key, "unknown"), "action": action_of.get(key, trade.direction),
+                "outcome": "profit" if trade.realised_pnl > 0 else "loss",
+                "attribution": by_trade["pnl-attribution"].mapping().get(trade_id),
+                "entry_quality": by_trade["entry-quality"].mapping().get(trade_id),
+                "significance": by_trade["outcome-significance"].mapping().get(trade_id),
+                "regime_flag": by_trade["regime-transition-flag"].mapping().get(trade_id),
+                "cluster": cluster_of.get(trade_id),
+            })
+        return tuple(jobs)
+
+    return run_trade_episode_encoder(
+        encoder=encoder,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_episodes=lambda episode: publish_episodes((episode,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

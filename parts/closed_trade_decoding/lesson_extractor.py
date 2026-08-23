@@ -281,3 +281,67 @@ def run_lesson_extractor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Evidence is a change -- a stop audit's verdict, a sequence pattern, an
+    attribution's dominant component -- observed on a trade with its effect
+    and whether the separator called the outcome significant.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    narratives = Batch(read=context.bus.reader("trade-narrative"))
+    attributions = Batch(read=context.bus.reader("pnl-attribution"))
+    audits = Batch(read=context.bus.reader("stop-audit"))
+    patterns = Batch(read=context.bus.reader("sequence-pattern"))
+    publish_instructions = context.bus.publisher_for("decoded-trade-instruction")
+    extractor = LessonExtractor(
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        minimum_significant_fraction=context.number("lesson_minimum_significant_fraction"),
+    )
+
+    def read_evidence():
+        narratives.payloads()
+        jobs = []
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            significance = episode.conditions.get("significance") if isinstance(episode.conditions, dict) else None
+            significant = bool(getattr(significance, "is_significant", False))
+            jobs.append({
+                "change": f"detector:{episode.detector}", "conditions": {"regime": episode.regime},
+                "trade_id": trade_id, "effect": episode.realised, "was_significant": significant,
+            })
+        for audit in audits.payloads():
+            jobs.append({
+                "change": f"stop:{audit.verdict}", "conditions": {"symbol": audit.symbol},
+                "trade_id": audit.trade_id, "effect": 0.0, "was_significant": True,
+            })
+        for attribution in attributions.payloads():
+            components = attribution.components if isinstance(attribution.components, dict) else {}
+            if components:
+                dominant = max(components.items(), key=lambda item: abs(item[1]))[0]
+                jobs.append({
+                    "change": f"pnl-from:{dominant}", "conditions": {"symbol": attribution.symbol},
+                    "trade_id": attribution.trade_id, "effect": attribution.realised_pnl, "was_significant": True,
+                })
+        for pattern in patterns.payloads():
+            if pattern.is_significant:
+                jobs.append({
+                    "change": f"sequence:{pattern.kind}", "conditions": {"pattern": pattern.pattern_id},
+                    "trade_id": pattern.pattern_id, "effect": pattern.effect, "was_significant": True,
+                })
+        return tuple(jobs)
+
+    return run_lesson_extractor(
+        extractor=extractor,
+        control_socket=context.control_socket,
+        read_evidence=read_evidence,
+        publish_instructions=lambda instruction: publish_instructions((instruction,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

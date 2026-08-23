@@ -289,3 +289,61 @@ def run_stop_placement_auditor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trade_identity import closed_trade_id
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    excursions = LatestByKey(read=context.bus.reader("peak-excursion"), key_of=lambda e: (e.venue_id, e.symbol))
+    plans = LatestByKey(read=context.bus.reader("stop-target-plan"), key_of=lambda p: (p.venue_id, p.symbol))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_audits = context.bus.publisher_for("stop-audit")
+    auditor = StopPlacementAuditor(
+        inside_the_noise_below=context.number("stop_audit_inside_noise_below"),
+        too_wide_above=context.number("stop_audit_too_wide_above"),
+        approach_fraction=context.number("stop_audit_approach_fraction"),
+    )
+    last_price: dict[tuple[str, str], float] = {}
+    awaiting_exit_price: dict[tuple[str, str], str] = {}
+
+    def read_trades():
+        for trade in trades.payloads():
+            if not isinstance(trade, NormalisedTrade):
+                continue
+            key = (trade.venue_id, trade.symbol)
+            previous = last_price.get(key)
+            if previous:
+                auditor.observe_typical_movement(trade.venue_id, trade.symbol, abs(trade.price / previous - 1.0))
+            last_price[key] = trade.price
+            trade_id = awaiting_exit_price.pop(key, None)
+            if trade_id is not None:
+                auditor.observe_price_after_exit(trade_id, trade.price)
+        latest_plans = plans.mapping()
+        latest_excursions = excursions.mapping()
+        jobs = []
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            key = (trade.venue_id, trade.symbol)
+            plan = latest_plans.get(key)
+            if plan is not None:
+                auditor.observe_stop(trade_id, plan.stop_price)
+            record = latest_excursions.get(key)
+            worst = record.worst_price if record is not None else trade.exit_price
+            awaiting_exit_price[key] = trade_id
+            jobs.append((trade_id, trade, worst))
+        return tuple(jobs)
+
+    return run_stop_placement_auditor(
+        auditor=auditor,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_audits=lambda audit: publish_audits((audit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

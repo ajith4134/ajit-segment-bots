@@ -36,6 +36,7 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "trade-narrative-writer"
+PURPOSE = "describe-a-closed-trade"
 
 PART_DECLARATION = PartDeclaration(
     part_id="trade-narrative-writer",
@@ -154,7 +155,7 @@ class TradeNarrativeWriter:
         if phrased_text is None:
             sentences = self.sentences_from_facts(episode, loss_cause)
             request = make_request(
-                purpose="describe-a-closed-trade",
+                purpose=PURPOSE,
                 venue_id=episode.venue_id,
                 symbol=episode.symbol,
                 instruction=(
@@ -271,4 +272,57 @@ def run_trade_narrative_writer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every episode is narrated from its facts the moment it arrives and the
+    request for a phrased version is published; a validated output for this
+    purpose naming the same trade is written as the phrased narrative. No
+    model is configured in phase 1, so every narrative is the factual one.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    rationales = Batch(read=context.bus.reader("decision-rationale"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    publish_narratives = context.bus.publisher_for("trade-narrative")
+    publish_requests = context.bus.publisher_for("llm-request")
+    writer = TradeNarrativeWriter(
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    pending: dict[str, object] = {}
+
+    def read_episodes():
+        entries.payloads()
+        rationales.payloads()
+        jobs = []
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            trade_id = str(value.get("trade_id", ""))
+            episode = pending.pop(trade_id, None)
+            if episode is not None:
+                jobs.append((trade_id, episode, None, output.text))
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            pending[trade_id] = episode
+            jobs.append((trade_id, episode, None, None))
+        return tuple(jobs)
+
+    return run_trade_narrative_writer(
+        writer=writer,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_requests=lambda request: publish_requests((request,)),
+        publish_narratives=lambda narrative: publish_narratives((narrative,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

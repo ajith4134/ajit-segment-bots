@@ -272,3 +272,55 @@ def run_exploration_pair_decoder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A pair is two opinions on one symbol from two bots, one long one short,
+    that the brain opened together; each closed trade on that symbol is a
+    leg, and the pair is decoded when both legs have closed.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    publish_verdicts = context.bus.publisher_for("pair-verdict")
+    decoder = ExplorationPairDecoder(
+        maximum_opening_gap_seconds=context.number("pair_maximum_opening_gap"),
+        size_tolerance=context.number("pair_size_tolerance"),
+        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+    )
+    sides_seen: dict[tuple[str, str], set[str]] = {}
+
+    def read_pairs(_decoder):
+        for opinion in opinions.payloads():
+            if opinion.is_a_call_to_act:
+                sides_seen.setdefault((opinion.venue_id, opinion.symbol), set()).add(opinion.side)
+        episodes.payloads()
+        touched = set()
+        for trade in closed.payloads():
+            key = (trade.venue_id, trade.symbol)
+            if len(sides_seen.get(key, ())) < 2:
+                continue  # one side only: not a pair
+            pair_id = f"{key[0]}:{key[1]}"
+            decoder.observe_pair_question(pair_id, "which of two bots was right on this symbol")
+            decoder.observe_leg(
+                pair_id, trade.direction, trade, exit_reason=None,
+                opened_at_ns=trade.opened_at_ns, notional=trade.quantity * trade.entry_price,
+            )
+            touched.add(pair_id)
+        return tuple(sorted(touched))
+
+    return run_exploration_pair_decoder(
+        decoder=decoder,
+        control_socket=context.control_socket,
+        read_pairs=read_pairs,
+        publish_verdicts=lambda verdict: publish_verdicts((verdict,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -259,3 +259,62 @@ def run_near_miss_recorder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A candidate the brain stood aside on is a near miss: the intent's reason
+    says why, the latest print is the reference, and the recorder follows
+    the price for its horizon to say what was missed.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    candidates = Batch(read=context.bus.reader("entry-candidate"))
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_episodes = context.bus.publisher_for("near-miss-episode")
+    recorder = NearMissRecorder(
+        horizon_seconds=context.number("near_miss_horizon"),
+        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+    )
+    prices: dict[tuple[str, str], float] = {}
+    latest_candidate: dict[tuple[str, str], object] = {}
+
+    def read_refusals():
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                prices[(trade.venue_id, trade.symbol)] = trade.price
+                recorder.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+        for candidate in candidates.payloads():
+            latest_candidate[(candidate.venue_id, candidate.symbol)] = candidate
+        opinions.payloads()
+        jobs = []
+        for intent in intents.payloads():
+            if intent.is_actionable:
+                continue
+            key = (intent.venue_id, intent.symbol)
+            candidate = latest_candidate.get(key)
+            price = prices.get(key)
+            if candidate is None or price is None:
+                continue
+            jobs.append({
+                "episode_id": f"{key[0]}:{key[1]}:{intent.formed_at_ns}",
+                "venue_id": key[0], "symbol": key[1], "side": candidate.direction,
+                "reference_price": price, "why_not_taken": intent.reason,
+                "considered_at_ns": intent.formed_at_ns,
+            })
+        return tuple(jobs)
+
+    return run_near_miss_recorder(
+        recorder=recorder,
+        control_socket=context.control_socket,
+        read_refusals=read_refusals,
+        publish_episodes=lambda episode: publish_episodes((episode,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

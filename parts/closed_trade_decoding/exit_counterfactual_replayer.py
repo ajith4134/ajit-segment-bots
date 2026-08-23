@@ -245,3 +245,64 @@ def run_exit_counterfactual_replayer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The tape is every print while a position was open, kept per symbol; the
+    rules replayed against a closed trade are the bots' own exit plans for
+    that symbol -- the stop as a fixed stop, each target as a fixed target.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trade_identity import closed_trade_id
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    plans = {
+        kind: LatestByKey(read=context.bus.reader(kind), key_of=lambda p: (p.venue_id, p.symbol))
+        for kind in ("bull-exit-plan", "bear-exit-plan", "tail-exit-plan")
+    }
+    publish_counterfactuals = context.bus.publisher_for("exit-counterfactual")
+    replayer = ExitCounterfactualReplayer(round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"))
+    open_symbols: dict[tuple[str, str], str] = {}
+
+    def read_jobs():
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                trade_id = open_symbols.get((trade.venue_id, trade.symbol))
+                if trade_id is not None:
+                    replayer.observe_tape(trade_id, trade.price, trade.venue_time_ns)
+        jobs = []
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            key = (trade.venue_id, trade.symbol)
+            open_symbols.pop(key, None)
+            for kind, source in plans.items():
+                plan = source.mapping().get(key)
+                if plan is None:
+                    continue
+                jobs.append((trade_id, trade, f"{kind}:stop", {"kind": FIXED_STOP, "price": plan.stop_price}))
+                for index, target in enumerate(plan.targets):
+                    jobs.append((trade_id, trade, f"{kind}:target-{index}", {"kind": FIXED_TARGET, "price": target.price}))
+        # The next trade on a symbol starts a fresh tape under its own id.
+        for kind, source in plans.items():
+            for key in source.mapping():
+                open_symbols.setdefault(key, f"{key[0]}:{key[1]}:pending")
+        return tuple(jobs)
+
+    def publish(counterfactual) -> None:
+        if counterfactual is not None:
+            publish_counterfactuals((counterfactual,))
+
+    return run_exit_counterfactual_replayer(
+        replayer=replayer,
+        control_socket=context.control_socket,
+        read_jobs=read_jobs,
+        publish_counterfactuals=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

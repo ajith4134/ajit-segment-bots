@@ -264,3 +264,50 @@ def run_trade_cluster_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Closed trades inside the window are clustered together; the correlation
+    mapper's groups say which symbols move together. The window of recent
+    trades is kept here, bounded to the decoding window.
+    """
+    from collections import deque
+
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    clusters = Batch(read=context.bus.reader("correlation-cluster"))
+    publish_clusters = context.bus.publisher_for("trade-cluster")
+    detector = TradeClusterDetector(
+        window_seconds=context.number("trade_cluster_window"),
+        minimum_correlation=context.number("trade_cluster_minimum_correlation"),
+    )
+    recent = deque(maxlen=int(context.number("decoding_window")))
+
+    def read_trades():
+        for cluster in clusters.payloads():
+            members = getattr(cluster, "members", None) or getattr(cluster, "symbols", ())
+            group = getattr(cluster, "cluster_id", None) or getattr(cluster, "group", "")
+            for symbol in members:
+                detector.observe_correlation_group(symbol, str(group))
+            pairs = getattr(cluster, "correlations", None)
+            if isinstance(pairs, dict):
+                for (left, right), value in pairs.items():
+                    detector.observe_correlation(left, right, float(value))
+        for trade in closed.payloads():
+            recent.append((closed_trade_id(trade), trade))
+        return tuple(recent)
+
+    return run_trade_cluster_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_clusters=lambda cluster: publish_clusters((cluster,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -245,3 +245,63 @@ def run_entry_quality_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Prices are kept per symbol as they print; the moment the signal existed
+    is read off the journal's entry-candidate for the symbol, which the
+    recorder writes with the detection time. A trade without one is scored
+    as unmeasurable by name. The symbol's typical movement is the window's
+    own range of returns.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    publish_qualities = context.bus.publisher_for("entry-quality")
+    scorer = EntryQualityScorer(
+        window_seconds=context.number("entry_quality_window"),
+        minimum_prices=int(context.number("entry_quality_minimum_prices")),
+        chasing_in_typical_movements=context.number("entry_quality_chasing_movements"),
+    )
+    last_signal: dict[tuple[str, str], int] = {}
+    last_price: dict[tuple[str, str], float] = {}
+
+    def read_closed_trades():
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                key = (trade.venue_id, trade.symbol)
+                previous = last_price.get(key)
+                if previous:
+                    scorer.observe_typical_movement(trade.venue_id, trade.symbol, abs(trade.price / previous - 1.0))
+                last_price[key] = trade.price
+                scorer.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            if entry.kind == "entry-candidate" and "detected_at_ns" in payload:
+                key = (str(payload.get("venue_id", "")), str(payload.get("symbol", "")))
+                last_signal[key] = int(payload["detected_at_ns"])
+        jobs = []
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            signal_at = last_signal.get((trade.venue_id, trade.symbol))
+            if signal_at is not None:
+                scorer.observe_signal_time(trade_id, signal_at)
+            jobs.append((trade_id, trade))
+        return tuple(jobs)
+
+    return run_entry_quality_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_qualities=lambda quality: publish_qualities((quality,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

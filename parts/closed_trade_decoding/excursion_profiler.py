@@ -238,3 +238,46 @@ def run_excursion_profiler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An episode names the trade, its regime and whether it won; the excursion
+    tracker's latest record for the symbol says how far it went each way.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    excursions = LatestByKey(read=context.bus.reader("peak-excursion"), key_of=lambda e: (e.venue_id, e.symbol))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_profiles = context.bus.publisher_for("excursion-profile")
+    profiler = ExcursionProfiler(
+        window=int(context.number("decoding_window")),
+        quantile=context.number("signal_excursion_adverse_quantile"),
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+    )
+
+    def read_excursions():
+        latest = excursions.mapping()
+        jobs = []
+        for episode in episodes.payloads():
+            record = latest.get((episode.venue_id, episode.symbol))
+            if record is None:
+                continue
+            jobs.append({
+                "venue_id": episode.venue_id, "symbol": episode.symbol, "regime": episode.regime,
+                "favourable": max(0.0, record.best_unrealised), "adverse": max(0.0, -record.worst_unrealised),
+                "was_a_winner": episode.realised > 0,
+            })
+        return tuple(jobs)
+
+    return run_excursion_profiler(
+        profiler=profiler,
+        control_socket=context.control_socket,
+        read_excursions=read_excursions,
+        publish_profiles=lambda profile: publish_profiles((profile,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

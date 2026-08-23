@@ -285,3 +285,56 @@ def run_trade_replay_verifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The journal's record of a fill and the venue's own fill are compared
+    field by field when the trade closes. No venue fills arrive in phase 1
+    (no key), so every verification finds the venue side missing -- which
+    the verifier reports as a mismatch on existence, honestly, until the
+    venue reader runs.
+    """
+    from dataclasses import asdict
+
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    fills = Batch(read=context.bus.reader("fill"))
+    publish_mismatches = context.bus.publisher_for("replay-mismatch")
+    verifier = TradeReplayVerifier(
+        quantity_tolerance=context.number("replay_quantity_tolerance"),
+        price_tolerance=context.number("replay_price_tolerance"),
+        fee_tolerance=context.number("replay_fee_tolerance"),
+        timestamp_tolerance_seconds=context.number("replay_timestamp_tolerance"),
+    )
+    fills_of_symbol: dict[tuple[str, str], list] = {}
+
+    def read_trades():
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            if entry.kind == "fill" and payload.get("fill_id"):
+                verifier.observe_journal_entry(str(payload["fill_id"]), payload)
+        for fill in fills.payloads():
+            if not fill.is_paper:
+                verifier.observe_venue_fill(fill.fill_id, asdict(fill))
+            fills_of_symbol.setdefault((fill.venue_id, fill.symbol), []).append(fill.fill_id)
+        jobs = []
+        for trade in closed.payloads():
+            ids = fills_of_symbol.pop((trade.venue_id, trade.symbol), [])
+            jobs.append((closed_trade_id(trade), tuple(ids)))
+        return tuple(jobs)
+
+    return run_trade_replay_verifier(
+        verifier=verifier,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_mismatches=lambda mismatch: publish_mismatches((mismatch,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

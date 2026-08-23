@@ -251,3 +251,57 @@ def run_winner_pattern_miner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Each episode is a trade with its declared conditions; once per health
+    interval every condition value seen is mined for lift.
+    """
+    import datetime
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    patterns = Batch(read=context.bus.reader("sequence-pattern"))
+    significances = Batch(read=context.bus.reader("outcome-significance"))
+    publish_patterns = context.bus.publisher_for("winner-pattern")
+    declared = tuple(str(name) for name in context.setting("winner_pattern_conditions").value)
+    miner = WinnerPatternMiner(
+        declared_conditions=declared,
+        minimum_each_side=int(context.number("winner_pattern_minimum_each_side")),
+        minimum_lift=context.number("winner_pattern_minimum_lift"),
+    )
+    values_seen: set[tuple[str, str]] = set()
+    last_mine = [float("-inf")]
+
+    def read_conditions():
+        patterns.payloads()
+        significances.payloads()
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            opened = datetime.datetime.fromtimestamp(episode.opened_at_ns / 1e9, datetime.UTC)
+            session = "asia" if opened.hour < 8 else "europe" if opened.hour < 16 else "america"
+            conditions = {"regime": episode.regime, "session": session, "detector": episode.detector}
+            kept = {name: value for name, value in conditions.items() if name in declared}
+            miner.observe_trade(trade_id, kept, episode.realised > 0)
+            for name, value in kept.items():
+                values_seen.add((name, str(value)))
+        now = _time.monotonic()
+        if now - last_mine[0] < context.health_interval_seconds:
+            return ()
+        last_mine[0] = now
+        return tuple(sorted(values_seen))
+
+    return run_winner_pattern_miner(
+        miner=miner,
+        control_socket=context.control_socket,
+        read_conditions=read_conditions,
+        publish_patterns=lambda pattern: publish_patterns((pattern,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

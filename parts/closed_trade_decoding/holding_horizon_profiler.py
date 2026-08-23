@@ -276,3 +276,53 @@ def run_holding_horizon_profiler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An exit counterfactual says what a rule would have made; the episode for
+    the same trade says which setup it was. A counterfactual whose rule is
+    named for a horizon is a point on that setup's curve.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
+    publish_profiles = context.bus.publisher_for("horizon-profile")
+    horizons = tuple(float(h) for h in context.setting("horizon_profile_horizons").value)
+    profiler = HoldingHorizonProfiler(
+        horizons_seconds=horizons,
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        winning_margin=context.number("horizon_profile_winning_margin"),
+        decay_fraction=context.number("horizon_profile_decay_fraction"),
+    )
+    setup_of: dict[str, str] = {}
+
+    def read_counterfactuals():
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            setup_of[trade_id] = episode.detector
+        points = []
+        for counterfactual in counterfactuals.payloads():
+            setup = setup_of.get(counterfactual.trade_id)
+            if setup is None or counterfactual.realised_pnl is None:
+                continue
+            held = counterfactual.rule_name.rsplit(":", 1)[-1]
+            try:
+                horizon = float(held.rstrip("s"))
+            except ValueError:
+                continue
+            points.append((setup, horizon, counterfactual.realised_pnl))
+        return tuple(points)
+
+    return run_holding_horizon_profiler(
+        profiler=profiler,
+        control_socket=context.control_socket,
+        read_counterfactuals=read_counterfactuals,
+        publish_profiles=lambda profile: publish_profiles((profile,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

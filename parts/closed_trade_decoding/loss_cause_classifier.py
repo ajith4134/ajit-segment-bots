@@ -316,3 +316,70 @@ def run_loss_cause_classifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every analysis of a trade arrives on its own type and names the trade;
+    each is held until the episode that closes the trade arrives, and the
+    loss is classified with whatever had landed. What had not is None, which
+    the classifier reads as unmeasured rather than as absent evidence.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trading_types import ClosedTrade
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    excursions = LatestByKey(read=context.bus.reader("peak-excursion"), key_of=lambda e: (e.venue_id, e.symbol))
+    attributions = LatestByKey(read=context.bus.reader("pnl-attribution"), key_of=lambda a: a.trade_id)
+    flags = LatestByKey(read=context.bus.reader("regime-transition-flag"), key_of=lambda f: f.trade_id)
+    audits = LatestByKey(read=context.bus.reader("stop-audit"), key_of=lambda a: a.trade_id)
+    breakdowns = LatestByKey(read=context.bus.reader("shortfall-breakdown"), key_of=lambda b: b.trade_id)
+    publish_causes = context.bus.publisher_for("loss-cause")
+    classifier = LossCauseClassifier(
+        gave_back_threshold=context.number("exit_quality_gave_back_threshold"),
+        regime_share_threshold=context.number("loss_cause_regime_share_threshold"),
+        prior_correctness=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+
+    def read_losses():
+        excursions.mapping()
+        breakdowns.mapping()
+        jobs = []
+        for episode in episodes.payloads():
+            if episode.realised >= 0:
+                continue
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            closed_trade = ClosedTrade(
+                venue_id=episode.venue_id, symbol=episode.symbol, direction=str(episode.action),
+                quantity=float(conditions.get("quantity", 0.0) or 0.0),
+                entry_price=float(conditions.get("entry_price", 0.0) or 0.0),
+                exit_price=float(conditions.get("exit_price", 0.0) or 0.0),
+                realised_pnl=episode.realised, fees_paid=float(conditions.get("fees_paid", 0.0) or 0.0),
+                opened_at_ns=episode.opened_at_ns, closed_at_ns=episode.closed_at_ns,
+            )
+            jobs.append({
+                "trade_id": trade_id, "closed_trade": closed_trade,
+                "stop_audit": audits.mapping().get(trade_id) or conditions.get("stop_audit"),
+                "regime_flag": flags.mapping().get(trade_id) or conditions.get("regime_flag"),
+                "attribution": attributions.mapping().get(trade_id),
+                "exit_quality": conditions.get("exit_quality"),
+                "entry_quality": conditions.get("entry_quality"),
+                "significance": conditions.get("significance"),
+            })
+        return tuple(jobs)
+
+    return run_loss_cause_classifier(
+        classifier=classifier,
+        control_socket=context.control_socket,
+        read_losses=read_losses,
+        publish_causes=lambda cause: publish_causes((cause,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

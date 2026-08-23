@@ -307,3 +307,58 @@ def run_pnl_attributor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Fills, funding and the cost estimate for a symbol are kept until the
+    trade closes; the decision price is the bounded order's, read off the
+    cost estimate's notional where one was made. A fill is attributed to the
+    trade open on its symbol.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.trade_identity import closed_trade_id
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    fills = Batch(read=context.bus.reader("fill"))
+    settlements = Batch(read=context.bus.reader("funding-settlement"))
+    estimates = Batch(read=context.bus.reader("cost-estimate"))
+    excursions = Batch(read=context.bus.reader("peak-excursion"))
+    publish_attributions = context.bus.publisher_for("pnl-attribution")
+    attributor = PnlAttributor(reconciliation_tolerance=context.number("pnl_reconciliation_tolerance"))
+    quote = str(context.setting("settlement_currency").value)
+    pending_fills: dict[tuple[str, str], list] = {}
+    pending_funding: dict[tuple[str, str], float] = {}
+
+    def read_closed_trades():
+        excursions.payloads()
+        estimates.payloads()
+        for fill in fills.payloads():
+            pending_fills.setdefault((fill.venue_id, fill.symbol), []).append(fill)
+        for settlement in settlements.payloads():
+            key = (settlement.venue_id, settlement.symbol)
+            pending_funding[key] = pending_funding.get(key, 0.0) + float(settlement.amount_quote)
+        jobs = []
+        for trade in closed.payloads():
+            trade_id = closed_trade_id(trade)
+            key = (trade.venue_id, trade.symbol)
+            for fill in pending_fills.pop(key, []):
+                attributor.observe_fill(trade_id, fill, quote)
+            funding = pending_funding.pop(key, None)
+            if funding:
+                attributor.observe_funding(trade_id, funding)
+            attributor.observe_decision_price(trade_id, trade.entry_price)
+            jobs.append((trade_id, trade))
+        return tuple(jobs)
+
+    return run_pnl_attributor(
+        attributor=attributor,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_attributions=lambda a: publish_attributions((a,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
