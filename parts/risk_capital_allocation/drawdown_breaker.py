@@ -170,3 +170,43 @@ def run_drawdown_breaker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Equity is read off the segment's account balance as the account keeper
+    publishes it. closed-trade and drawdown-episode are declared and read so
+    the breaker is woken by the events that move equity, but the number it
+    judges is the keeper's equity: one source of truth for what the account is
+    worth, not a second one summed here.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    episodes = Batch(read=context.bus.reader("drawdown-episode"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    segment = str(context.setting("segment_id").value)
+    breaker = DrawdownBreaker(
+        maximum_drawdown_fraction=context.number("risk_maximum_drawdown_fraction"),
+        recovery_fraction=context.number("risk_drawdown_recovery_fraction"),
+        allowed_fraction_when_trading=context.number("risk_allowed_fraction_when_clear"),
+    )
+
+    def read_equity():
+        closed.payloads()
+        episodes.payloads()
+        balance = balances.mapping().get(segment)
+        return None if balance is None else balance.equity
+
+    return run_drawdown_breaker(
+        breaker=breaker,
+        control_socket=context.control_socket,
+        read_equity=read_equity,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

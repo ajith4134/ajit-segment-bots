@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import LONG
+from runtime.trading_types import LONG, SHORT
 
 PART_ID = "profit-lock"
 
@@ -253,4 +253,82 @@ def run_profit_lock(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The stop this part trails from is the last one it published for the
+    position, and before it has published one, the widest stop the risk
+    settings allow below the entry -- the most conservative assumption, and
+    safe because stop-order-manager never widens a stop, so an adjustment
+    computed from a stop wider than the real one can only be a tightening or
+    a hold. Retracements are learned from the excursion profiles the
+    profilers measure, as their adverse excursion.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = LatestByKey(read=context.bus.reader("position"), key_of=lambda p: (p.venue_id, p.symbol))
+    trades = Batch(read=context.bus.reader("market-data"))
+    profiles = Batch(read=context.bus.reader("excursion-profile"))
+    publish_adjustments = context.bus.publisher_for("stop-adjustment")
+    widest_stop = context.number("risk_maximum_stop_fraction")
+    lock = ProfitLock(
+        break_even_trigger_fraction=context.number("profit_lock_break_even_trigger"),
+        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+        prior_retracement_fraction=context.number("profit_lock_prior_retracement"),
+        maximum_trail_fraction=context.number("profit_lock_maximum_trail"),
+        minimum_observations=int(context.number("profit_lock_minimum_observations")),
+        window=int(context.number("profit_lock_window")),
+    )
+    prices: dict[tuple[str, str], float] = {}
+    stops: dict[tuple[str, str], float] = {}
+
+    def read_positions():
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                prices[(trade.venue_id, trade.symbol)] = trade.price
+        for profile in profiles.payloads():
+            adverse = getattr(profile, "adverse_excursion", None)
+            if adverse is None:
+                adverse = getattr(profile, "median_adverse", None)
+            if adverse is not None and adverse > 0:
+                lock.observe_retracement(profile.venue_id, profile.symbol, float(adverse))
+        requests = []
+        for key, position in positions.mapping().items():
+            if position.quantity == 0:
+                if key in stops:
+                    stops.pop(key, None)
+                    lock.observe_position_closed(*key)
+                continue
+            price = prices.get(key)
+            if price is None:
+                continue
+            direction = LONG if position.quantity > 0 else SHORT
+            entry = position.average_entry_price
+            if key not in stops:
+                stops[key] = entry * (1.0 - widest_stop) if direction == LONG else entry * (1.0 + widest_stop)
+            requests.append({
+                "venue_id": key[0], "symbol": key[1], "direction": direction,
+                "entry_price": entry, "current_price": price, "current_stop": stops[key],
+            })
+        return tuple(requests)
+
+    def publish(adjustments) -> None:
+        for adjustment in adjustments:
+            stops[(adjustment.venue_id, adjustment.symbol)] = adjustment.new_stop
+        if adjustments:
+            publish_adjustments(adjustments)
+
+    return run_profit_lock(
+        lock=lock,
+        control_socket=context.control_socket,
+        read_positions=read_positions,
+        publish_adjustments=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

@@ -209,3 +209,63 @@ def run_leverage_selector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A choice per actionable intent, from the latest volatility and funding
+    forecast for that symbol and the segment's leverage ceiling. No forecast
+    means the selector's own refusal, which it states; no ceiling yet means
+    no choice, since a leverage chosen against a ceiling nobody has read is a
+    leverage chosen against nothing.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    volatility = LatestByKey(read=context.bus.reader("volatility-forecast"), key_of=lambda f: (f.venue_id, f.symbol))
+    funding = LatestByKey(read=context.bus.reader("funding-forecast"), key_of=lambda f: (f.venue_id, f.symbol))
+    ceilings = LatestByKey(read=context.bus.reader("leverage-ceiling"), key_of=lambda a: a.segment)
+    publish_choices = context.bus.publisher_for("leverage-choice")
+    segment = str(context.setting("segment_id").value)
+    selector = LeverageSelector(
+        target_liquidation_distance=context.number("leverage_target_liquidation_distance"),
+        volatility_horizons_to_survive=context.number("leverage_volatility_horizons_to_survive"),
+        funding_tolerance_per_day=context.number("leverage_funding_tolerance_per_day"),
+        maintenance_margin_rate=context.number("maintenance_margin_rate"),
+    )
+
+    def read_intents():
+        allotment = ceilings.mapping().get(segment)
+        vol_by_symbol = volatility.mapping()
+        funding_by_symbol = funding.mapping()
+        requests = []
+        for intent in intents.payloads():
+            if not intent.is_actionable or allotment is None:
+                continue
+            key = (intent.venue_id, intent.symbol)
+            forecast = vol_by_symbol.get(key)
+            rate = funding_by_symbol.get(key)
+            requests.append({
+                "venue_id": intent.venue_id,
+                "symbol": intent.symbol,
+                "ceiling": allotment.leverage_ceiling,
+                "volatility_forecast": None if forecast is None else forecast.expected_volatility,
+                "funding_forecast": None if rate is None else rate.predicted_rate,
+            })
+        return tuple(requests)
+
+    def publish(choices) -> None:
+        if choices:
+            publish_choices(choices)
+
+    return run_leverage_selector(
+        selector=selector,
+        control_socket=context.control_socket,
+        read_intents=read_intents,
+        publish_choices=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -157,3 +157,63 @@ def run_halt_enforcer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Four sources can halt. A trading halt is raised while is_halted and
+    released when a decision says it is not; a policy decision refusing the
+    subject "trading" halts until one allows it; an active human override
+    whose instruction says halt holds until it is inactive or expired; and a
+    capital-settings verdict other than valid halts the segment until the
+    settings read cleanly again. Each is its own kind, so the limit names
+    every reason standing rather than the last one.
+    """
+    from runtime.input_assembly import Batch
+
+    halts = Batch(read=context.bus.reader("trading-halt"))
+    decisions = Batch(read=context.bus.reader("policy-decision"))
+    overrides = Batch(read=context.bus.reader("human-override"))
+    verdicts = Batch(read=context.bus.reader("capital-settings-verdict"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    enforcer = HaltEnforcer(allowed_fraction_when_clear=context.number("risk_allowed_fraction_when_clear"))
+    segment = str(context.setting("segment_id").value)
+
+    def read_halt_events(_enforcer) -> None:
+        for halt in halts.payloads():
+            if halt.is_halted:
+                enforcer.raise_halt(TRADING_HALT, halt.scope, halt.reason)
+            else:
+                enforcer.release_halt(TRADING_HALT)
+        for decision in decisions.payloads():
+            if decision.subject != "trading":
+                continue
+            if decision.is_allowed:
+                enforcer.release_halt(POLICY_REFUSAL)
+            else:
+                enforcer.raise_halt(POLICY_REFUSAL, decision.envelope_level, decision.reason)
+        for override in overrides.payloads():
+            wants_halt = "halt" in override.instruction.lower()
+            if override.is_active and wants_halt:
+                enforcer.raise_halt(HUMAN_OVERRIDE, override.source_reference, override.instruction)
+            elif wants_halt:
+                enforcer.release_halt(HUMAN_OVERRIDE)
+        for verdict in verdicts.payloads():
+            if verdict.segment != segment:
+                continue
+            if verdict.permits_trading:
+                enforcer.release_halt(SETTINGS_INVALID)
+            else:
+                enforcer.raise_halt(SETTINGS_INVALID, verdict.segment, verdict.reason)
+
+    return run_halt_enforcer(
+        enforcer=enforcer,
+        control_socket=context.control_socket,
+        read_halt_events=read_halt_events,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

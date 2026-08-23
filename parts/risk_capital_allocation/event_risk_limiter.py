@@ -241,3 +241,76 @@ def run_event_risk_limiter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Five kinds of evidence, each registered in the limiter's own terms. A
+    market event with an effective time is scheduled; one without is treated
+    as an announcement. A turbulence reading is proportional, against the
+    index's normal level -- the number of symbols in the index, which is the
+    expectation of a Mahalanobis distance over that many dimensions. A
+    sequence pattern is read as evidence about the strategy, not the market,
+    and is consumed without shrinking anything: the limiter has no stated
+    rule for it and an invented one would be a number with no provenance.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    events = Batch(read=context.bus.reader("market-event"))
+    anomalies = Batch(read=context.bus.reader("market-anomaly"))
+    turbulence = Batch(read=context.bus.reader("turbulence-index"))
+    announcements = Batch(read=context.bus.reader("venue-announcement"))
+    patterns = Batch(read=context.bus.reader("sequence-pattern"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    limiter = EventRiskLimiter(
+        allowed_fraction_when_calm=context.number("risk_allowed_fraction_when_clear"),
+        turbulence_shrink_floor=context.number("event_risk_turbulence_floor"),
+    )
+    anomaly_shrink = context.number("event_risk_anomaly_shrink_to")
+    anomaly_decay = context.number("event_risk_anomaly_decay")
+    announcement_shrink = context.number("event_risk_announcement_shrink_to")
+    announcement_window = context.number("event_risk_announcement_window")
+    scheduled_window = context.number("event_risk_scheduled_window")
+    scheduled_shrink = context.number("event_risk_scheduled_shrink_to")
+    turbulence_horizon = context.number("event_risk_turbulence_horizon")
+
+    def register_scheduled_or_announced(subject: str, effective_at_ns, reason: str) -> None:
+        if effective_at_ns is not None:
+            seconds_until = (effective_at_ns - _time.time_ns()) / 1e9
+            if seconds_until + scheduled_window > 0:
+                limiter.register_scheduled_event(subject, seconds_until, scheduled_window, scheduled_shrink, reason)
+            return
+        limiter.register_announcement(subject, announcement_shrink, announcement_window, reason)
+
+    def read_events(_limiter) -> None:
+        for event in events.payloads():
+            subject = ",".join(event.symbols) if event.symbols else event.venue_id
+            register_scheduled_or_announced(subject, event.effective_at_ns, f"{event.event_type}: {event.title}")
+        for announcement in announcements.payloads():
+            symbols = getattr(announcement, "symbols", ())
+            subject = ",".join(symbols) if symbols else announcement.venue_id
+            headline = getattr(announcement, "headline", None) or getattr(announcement, "title", "")
+            register_scheduled_or_announced(subject, announcement.effective_at_ns, headline)
+        for anomaly in anomalies.payloads():
+            if anomaly.is_anomalous:
+                limiter.register_anomaly(
+                    f"{anomaly.venue_id}:{anomaly.symbol}", anomaly_shrink, anomaly_decay, anomaly.reason
+                )
+        for reading in turbulence.payloads():
+            if reading.distance is not None and reading.symbols:
+                limiter.observe_turbulence(reading.distance, float(len(reading.symbols)), turbulence_horizon)
+        patterns.payloads()
+
+    return run_event_risk_limiter(
+        limiter=limiter,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

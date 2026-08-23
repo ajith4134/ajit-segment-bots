@@ -198,3 +198,62 @@ def run_margin_liquidation_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Liquidation prices come from liquidation-price-tracker; the mark is the
+    latest trade for the symbol; the account's equity and maintenance
+    requirement come from the segment's balance, the requirement being the
+    maintenance rate over the notional the watch can see in its positions. A
+    position whose quantity goes to zero is forgotten.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = Batch(read=context.bus.reader("position"))
+    balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
+    liquidations = LatestByKey(read=context.bus.reader("liquidation-price"), key_of=lambda l: (l.venue_id, l.symbol))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    segment = str(context.setting("segment_id").value)
+    maintenance_rate = context.number("maintenance_margin_rate")
+    watch = MarginLiquidationWatch(
+        danger_price_distance=context.number("liquidation_danger_price_distance"),
+        danger_equity_headroom=context.number("liquidation_danger_equity_headroom"),
+        allowed_fraction_when_safe=context.number("risk_allowed_fraction_when_clear"),
+    )
+    marks: dict[tuple[str, str], float] = {}
+    notional: dict[tuple[str, str], float] = {}
+
+    def read_positions_and_account(_watch) -> None:
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                marks[(trade.venue_id, trade.symbol)] = trade.price
+        for position in positions.payloads():
+            key = (position.venue_id, position.symbol)
+            if position.quantity == 0:
+                notional.pop(key, None)
+                watch.observe_position_closed(position.venue_id, position.symbol)
+            else:
+                notional[key] = abs(position.quantity) * position.average_entry_price
+        for key, liquidation in liquidations.mapping().items():
+            if key in notional:
+                watch.observe_liquidation_price(
+                    key[0], key[1], liquidation.liquidation_price, marks.get(key)
+                )
+        balance = balances.mapping().get(segment)
+        if balance is not None:
+            watch.observe_account(balance.equity, maintenance_rate * sum(notional.values()))
+
+    return run_margin_liquidation_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_positions_and_account=read_positions_and_account,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

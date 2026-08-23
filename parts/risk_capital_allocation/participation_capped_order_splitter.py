@@ -239,3 +239,80 @@ def run_participation_capped_order_splitter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Traded volume per symbol is measured from the order books' turnover --
+    the only volume this part is handed, since it declares the book and not
+    the trade stream -- as the quantity that left the top of book between
+    snapshots; a schedule is built for every bounded order that was not
+    refused, shortened by the symbol's volatility forecast.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.order_book import OrderBookSnapshot
+
+    orders = Batch(read=context.bus.reader("bounded-order"))
+    volatility = LatestByKey(read=context.bus.reader("volatility-forecast"), key_of=lambda f: (f.venue_id, f.symbol))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_schedules = context.bus.publisher_for("execution-schedule")
+    interval = context.number("order_slice_interval")
+    splitter = ParticipationCappedOrderSplitter(
+        participation_cap=context.number("order_participation_cap"),
+        slice_interval_seconds=interval,
+        maximum_horizon_seconds=context.number("order_maximum_schedule_horizon"),
+        volatility_urgency_factor=context.number("order_volatility_urgency_factor"),
+    )
+    last_book: dict[tuple[str, str], OrderBookSnapshot] = {}
+
+    def read_orders():
+        volumes = []
+        for book in books.payloads():
+            if not isinstance(book, OrderBookSnapshot):
+                continue
+            key = (book.venue_id, book.symbol)
+            previous = last_book.get(key)
+            last_book[key] = book
+            if previous is None or book.venue_time_ns <= previous.venue_time_ns:
+                continue
+            # Quantity that left the best levels between two books is a floor on
+            # what traded; quantity that was pulled also leaves, so this is an
+            # estimate the splitter treats as the measured figure until a trade
+            # stream is declared for it.
+            before = dict(previous.bids[:1] + previous.asks[:1])
+            after = dict(book.bids[:1] + book.asks[:1])
+            gone = sum(max(0.0, quantity - after.get(price, 0.0)) for price, quantity in before.items())
+            seconds = (book.venue_time_ns - previous.venue_time_ns) / 1e9
+            if gone > 0 and seconds > 0:
+                volumes.append({
+                    "venue_id": book.venue_id, "symbol": book.symbol,
+                    "quantity_traded": gone, "over_seconds": seconds,
+                })
+        vol_by_symbol = volatility.mapping()
+        requests = []
+        for order in orders.payloads():
+            if order.quantity <= 0:
+                continue
+            forecast = vol_by_symbol.get((order.venue_id, order.symbol))
+            requests.append({
+                "venue_id": order.venue_id, "symbol": order.symbol, "side": order.side,
+                "quantity": order.quantity,
+                "volatility_forecast": None if forecast is None else forecast.expected_volatility,
+            })
+        return volumes, requests
+
+    def publish(schedules) -> None:
+        if schedules:
+            publish_schedules(schedules)
+
+    return run_participation_capped_order_splitter(
+        splitter=splitter,
+        control_socket=context.control_socket,
+        read_orders=read_orders,
+        publish_schedules=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

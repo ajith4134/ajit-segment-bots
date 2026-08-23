@@ -752,3 +752,158 @@ note  = "operator, 2026-08-23: the window switch_transitions_before_flap is coun
 value = 60.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how long a flapping part is held in its current state the first time it flaps; the damper doubles it on each repeat. One minute equals the spine's restart backoff ceiling, so a hold is never shorter than the substrate's own patience."
+
+[risk_maximum_drawdown_fraction]
+value = 0.1
+unit  = "fraction of peak equity"
+note  = "operator, 2026-08-23: how far realised equity may fall from its high-water mark before drawdown-breaker zeroes the risk limit. Ten percent of the 10000 USDT paper allotment is 1000 USDT, ten consecutive full-risk losses at risk_maximum_per_position_fraction -- a run long enough to be the strategy, not the noise. A judgement on paper; what would settle it is the realised distribution of drawdowns once enough trades have closed."
+
+[risk_drawdown_recovery_fraction]
+value = 0.5
+unit  = "fraction of the drawdown"
+note  = "operator, 2026-08-23: how much of the drawdown must be recovered before a tripped drawdown-breaker releases. Half, so a breaker does not flap at the floor: tripped at -10%, it releases at -5%, and a bot that only ever claws back a little stays stopped."
+
+[risk_allowed_fraction_when_clear]
+value = 1.0
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: the risk limit a breaker or enforcer publishes when nothing is wrong. One: the limit that binds in a clear market is exposure-limiter's per-position and per-cluster caps, and a second, lower number here would be a cap nobody could trace to a reason. Every limiter publishes a fraction and position-sizer takes the minimum."
+
+[event_risk_anomaly_shrink_to]
+value = 0.25
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: how far event-risk-limiter shrinks the risk limit while a market anomaly on a symbol stands -- a venue's price disagreeing with the consolidated price. A quarter, not zero: an anomaly is evidence that one print is wrong, not that trading is, and a position sized at a quarter survives being on the wrong side of it. Unmeasured until market-anomaly-detector has produced an anomaly on a live run."
+
+[event_risk_anomaly_decay]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long an anomaly's shrink decays back to the full limit. Five minutes, the same window feed-coverage uses to decide whether a stream is gone: a disagreement that has not resolved in five minutes is a new fact the detector will report again."
+
+[event_risk_announcement_shrink_to]
+value = 0.5
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: the limit while a venue announcement naming a symbol is in force -- a delisting, a maintenance window, a contract change. Half: the announcement is about the venue's plumbing, not the market, and the risk is that an exit cannot be made, which halving the size halves."
+
+[event_risk_announcement_window]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long an announcement's shrink stands from when it is observed. An hour: both venues announce maintenance at least an hour ahead, and an announcement older than that either has an effective time the limiter reads as a scheduled event or has already happened."
+
+[event_risk_scheduled_window]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far either side of a scheduled market event the limiter shrinks the limit. Fifteen minutes, because repricing around a funding settlement or a listing happens in anticipation and a limiter that only shrank after the print would be positioned through the move it was meant to avoid."
+
+[event_risk_scheduled_shrink_to]
+value = 0.5
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: the limit inside a scheduled event's window. Half, the same reasoning as an announcement: the event is known, its direction is not, and a half-sized position is the expression of that."
+
+[event_risk_turbulence_floor]
+value = 0.1
+unit  = "fraction of the allotment"
+note  = "operator, 2026-08-23: the least the limit may shrink to under turbulence, however far the index is above normal. A tenth rather than zero: turbulence is a continuum and the floor keeps the bot in the market at the size where being wrong is survivable, which is where the learning about turbulent markets has to come from."
+
+[event_risk_turbulence_horizon]
+value = 600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long one turbulence reading shrinks the limit before it must be re-observed. Ten minutes, longer than the gauge's own interval, so a gauge that stops reporting leaves the shrink in place rather than releasing it into a market it can no longer see."
+
+[leverage_target_liquidation_distance]
+value = 0.1
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far from the entry leverage-selector places the liquidation price, as the most leverage it will choose. Ten percent: measured on today's tape, the largest intraday move on the captured thirty was 1.5% (TRUMPUSDT), so a liquidation ten percent away survives six such moves stacked, which is the margin a paper bot learning its exits needs."
+
+[leverage_volatility_horizons_to_survive]
+value = 3.0
+unit  = "horizons"
+note  = "operator, 2026-08-23: how many forecast volatility horizons of adverse move the chosen leverage must survive before liquidation. Three, so a two-sigma move over the forecast horizon -- ordinary, not a tail -- leaves a third of the distance unspent."
+
+[leverage_funding_tolerance_per_day]
+value = 0.001
+unit  = "fraction of notional per day"
+note  = "operator, 2026-08-23: the most funding leverage-selector will pay per day at the chosen leverage before it reduces it. Ten basis points a day -- three settlements at the venues' base 0.01% each is three, so this tolerates a rate three times base, which on 2026-08-22 the captured fundingInfo put only a few symbols above."
+
+[maintenance_margin_rate]
+value = 0.005
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: the venue's maintenance margin at the lowest risk tier, used wherever a liquidation distance is computed. Half a percent, which is both venues' published first tier for BTCUSDT perpetuals; tiers rise with position size and the 1000 USDT per-trade cap keeps every paper position in the first. Not readable from public endpoints per symbol without an authenticated call, so it is the published schedule and should be re-read once keys exist."
+
+[liquidation_danger_price_distance]
+value = 0.03
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how close the mark may come to a position's liquidation price before margin-liquidation-watch zeroes new risk. Three percent: twice the largest intraday move measured on the captured thirty today (1.5%), so a single ordinary move cannot take a position from safe to liquidated inside one health interval."
+
+[liquidation_danger_equity_headroom]
+value = 0.2
+unit  = "fraction of the maintenance requirement"
+note  = "operator, 2026-08-23: how much equity above the account's maintenance requirement is the least margin-liquidation-watch calls safe. A fifth over maintenance; below it the venue, not the bot, decides what closes."
+
+[order_participation_cap]
+value = 0.1
+unit  = "fraction of traded volume"
+note  = "operator, 2026-08-23: the share of a symbol's measured traded volume one slice of an order may be, above which participation-capped-order-splitter splits it. A tenth: measured on today's tape the thinnest captured symbol trades about 30 prints a minute, and a slice that is a tenth of a minute's volume moves the price by about one spread on both books captured. A judgement until slippage-learner has measured impact against participation."
+
+[order_slice_interval]
+value = 10.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far apart the splitter schedules slices. Ten seconds, the window the participation cap is measured over, so one slice is one window's share."
+
+[order_maximum_schedule_horizon]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the longest a split order may take to complete. Five minutes, the horizon the spread-reversion detector claims over, after which the decision that produced the order is a decision about a market that has gone."
+
+[order_volatility_urgency_factor]
+value = 1.0
+unit  = "multiplier"
+note  = "operator, 2026-08-23: how much a volatility forecast shortens the schedule -- at one, a symbol forecast to move twice its normal is scheduled in half the time. One until the trade-off between impact and the cost of waiting has been measured."
+
+[profit_lock_break_even_trigger]
+value = 0.02
+unit  = "fraction of entry price"
+note  = "operator, 2026-08-23: how far a position must be in profit before profit-lock moves its stop to break-even. Two percent, about three times the two-fee round trip plus the measured typical adverse excursion on the captured symbols, so a stop moved to break-even is not immediately hit by the noise that preceded the move."
+
+[profit_lock_prior_retracement]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the retracement a winner is assumed to give back, used to place the trailing stop before profit-lock has observed enough retracements on the symbol to measure its own. One percent, below the 1.5% largest intraday move measured today so that an ordinary pullback does not stop a winner out before the measurement exists."
+
+[profit_lock_maximum_trail]
+value = 0.1
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the widest a trailing stop may be set from the peak, whatever the measured retracement says. Ten percent; a trail wider than that is not locking profit, it is a new stop."
+
+[profit_lock_minimum_observations]
+value = 10
+unit  = "retracements"
+note  = "operator, 2026-08-23: how many retracements profit-lock needs on a symbol before it trails by the measured quantile rather than the prior. Ten, the least a quantile of a small sample can mean; below it the prior is used and the adjustment says so."
+
+[profit_lock_window]
+value = 50
+unit  = "retracements"
+note  = "operator, 2026-08-23: how many recent retracements per symbol profit-lock keeps for its quantile. Fifty, so a regime change shows within fifty winners and an outlier weighs two percent."
+
+[stop_frequency_window]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many recent closed trades stop-frequency-breaker counts stop-outs over. Twenty, enough that a cluster of stops is a rate rather than a coincidence, few enough that the breaker trips before the equity curve shows it, which is the whole point."
+
+[stop_frequency_prior_rate]
+value = 0.4
+unit  = "fraction of closed trades"
+note  = "operator, 2026-08-23: the stop-out rate assumed normal before enough trades have closed to measure one. Two in five: at the 1.5 reward-to-risk the exit plans aim for, a bot right half the time stops out half the time, and the prior sits just under that so an early run at the break-even rate does not trip it."
+
+[stop_frequency_excess_ratio]
+value = 1.8
+unit  = "multiple of the normal rate"
+note  = "operator, 2026-08-23: how many times the normal stop-out rate the recent rate must reach to trip. At 1.8 times 0.4 the breaker trips when 72% of recent trades stopped out, which over a twenty-trade window is a four-sigma excess against the prior."
+
+[stop_frequency_minimum_observations]
+value = 5
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many trades must have closed before the breaker judges at all. Five: three stop-outs in three trades is no evidence of anything."
+
+[stop_frequency_cooldown_trades]
+value = 5
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many trades after a trip the breaker stays tripped, at the size the sizer is left with. Five, so the bot re-enters small and the recovery is measured rather than assumed."

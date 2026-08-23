@@ -194,3 +194,40 @@ def run_stop_frequency_breaker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A closed trade carries no flag saying whether the stop took it out, so a
+    stop-out is read as a trade closed at a loss: the exit the stop is for.
+    A losing exit that was not the stop is counted the same, which overstates
+    the rate by the trades that expired in the red -- stated here, and the
+    reason the prior sits under the break-even rate.
+    """
+    from runtime.input_assembly import Batch
+
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    breaker = StopFrequencyBreaker(
+        window_trades=int(context.number("stop_frequency_window")),
+        prior_stop_rate=context.number("stop_frequency_prior_rate"),
+        excess_ratio=context.number("stop_frequency_excess_ratio"),
+        minimum_observations=int(context.number("stop_frequency_minimum_observations")),
+        cooldown_trades=int(context.number("stop_frequency_cooldown_trades")),
+        allowed_fraction_when_trading=context.number("risk_allowed_fraction_when_clear"),
+    )
+
+    def read_closed_trades():
+        return tuple(trade.realised_pnl < 0 for trade in closed.payloads())
+
+    return run_stop_frequency_breaker(
+        breaker=breaker,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -205,10 +205,15 @@ def start_part(context) -> int:
     """
     publish_allotment_type = context.bus.publisher_for("capital-allotment")
     publish_bounds_type = context.bus.publisher_for("trade-capital-bounds")
+    # Declared since the blueprint and published since 2026-08-23: the ceiling
+    # is a field of the allotment, and the allotment goes out on this type too
+    # so leverage-selector reads leverage_ceiling off what it is handed.
+    publish_ceiling_type = context.bus.publisher_for("leverage-ceiling")
 
     def publish_allotment(allotment) -> None:
         publish_allotment_type([allotment])
         publish_bounds_type([allotment.bounds])
+        publish_ceiling_type([allotment])
 
     return run_capital_allotment_reader(
         reader=CapitalAllotmentReader(segment=str(context.setting("segment_id").value)),
