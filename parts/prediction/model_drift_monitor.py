@@ -286,3 +286,47 @@ def run_model_drift_monitor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    accuracies = Batch(read=context.bus.reader("forecast-accuracy"))
+    reports = Batch(read=context.bus.reader("forgetting-report"))
+    publish_alerts = context.bus.publisher_for("model-drift-alert")
+    monitor = ModelDriftMonitor(
+        established_window=int(context.number("drift_established_window")),
+        recent_window=int(context.number("drift_recent_window")),
+        minimum_established=int(context.number("drift_minimum_established")),
+        noise_multiple=context.number("drift_noise_multiple"),
+        forgetting_threshold=context.number("drift_forgetting_threshold"),
+        realert_after_seconds=context.number("drift_realert_after"),
+    )
+
+    def read_accuracy_and_reports(_monitor):
+        touched = set()
+        for accuracy in accuracies.payloads():
+            monitor.observe_accuracy(accuracy)
+            touched.add((accuracy.forecaster, accuracy.model_name))
+        for report in reports.payloads():
+            if report.overall_recall is not None:
+                monitor.observe_forgetting_report("kronos-forecaster", report.model_name, report.overall_recall)
+                touched.add(("kronos-forecaster", report.model_name))
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_alerts(kept)
+
+    return run_model_drift_monitor(
+        monitor=monitor,
+        control_socket=context.control_socket,
+        read_accuracy_and_reports=read_accuracy_and_reports,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

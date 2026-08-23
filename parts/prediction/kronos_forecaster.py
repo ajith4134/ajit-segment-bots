@@ -284,3 +284,56 @@ def run_kronos_forecaster(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No weights are loaded on this machine, so every forecast is the refusal
+    MODEL_NOT_LOADED, which is a state and not a zero. Fine-tuned models,
+    champion choices and accelerator slots are applied as they arrive.
+    """
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("kline-window"))
+    models = Batch(read=context.bus.reader("finetuned-model"))
+    choices = Batch(read=context.bus.reader("model-choice"))
+    champions = Batch(read=context.bus.reader("champion-choice"))
+    slots = Batch(read=context.bus.reader("accelerator-slot"))
+    publish_forecasts = context.bus.publisher_for("price-forecast")
+    forecaster = KronosForecaster(
+        forecast_steps=int(context.number("kronos_forecast_steps")),
+        sample_paths=int(context.number("kronos_sample_paths")),
+        interval_quantile=context.number("kronos_interval_quantile"),
+        interval_seconds=context.number("forecast_horizon"),
+    )
+
+    def read_windows_and_choices(_forecaster):
+        for model in models.payloads():
+            loaded = getattr(model, "loaded", None)
+            if loaded is not None:
+                forecaster.load_model("challenger", loaded)
+        choices.payloads()
+        for choice in champions.payloads():
+            if getattr(choice, "model_name", None) == PART_ID:
+                forecaster.apply_champion_choice(getattr(choice, "decision", "champion"))
+        for slot in slots.payloads():
+            if getattr(slot, "part_id", None) == PART_ID:
+                forecaster.set_accelerator_slot(getattr(slot, "state", "") == "granted")
+        return tuple(windows.payloads())
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_forecasts(kept)
+
+    return run_kronos_forecaster(
+        forecaster=forecaster,
+        control_socket=context.control_socket,
+        read_windows_and_choices=read_windows_and_choices,
+        publish_forecasts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

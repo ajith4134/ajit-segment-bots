@@ -251,3 +251,57 @@ def run_kline_window_builder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Candles arrive on market-data from the candle reader with the venue's
+    closed flag; a window is rebuilt and published for a symbol when a
+    closed candle lands on it.
+    """
+    from runtime.forecast_types import Candle
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedCandle
+
+    updates = Batch(read=context.bus.reader("market-data"))
+    publish_windows = context.bus.publisher_for("kline-window")
+    builder = KlineWindowBuilder(
+        interval=str(context.setting("candle_interval").value),
+        maximum_window=int(context.number("kline_maximum_window")),
+        include_open_candle=bool(context.setting("kline_include_open_candle").value),
+    )
+    length = int(context.number("kline_window_length"))
+
+    def read_candles(_builder):
+        touched = set()
+        for update in updates.payloads():
+            if not isinstance(update, NormalisedCandle):
+                continue
+            builder.observe_candle(
+                update.venue_id, update.symbol,
+                Candle(
+                    open_time_ns=update.open_time_ns, open=update.open, high=update.high, low=update.low,
+                    close=update.close, volume=update.volume, quote_volume=update.quote_volume,
+                    trades=update.trades or 0, is_closed=update.is_closed,
+                ),
+            )
+            if update.is_closed:
+                touched.add((update.venue_id, update.symbol))
+        return tuple((venue_id, symbol, length) for venue_id, symbol in sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_windows(kept)
+
+    return run_kline_window_builder(
+        builder=builder,
+        control_socket=context.control_socket,
+        read_candles=read_candles,
+        publish_windows=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -250,3 +250,43 @@ def run_order_flow_state_encoder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_states = context.bus.publisher_for("order-flow-state")
+    encoder = OrderFlowStateEncoder(
+        volume_window_seconds=int(context.number("order_flow_volume_window")),
+        minimum_volume_observations=int(context.number("order_flow_minimum_volume_observations")),
+    )
+    length = int(context.number("order_flow_state_length"))
+
+    def read_trades(_encoder):
+        books.payloads()
+        touched = set()
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                encoder.observe_trade(trade.venue_id, trade.symbol, trade.price, trade.quantity, trade.venue_time_ns)
+                touched.add((trade.venue_id, trade.symbol))
+        return tuple((venue_id, symbol, length) for venue_id, symbol in sorted(touched))
+
+    def publish(state_tuples) -> None:
+        flat = tuple(state for states in state_tuples for state in states)
+        if flat:
+            publish_states(flat)
+
+    return run_order_flow_state_encoder(
+        encoder=encoder,
+        control_socket=context.control_socket,
+        read_trades=read_trades,
+        publish_states=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

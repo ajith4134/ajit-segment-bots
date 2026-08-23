@@ -2342,3 +2342,223 @@ note  = "operator, 2026-08-23: the most of the whole book one symbol may hold af
 value = 0.005
 unit  = "fraction of price"
 note  = "operator, 2026-08-23: how far in profit a held position must be before tail-winner-selector adds to it. Half a percent, twice the round trip."
+
+[forecast_horizon]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the horizon the volatility forecasters and the Kronos forecaster forecast over. Five minutes, the single-symbol detectors' horizon, so a forecast answers the question the detectors ask."
+
+[forecast_prior_absolute_return]
+value = 0.001
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the absolute return the entropy forecaster assumes per horizon before it has measured outcomes per entropy quintile. Ten basis points, the median five-minute move on the liquid captured symbols today."
+
+[forecast_low_entropy_percentile]
+value = 0.2
+unit  = "percentile"
+note  = "operator, 2026-08-23: the entropy percentile below which order flow is read as ordered -- a large move forming. A fifth."
+
+[forecast_outcome_window]
+value = 500
+unit  = "outcomes"
+note  = "operator, 2026-08-23: how many outcomes per entropy quintile the forecaster keeps. Five hundred."
+
+[flow_entropy_window]
+value = 120
+unit  = "seconds"
+note  = "operator, 2026-08-23: how many seconds of flow states the entropy meter measures over. Two minutes, enough transitions among six states for a rate."
+
+[flow_entropy_percentile_window]
+value = 500
+unit  = "readings"
+note  = "operator, 2026-08-23: how many recent entropy readings per symbol the meter keeps to rank the current one. Five hundred."
+
+[flow_entropy_prior]
+value = 0.8
+unit  = "fraction of maximum entropy"
+note  = "operator, 2026-08-23: the entropy assumed before enough transitions have been seen. Four fifths of maximum -- order flow is mostly noise."
+
+[forecast_deviation_threshold]
+value = 3.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far a window's returns may sit from the training distribution before forecast-distribution-gate flags the forecast. Three."
+
+[forecast_volatility_deviation_threshold]
+value = 3.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: the same threshold for the window's volatility. Three."
+
+[forecast_headroom]
+value = 1.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: how far beyond the training data's largest move a forecast may reach before it is flagged, as a multiple of that move -- at least one by the gate's own rule, which refused a first value written as a fraction. One and a half."
+
+[ensemble_minimum_trust]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the measured accuracy a forecaster needs for the ensembler to include it. Just above the coin flip, as for forecast_trust_threshold."
+
+[ensemble_minimum_members]
+value = 1
+unit  = "forecasters"
+note  = "operator, 2026-08-23: how many trusted forecasters must contribute before an ensemble forecast is published. One on paper; a second forecaster does not yet run."
+
+[funding_premium_window]
+value = 480
+unit  = "observations"
+note  = "operator, 2026-08-23: how many mark-minus-index premiums funding-rate-forecaster averages, the venues' own eight-hour window at a reading a minute."
+
+[implied_vol_maximum_quote_age]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old an options quote may be before the implied-vol reader drops it. A minute."
+
+[implied_vol_minimum_strikes_per_expiry]
+value = 3
+unit  = "strikes"
+note  = "operator, 2026-08-23: how many strikes an expiry needs for a smile to be read. Three."
+
+[kline_maximum_window]
+value = 512
+unit  = "candles"
+note  = "operator, 2026-08-23: the longest candle window kline-window-builder keeps per symbol. 512, the context length Kronos was trained on."
+
+[kline_include_open_candle]
+value = false
+unit  = "true or false"
+note  = "operator, 2026-08-23: whether the window includes the current, unfinished candle. No: a partial minute recorded as finished is the failure the candle reader exists to prevent."
+
+[kline_window_length]
+value = 64
+unit  = "candles"
+note  = "operator, 2026-08-23: the window length published per symbol. Sixty-four minutes, the shortest context the Kronos tokenizer accepts and an hour of market."
+
+[kronos_minimum_training_windows]
+value = 100
+unit  = "windows"
+note  = "operator, 2026-08-23: how many windows the finetuner needs before it fine-tunes. A hundred."
+
+[kronos_validation_fraction]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of windows held out as the validation tail, the finetuner's own meaning of the number -- a first value written as the training share was refused at launch. A fifth."
+
+[kronos_epochs]
+value = 1
+unit  = "epochs"
+note  = "operator, 2026-08-23: how many passes a fine-tune makes. One; no accelerator is on this box and no weights are loaded, so this is unexercised."
+
+[kronos_refit_tokenizer]
+value = true
+unit  = "true or false"
+note  = "operator, 2026-08-23: whether the tokenizer is refitted on fine-tune. Yes, per the Kronos authors' recipe."
+
+[kronos_maximum_windows_held]
+value = 1000
+unit  = "windows"
+note  = "operator, 2026-08-23: how many windows the finetuner holds in memory. A thousand; a process's memory is bounded."
+
+[kronos_forecast_steps]
+value = 5
+unit  = "candles"
+note  = "operator, 2026-08-23: how many candles ahead Kronos forecasts. Five minutes, forecast_horizon."
+
+[kronos_sample_paths]
+value = 8
+unit  = "paths"
+note  = "operator, 2026-08-23: how many sample paths a forecast averages. Eight; unexercised without weights."
+
+[kronos_interval_quantile]
+value = 0.8
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of sampled paths that bounds the forecast interval. The eightieth."
+
+[kronos_sizes]
+value = ["kronos-mini", "kronos-small", "kronos-base"]
+unit  = "model names"
+note  = "operator, 2026-08-23: the Kronos sizes the size selector chooses among, as the authors published them."
+
+[kronos_switch_margin]
+value = 0.02
+unit  = "accuracy"
+note  = "operator, 2026-08-23: how much more accurate another size must be before the selector switches. Two points."
+
+[kronos_sample_every]
+value = 10
+unit  = "forecasts"
+note  = "operator, 2026-08-23: how often the selector samples a size other than the chosen one, to keep measuring it. One in ten."
+
+[liquidation_leverage_bands]
+value = [5.0, 10.0, 20.0, 50.0, 100.0]
+unit  = "leverage"
+note  = "operator, 2026-08-23: the leverage bands the liquidation mapper assumes open interest is distributed across. The venues' common tiers."
+
+[liquidation_prior_band_share]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of open interest assumed in each band before liquidations have been observed. Equal across five bands."
+
+[liquidation_volume_profile_buckets]
+value = 100
+unit  = "buckets"
+note  = "operator, 2026-08-23: how many price buckets the mapper profiles traded volume into. A hundred."
+
+[drift_established_window]
+value = 50
+unit  = "scores"
+note  = "operator, 2026-08-23: how many scored forecasts make the established accuracy the drift monitor compares against. Fifty."
+
+[drift_recent_window]
+value = 10
+unit  = "scores"
+note  = "operator, 2026-08-23: how many recent scores the monitor compares. Ten."
+
+[drift_minimum_established]
+value = 20
+unit  = "scores"
+note  = "operator, 2026-08-23: the least established scores before drift can be judged. Twenty."
+
+[drift_noise_multiple]
+value = 2.0
+unit  = "standard errors"
+note  = "operator, 2026-08-23: how far below the established accuracy the recent one must fall, in standard errors, before the monitor alerts. Two."
+
+[drift_forgetting_threshold]
+value = 0.7
+unit  = "recall"
+note  = "operator, 2026-08-23: the forgetting-auditor recall below which the monitor alerts. Seven tenths, champion_minimum_recall."
+
+[drift_realert_after]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long after an alert the monitor waits before alerting again for the same model. An hour."
+
+[order_flow_volume_window]
+value = 300
+unit  = "seconds"
+note  = "operator, 2026-08-23: how many seconds of per-second volume the flow encoder ranks a second's volume against. Five minutes."
+
+[order_flow_minimum_volume_observations]
+value = 30
+unit  = "seconds"
+note  = "operator, 2026-08-23: how many seconds of volume before quintiles are read. Thirty."
+
+[order_flow_state_length]
+value = 120
+unit  = "states"
+note  = "operator, 2026-08-23: how many flow states per symbol are published for the entropy meter. Two minutes, flow_entropy_window."
+
+[vol_feature_short_window]
+value = 5
+unit  = "candles"
+note  = "operator, 2026-08-23: the short window of the volatility features. Five minutes."
+
+[vol_feature_long_window]
+value = 60
+unit  = "candles"
+note  = "operator, 2026-08-23: the long window of the volatility features. An hour."
+
+[vol_feature_minimum_observations]
+value = 5
+unit  = "candles"
+note  = "operator, 2026-08-23: the fewest candles before a volatility feature set is built. Five."

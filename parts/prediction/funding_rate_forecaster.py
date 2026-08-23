@@ -273,3 +273,41 @@ def run_funding_rate_forecaster(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The premium a funding rate is averaged from is mark minus index, and
+    neither is on market-data, which carries trades, candles and books. With
+    no premium to observe the forecaster forecasts nothing and its standing
+    says so: a blueprint gap (RL-062), not a forecast of zero funding.
+    """
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_forecasts = context.bus.publisher_for("funding-forecast")
+    forecaster = FundingRateForecaster(
+        premium_window_observations=int(context.number("funding_premium_window")),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+
+    def read_premiums(_forecaster):
+        trades.payloads()
+        return ()
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_forecasts(kept)
+
+    return run_funding_rate_forecaster(
+        forecaster=forecaster,
+        control_socket=context.control_socket,
+        read_premiums=read_premiums,
+        publish_forecasts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

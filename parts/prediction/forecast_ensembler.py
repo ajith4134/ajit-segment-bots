@@ -314,3 +314,46 @@ def run_forecast_ensembler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    prices = Batch(read=context.bus.reader("price-forecast"))
+    volatilities = Batch(read=context.bus.reader("volatility-forecast"))
+    trusts = Batch(read=context.bus.reader("forecast-trust"))
+    flags = Batch(read=context.bus.reader("forecast-out-of-distribution-flag"))
+    publish_ensembles = context.bus.publisher_for("ensemble-forecast")
+    ensembler = ForecastEnsembler(
+        minimum_trust=context.number("ensemble_minimum_trust"),
+        minimum_members=int(context.number("ensemble_minimum_members")),
+    )
+
+    def read_forecasts(_ensembler):
+        for trust in trusts.payloads():
+            ensembler.observe_trust(trust.forecaster, trust.trust, trust.state == "measured")
+        for flag in flags.payloads():
+            ensembler.observe_out_of_distribution_flag(flag.forecaster, flag.venue_id, flag.symbol, flag.is_out_of_distribution)
+        grouped: dict[tuple[str, str], tuple[list, list]] = {}
+        for forecast in prices.payloads():
+            grouped.setdefault((forecast.venue_id, forecast.symbol), ([], []))[0].append(forecast)
+        for forecast in volatilities.payloads():
+            grouped.setdefault((forecast.venue_id, forecast.symbol), ([], []))[1].append(forecast)
+        return tuple((key[0], key[1], tuple(p), tuple(v)) for key, (p, v) in sorted(grouped.items()))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_ensembles(kept)
+
+    return run_forecast_ensembler(
+        ensembler=ensembler,
+        control_socket=context.control_socket,
+        read_forecasts=read_forecasts,
+        publish_ensembles=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -240,3 +240,58 @@ def run_entropy_magnitude_forecaster(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Outcomes are learned from the realised volatility the next feature set
+    carries for the symbol; the forecast pairs the latest entropy with the
+    latest features.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    entropies = Batch(read=context.bus.reader("flow-entropy"))
+    feature_sets = LatestByKey(read=context.bus.reader("vol-feature-set"), key_of=lambda f: (f.venue_id, f.symbol))
+    publish_forecasts = context.bus.publisher_for("volatility-forecast")
+    forecaster = EntropyMagnitudeForecaster(
+        horizon_seconds=context.number("forecast_horizon"),
+        minimum_observations_per_quintile=int(context.number("learning_minimum_observations")),
+        outcome_window=int(context.number("forecast_outcome_window")),
+        prior_absolute_return=context.number("forecast_prior_absolute_return"),
+        low_entropy_percentile=context.number("forecast_low_entropy_percentile"),
+    )
+    last_percentile: dict[tuple[str, str], float] = {}
+
+    def read_entropy_and_features(_forecaster):
+        by_symbol = feature_sets.mapping()
+        jobs = []
+        for entropy in entropies.payloads():
+            key = (entropy.venue_id, entropy.symbol)
+            feature_set = by_symbol.get(key)
+            if feature_set is None:
+                continue
+            realised = feature_set.features.get("close_to_close_short")
+            earlier = last_percentile.get(key)
+            if earlier is not None and realised is not None:
+                forecaster.observe_outcome(earlier, float(realised))
+            if entropy.percentile is not None:
+                last_percentile[key] = entropy.percentile
+            jobs.append((entropy, feature_set))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_forecasts(kept)
+
+    return run_entropy_magnitude_forecaster(
+        forecaster=forecaster,
+        control_socket=context.control_socket,
+        read_entropy_and_features=read_entropy_and_features,
+        publish_forecasts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

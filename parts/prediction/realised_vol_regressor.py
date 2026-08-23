@@ -275,3 +275,57 @@ def run_realised_vol_regressor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Each feature set is forecast from; the realised volatility that follows
+    it is read off the next feature set for the same symbol a horizon later,
+    which carries the realised figure over the interval just ended, and the
+    regressor is trained on the pair.
+    """
+    from runtime.input_assembly import Batch
+
+    feature_sets = Batch(read=context.bus.reader("vol-feature-set"))
+    publish_forecasts = context.bus.publisher_for("volatility-forecast")
+    horizon = context.number("forecast_horizon")
+    regressor = RealisedVolRegressor(
+        learning_rate=context.number("bull_learning_rate"),
+        l2_regularisation=context.number("bull_l2_regularisation"),
+        feature_half_life_observations=context.number("bull_feature_half_life_observations"),
+        minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
+        minimum_training_observations=int(context.number("bull_minimum_training_observations")),
+        horizon_seconds=horizon,
+    )
+    pending: dict[tuple[str, str], object] = {}
+
+    def read_feature_sets(_regressor):
+        ready = []
+        for feature_set in feature_sets.payloads():
+            key = (feature_set.venue_id, feature_set.symbol)
+            earlier = pending.get(key)
+            realised = feature_set.features.get("close_to_close_short")
+            if earlier is not None and realised is not None and feature_set.built_at_ns - earlier.built_at_ns >= horizon * 1e9:
+                regressor.train(earlier, float(realised))
+                pending[key] = feature_set
+            elif earlier is None:
+                pending[key] = feature_set
+            ready.append(feature_set)
+        return tuple(ready)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_forecasts(kept)
+
+    return run_realised_vol_regressor(
+        regressor=regressor,
+        control_socket=context.control_socket,
+        read_feature_sets=read_feature_sets,
+        publish_forecasts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

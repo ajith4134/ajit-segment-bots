@@ -254,3 +254,42 @@ def run_forecast_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    forecasts = Batch(read=context.bus.reader("price-forecast"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_accuracy = context.bus.publisher_for("forecast-accuracy")
+    scorer = ForecastScorer(
+        prior_accuracy=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+
+    def read_forecasts_and_prices(_scorer) -> None:
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                scorer.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for forecast in forecasts.payloads():
+            scorer.take_forecast(forecast)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_accuracy(kept)
+
+    return run_forecast_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_forecasts_and_prices=read_forecasts_and_prices,
+        publish_accuracy=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

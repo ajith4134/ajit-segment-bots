@@ -327,3 +327,53 @@ def run_flow_entropy_meter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    states = Batch(read=context.bus.reader("order-flow-state"))
+    publish_entropy = context.bus.publisher_for("flow-entropy")
+    window = int(context.number("flow_entropy_window"))
+    meter = FlowEntropyMeter(
+        window_seconds=window,
+        percentile_window=int(context.number("flow_entropy_percentile_window")),
+        prior_entropy=context.number("flow_entropy_prior"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+    )
+    held: dict[tuple[str, str], dict] = {}
+    last_measure = [float("-inf")]
+
+    def read_states(_meter):
+        for state in states.payloads():
+            held.setdefault((state.venue_id, state.symbol), {})[state.second_ns] = state
+        now = _time.monotonic()
+        if now - last_measure[0] < context.health_interval_seconds:
+            return ()
+        last_measure[0] = now
+        jobs = []
+        for key, by_second in held.items():
+            recent = [by_second[second] for second in sorted(by_second)[-window:]]
+            for second in sorted(by_second)[:-window]:
+                del by_second[second]
+            jobs.append((key[0], key[1], tuple(recent)))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_entropy(kept)
+
+    return run_flow_entropy_meter(
+        meter=meter,
+        control_socket=context.control_socket,
+        read_states=read_states,
+        publish_entropy=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

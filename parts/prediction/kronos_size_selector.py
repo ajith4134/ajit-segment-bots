@@ -254,3 +254,42 @@ def run_kronos_size_selector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    accuracies = Batch(read=context.bus.reader("forecast-accuracy"))
+    publish_choices = context.bus.publisher_for("model-choice")
+    selector = KronosSizeSelector(
+        sizes=tuple(str(s) for s in context.setting("kronos_sizes").value),
+        minimum_forecasts=int(context.number("learning_minimum_observations")),
+        switch_margin=context.number("kronos_switch_margin"),
+        sample_every=int(context.number("kronos_sample_every")),
+    )
+
+    def read_accuracy(_selector):
+        touched = set()
+        for accuracy in accuracies.payloads():
+            if accuracy.forecaster != "kronos-forecaster":
+                continue
+            selector.observe_accuracy(accuracy)
+            touched.add((accuracy.venue_id, accuracy.symbol, accuracy.horizon_seconds))
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_choices(kept)
+
+    return run_kronos_size_selector(
+        selector=selector,
+        control_socket=context.control_socket,
+        read_accuracy=read_accuracy,
+        publish_choices=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

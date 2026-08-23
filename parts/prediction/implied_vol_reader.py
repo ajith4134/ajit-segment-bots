@@ -287,3 +287,42 @@ def run_implied_vol_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No options feed is connected in phase 1 and market-data carries no
+    options quote; the reader is told so and publishes surfaces that say
+    the feed is not connected, never an empty surface that reads as a flat
+    market.
+    """
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_surfaces = context.bus.publisher_for("implied-vol-surface")
+    reader = ImpliedVolReader(
+        maximum_quote_age_seconds=context.number("implied_vol_maximum_quote_age"),
+        minimum_strikes_per_expiry=int(context.number("implied_vol_minimum_strikes_per_expiry")),
+    )
+    reader.set_feed_connected(False)
+
+    def read_quotes(_reader):
+        trades.payloads()
+        return ()
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_surfaces(kept)
+
+    return run_implied_vol_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_quotes=read_quotes,
+        publish_surfaces=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

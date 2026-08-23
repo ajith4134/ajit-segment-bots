@@ -371,3 +371,59 @@ def run_liquidation_cluster_mapper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Traded volume per price comes from the trade stream; the mark is the
+    latest print. Open interest and the margin schedule are not on any input
+    this part declares, so the map is built from the volume profile and the
+    prior band shares, and says so in its reason.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_maps = context.bus.publisher_for("liquidation-map")
+    mapper = LiquidationClusterMapper(
+        leverage_bands=tuple(float(b) for b in context.setting("liquidation_leverage_bands").value),
+        prior_band_share=context.number("liquidation_prior_band_share"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+        volume_profile_buckets=int(context.number("liquidation_volume_profile_buckets")),
+    )
+    marks: dict[tuple[str, str], float] = {}
+    last_map = [float("-inf")]
+
+    def read_market(_mapper):
+        books.payloads()
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                mapper.observe_traded_volume(trade.venue_id, trade.symbol, trade.price, trade.quote_volume)
+                marks[(trade.venue_id, trade.symbol)] = trade.price
+        now = _time.monotonic()
+        if now - last_map[0] < context.health_interval_seconds:
+            return ()
+        last_map[0] = now
+        return tuple((key[0], key[1], mark) for key, mark in sorted(marks.items()))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_maps(kept)
+
+    return run_liquidation_cluster_mapper(
+        mapper=mapper,
+        control_socket=context.control_socket,
+        read_market=read_market,
+        publish_maps=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

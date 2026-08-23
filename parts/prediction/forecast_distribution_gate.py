@@ -261,3 +261,54 @@ def run_forecast_distribution_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A fine-tuned model carries the statistics of what it was trained on; a
+    forecast is checked against the window it was made from and those
+    statistics. No model has been fine-tuned in phase 1, so every forecast is
+    flagged as from a model whose training is unknown -- which is the flag's
+    own rule, not this part's invention.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    windows = LatestByKey(read=context.bus.reader("kline-window"), key_of=lambda w: (w.venue_id, w.symbol))
+    models = Batch(read=context.bus.reader("finetuned-model"))
+    forecasts = Batch(read=context.bus.reader("price-forecast"))
+    publish_flags = context.bus.publisher_for("forecast-out-of-distribution-flag")
+    gate = ForecastDistributionGate(
+        deviation_threshold=context.number("forecast_deviation_threshold"),
+        volatility_deviation_threshold=context.number("forecast_volatility_deviation_threshold"),
+        forecast_headroom=context.number("forecast_headroom"),
+    )
+
+    def read_windows_and_forecasts(_gate):
+        for model in models.payloads():
+            statistics = getattr(model, "training_statistics", None)
+            if statistics is not None:
+                gate.observe_training_statistics(statistics)
+        by_symbol = windows.mapping()
+        pairs = []
+        for forecast in forecasts.payloads():
+            window = by_symbol.get((forecast.venue_id, forecast.symbol))
+            if window is not None:
+                pairs.append((window, forecast))
+        return tuple(pairs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_flags(kept)
+
+    return run_forecast_distribution_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_windows_and_forecasts=read_windows_and_forecasts,
+        publish_flags=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

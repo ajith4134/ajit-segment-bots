@@ -284,3 +284,39 @@ def run_volatility_feature_builder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("kline-window"))
+    surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
+    publish_feature_sets = context.bus.publisher_for("vol-feature-set")
+    builder = VolatilityFeatureBuilder(
+        short_window=int(context.number("vol_feature_short_window")),
+        long_window=int(context.number("vol_feature_long_window")),
+        minimum_observations=int(context.number("vol_feature_minimum_observations")),
+    )
+    horizon = context.number("forecast_horizon")
+
+    def read_windows_and_surfaces(_builder):
+        for surface in surfaces.payloads():
+            builder.observe_surface(surface.venue_id, surface.underlying, surface)
+        return tuple((window, horizon) for window in windows.payloads())
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_feature_sets(kept)
+
+    return run_volatility_feature_builder(
+        builder=builder,
+        control_socket=context.control_socket,
+        read_windows_and_surfaces=read_windows_and_surfaces,
+        publish_feature_sets=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

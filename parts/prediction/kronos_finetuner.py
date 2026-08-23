@@ -278,3 +278,58 @@ def run_kronos_finetuner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No Kronos weights and no trainer exist on this machine; the finetuner
+    collects windows and requests and, when asked to fine-tune, refuses for
+    the lack of a trainer, which it reports. The accelerator slot arrives as
+    the scheduler's refusal on a box with no device.
+    """
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("kline-window"))
+    drift = Batch(read=context.bus.reader("model-drift-alert"))
+    retrains = Batch(read=context.bus.reader("retrain-request"))
+    weights = Batch(read=context.bus.reader("sample-weight"))
+    slots = Batch(read=context.bus.reader("accelerator-slot"))
+    publish_models = context.bus.publisher_for("finetuned-model")
+    finetuner = KronosFinetuner(
+        minimum_training_windows=int(context.number("kronos_minimum_training_windows")),
+        validation_fraction=context.number("kronos_validation_fraction"),
+        epochs=int(context.number("kronos_epochs")),
+        refit_tokenizer=bool(context.setting("kronos_refit_tokenizer").value),
+        maximum_windows_held=int(context.number("kronos_maximum_windows_held")),
+    )
+
+    def read_windows_and_requests(_finetuner) -> None:
+        for window in windows.payloads():
+            finetuner.observe_window(window)
+        for weight in weights.payloads():
+            finetuner.observe_sample_weight(weight.symbol, weight.weight)
+        for alert in drift.payloads():
+            if alert.model_name == PART_ID or alert.forecaster == "kronos-forecaster":
+                finetuner.observe_drift_alert(alert.reason)
+        for request in retrains.payloads():
+            if request.model_name in (PART_ID, "kronos-forecaster") and request.state == "scheduled":
+                finetuner.observe_retrain_request(request.reason)
+        for slot in slots.payloads():
+            if getattr(slot, "part_id", None) in (PART_ID, "kronos-finetuner"):
+                finetuner.set_accelerator_slot(getattr(slot, "state", "") == "granted")
+
+    def publish(model, outcome) -> None:
+        if model is not None:
+            publish_models((model,))
+
+    return run_kronos_finetuner(
+        finetuner=finetuner,
+        control_socket=context.control_socket,
+        read_windows_and_requests=read_windows_and_requests,
+        publish_model=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
