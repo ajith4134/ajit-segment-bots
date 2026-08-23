@@ -118,10 +118,17 @@ def run_gate_actuator(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    def tick() -> None:
+        # No plan this tick is not an empty plan: an empty plan would be a
+        # statement that nothing should change, and nobody made it.
+        plan = read_plan()
+        if plan is not None:
+            publish_records(actuator.apply(plan))
+
     return run_part(
         declaration=PART_DECLARATION,
         control_socket=control_socket,
-        do_one_tick=lambda: publish_records(actuator.apply(read_plan())),
+        do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
@@ -171,10 +178,13 @@ def start_part(context) -> int:
             raise SwitchWasNotMade(f"{outcome.outcome}: {outcome.detail}")
 
     def read_plan():
+        # The newest plan wins; an older one acted on after a newer one arrived
+        # would switch parts the planner has since changed its mind about. None
+        # when nothing arrived -- which, until 2026-08-23, built an empty plan
+        # from a type this file never imported and ended the process on its
+        # first tick, caught the first time the part was started in a test.
         applied = plans.payloads()
-        if not applied:
-            return SwitchPlan(decisions=(), held=(), unplannable_reason=None, planned_at_ns=time.time_ns())
-        return applied[-1]
+        return applied[-1] if applied else None
 
     return run_gate_actuator(
         actuator=GateActuator(switch_part=switch_part),
