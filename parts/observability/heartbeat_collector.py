@@ -57,6 +57,11 @@ class Heartbeat:
     # 2026-08-23, nothing consumed it while a symbol's price sat frozen for 56
     # minutes in a part whose health read fine.
     input_loss: tuple[tuple[str, int], ...] = ()
+    # What was lost between the part's previous report and this one. A count
+    # since start cannot separate a burst at startup, before every inbox was
+    # bound, from a consumer that is losing its feed right now; only the second
+    # is a decision being made on data that is not what the market is saying.
+    input_loss_since_previous: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_healthy(self) -> bool:
@@ -106,6 +111,7 @@ class HeartbeatCollector:
         self._now_ns = now_ns
         self._expected: set[str] = set()
         self._latest: dict[str, tuple[object, float]] = {}
+        self._loss_since_previous: dict[str, tuple[tuple[str, int], ...]] = {}
         self._was_silent: set[str] = set()
         self.standing = CollectorStanding()
 
@@ -123,12 +129,21 @@ class HeartbeatCollector:
         """A part deliberately switched off is no longer expected to report."""
         self._expected.discard(part_id)
         self._latest.pop(part_id, None)
+        self._loss_since_previous.pop(part_id, None)
         self._was_silent.discard(part_id)
         self.standing.parts_expected = len(self._expected)
 
     def observe_health(self, health) -> None:
         self.standing.reports_received += 1
         self._expected.add(health.part_id)
+        previous = self._latest.get(health.part_id)
+        before = dict(getattr(previous[0], "input_loss", ()) or ()) if previous else {}
+        now_lost = dict(getattr(health, "input_loss", ()) or ())
+        self._loss_since_previous[health.part_id] = tuple(
+            (kind, count - before.get(kind, 0))
+            for kind, count in sorted(now_lost.items())
+            if count - before.get(kind, 0) > 0
+        )
         self._latest[health.part_id] = (health, self._monotonic())
         self._was_silent.discard(health.part_id)
         self.standing.parts_expected = len(self._expected)
@@ -187,6 +202,7 @@ class HeartbeatCollector:
                         (str(kind), int(count))
                         for kind, count in getattr(health, "input_loss", ()) or ()
                     ),
+                    input_loss_since_previous=self._loss_since_previous.get(part_id, ()),
                     reason=reason,
                 )
             )
@@ -276,6 +292,7 @@ def heartbeat_table_as_document(table: HeartbeatTable, standing: CollectorStandi
                 "staleness_seconds": beat.staleness_seconds,
                 "refused_control_frame": beat.refused_control_frame,
                 "input_loss": list(beat.input_loss),
+                "input_loss_since_previous": list(beat.input_loss_since_previous),
                 "reason": beat.reason,
             }
             for beat in table.heartbeats

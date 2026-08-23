@@ -633,13 +633,26 @@ def test_input_loss_fails_the_tile_and_names_the_part(board, heartbeat_settings)
     """The frozen-price defect of 2026-08-23, as the tile would have shown it."""
     _heartbeat_table(heartbeat_settings, 10_000_000_000, [
         {"part_id": "bull-feature-builder", "state": "reporting", "age_seconds": 0.3,
-         "rate_ratio": 1.0, "staleness_seconds": 0.2, "input_loss": [["market-data", 3400]]},
+         "rate_ratio": 1.0, "staleness_seconds": 0.2, "input_loss": [["market-data", 3400]],
+         "input_loss_since_previous": [["market-data", 540]]},
         {"part_id": "position-sizer", "state": "reporting", "age_seconds": 0.5,
          "rate_ratio": 1.0, "staleness_seconds": 0.4, "input_loss": []},
     ])
     result = board.probe_parts_alive(now_ns=11_000_000_000)
     assert result.state == board.FAILING
-    assert "bull-feature-builder" in result.proof and "3400" in result.proof
+    assert "bull-feature-builder" in result.proof and "540" in result.proof
+
+
+def test_loss_at_startup_that_stopped_is_named_not_painted_red(board, heartbeat_settings):
+    _heartbeat_table(heartbeat_settings, 10_000_000_000, [
+        {"part_id": "trade-capital-bounds-gate", "state": "reporting", "age_seconds": 0.3,
+         "rate_ratio": 1.0, "staleness_seconds": 0.2,
+         "input_loss": [["capital-settings-verdict", 212]], "input_loss_since_previous": []},
+    ])
+    result = board.probe_parts_alive(now_ns=11_000_000_000)
+    assert result.state == board.OK
+    assert "trade-capital-bounds-gate" in result.proof and "212" in result.proof
+    assert "not since" in result.proof
 
 
 def test_a_silent_part_fails_the_tile(board, heartbeat_settings):

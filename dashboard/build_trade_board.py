@@ -979,9 +979,16 @@ def probe_parts_alive(now_ns: int | None = None) -> ProbeResult:
         )
     beats = document.get("heartbeats", [])
     silent = [b["part_id"] for b in beats if b.get("state") != HEARTBEAT_REPORTING]
+    # Loss between a part's last two reports is a feed being lost now. Loss since
+    # start that is not growing is history -- most of it the burst at startup
+    # before every inbox was bound -- and is named, not painted red.
     lossy = [
+        (b["part_id"], b.get("input_loss_since_previous"))
+        for b in beats if b.get("input_loss_since_previous")
+    ]
+    lost_once = [
         (b["part_id"], b.get("input_loss"))
-        for b in beats if b.get("input_loss")
+        for b in beats if b.get("input_loss") and not b.get("input_loss_since_previous")
     ]
     stale = [
         (b["part_id"], float(b.get("staleness_seconds") or 0.0))
@@ -1000,9 +1007,9 @@ def probe_parts_alive(now_ns: int | None = None) -> ProbeResult:
     if lossy:
         worst = max(lossy, key=lambda item: sum(count for _kind, count in item[1]))
         return ProbeResult(
-            "Parts alive", FAILING, f"{len(lossy)} lost input",
-            f"{proof}; input lost by {', '.join(sorted(part for part, _loss in lossy))}; "
-            f"worst {worst[0]} lost {worst[1]}",
+            "Parts alive", FAILING, f"{len(lossy)} losing input",
+            f"{proof}; losing input now: {', '.join(sorted(part for part, _loss in lossy))}; "
+            f"worst {worst[0]} lost {worst[1]} since its previous report",
         )
     if stale:
         worst = max(stale, key=lambda item: item[1])
@@ -1013,9 +1020,14 @@ def probe_parts_alive(now_ns: int | None = None) -> ProbeResult:
     if total == 0:
         return ProbeResult("Parts alive", WAITING, "nothing has reported", proof)
     worst_staleness = max((float(b.get("staleness_seconds") or 0.0) for b in beats), default=0.0)
+    history = (
+        f"; lost earlier and not since: "
+        + ", ".join(f"{part} {loss}" for part, loss in sorted(lost_once))
+        if lost_once else ", no input lost"
+    )
     return ProbeResult(
         "Parts alive", OK, f"{reporting} of {total} reporting",
-        f"{proof}, no input loss, worst staleness {worst_staleness:.1f}s",
+        f"{proof}{history}, worst staleness {worst_staleness:.1f}s",
     )
 
 

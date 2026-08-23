@@ -615,6 +615,14 @@ def test_input_loss_rides_on_the_heartbeat():
         PartHealth("the-model", "on", 1.0, 0.1, 1, None, input_loss=(("market-data", 12),))
     )
     assert subject.heartbeat_of("the-model").input_loss == (("market-data", 12),)
+    subject.observe_health(
+        PartHealth("the-model", "on", 1.0, 0.1, 2, None, input_loss=(("market-data", 12),))
+    )
+    assert subject.heartbeat_of("the-model").input_loss_since_previous == (), "nothing new"
+    subject.observe_health(
+        PartHealth("the-model", "on", 1.0, 0.1, 3, None, input_loss=(("market-data", 40),))
+    )
+    assert subject.heartbeat_of("the-model").input_loss_since_previous == (("market-data", 28),)
 
 
 def test_the_table_file_round_trips_and_is_read_by_nothing_older(tmp_path):
