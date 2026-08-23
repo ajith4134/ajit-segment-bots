@@ -223,3 +223,45 @@ def run_clock_skew_monitor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A raw venue status that carries the venue's server time is a clock
+    reading against the time it was received; a status whose reason is a
+    timestamp rejection is counted as one. No venue socket is held in phase 1,
+    so nothing arrives and nothing is alerted -- the readings say so.
+    """
+    from runtime.input_assembly import Batch
+
+    statuses = Batch(read=context.bus.reader("raw-venue-order-status"))
+    publish_alerts = context.bus.publisher_for("alert")
+    monitor = ClockSkewMonitor(
+        drift_warning_seconds=context.number("clock_drift_warning"),
+        rejections_before_alert=int(context.number("clock_rejections_before_alert")),
+        window_seconds=context.number("clock_rejection_window"),
+    )
+
+    def read_statuses(_monitor) -> None:
+        for status in statuses.payloads():
+            response = status.venue_response if isinstance(status.venue_response, dict) else {}
+            venue_time = response.get("serverTime") or response.get("time") or response.get("ts")
+            if venue_time is not None and status.responded_at_ns is not None:
+                monitor.observe_venue_time(status.venue_id, int(venue_time) * 1_000_000, status.responded_at_ns)
+            monitor.observe_status(status.venue_id, status.reason)
+
+    def publish(alerts) -> None:
+        if alerts:
+            publish_alerts(alerts)
+
+    return run_clock_skew_monitor(
+        monitor=monitor,
+        control_socket=context.control_socket,
+        read_statuses=read_statuses,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

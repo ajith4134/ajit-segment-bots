@@ -225,3 +225,61 @@ def run_board_snapshot_builder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One tile per input type, from the latest payload of it: what it says, and
+    the proof that it is that payload. A type that has said nothing, or
+    nothing for board_stale_input seconds, is marked unmeasurable under its
+    own label, never left off -- the board must be able to show what it has
+    not been told. The expected labels are every type this part consumes.
+    Built once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import LatestValue
+
+    consumed = tuple(kind for kind in context.declaration.consumes if kind != "part-health")
+    sources = {kind: LatestValue(read=context.bus.reader(kind)) for kind in consumed}
+    publish_snapshot = context.bus.publisher_for("board-snapshot")
+    builder = BoardSnapshotBuilder(stale_input_seconds=context.number("board_stale_input"))
+    seen_at: dict[str, float] = {}
+    last_build = [float("-inf")]
+
+    def tile_of(kind: str, item) -> tuple[str, str, str]:
+        state = str(getattr(item, "state", None) or getattr(item, "outcome", None) or getattr(item, "verdict", None) or OK)
+        value = getattr(item, "reason", None) or getattr(item, "value", None) or getattr(item, "summary", None)
+        normalised = FAILING if state.lower() in ("failing", "failed", "broken", "halted") else OK
+        return normalised, str(value if value is not None else state)[:160], f"latest {kind} on the bus: {type(item).__name__}"
+
+    def read_inputs(_builder):
+        now = _time.monotonic()
+        for kind, source in sources.items():
+            item = source.value()
+            if item is None:
+                builder.mark_unmeasurable(kind, "nothing of this type has arrived", f"no {kind} on the bus since start")
+                continue
+            seen_at.setdefault(kind, now)
+            state, value, proof = tile_of(kind, item)
+            builder.offer_tile(kind, state, value, proof)
+        return consumed
+
+    def tick() -> None:
+        expected = read_inputs(builder)
+        now = _time.monotonic()
+        if now - last_build[0] < context.health_interval_seconds:
+            return
+        publish_snapshot((builder.build(expected),))
+        last_build[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

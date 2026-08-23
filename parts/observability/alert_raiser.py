@@ -205,3 +205,64 @@ def run_alert_raiser(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Seven kinds of condition, each turned into one alert with the message and
+    the proof the source carried; severity is the raiser's to decide from the
+    source. A repeat inside the cooldown is held.
+    """
+    from runtime.input_assembly import Batch
+
+    sources = {
+        "part-fault": Batch(read=context.bus.reader("part-fault")),
+        "trading-halt": Batch(read=context.bus.reader("trading-halt")),
+        "journal-gap": Batch(read=context.bus.reader("journal-gap")),
+        "market-anomaly": Batch(read=context.bus.reader("market-anomaly")),
+        "hog-report": Batch(read=context.bus.reader("hog-report")),
+        "feed-coverage": Batch(read=context.bus.reader("feed-coverage")),
+        "replay-mismatch": Batch(read=context.bus.reader("replay-mismatch")),
+    }
+    publish_alerts = context.bus.publisher_for("alert")
+    raiser = AlertRaiser(cooldown_seconds=context.number("alert_cooldown"))
+
+    def condition_of(source: str, item) -> dict | None:
+        if source == "trading-halt" and not item.is_halted:
+            return None
+        if source == "market-anomaly" and not item.is_anomalous:
+            return None
+        if source == "feed-coverage" and getattr(item, "state", "") == "covered":
+            return None
+        subject = (
+            getattr(item, "part_id", None) or getattr(item, "symbol", None)
+            or getattr(item, "trade_id", None) or getattr(item, "scope", None) or source
+        )
+        message = getattr(item, "reason", None) or getattr(item, "detail", None) or repr(item)
+        proof = f"{source} from the bus: {message}"
+        return {"source": source, "subject": str(subject), "message": str(message), "proof": proof}
+
+    def read_conditions():
+        conditions = []
+        for source, batch in sources.items():
+            for item in batch.payloads():
+                condition = condition_of(source, item)
+                if condition is not None:
+                    conditions.append(condition)
+        return tuple(conditions)
+
+    def publish(alerts) -> None:
+        if alerts:
+            publish_alerts(alerts)
+
+    return run_alert_raiser(
+        raiser=raiser,
+        control_socket=context.control_socket,
+        read_conditions=read_conditions,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

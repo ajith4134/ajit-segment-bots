@@ -75,6 +75,9 @@ class HarnessStanding:
     inconclusive: int = 0
     state: str = IDLE
     currently_ablating: str | None = None
+    # Ticks on which an ablation could have begun and did not, because this
+    # part holds no switch endpoint (the blueprint gives it to gate-actuator).
+    ablations_not_begun_no_switch_path: int = 0
 
 
 class AblationHarness:
@@ -235,4 +238,53 @@ def run_ablation_harness(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The metrics are every part's rate ratio and staleness as it reports them;
+    the baseline is measured from those continuously. Beginning an ablation
+    means switching a part off, and the blueprint gives the switch endpoint to
+    one part only, gate-actuator -- so this harness measures the baseline and
+    never begins one on its own, counting each tick it could have. A
+    scorecard is published only when an ablation has run, which today is
+    never; the gap is a number on the standing, not a silence (RL-062).
+    """
+    from runtime.input_assembly import Batch
+
+    reports = Batch(read=context.bus.reader("part-health"))
+    publish_scorecards = context.bus.publisher_for("ablation-scorecard")
+    harness = AblationHarness(
+        measurement_samples=int(context.number("ablation_measurement_samples")),
+        recovery_seconds=context.number("ablation_recovery"),
+        significant_change_fraction=context.number("ablation_significant_change_fraction"),
+    )
+
+    def read_measurements(_harness):
+        metrics = {}
+        for health in reports.payloads():
+            metrics[f"{health.part_id}:rate_ratio"] = float(health.rate_ratio)
+            metrics[f"{health.part_id}:staleness_seconds"] = float(health.staleness_seconds)
+        if metrics:
+            if harness.is_ablating:
+                harness.observe_ablated(metrics)
+            else:
+                harness.observe_baseline(metrics)
+        harness.standing.ablations_not_begun_no_switch_path += 1
+        return None
+
+    def publish(scorecard) -> None:
+        publish_scorecards((scorecard,))
+
+    return run_ablation_harness(
+        harness=harness,
+        control_socket=context.control_socket,
+        read_measurements=read_measurements,
+        publish_scorecard=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

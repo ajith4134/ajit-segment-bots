@@ -172,3 +172,65 @@ def run_probe_runner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The probes are the same ones the status board runs -- the capture,
+    substrate and trading probes in runtime/probes -- each registered with
+    the command a person types to re-run it, plus two read off the bus: how
+    many parts the heartbeat table says are reporting, and the journal gaps
+    seen. Run once per health interval; the bus inputs wake the part between.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestValue
+    from runtime.probes import capture_probes, substrate_probes, trading_probes
+
+    tables = LatestValue(read=context.bus.reader("heartbeat-table"))
+    gaps = Batch(read=context.bus.reader("journal-gap"))
+    publish_results = context.bus.publisher_for("probe-result")
+    runner = ProbeRunner(timeout_seconds=context.number("probe_timeout"))
+    gaps_seen = [0]
+
+    for module, prefix in ((capture_probes, "capture"), (substrate_probes, "substrate"), (trading_probes, "trading")):
+        for name in dir(module):
+            if name.startswith("probe_"):
+                probe = getattr(module, name)
+                runner.register(
+                    f"{prefix}:{name[6:]}", probe,
+                    command=f".venv/bin/python -c 'from runtime.probes.{module.__name__.rsplit('.', 1)[-1]} import {name}; print({name}())'",
+                )
+
+    def parts_reporting():
+        table = tables.value()
+        return None if table is None else f"{table.reporting} of {len(table.heartbeats)} reporting"
+
+    def journal_gaps():
+        return f"{gaps_seen[0]} gap(s) seen since start"
+
+    runner.register("bus:parts-reporting", parts_reporting, command="read the latest heartbeat-table on the bus")
+    runner.register("bus:journal-gaps", journal_gaps, command="count journal-gap messages on the bus")
+    last_run = [float("-inf")]
+
+    def tick() -> None:
+        gaps_seen[0] += len(gaps.payloads())
+        tables.value()
+        now = _time.monotonic()
+        if now - last_run[0] < context.health_interval_seconds:
+            return
+        results = runner.run_all()
+        if results:
+            publish_results(tuple(results))
+        last_run[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

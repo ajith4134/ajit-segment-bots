@@ -1847,3 +1847,73 @@ note  = "operator, 2026-08-23: how far a live venue balance may differ from the 
 value = 300.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how old a conversion rate may be before paper-currency-converter refuses to convert with it. Five minutes; the rate comes from the live trade stream of the conversion pair, which prints many times a minute, so a rate older than that is a pair that stopped trading."
+
+[ablation_measurement_samples]
+value = 60
+unit  = "health reports"
+note  = "operator, 2026-08-23: how many health reports ablation-harness averages before and during an ablation. Sixty at one report a second per part: a minute, long enough that one slow tick does not decide what a part is worth."
+
+[ablation_recovery]
+value = 120.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long the harness waits after one ablation before beginning another, so the system measured is the system recovered. Two minutes, twice the switch-flap window the governor watches."
+
+[ablation_significant_change_fraction]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far a metric must move under ablation before the scorecard calls the change significant. A fifth; smaller moves are within the run-to-run variation of rate ratios and staleness on the live spine."
+
+[alert_cooldown]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long alert-raiser holds a repeat of the same condition from the same source before raising it again. Five minutes: an alert per tick is noise nobody reads, and five minutes is the coverage window the feed auditor uses."
+
+[board_published_path]
+value = "~/.local/share/ajit-segment-bots/board-snapshot.json"
+unit  = "path"
+note  = "operator, 2026-08-23: where board-publisher writes the latest snapshot. A file on this machine rather than a link on the web: only port 22 listens here, and publishing to the shared Artifact URL is a person's act (dashboard/rebuild_all_boards.sh prints the URLs). The link this part publishes is this path, and stale-board-watch compares what is in it against what was built."
+
+[board_stale_input]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old a tile's input may be before board-snapshot-builder shows the tile as not measured rather than as its last value. A minute, sixty health intervals; a source that has said nothing for a minute has stopped."
+
+[board_maximum_lag]
+value = 120.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far behind the built snapshot the published one may be before stale-board-watch alerts. Two minutes, two publish intervals."
+
+[board_source_stopped_after]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long without a new snapshot before the watch says the source stopped rather than that the board is lagging. Five minutes: the builder publishes once a health interval, so five minutes of nothing is the builder, not the link."
+
+[clock_drift_warning]
+value = 1.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far the venue's clock may sit from this machine's before clock-skew-monitor warns. One second: both venues reject a signed request whose timestamp is more than a few seconds off, and a second of drift is the last point at which every request still lands."
+
+[clock_rejections_before_alert]
+value = 3
+unit  = "rejections"
+note  = "operator, 2026-08-23: how many timestamp rejections from a venue inside clock_rejection_window before the monitor alerts. Three, so one rejection on a slow request is not an alert."
+
+[clock_rejection_window]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window clock_rejections_before_alert is counted over. Five minutes."
+
+[drawdown_episode_minimum_depth]
+value = 0.01
+unit  = "fraction of peak equity"
+note  = "operator, 2026-08-23: how far equity must fall from its peak before drawdown-episode-tracker opens an episode. One percent, one full-risk loss at risk_maximum_per_position_fraction; shallower dips are the noise of open positions marking."
+
+[fund_conservation_tolerance]
+value = 0.01
+unit  = "USDT"
+note  = "operator, 2026-08-23: how far the cash and position value a fill moved may disagree with what the fill itself implies before fund-conservation-auditor alerts. A cent, the rounding of a quantity snapped to the venue's lot size at the prices of the captured symbols; anything larger is money that appeared or vanished."
+
+[probe_timeout]
+value = 10.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long probe-runner gives one probe before recording it as timed out. Ten seconds: the slowest probe measured -- counting the tape's records over nine gigabytes -- takes under five, and a probe that hangs must not stop the ones behind it."

@@ -15,10 +15,10 @@ system was having trouble.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import dataclass, field
 
+from runtime.board_digest import board_digest
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -85,10 +85,7 @@ class BoardPublisher:
         content is the same board, and republishing it would make every board
         look freshly changed and hide the ones that really did.
         """
-        body = "|".join(
-            f"{tile.label}:{tile.state}:{tile.value}:{tile.proof}" for tile in snapshot.tiles
-        )
-        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+        return board_digest(snapshot)
 
     def publish_snapshot(self, snapshot) -> BoardLink:
         digest = self.digest_of(snapshot)
@@ -170,4 +167,65 @@ def run_board_publisher(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Publishing here is writing the snapshot to board_published_path,
+    atomically; the link published is that path. Only port 22 listens on
+    this machine, so the shared Artifact URL is a person's to push to, and a
+    publisher that pretended otherwise would be the stale-link failure this
+    part exists to catch, one layer along.
+    """
+    import json
+    import os
+    import pathlib
+    import tempfile
+    from dataclasses import asdict
+
+    from runtime.input_assembly import LatestValue
+
+    snapshots = LatestValue(read=context.bus.reader("board-snapshot"))
+    publish_link = context.bus.publisher_for("board-link")
+    path = pathlib.Path(str(context.setting("board_published_path").value)).expanduser()
+
+    def write(url: str, snapshot) -> None:
+        destination = pathlib.Path(url)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination.parent,
+            prefix=f".{destination.name}.", suffix=".partial", delete=False,
+        )
+        try:
+            with handle:
+                json.dump(asdict(snapshot), handle, sort_keys=True, default=str)
+            os.replace(handle.name, destination)
+        except BaseException:
+            pathlib.Path(handle.name).unlink(missing_ok=True)
+            raise
+
+    publisher = BoardPublisher(url=str(path), publish=write)
+    last_digest = [None]
+
+    def read_snapshot():
+        snapshot = snapshots.value()
+        if snapshot is None:
+            return None
+        digest = publisher.digest_of(snapshot)
+        if digest == last_digest[0]:
+            return None
+        last_digest[0] = digest
+        return snapshot
+
+    return run_board_publisher(
+        publisher=publisher,
+        control_socket=context.control_socket,
+        read_snapshot=read_snapshot,
+        publish_link=lambda link: publish_link((link,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

@@ -206,3 +206,30 @@ def run_drawdown_episode_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    balances = Batch(read=context.bus.reader("account-balance"))
+    publish_episodes = context.bus.publisher_for("drawdown-episode")
+    segment = str(context.setting("segment_id").value)
+    tracker = DrawdownEpisodeTracker(minimum_depth_fraction=context.number("drawdown_episode_minimum_depth"))
+
+    def read_equity():
+        return tuple(
+            balance.equity for balance in balances.payloads()
+            if getattr(balance, "segment", None) == segment
+        )
+
+    return run_drawdown_episode_tracker(
+        tracker=tracker,
+        control_socket=context.control_socket,
+        read_equity=read_equity,
+        publish_episode=lambda episode: publish_episodes((episode,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

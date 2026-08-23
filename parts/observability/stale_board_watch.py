@@ -220,3 +220,38 @@ def run_stale_board_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.board_digest import board_digest
+    from runtime.input_assembly import Batch
+
+    links = Batch(read=context.bus.reader("board-link"))
+    snapshots = Batch(read=context.bus.reader("board-snapshot"))
+    publish_alerts = context.bus.publisher_for("alert")
+    watch = StaleBoardWatch(
+        maximum_lag_seconds=context.number("board_maximum_lag"),
+        source_stopped_after_seconds=context.number("board_source_stopped_after"),
+    )
+
+    def read_link_and_snapshot(_watch) -> None:
+        for snapshot in snapshots.payloads():
+            watch.observe_snapshot(board_digest(snapshot))
+        for link in links.payloads():
+            watch.observe_link(link.snapshot_digest)
+
+    def publish(alerts) -> None:
+        if alerts:
+            publish_alerts(alerts)
+
+    return run_stale_board_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_link_and_snapshot=read_link_and_snapshot,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

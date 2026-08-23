@@ -80,6 +80,11 @@ class AuditorStanding:
     running_cash: float = 0.0
     running_position_value: float = 0.0
     running_fees: float = 0.0
+    # Fills that arrived with no journal entry stating the cash and position
+    # value they moved. The journal carries fills and positions, not the account
+    # keeper's cash movement per fill; until an entry states it, the auditor has
+    # nothing independent to check the fill against, and says so (RL-062).
+    fills_without_a_reported_change: int = 0
 
 
 class FundConservationAuditor:
@@ -207,4 +212,62 @@ def run_fund_conservation_auditor(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A fill is checked against what the journal says it moved: a journal
+    entry whose payload names the same fill id and carries a cash change and
+    a position value change. The recorders write fills and positions and not
+    the keeper's cash movement per fill, so today no entry carries those two
+    figures and every fill is counted as one that could not be audited --
+    a number on the standing, never a silent pass.
+    """
+    from runtime.input_assembly import Batch
+
+    fills = Batch(read=context.bus.reader("fill"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    publish_alerts = context.bus.publisher_for("alert")
+    auditor = FundConservationAuditor(tolerance=context.number("fund_conservation_tolerance"))
+    reported: dict[str, tuple[float, float]] = {}
+    waiting: dict[str, object] = {}
+
+    def read_fills():
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            fill_id = payload.get("fill_id")
+            if fill_id and "cash_change" in payload and "position_value_change" in payload:
+                reported[str(fill_id)] = (float(payload["cash_change"]), float(payload["position_value_change"]))
+        for fill in fills.payloads():
+            waiting[fill.fill_id] = fill
+        ready = []
+        for fill_id, fill in list(waiting.items()):
+            changes = reported.pop(fill_id, None)
+            if changes is None:
+                continue
+            ready.append((fill, changes[0], changes[1]))
+            del waiting[fill_id]
+        # A fill with no reported change is not held forever: past one health
+        # interval's worth of fills it is counted and forgotten.
+        if len(waiting) > 1000:
+            for fill_id in list(waiting)[:-1000]:
+                del waiting[fill_id]
+                auditor.standing.fills_without_a_reported_change += 1
+        return tuple(ready)
+
+    def publish(alerts) -> None:
+        if alerts:
+            publish_alerts(alerts)
+
+    return run_fund_conservation_auditor(
+        auditor=auditor,
+        control_socket=context.control_socket,
+        read_fills=read_fills,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )
