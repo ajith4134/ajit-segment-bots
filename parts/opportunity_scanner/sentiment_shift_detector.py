@@ -225,3 +225,58 @@ def run_sentiment_shift_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A sentiment reading names a symbol and no venue; it is observed for
+    every venue on which that symbol has printed.
+    """
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    readings = Batch(read=context.bus.reader("sentiment-reading"))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = SentimentShiftDetector(
+        window_length=int(context.number("detector_window_length")),
+        minimum_observations=int(context.number("detector_minimum_observations")),
+        shift_z_threshold=context.number("detector_z_threshold"),
+        price_agreement_fraction=context.number("sentiment_price_agreement_fraction"),
+        horizon_seconds=context.number("sentiment_shift_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+    venues_of: dict[str, set[str]] = {}
+
+    def read_sentiment(_detector):
+        rules.payloads()
+        for trade in trades.payloads():
+            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            venues_of.setdefault(trade.symbol, set()).add(trade.venue_id)
+        touched = set()
+        for reading in readings.payloads():
+            for venue_id in venues_of.get(reading.symbol, ()):
+                detector.observe_sentiment(venue_id, reading.symbol, reading.level)
+                touched.add((venue_id, reading.symbol))
+        return tuple(sorted(touched))
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_sentiment_shift_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_sentiment=read_sentiment,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -252,3 +252,56 @@ def run_liquidity_grader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every book updates the grader; every trade adds turnover; a symbol is
+    regraded when its book arrives, at the reference order size the capital
+    desk caps a trade at, and the grader holds the grade between refreshes.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.order_book import OrderBookSnapshot
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_grades = context.bus.publisher_for("liquidity-grade")
+    grader = LiquidityGrader(
+        refresh_interval_seconds=context.number("liquidity_grade_refresh_interval"),
+        deep_cost_fraction=context.number("liquidity_deep_cost_fraction"),
+        tradeable_cost_fraction=context.number("liquidity_tradeable_cost_fraction"),
+        thin_cost_fraction=context.number("liquidity_thin_cost_fraction"),
+        turnover_window=int(context.number("liquidity_turnover_window")),
+    )
+    order_size = context.number("liquidity_reference_order_size")
+
+    def read_books(_grader):
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                grader.observe_turnover(trade.venue_id, trade.symbol, trade.quote_volume)
+        touched = set()
+        for book in books.payloads():
+            if isinstance(book, OrderBookSnapshot):
+                grader.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
+                touched.add((book.venue_id, book.symbol))
+        return tuple(
+            {"venue_id": venue_id, "symbol": symbol, "order_size_quote": order_size}
+            for venue_id, symbol in sorted(touched)
+        )
+
+    def publish(grades) -> None:
+        if grades:
+            publish_grades(grades)
+
+    return run_liquidity_grader(
+        grader=grader,
+        control_socket=context.control_socket,
+        read_books=read_books,
+        publish_grades=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -211,3 +211,52 @@ def run_funding_skew_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    forecasts = Batch(read=context.bus.reader("funding-forecast"))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = FundingSkewDetector(
+        window_length=int(context.number("detector_window_length")),
+        minimum_observations=int(context.number("detector_minimum_observations")),
+        skew_z_threshold=context.number("detector_z_threshold"),
+        price_confirmation_window=int(context.number("funding_skew_price_confirmation_window")),
+        horizon_seconds=context.number("funding_skew_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+
+    def read_funding(_detector):
+        rules.payloads()
+        touched = set()
+        for forecast in forecasts.payloads():
+            if forecast.predicted_rate is not None:
+                detector.observe_funding(forecast.venue_id, forecast.symbol, forecast.predicted_rate)
+                touched.add((forecast.venue_id, forecast.symbol))
+        for trade in trades.payloads():
+            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+        return tuple(sorted(touched))
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_funding_skew_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_funding=read_funding,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

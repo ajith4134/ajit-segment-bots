@@ -103,6 +103,12 @@ class CompilerStanding:
     active_conditions: int = 0
     by_measurement: dict = field(default_factory=dict)
     last_refusal: str | None = None
+    # Proven instructions that arrived carrying only their id: a ProvenInstruction
+    # names the instruction and its runs, not the measurement, comparison and
+    # threshold a condition is compiled from, which live on the
+    # opportunity-instruction this part does not consume. Counted so the gap is
+    # a number on the board; the fix is a blueprint edit (RL-062).
+    proven_without_a_body: int = 0
 
 
 class WatchConditionCompiler:
@@ -226,4 +232,55 @@ def run_watch_condition_compiler(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Retirements are applied as they arrive. A proven instruction arrives
+    carrying its id and its runs, not the measurement, comparison and
+    threshold a condition is compiled from; those live on the
+    opportunity-instruction this part does not consume. Each such arrival is
+    counted on the standing as proven without a body, and nothing is
+    compiled from it -- a condition invented from an id would watch for
+    nothing the instruction said. The known measurements are the shared
+    vocabulary in runtime.sweep_measurements, which the sweeper computes.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.sweep_measurements import KNOWN_MEASUREMENTS
+
+    proven = Batch(read=context.bus.reader("proven-instruction"))
+    retired = Batch(read=context.bus.reader("retired-instruction"))
+    publish_conditions = context.bus.publisher_for("watch-condition")
+    compiler = WatchConditionCompiler(known_measurements=KNOWN_MEASUREMENTS)
+
+    def read_instructions():
+        bodies = []
+        for instruction in proven.payloads():
+            body = getattr(instruction, "body", None)
+            if body is None:
+                compiler.standing.proven_without_a_body += 1
+                continue
+            bodies.append({
+                "instruction_id": instruction.instruction_id,
+                "measurement": body.measurement, "comparison": body.comparison,
+                "threshold": body.threshold, "direction": body.direction,
+                "expectation": body.expectation, "horizon_seconds": body.horizon_seconds,
+            })
+        return tuple(bodies), tuple(item.instruction_id for item in retired.payloads())
+
+    def publish(conditions) -> None:
+        if conditions:
+            publish_conditions(tuple(conditions))
+
+    return run_watch_condition_compiler(
+        compiler=compiler,
+        control_socket=context.control_socket,
+        read_instructions=read_instructions,
+        publish_conditions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

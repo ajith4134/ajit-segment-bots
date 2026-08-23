@@ -195,3 +195,71 @@ def run_whale_flow_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A transfer names an asset and the venue it went to; it is read as a
+    transfer of that asset's perpetual on that venue where one has printed.
+    """
+    from runtime.input_assembly import Batch
+
+    transfers = Batch(read=context.bus.reader("whale-transfer"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    flows = Batch(read=context.bus.reader("onchain-flow"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = WhaleFlowDetector(
+        window_length=int(context.number("detector_window_length")),
+        minimum_observations=int(context.number("detector_minimum_observations")),
+        flow_z_threshold=context.number("detector_z_threshold"),
+        horizon_seconds=context.number("whale_flow_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+    symbol_of: dict[tuple[str, str], str] = {}
+
+    def read_transfers():
+        flows.payloads()
+        for trade in trades.payloads():
+            symbol_of[(trade.venue_id, trade.symbol.removesuffix("USDT"))] = trade.symbol
+            if hasattr(detector, "observe_price"):
+                detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+        requests = []
+        for transfer in transfers.payloads():
+            venue_id = transfer.to_venue_id
+            if venue_id is None:
+                continue
+            symbol = symbol_of.get((venue_id, transfer.asset))
+            if symbol is None:
+                continue
+            if transfer.could_become_supply:
+                direction = INFLOW
+            elif transfer.leaves_the_market:
+                direction = OUTFLOW
+            else:
+                continue  # wallet to wallet; neither side is a venue
+            requests.append({
+                "venue_id": venue_id, "symbol": symbol,
+                "quantity": transfer.quantity, "direction": direction,
+            })
+        return tuple(requests)
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_whale_flow_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_transfers=read_transfers,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

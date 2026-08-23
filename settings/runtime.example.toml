@@ -1142,3 +1142,123 @@ note  = "operator, 2026-08-23: the scale when only one bot had a view. Seven ten
 value = 0.5
 unit  = "multiple"
 note  = "operator, 2026-08-23: the scale when the conviction behind an intent is not yet a measured frequency. Half: an unmeasured conviction is an opinion, and an opinion is traded at half the size of a measurement."
+
+[detector_window_length]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations each single-symbol detector (mean reversion, momentum burst, funding skew, liquidation cascade, sentiment shift, whale flow) keeps before judging the current one. The same 256 the spread-reversion detector uses, for the same reason: a z-score on fewer points has an error bar wider than the signal, and a longer window makes the mean a statement about a market that has moved on."
+
+[detector_minimum_observations]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-23: the fewest observations before any single-symbol detector computes a z-score -- a full window, as spread-reversion-detector requires."
+
+[detector_z_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far a measurement must sit from its own mean before a single-symbol detector raises a candidate. Two, the outer 5% under a normal distribution, matching spread_reversion_z_threshold; measured on the live run the spread detector raised candidates at 2.0 to 2.3 and the labeller scored them at 51% -- which is the calibrator's job to learn from, not this threshold's to guess."
+
+[mean_reversion_horizon]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a mean-reversion claim is given. Five minutes, five times the spread detector's sixty: a single symbol's reversion to its own mean is slower than a cointegrated spread's, which has two legs pulling. Unmeasured; signal-horizon-profiler measures the realised time-to-resolution per detector and that is what would settle it."
+
+[mean_reversion_minimum_volatility_fraction]
+value = 0.0005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the least realised volatility over the window at which a mean-reversion z-score is worth computing. Five basis points, just under the round trip at the venues' taker fees: a symbol moving less than it costs to trade has no reversion worth catching."
+
+[momentum_burst_horizon]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a momentum continuation claim is given. Five minutes, for the same reason as mean_reversion_horizon; the profiler measures the real figure."
+
+[funding_skew_horizon]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a funding-skew unwind is given. An hour, a fraction of one funding interval (eight hours on most symbols, four on some): the unwind a skewed rate produces happens into the settlement, not after it."
+
+[funding_skew_price_confirmation_window]
+value = 20
+unit  = "observations"
+note  = "operator, 2026-08-23: how many recent prices funding-skew-detector checks for the price to be moving against the skew before it raises a candidate. Twenty, a few minutes of prints on the captured symbols."
+
+[liquidation_cascade_horizon]
+value = 600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a cascade claim is given. Ten minutes: a cascade through a cluster of liquidations is over in minutes or does not happen."
+
+[liquidation_cascade_reach_in_volatilities]
+value = 2.0
+unit  = "window volatilities"
+note  = "operator, 2026-08-23: how close, in units of the window's realised volatility, the price must be to a liquidation cluster before the detector considers a cascade reachable. Two, so the cluster is reachable by an ordinary move."
+
+[liquidation_cascade_minimum_cluster_notional]
+value = 1000000.0
+unit  = "USDT"
+note  = "operator, 2026-08-23: the least notional a liquidation cluster must hold to be worth watching. A million USDT, which on the captured thirty is a few minutes of volume on the thinnest and seconds on BTCUSDT -- a cluster smaller than that is absorbed without a cascade. Unmeasured until a liquidation map has been built from real open interest."
+
+[liquidation_cascade_depth_multiple]
+value = 3.0
+unit  = "multiple of book depth"
+note  = "operator, 2026-08-23: how many times the visible book depth a cluster must be before its liquidation would cascade rather than fill. Three: a cluster inside the book fills; one three books deep walks the price."
+
+[sentiment_shift_horizon]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a sentiment-shift claim is given. An hour, the window the sentiment reader measures over."
+
+[sentiment_price_agreement_fraction]
+value = 0.002
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far the price must already have moved in the direction of a sentiment shift before the detector treats the shift as confirmed rather than as talk. Twenty basis points, a move larger than the round-trip cost."
+
+[volatility_gap_minimum_fraction]
+value = 0.2
+unit  = "fraction of implied volatility"
+note  = "operator, 2026-08-23: how far the forecast realised volatility must sit from implied before volatility-gap-detector raises a candidate. A fifth, which is the spread between the two on BTC on an ordinary day in the literature the prediction block cites; no options feed runs in phase 1 so this is unmeasured here."
+
+[volatility_gap_horizon]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a volatility-gap claim is given. An hour; the gap closes over the option's life, and an hour is the least in which realised volatility is measurable."
+
+[whale_flow_horizon]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a whale-flow claim is given. An hour: an exchange inflow is sold over hours, not seconds."
+
+[sweep_budget]
+value = 0.5
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long one pass of universal-symbol-sweeper may take before it yields and resumes next tick. Half a second, half the health interval, so the sweeper is never the part that misses its own heartbeat."
+
+[liquidity_grade_refresh_interval]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how often a symbol's liquidity grade is recomputed from its book. Five seconds: a grade is a statement about a symbol's usual depth, not about one snapshot."
+
+[liquidity_deep_cost_fraction]
+value = 0.001
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the walk cost at the reference order size below which a symbol is graded deep. Ten basis points, the cost of a single taker fee: a symbol that costs less than the fee to walk is not where the cost is."
+
+[liquidity_tradeable_cost_fraction]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the walk cost below which a symbol is tradeable. Half a percent, a third of the 1.5% stop the exit plans set, so walking in and out costs less than the trade risks."
+
+[liquidity_thin_cost_fraction]
+value = 0.02
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the walk cost above which a symbol is thin. Two percent, more than the stop; a symbol that costs more to enter than the trade risks is not traded."
+
+[liquidity_turnover_window]
+value = 60
+unit  = "observations"
+note  = "operator, 2026-08-23: how many recent trades' quote volume the grader sums as turnover. Sixty, about a minute on the captured symbols."
+
+[liquidity_reference_order_size]
+value = 1000.0
+unit  = "USDT"
+note  = "operator, 2026-08-23: the order size the grader walks the book with. The per-trade capital cap the capital desk sets, so a grade answers the question the sizer will ask."

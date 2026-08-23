@@ -203,3 +203,50 @@ def run_mean_reversion_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = MeanReversionDetector(
+        window_length=int(context.number("detector_window_length")),
+        minimum_observations=int(context.number("detector_minimum_observations")),
+        z_threshold=context.number("detector_z_threshold"),
+        minimum_volatility_fraction=context.number("mean_reversion_minimum_volatility_fraction"),
+        horizon_seconds=context.number("mean_reversion_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+
+    def read_prices_and_regimes(_detector):
+        rules.payloads()
+        touched = set()
+        for trade in trades.payloads():
+            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            touched.add((trade.venue_id, trade.symbol))
+        by_symbol = regimes.mapping()
+        return tuple(by_symbol[key] for key in sorted(touched) if key in by_symbol)
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_mean_reversion_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_prices_and_regimes=read_prices_and_regimes,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

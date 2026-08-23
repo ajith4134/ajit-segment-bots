@@ -210,3 +210,67 @@ def run_momentum_burst_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    # This detector is not given market-regime; the regime it judges in is
+    # what the symbol's profile records, and "unclassified" until one does.
+    profiles = LatestByKey(read=context.bus.reader("symbol-profile"), key_of=lambda p: (p.venue_id, p.symbol))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = MomentumBurstDetector(
+        window_length=int(context.number("detector_window_length")),
+        minimum_observations=int(context.number("detector_minimum_observations")),
+        burst_z_threshold=context.number("detector_z_threshold"),
+        horizon_seconds=context.number("momentum_burst_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+
+    class _Regime:
+        __slots__ = ("venue_id", "symbol", "regime", "is_classified")
+
+        def __init__(self, venue_id, symbol, regime):
+            self.venue_id, self.symbol = venue_id, symbol
+            self.regime = regime or "unclassified"
+            self.is_classified = bool(regime)
+
+    def read_prices_and_regimes(_detector):
+        for rule in rules.payloads():
+            # A playbook rule about a symbol's bursts says what to expect of them.
+            expectation = getattr(rule, "then", None)
+            symbol = getattr(rule, "when", "")
+            if expectation and symbol:
+                detector.set_playbook_expectation(str(symbol), str(expectation))
+        touched = set()
+        for trade in trades.payloads():
+            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            touched.add((trade.venue_id, trade.symbol))
+        by_symbol = profiles.mapping()
+        return tuple(
+            _Regime(key[0], key[1], (by_symbol[key].fields or {}).get("regime") if key in by_symbol else None)
+            for key in sorted(touched)
+        )
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_momentum_burst_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_prices_and_regimes=read_prices_and_regimes,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

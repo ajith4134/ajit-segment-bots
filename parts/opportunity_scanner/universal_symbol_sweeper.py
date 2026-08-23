@@ -34,6 +34,10 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "universal-symbol-sweeper"
+# The grades the grader publishes that mean a symbol can be traded. Strings
+# rather than an import: a part names data, never another part (T-4).
+DEEP_GRADE = "deep"
+TRADEABLE_GRADE = "tradeable"
 
 PART_DECLARATION = PartDeclaration(
     part_id="universal-symbol-sweeper",
@@ -276,4 +280,87 @@ def run_universal_symbol_sweeper(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The universe is what the catalogue reader publishes; the measurements
+    per symbol are computed from the latest trade, the trade one window ago
+    and the consolidated price, in the shared vocabulary the compiler
+    checks conditions against. Held positions and untradeable grades are
+    skipped as the sweeper is told of them. A sweep runs once per health
+    interval and resumes where its budget ran out.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.rolling_statistics import RollingWindow
+    from runtime.sweep_measurements import measure
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    universe = LatestByKey(read=context.bus.reader("symbol-universe"), key_of=lambda e: (e.venue_id, e.symbol))
+    conditions = LatestByKey(read=context.bus.reader("watch-condition"), key_of=lambda c: c.condition_id)
+    grades = Batch(read=context.bus.reader("liquidity-grade"))
+    positions = Batch(read=context.bus.reader("position"))
+    signals = Batch(read=context.bus.reader("cross-segment-signal"))
+    announcements = Batch(read=context.bus.reader("venue-announcement"))
+    consolidated = LatestByKey(read=context.bus.reader("consolidated-price"), key_of=lambda p: p.symbol)
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    sweeper = UniversalSymbolSweeper(
+        sweep_budget_seconds=context.number("sweep_budget"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+    window_length = int(context.number("detector_window_length"))
+    windows: dict[tuple[str, str], RollingWindow] = {}
+    last_sweep = [float("-inf")]
+
+    def read_universe(_sweeper):
+        signals.payloads()
+        announcements.payloads()
+        for trade in trades.payloads():
+            if not isinstance(trade, NormalisedTrade):
+                continue
+            key = (trade.venue_id, trade.symbol)
+            window = windows.get(key)
+            if window is None:
+                window = windows[key] = RollingWindow(length=window_length)
+            window.observe(trade.price)
+        for grade in grades.payloads():
+            sweeper.set_tradeable(grade.venue_id, grade.symbol, grade.grade in (DEEP_GRADE, TRADEABLE_GRADE))
+        for position in positions.payloads():
+            sweeper.set_held(position.venue_id, position.symbol, not position.is_flat)
+        consolidated_by_symbol = consolidated.mapping()
+        for key, window in windows.items():
+            price = consolidated_by_symbol.get(key[1])
+            sweeper.observe_measurements(
+                key[0], key[1],
+                measure(window.latest, window.values[0] if window.values else None, None if price is None else price.price),
+            )
+        now = _time.monotonic()
+        if now - last_sweep[0] < context.health_interval_seconds:
+            return (), ()
+        last_sweep[0] = now
+        return tuple(sorted(universe.mapping())), tuple(conditions.mapping().values())
+
+    def publish(candidates, _report) -> None:
+        if candidates:
+            publish_candidates(tuple(candidates))
+
+    return run_universal_symbol_sweeper(
+        sweeper=sweeper,
+        control_socket=context.control_socket,
+        read_universe=read_universe,
+        publish=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

@@ -195,3 +195,66 @@ def run_volatility_gap_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Realised-volatility forecasts per symbol against the implied surface's
+    at-the-money level for the same underlying. Options flow and playbook
+    rules are read and not yet used to shade the gap: no options feed runs in
+    phase 1.
+    """
+    from runtime.input_assembly import Batch
+
+    forecasts = Batch(read=context.bus.reader("volatility-forecast"))
+    surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    flows = Batch(read=context.bus.reader("options-flow"))
+    publish_candidates = context.bus.publisher_for("entry-candidate")
+    detector = VolatilityGapDetector(
+        minimum_gap_fraction=context.number("volatility_gap_minimum_fraction"),
+        horizon_seconds=context.number("volatility_gap_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=context.number("signal_prior_hit_rate"),
+            prior_weight=context.number("signal_prior_weight"),
+            half_life_observations=context.number("signal_half_life_observations"),
+            minimum_observations=int(context.number("signal_minimum_observations")),
+        ),
+    )
+    symbols_of: dict[tuple[str, str], set[str]] = {}
+
+    def read_volatility(_detector):
+        rules.payloads()
+        flows.payloads()
+        touched = set()
+        for forecast in forecasts.payloads():
+            if forecast.expected_volatility is None:
+                continue
+            detector.observe_forecast(forecast.venue_id, forecast.symbol, forecast.expected_volatility)
+            touched.add((forecast.venue_id, forecast.symbol))
+            symbols_of.setdefault((forecast.venue_id, forecast.symbol.rstrip("USDT")), set()).add(forecast.symbol)
+        for surface in surfaces.payloads():
+            at_the_money = surface.at_the_money if isinstance(surface.at_the_money, dict) else {}
+            nearest = min(at_the_money.items(), default=(None, None))[1] if at_the_money else None
+            if nearest is None:
+                continue
+            for symbol in symbols_of.get((surface.venue_id, surface.underlying), ()):
+                detector.observe_implied(surface.venue_id, symbol, float(nearest))
+                touched.add((surface.venue_id, symbol))
+        return tuple(sorted(touched))
+
+    def publish(candidates) -> None:
+        if candidates:
+            publish_candidates(candidates)
+
+    return run_volatility_gap_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_volatility=read_volatility,
+        publish_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
