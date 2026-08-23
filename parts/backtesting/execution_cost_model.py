@@ -275,3 +275,82 @@ def run_execution_cost_model(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Measured costs come from the slippage learner's profiles and the
+    shortfall decomposer's breakdowns; an estimate is published per symbol
+    at the per-trade capital cap once per health interval, which is the
+    size every paper order is bounded to.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    profiles = Batch(read=context.bus.reader("slippage-profile"))
+    breakdowns = Batch(read=context.bus.reader("shortfall-breakdown"))
+    publish_estimates = context.bus.publisher_for("cost-estimate")
+    model = ExecutionCostModel(
+        window=int(context.number("execution_window")),
+        quantile=context.number("backtest_cost_quantile"),
+        minimum_observations=int(context.number("execution_minimum_observations")),
+        prior_half_spread_fraction=context.number("backtest_prior_half_spread_fraction"),
+        prior_impact_coefficient=context.number("backtest_prior_impact_coefficient"),
+    )
+    fee = context.number("taker_fee_rate")
+    notional = context.number("liquidity_reference_order_size")
+    symbols: set[tuple[str, str]] = set()
+    volume: dict[tuple[str, str], float] = {}
+    symbol_of_trade: dict[str, tuple[str, str]] = {}
+    last_estimate = [float("-inf")]
+
+    def read_measurements():
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                key = (trade.venue_id, trade.symbol)
+                symbols.add(key)
+                volume[key] = volume.get(key, 0.0) + trade.quote_volume
+        for key in symbols:
+            model.observe_fee_schedule(key[0], fee)
+            model.observe_daily_volume(key[0], key[1], volume.get(key, 0.0))
+        for breakdown in breakdowns.payloads():
+            key = symbol_of_trade.get(breakdown.trade_id)
+            if key is not None and breakdown.quantity > 0:
+                model.observe_shortfall(key[0], key[1], breakdown, breakdown.quantity * breakdown.achieved_price)
+        jobs = []
+        for profile in profiles.payloads():
+            typical = getattr(profile, "typical_cost_fraction", None)
+            if typical is not None:
+                jobs.append({
+                    "venue_id": profile.venue_id, "symbol": profile.symbol,
+                    "half_spread_fraction": typical / 2.0, "impact_fraction": typical / 2.0,
+                    "participation": getattr(profile, "participation", 0.0) or 0.0,
+                })
+        return tuple(jobs)
+
+    def read_requests():
+        now = _time.monotonic()
+        if now - last_estimate[0] < context.health_interval_seconds:
+            return ()
+        last_estimate[0] = now
+        return tuple((key[0], key[1], notional) for key in sorted(symbols))
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_estimates((item,))
+
+    return run_execution_cost_model(
+        model=model,
+        control_socket=context.control_socket,
+        read_measurements=read_measurements,
+        read_requests=read_requests,
+        publish_estimates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

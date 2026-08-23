@@ -219,3 +219,48 @@ def run_fill_volume_capper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every bar of a window is volume the capper knows; a fillable size is
+    published per bar at the replay quantity, so the replayer has a cap for
+    each bar it may fill in.
+    """
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("historical-window"))
+    publish_sizes = context.bus.publisher_for("fillable-size")
+    capper = FillVolumeCapper(participation_cap=context.number("order_participation_cap"))
+    quantity = context.number("replay_quantity")
+    pending: list = []
+
+    def read_bars():
+        bars = []
+        for window in windows.payloads():
+            for bar in window.bars:
+                bars.append((window.venue_id, window.symbol, bar.at_ns, bar.volume))
+                pending.append((window.venue_id, window.symbol, bar.at_ns, quantity))
+        return tuple(bars)
+
+    def read_requests():
+        requests = tuple(pending)
+        pending.clear()
+        return requests
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_sizes((item,))
+
+    return run_fill_volume_capper(
+        capper=capper,
+        control_socket=context.control_socket,
+        read_bars=read_bars,
+        read_requests=read_requests,
+        publish_sizes=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

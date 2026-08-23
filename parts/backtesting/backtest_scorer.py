@@ -228,3 +228,23 @@ def run_backtest_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    runs = Batch(read=context.bus.reader("backtest-run"))
+    publish_results = context.bus.publisher_for("backtest-result")
+    scorer = BacktestScorer(confidence_multiple=context.number("backtest_confidence_multiple"))
+
+    return run_backtest_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_runs=lambda: tuple(runs.payloads()),
+        publish_results=lambda result: publish_results((result,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

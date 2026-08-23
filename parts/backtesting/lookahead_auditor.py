@@ -244,3 +244,26 @@ def run_lookahead_auditor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    runs = Batch(read=context.bus.reader("backtest-run"))
+    publish_verdicts = context.bus.publisher_for("backtest-verdict")
+    auditor = LookaheadAuditor(
+        impossible_win_rate=context.number("lookahead_impossible_win_rate"),
+        minimum_trades_for_smoothness=int(context.number("lookahead_minimum_trades_for_smoothness")),
+    )
+
+    return run_lookahead_auditor(
+        auditor=auditor,
+        control_socket=context.control_socket,
+        read_runs=lambda: tuple(runs.payloads()),
+        publish_verdicts=lambda verdict: publish_verdicts((verdict,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

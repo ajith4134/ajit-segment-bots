@@ -296,3 +296,56 @@ def run_instruction_promotion_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    results = Batch(read=context.bus.reader("backtest-result"))
+    verdicts = Batch(read=context.bus.reader("backtest-verdict"))
+    refutations = Batch(read=context.bus.reader("refutation-verdict"))
+    ledgers = Batch(read=context.bus.reader("trial-ledger"))
+    samples = Batch(read=context.bus.reader("required-sample-size"))
+    criteria = Batch(read=context.bus.reader("falsification-criterion"))
+    publish_proven = context.bus.publisher_for("proven-instruction")
+    gate = InstructionPromotionGate(
+        base_expectancy_bar=context.number("promotion_base_expectancy_bar"),
+        multiple_testing_exponent=context.number("promotion_multiple_testing_exponent"),
+    )
+    family_of: dict[str, str] = {}
+    folds_of: dict[str, int] = {}
+
+    def read_candidates(_gate):
+        touched = set()
+        for result in results.payloads():
+            gate.observe_result(result)
+            family_of.setdefault(result.instruction_id, result.instruction_id.split("@")[0])
+            folds_of[result.instruction_id] = folds_of.get(result.instruction_id, 0) + 1
+            touched.add(result.instruction_id)
+        for verdict in verdicts.payloads():
+            gate.observe_verdict(verdict)
+        for verdict in refutations.payloads():
+            gate.observe_refutation(verdict.instruction_id, verdict.verdict != "refuted")
+            touched.add(verdict.instruction_id)
+        for ledger in ledgers.payloads():
+            gate.observe_trials(ledger.family, ledger.trials)
+        samples.payloads()
+        for criterion in criteria.payloads():
+            gate.observe_falsification_criterion(criterion.hypothesis_id, criterion.reason)
+        return tuple((i, family_of.get(i, i), folds_of.get(i, 1)) for i in sorted(touched))
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_proven((item,))
+
+    return run_instruction_promotion_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_candidates=read_candidates,
+        publish_proven=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

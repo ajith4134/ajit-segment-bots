@@ -207,3 +207,28 @@ def run_walk_forward_splitter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("historical-window"))
+    publish_splits = context.bus.publisher_for("walk-forward-split")
+    splitter = WalkForwardSplitter(
+        train_seconds=context.number("walk_forward_train_seconds"),
+        test_seconds=context.number("walk_forward_test_seconds"),
+        embargo_seconds=context.number("walk_forward_embargo_seconds"),
+        step_seconds=context.number("walk_forward_step_seconds"),
+    )
+
+    return run_walk_forward_splitter(
+        splitter=splitter,
+        control_socket=context.control_socket,
+        read_windows=lambda: tuple(windows.payloads()),
+        publish_splits=lambda split: publish_splits((split,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

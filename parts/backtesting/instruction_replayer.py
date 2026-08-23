@@ -96,6 +96,8 @@ class ReplayerStanding:
     refused_no_cost_model: int = 0
     refused_no_bars: int = 0
     decisions_offered_the_future: int = 0
+    # Splits that arrived without the bars they cut (see start_part).
+    splits_without_bars: int = 0
 
 
 class InstructionReplayer:
@@ -312,4 +314,101 @@ def run_instruction_replayer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An instruction is a measurement, a comparison and a threshold; its
+    decision over a bounded view is the measurement on the view's last
+    bars, compared -- a return over the instruction's horizon in bars
+    against the threshold -- and a side, stop and target from the bar
+    range. Every instruction is replayed over every split of every window
+    for its symbol, with the cost model, the volume cap and the fill
+    sequence the other backtesting parts publish.
+
+    A split names where it cuts and not the bars it cuts; the bars are on
+    historical-window, which this part is not given. Until a blueprint edit
+    gives it the window -- or the split carries one -- every split arrives
+    without bars and is counted as such on the standing (RL-062); nothing is
+    replayed against bars it does not have.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    instructions = LatestByKey(read=context.bus.reader("opportunity-instruction"), key_of=lambda i: i.instruction_id)
+    splits = Batch(read=context.bus.reader("walk-forward-split"))
+    estimates = LatestByKey(read=context.bus.reader("cost-estimate"), key_of=lambda e: (e.venue_id, e.symbol))
+    sequences = LatestByKey(read=context.bus.reader("fill-sequence"), key_of=lambda s: (s.venue_id, s.symbol, s.at_ns))
+    sizes = LatestByKey(read=context.bus.reader("fillable-size"), key_of=lambda s: (s.venue_id, s.symbol, s.at_ns))
+    publish_runs = context.bus.publisher_for("backtest-run")
+    replayer = InstructionReplayer()
+    quantity = context.number("replay_quantity")
+    windows_by_split: dict[str, object] = {}
+
+    def cost_of(venue_id, symbol, notional):
+        estimate = estimates.mapping().get((venue_id, symbol))
+        if estimate is None or estimate.notional <= 0:
+            return None
+        return (estimate.fee + estimate.half_spread + estimate.expected_impact) / estimate.notional * notional
+
+    def cap(venue_id, symbol, at_ns, intended):
+        size = sizes.mapping().get((venue_id, symbol, at_ns))
+        return intended if size is None else min(intended, size.fillable)
+
+    def sequence_of(venue_id, symbol, at_ns):
+        return sequences.mapping().get((venue_id, symbol, at_ns))
+
+    replayer.install_cost_model(cost_of)
+    replayer.install_volume_cap(cap)
+    replayer.install_sequencer(sequence_of)
+
+    def decide_for(instruction):
+        bars_back = max(1, int(instruction.horizon_seconds / context.number("backtest_bar_interval")))
+
+        def decide(view):
+            bars = view.bars
+            if len(bars) <= bars_back:
+                return None
+            last, earlier = bars[-1], bars[-1 - bars_back]
+            value = last.close_price / earlier.close_price - 1.0 if earlier.close_price else 0.0
+            fired = value > instruction.threshold if instruction.comparison in ("above", "crosses-above") else value < instruction.threshold
+            if not fired:
+                return None
+            span = max(last.high_price - last.low_price, 1e-12)
+            if instruction.direction == "long":
+                return {"side": "long", "stop": last.close_price - span, "target": last.close_price + span}
+            return {"side": "short", "stop": last.close_price + span, "target": last.close_price - span}
+
+        return decide
+
+    def read_jobs():
+        jobs = []
+        for split in splits.payloads():
+            window = getattr(split, "window", None)
+            if window is not None:
+                windows_by_split[split.split_id] = window
+            if window is None:
+                replayer.standing.splits_without_bars += 1
+                continue
+            for instruction in instructions.mapping().values():
+                jobs.append({
+                    "instruction_id": instruction.instruction_id, "split": split, "window": window,
+                    "decide": decide_for(instruction), "quantity": quantity, "is_out_of_sample": True,
+                })
+        return tuple(jobs)
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_runs((item,))
+
+    return run_instruction_replayer(
+        replayer=replayer,
+        control_socket=context.control_socket,
+        read_jobs=read_jobs,
+        publish_runs=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

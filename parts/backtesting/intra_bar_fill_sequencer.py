@@ -209,3 +209,45 @@ def run_intra_bar_fill_sequencer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The order the stop and target are touched inside one bar is sequenced
+    for every bar of a window, with the bar's own extremes as the stop and
+    target -- the worst case for each side -- so the replayer is handed the
+    order a bar's path implies. Cost estimates are consumed to wake the part.
+    """
+    from runtime.input_assembly import Batch
+
+    windows = Batch(read=context.bus.reader("historical-window"))
+    estimates = Batch(read=context.bus.reader("cost-estimate"))
+    publish_sequences = context.bus.publisher_for("fill-sequence")
+    sequencer = IntraBarFillSequencer()
+
+    def read_jobs():
+        estimates.payloads()
+        jobs = []
+        for window in windows.payloads():
+            for bar in window.bars:
+                jobs.append({
+                    "venue_id": window.venue_id, "symbol": window.symbol, "at_ns": bar.at_ns, "bar": bar,
+                    "stop_price": bar.low_price, "target_price": bar.high_price, "is_long": True,
+                })
+        return tuple(jobs)
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_sequences((item,))
+
+    return run_intra_bar_fill_sequencer(
+        sequencer=sequencer,
+        control_socket=context.control_socket,
+        read_jobs=read_jobs,
+        publish_sequences=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

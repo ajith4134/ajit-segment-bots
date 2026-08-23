@@ -2562,3 +2562,188 @@ note  = "operator, 2026-08-23: the long window of the volatility features. An ho
 value = 5
 unit  = "candles"
 note  = "operator, 2026-08-23: the fewest candles before a volatility feature set is built. Five."
+
+[backtest_confidence_multiple]
+value = 2.0
+unit  = "standard errors"
+note  = "operator, 2026-08-23: how many standard errors of expectancy a backtest run needs above zero before backtest-scorer calls it significant. Two, the outer 5%."
+
+[backtest_cost_quantile]
+value = 0.8
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of measured costs the execution cost model charges a backtest. The eightieth, so a replay pays what one fill in five pays live rather than the median."
+
+[backtest_prior_half_spread_fraction]
+value = 0.0005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the half spread assumed before measured. Five basis points, the liquid captured symbols on 2026-08-22."
+
+[backtest_prior_impact_coefficient]
+value = 0.001
+unit  = "fraction of price per unit participation"
+note  = "operator, 2026-08-23: the impact per unit of participation assumed before measured. Ten basis points at full participation."
+
+[backtest_bar_interval]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the bar interval the historical store keeps, one minute, candle_interval."
+
+[backtest_window_bars]
+value = 1440
+unit  = "bars"
+note  = "operator, 2026-08-23: how many bars a historical window covers when one is requested. A day of minutes."
+
+[walk_forward_train_seconds]
+value = 259200.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the training span of one walk-forward fold. Three days, the tape's age when this was written; lengthen as the tape grows."
+
+[walk_forward_test_seconds]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the test span of one fold. A day."
+
+[walk_forward_embargo_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the gap between training and test so the test does not start on the training data's last hour. An hour, the longest detector horizon."
+
+[walk_forward_step_seconds]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how far each fold advances. A day."
+
+[lookahead_impossible_win_rate]
+value = 0.95
+unit  = "probability"
+note  = "operator, 2026-08-23: the win rate above which lookahead-auditor calls a backtest impossible -- a run that wins nineteen in twenty knew the future. Ninety-five percent."
+
+[lookahead_minimum_trades_for_smoothness]
+value = 10
+unit  = "trades"
+note  = "operator, 2026-08-23: the fewest trades before the equity curve's smoothness is judged. Ten."
+
+[reconcile_minimum_live_trades]
+value = 10
+unit  = "closed trades"
+note  = "operator, 2026-08-23: the fewest live trades before live-vs-replay-reconciler compares them to the backtest. Ten."
+
+[reconcile_consistency_tolerance]
+value = 0.3
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far live expectancy may sit from replayed before the reconciler reports a gap. Three tenths."
+
+[reconcile_size_correlation_threshold]
+value = 0.5
+unit  = "correlation"
+note  = "operator, 2026-08-23: the correlation between size and shortfall above which the reconciler says the gap is impact. A half."
+
+[promotion_base_expectancy_bar]
+value = 0.001
+unit  = "fraction of notional per trade"
+note  = "operator, 2026-08-23: the expectancy an instruction must clear out of sample before promotion, before the multiple-testing adjustment. Ten basis points a trade, one round trip."
+
+[promotion_multiple_testing_exponent]
+value = 1.0
+unit  = "exponent"
+note  = "operator, 2026-08-23: how the bar rises with trials in the family: bar times trials to this power. One, linear -- a bot found by two hundred variations clears a bar two hundred times higher."
+
+[replay_quantity]
+value = 1.0
+unit  = "contracts"
+note  = "operator, 2026-08-23: the quantity an instruction is replayed at. One contract; the replay measures the edge, the sizer sizes it."
+
+[hypothesis_threshold_tolerance]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: how close two hypotheses' thresholds may be, relative, before the deduplicator calls them the same. A tenth."
+
+[hypothesis_overlap_tolerance]
+value = 0.8
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of ticks two hypotheses may fire on together before they are the same hypothesis. Four fifths."
+
+[hypothesis_maximum_reachable_trades]
+value = 10000
+unit  = "trades"
+note  = "operator, 2026-08-23: the most trades a hypothesis may require and still be testable here. Ten thousand, about a month of paper trades at today's rate."
+
+[hypothesis_threshold_step_fraction]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far the mutator moves a threshold per mutation. A tenth."
+
+[hypothesis_horizon_step_fraction]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far the mutator moves a horizon per mutation. Half."
+
+[hypothesis_failures_before_stopping]
+value = 3
+unit  = "mutations"
+note  = "operator, 2026-08-23: how many consecutive failed mutations exhaust a family. Three."
+
+[hypothesis_minimum_half_life_trades]
+value = 10.0
+unit  = "trades"
+note  = "operator, 2026-08-23: the shortest edge half-life the ranker considers worth the trades to test. Ten."
+
+[hypothesis_working_threshold]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the hit rate in a regime above which the regime tagger says a hypothesis works there. Just above the coin flip."
+
+[hypothesis_minimum_novelty]
+value = 0.5
+unit  = "novelty"
+note  = "operator, 2026-08-23: the novelty score a hypothesis needs before the writer writes it as an instruction. A half."
+
+[loss_inverter_minimum_wrong_rate]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: how often an instruction must be wrong on direction before loss-inverter proposes the inverse. Three in five: an inverse of a coin flip is a coin flip."
+
+[power_target]
+value = 0.8
+unit  = "probability"
+note  = "operator, 2026-08-23: the statistical power power-estimator sizes a test for. Four fifths, the convention."
+
+[power_significance]
+value = 0.05
+unit  = "probability"
+note  = "operator, 2026-08-23: the uncorrected significance power-estimator starts from. One in twenty, the convention; it is divided by the trials in the hypothesis's family before any sample is sized, and rounded toward the stricter tabulated level."
+
+[miner_threshold_quantiles]
+value = [0.25, 0.5, 0.75]
+unit  = "quantiles"
+note  = "operator, 2026-08-23: where symbolic-hypothesis-miner places a term's threshold, as quantiles of the feature's own observed values. Quartiles: each feature is read as its percentile among what this system has actually seen, so a formula says 'top quarter of imbalance' and means the same thing for every feature. The thresholds are estimated from the first examples, never typed."
+
+[miner_maximum_terms]
+value = 2
+unit  = "terms"
+note  = "operator, 2026-08-23: the most conditions a mined formula may join with 'and'. Two: three terms over four features at three thresholds is a space the held-out period cannot police."
+
+[miner_minimum_examples]
+value = 100
+unit  = "labelled examples"
+note  = "operator, 2026-08-23: how many labelled examples the miner needs before it estimates its thresholds and starts searching. A hundred, five times the decoding floor, because the split keeps only the later part for scoring."
+
+[miner_held_out_fraction]
+value = 0.3
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of examples, the latest in time, that the miner never fits on and scores every formula against. Three tenths, as the reconciler and the walk-forward splitter keep."
+
+[miner_complexity_penalty_per_term]
+value = 0.01
+unit  = "hit-rate points"
+note  = "operator, 2026-08-23: what each extra term costs a formula in held-out hit rate before it counts as an edge. One point per term: a second condition must buy more than a point or it is fitting noise."
+
+[miner_perfect_fit_threshold]
+value = 0.95
+unit  = "probability"
+note  = "operator, 2026-08-23: the fitted hit rate above which the miner refuses to believe a formula. Nineteen in twenty: no readable rule over crypto trades is right that often, so one that fits that well has found the training set, not the market."
+
+[miner_formulas_per_tick]
+value = 50
+unit  = "formulas"
+note  = "operator, 2026-08-23: how many formulas from the declared space the miner evaluates per tick, so one tick stays short and the health report keeps its cadence. Fifty."

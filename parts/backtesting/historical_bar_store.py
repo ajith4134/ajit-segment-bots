@@ -244,3 +244,59 @@ def run_historical_bar_store(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Closed candles from the candle reader are stored as bars; a window is
+    published for a symbol once per health interval covering the last
+    backtest_window_bars. The store refuses off-interval bars itself.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedCandle
+
+    updates = Batch(read=context.bus.reader("market-data"))
+    publish_windows = context.bus.publisher_for("historical-window")
+    interval = context.number("backtest_bar_interval")
+    store = HistoricalBarStore(interval_seconds=interval)
+    span_ns = int(context.number("backtest_window_bars") * interval * 1e9)
+    latest: dict[tuple[str, str], int] = {}
+    last_window = [float("-inf")]
+
+    def read_bars():
+        bars = []
+        for update in updates.payloads():
+            if isinstance(update, NormalisedCandle) and update.is_closed:
+                bars.append((update.venue_id, update.symbol, Bar(
+                    at_ns=update.open_time_ns, open_price=update.open, high_price=update.high,
+                    low_price=update.low, close_price=update.close, volume=update.volume,
+                    trades=update.trades or 0,
+                )))
+                latest[(update.venue_id, update.symbol)] = update.open_time_ns
+        return tuple(bars)
+
+    def read_requests():
+        now = _time.monotonic()
+        if now - last_window[0] < context.health_interval_seconds:
+            return ()
+        last_window[0] = now
+        return tuple((key[0], key[1], to_ns - span_ns, to_ns) for key, to_ns in sorted(latest.items()))
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_windows((item,))
+
+    return run_historical_bar_store(
+        store=store,
+        control_socket=context.control_socket,
+        read_bars=read_bars,
+        read_requests=read_requests,
+        publish_windows=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

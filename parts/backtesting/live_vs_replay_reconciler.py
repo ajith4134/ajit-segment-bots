@@ -293,3 +293,57 @@ def run_live_vs_replay_reconciler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A backtest result is observed per instruction; a closed trade's episode
+    names the detector that raised it, which for a learned instruction is
+    its id, and is observed as a live trade against the expectancy the
+    episode's conditions record.
+    """
+    from runtime.input_assembly import Batch
+
+    results = Batch(read=context.bus.reader("backtest-result"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_gaps = context.bus.publisher_for("live-vs-replay-gap")
+    reconciler = LiveVsReplayReconciler(
+        minimum_live_trades=int(context.number("reconcile_minimum_live_trades")),
+        consistency_tolerance=context.number("reconcile_consistency_tolerance"),
+        size_correlation_threshold=context.number("reconcile_size_correlation_threshold"),
+    )
+    known: set[str] = set()
+
+    def read_instructions(_reconciler):
+        touched = set()
+        for result in results.payloads():
+            reconciler.observe_backtest(result, getattr(result, "period_from_ns", 0), getattr(result, "period_to_ns", 0))
+            known.add(result.instruction_id)
+            touched.add(result.instruction_id)
+        for episode in episodes.payloads():
+            if episode.detector not in known:
+                continue
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            reconciler.observe_live_trade(
+                episode.detector, episode.realised, float(conditions.get("expected", 0.0) or 0.0),
+                float(conditions.get("notional", 0.0) or 0.0), bool(conditions.get("was_fast_market", False)),
+                episode.closed_at_ns,
+            )
+            touched.add(episode.detector)
+        return tuple(sorted(touched))
+
+    def publish(item) -> None:
+        if item is not None:
+            publish_gaps((item,))
+
+    return run_live_vs_replay_reconciler(
+        reconciler=reconciler,
+        control_socket=context.control_socket,
+        read_instructions=read_instructions,
+        publish_gaps=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
