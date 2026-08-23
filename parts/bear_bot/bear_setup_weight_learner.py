@@ -299,3 +299,60 @@ def run_bear_setup_weight_learner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The bot's scorecard carries each detector's wins and trades and is
+    adopted whole; an instruction scorecard carries a learned instruction's
+    record, which is attributed to the detector named for that instruction.
+    Weights go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    instruction_cards = Batch(read=context.bus.reader("instruction-scorecard"))
+    publish_weights = context.bus.publisher_for("bear-setup-weight")
+    learner = BearSetupWeightLearner(
+        prior_hit_rate=context.number("bear_setup_weight_prior_hit_rate"),
+        prior_weight=context.number("bear_setup_weight_prior_weight"),
+        half_life_observations=context.number("bear_feature_half_life_observations"),
+        minimum_observations=int(context.number("bear_setup_weight_minimum_observations")),
+        minimum_weight=context.number("bear_setup_weight_minimum"),
+        maximum_weight=context.number("bear_setup_weight_maximum"),
+        loss_window=int(context.number("bear_setup_weight_loss_window")),
+        prior_loss_fraction=context.number("bear_setup_weight_prior_loss_fraction"),
+        prior_win_fraction=context.number("bear_setup_weight_prior_win_fraction"),
+        tail_quantile=context.number("bear_setup_weight_tail_quantile"),
+        tolerated_tail_ratio=context.number("bear_setup_weight_tolerated_tail_ratio"),
+    )
+    last_publish = [float("-inf")]
+
+    def read_scorecards(_learner) -> None:
+        for scorecard in scorecards.payloads():
+            if getattr(scorecard, "bot", None) == BOT:
+                learner.observe_scorecard(scorecard)
+        for card in instruction_cards.payloads():
+            learner.observe_instruction_scorecard(card.instruction_id, card.instruction_id, card.wins, card.trades)
+
+    def tick() -> None:
+        read_scorecards(learner)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        weights = learner.all_weights()
+        if weights:
+            publish_weights(weights)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

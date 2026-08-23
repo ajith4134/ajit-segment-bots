@@ -220,3 +220,39 @@ def run_bear_setup_filter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A learned setup weight is a level -- what this detector is currently worth --
+    and it is applied to every candidate until the learner says otherwise. Until
+    any weight has been learned the filter uses the default, which is what makes an
+    unproven detector neither favoured nor silenced.
+    """
+    from runtime.input_assembly import Batch
+
+    candidates = Batch(read=context.bus.reader("entry-candidate"))
+    weights = Batch(read=context.bus.reader("bear-setup-weight"))
+    publish_side_candidates = context.bus.publisher_for("bear-side-candidate")
+
+    def read_candidates_and_weights(setup_filter):
+        for weight in weights.payloads():
+            setup_filter.observe_setup_weight(weight)
+        return candidates.payloads()
+
+    return run_bear_setup_filter(
+        setup_filter=BearSetupFilter(
+            default_setup_weight=context.number("bear_default_setup_weight"),
+            minimum_setup_weight=context.number("bear_minimum_setup_weight"),
+            minimum_weighted_strength=context.number("bear_minimum_weighted_strength"),
+            settlements_per_day=context.number("bear_settlements_per_day"),
+            maximum_carry_fraction_of_horizon=context.number("bear_maximum_carry_fraction_of_horizon"),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_weights=read_candidates_and_weights,
+        publish_side_candidates=publish_side_candidates,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

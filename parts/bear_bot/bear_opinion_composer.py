@@ -27,6 +27,7 @@ from runtime.bot_opinion import (
     CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, NO_EXIT_PLAN, SHORT,
     STAND_DOWN, TIMING_REFUSED, WAIT_FOR_TRIGGER, DirectionalOpinion, stand_down,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -56,6 +57,7 @@ class ComposerStanding:
     stood_down: int = 0
     by_refusal: dict = field(default_factory=dict)
     strongest_conviction_acted_on: float = 0.0
+    last_floor: float | None = None
     widest_risk_accepted: float = 0.0
 
 
@@ -64,14 +66,12 @@ class BearOpinionComposer:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         maximum_missing_features: int,
         maximum_risk_fraction: float,
         require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         if not 0.0 < maximum_risk_fraction < 1.0:
             raise ValueError(
                 "a short's risk ceiling is a fraction of entry price and must be inside (0, 1); "
@@ -79,7 +79,9 @@ class BearOpinionComposer:
             )
         if maximum_missing_features < 0:
             raise ValueError("a negative allowance for missing features means nothing")
-        self._minimum_conviction = minimum_conviction
+        # The plan's own break-even plus the operator's margin, as for the bull
+        # bot: a literal floor was the off switch (runtime/edge_arithmetic.py).
+        self._floor = conviction_floor
         self._maximum_missing = maximum_missing_features
         self._maximum_risk = maximum_risk_fraction
         self._require_trained_model = require_trained_model
@@ -99,11 +101,22 @@ class BearOpinionComposer:
                 conviction.calibrated,
             )
 
-        if conviction.probability < self._minimum_conviction:
+        if exit_plan is None or not exit_plan.is_complete:
+            return self._stand_down(
+                venue_id, symbol, NO_EXIT_PLAN,
+                f"conviction {conviction.probability:.1%}, but no exit plan could be built, so "
+                f"there is nowhere this short is wrong, nowhere it is finished, and no "
+                f"break-even it has to clear",
+                conviction.calibrated,
+            )
+
+        floor, floor_reason = self._floor.for_plan(exit_plan.reward_to_risk, exit_plan.risk_fraction)
+        self.standing.last_floor = floor
+        if conviction.probability < floor:
             return self._stand_down(
                 venue_id, symbol, CONVICTION_TOO_LOW,
                 f"conviction is {conviction.probability:.1%} against a floor of "
-                f"{self._minimum_conviction:.1%}",
+                f"{floor:.1%} ({floor_reason})",
                 conviction.calibrated,
             )
 
@@ -124,17 +137,8 @@ class BearOpinionComposer:
                 conviction.calibrated,
             )
 
-        if exit_plan is None or not exit_plan.is_complete:
-            return self._stand_down(
-                venue_id, symbol, NO_EXIT_PLAN,
-                f"conviction {conviction.probability:.1%} and the moment is right, but no exit "
-                f"plan could be built, so there is nowhere this short is wrong and nowhere it "
-                f"is finished",
-                conviction.calibrated,
-            )
-
         if exit_plan.risk_fraction > self._maximum_risk:
-            # Checked here as well as in the proposer, deliberately: the
+            # A short's loss has no ceiling, so a stop too far is not a stop. The
             # requirement lives where the opinion is formed, so replacing the
             # proposer cannot quietly remove it.
             return self._stand_down(
@@ -222,4 +226,69 @@ def run_bear_opinion_composer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Four judgements have to be about the same symbol before an opinion exists: the
+    vector it was judged on, the conviction, the entry timing and the exit plan.
+    Three of them are levels kept per symbol and the fourth -- the vector -- is the
+    event that asks for the opinion, because a vector is what every one of the other
+    three was derived from.
+
+    A symbol missing any of the four gets no opinion at all. Composing one from
+    three would be an opinion with a hole where a decision should be, and the
+    arbiter downstream cannot see which part is missing.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    vectors = Batch(read=context.bus.reader("bear-feature-vector"))
+
+    def by_symbol(data_type: str) -> LatestByKey:
+        return LatestByKey(
+            read=context.bus.reader(data_type),
+            key_of=lambda payload: (payload.venue_id, payload.symbol),
+        )
+
+    convictions = by_symbol("bear-calibrated-conviction")
+    timings = by_symbol("bear-entry-timing")
+    exit_plans = by_symbol("bear-exit-plan")
+    publish_opinions = context.bus.publisher_for("directional-opinion")
+
+    def read_judgements():
+        belief = convictions.mapping()
+        timing_by_symbol = timings.mapping()
+        plan_by_symbol = exit_plans.mapping()
+        judgements = []
+        for vector in vectors.payloads():
+            key = (vector.venue_id, vector.symbol)
+            conviction = belief.get(key)
+            timing = timing_by_symbol.get(key)
+            exit_plan = plan_by_symbol.get(key)
+            if conviction is None or timing is None or exit_plan is None:
+                continue
+            judgements.append((vector, conviction, timing, exit_plan))
+        return tuple(judgements)
+
+    return run_bear_opinion_composer(
+        composer=BearOpinionComposer(
+            conviction_floor=ConvictionFloor(
+                fee_rate=context.number("taker_fee_rate"),
+                margin=context.number("bear_conviction_margin_over_break_even"),
+                fallback_reward_to_risk=context.number("bear_exit_minimum_reward_to_risk"),
+            ),
+            maximum_missing_features=int(context.number("bear_opinion_maximum_missing_features")),
+            maximum_risk_fraction=context.number("risk_maximum_stop_fraction"),
+            require_trained_model=bool(
+                context.setting("bear_opinion_require_trained_model").value
+            ),
+        ),
+        control_socket=context.control_socket,
+        read_judgements=read_judgements,
+        publish_opinions=publish_opinions,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

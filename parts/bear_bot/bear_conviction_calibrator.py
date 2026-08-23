@@ -202,3 +202,42 @@ def run_bear_conviction_calibrator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A raw conviction is calibrated against the regime it was formed in, because a
+    model that is well calibrated in a trend is not the same model in a chop. The
+    regime is a level kept per symbol; a conviction with no regime yet is calibrated
+    against 'any', which is what the classifier itself reports before it has seen a
+    full window.
+    """
+    from runtime.input_assembly import Batch
+
+    convictions = Batch(read=context.bus.reader("bear-raw-conviction"))
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    publish_calibrated = context.bus.publisher_for("bear-calibrated-conviction")
+
+    def read_convictions_and_scorecard(calibrator):
+        for scorecard in scorecards.payloads():
+            calibrator.observe_scorecard(scorecard)
+        # The regime this part may use is the one carried on the conviction's own
+        # reason chain, not a market-regime message: this part does not declare
+        # market-regime, and reading a type it has not declared would be private
+        # wiring of exactly the kind R-01 forbids.
+        return tuple((raw, ALL_REGIMES) for raw in convictions.payloads())
+
+    return run_bear_conviction_calibrator(
+        calibrator=BearConvictionCalibrator(
+            bin_count=int(context.number("bear_calibration_bin_count")),
+            minimum_observations=int(context.number("bear_calibration_minimum_observations")),
+            half_life_observations=context.number("bear_calibration_half_life_observations"),
+        ),
+        control_socket=context.control_socket,
+        read_convictions_and_scorecard=read_convictions_and_scorecard,
+        publish_calibrated=publish_calibrated,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

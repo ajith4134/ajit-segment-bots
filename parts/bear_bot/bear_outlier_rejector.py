@@ -285,3 +285,35 @@ def run_bear_outlier_rejector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Judge first, then learn from the vector: a vector compared against a
+    distribution it has already been added to is a vector compared against itself,
+    which makes every reading look ordinary. The part's own tick already does them
+    in that order; this only has to hand it the vectors.
+    """
+    from runtime.input_assembly import Batch
+
+    vectors = Batch(read=context.bus.reader("bear-feature-vector"))
+    publish_flags = context.bus.publisher_for("bear-feature-out-of-distribution-flag")
+
+    return run_bear_outlier_rejector(
+        rejector=BearOutlierRejector(
+            deviation_threshold=context.number("bear_outlier_deviation_threshold"),
+            minimum_observations=int(context.number("bear_outlier_minimum_observations")),
+            half_life_observations=context.number("bear_outlier_half_life_observations"),
+            maximum_unjudgeable_fraction=context.number("bear_outlier_maximum_unjudgeable_fraction"),
+            dangerous_side_threshold=context.number("bear_outlier_dangerous_side_threshold"),
+            squeeze_room_deviation=context.number("bear_squeeze_room_deviation"),
+            rising_volatility_deviation=context.number("bear_rising_volatility_deviation"),
+        ),
+        control_socket=context.control_socket,
+        read_vectors=vectors.payloads,
+        publish_flags=publish_flags,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

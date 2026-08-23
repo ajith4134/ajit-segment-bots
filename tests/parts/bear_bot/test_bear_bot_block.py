@@ -24,7 +24,7 @@ from parts.bear_bot.bear_entry_timer import (
     BearEntryTimer, PlaybookRule,
 )
 from parts.bear_bot.bear_exit_plan_proposer import (
-    MAXIMUM_SHORT_FAVOURABLE_EXCURSION, NO_EXCURSION_PROFILE, NO_HORIZON,
+    MAXIMUM_SHORT_FAVOURABLE_EXCURSION, NO_EXCURSION_PROFILE, NO_HORIZON, NO_RANGE,
     REWARD_BELOW_RISK, STOP_WOULD_BE_UNBOUNDED, BearExitPlanProposer, ExcursionProfile,
     HorizonProfile, StopAudit,
 )
@@ -46,6 +46,7 @@ from runtime.bot_opinion import (
     NO_EXIT_PLAN, REDUCE_POSITION, SHORT, STAND_DOWN, TIMING_REFUSED, WAIT_FOR_TRIGGER,
     BotScorecard, FeatureVector, SideCandidate,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.market_signal import CONTINUATION, make_candidate
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -515,9 +516,15 @@ def test_the_record_decays_so_a_past_regime_stops_governing():
 
 # ---- bear-entry-timer -------------------------------------------------------
 
-def a_timer(minimum_conviction=0.55, clock=None, floor=0.01):
+def a_floor(margin=0.0):
+    # Fee-free break-even at 1.5 reward to risk is 40%; the plan's own floor
+    # applies in the composer. Same arithmetic as the bull bot's tests.
+    return ConvictionFloor(fee_rate=0.00055, margin=margin, fallback_reward_to_risk=1.5)
+
+
+def a_timer(margin=0.0, clock=None, floor=0.01):
     return BearEntryTimer(
-        minimum_conviction=minimum_conviction, window_length=50, minimum_observations=10,
+        conviction_floor=a_floor(margin), window_length=50, minimum_observations=10,
         trigger_validity_seconds=30.0, minimum_extension_quantile=0.2,
         entry_quality_window=200, prior_extension_floor=floor,
         prior_entry_cost_fraction=0.0005, now_ns=clock or Clock(),
@@ -531,7 +538,7 @@ class ConvictionStub:
 
 
 def test_a_short_the_bot_does_not_believe_is_not_timed():
-    subject = a_timer(minimum_conviction=0.7)
+    subject = a_timer(margin=0.2)
     assert subject.decide(a_side_candidate(), ConvictionStub(0.5)).action == STAND_DOWN
     assert TIMER_CONVICTION_TOO_LOW in subject.standing.by_refusal
 
@@ -606,10 +613,23 @@ def test_a_playbook_rule_can_demand_a_higher_bounce_never_a_lower_one():
 
 # ---- bear-exit-plan-proposer ------------------------------------------------
 
-def a_proposer(minimum_reward=1.0, maximum_stop=0.15):
+# The cold-start path, as in the bull bot's tests: a stop from the symbol's own
+# range over the claimed horizon, targets at multiples of it.
+COLD_START_STOP_MULTIPLE = 1.5
+COLD_START_REWARD_MULTIPLES = (1.0, 2.0)
+COLD_START_MINIMUM_PRINTS = 20
+COLD_START_PRICE_WINDOW = 4000
+
+
+def a_proposer(minimum_reward=1.0, maximum_stop=0.15, clock=None):
     return BearExitPlanProposer(
         stop_safety_multiple=1.5, maximum_stop_fraction=maximum_stop,
         target_quantiles=((0.5, 0.5), (0.8, 0.5)), minimum_reward_to_risk=minimum_reward,
+        cold_start_stop_range_multiple=COLD_START_STOP_MULTIPLE,
+        cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
+        cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
+        cold_start_price_window=COLD_START_PRICE_WINDOW,
+        **({"now_ns": clock} if clock is not None else {}),
     )
 
 
@@ -658,16 +678,23 @@ def test_a_target_cannot_be_priced_below_zero():
     assert MAXIMUM_SHORT_FAVOURABLE_EXCURSION == 1.0
 
 
-def test_no_excursion_or_horizon_record_means_no_plan():
+def test_no_excursion_record_falls_back_to_the_range_and_no_range_is_refused_by_name():
+    """Rewritten on 2026-08-23 with the cold-start path: no record is no longer
+    no plan, it is a plan from the symbol's own range -- and with one print
+    there is no range, which is its own refusal."""
     without_excursion = a_proposer()
     without_excursion.observe_price(VENUE, SYMBOL, 100.0)
     without_excursion.observe_horizon_profile(a_horizon())
-    assert without_excursion.propose(a_side_candidate(), ConvictionStub(0.8))[1] == NO_EXCURSION_PROFILE
+    assert without_excursion.propose(a_side_candidate(), ConvictionStub(0.8))[1] == NO_RANGE
 
+
+def test_no_horizon_record_uses_the_horizon_the_detector_claimed():
     without_horizon = a_proposer()
     without_horizon.observe_price(VENUE, SYMBOL, 100.0)
     without_horizon.observe_excursion_profile(a_profile())
-    assert without_horizon.propose(a_side_candidate(), ConvictionStub(0.8))[1] == NO_HORIZON
+    plan, outcome = without_horizon.propose(a_side_candidate(), ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert "the horizon the detector itself claimed" in plan.reason
 
 
 def test_the_horizon_is_not_extended_for_conviction_because_carry_accrues():
@@ -698,14 +725,18 @@ def test_a_proposer_with_no_risk_ceiling_is_refused_at_construction():
         BearExitPlanProposer(
             stop_safety_multiple=1.5, maximum_stop_fraction=1.5,
             target_quantiles=((0.5, 1.0),), minimum_reward_to_risk=1.0,
+            cold_start_stop_range_multiple=COLD_START_STOP_MULTIPLE,
+            cold_start_reward_multiples=(1.0,),
+            cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
+            cold_start_price_window=COLD_START_PRICE_WINDOW,
         )
 
 
 # ---- bear-opinion-composer --------------------------------------------------
 
-def a_composer(minimum=0.55, missing=1, maximum_risk=0.1, require_measured=False):
+def a_composer(margin=0.0, missing=1, maximum_risk=0.1, require_measured=False):
     return BearOpinionComposer(
-        minimum_conviction=minimum, maximum_missing_features=missing,
+        conviction_floor=a_floor(margin), maximum_missing_features=missing,
         maximum_risk_fraction=maximum_risk, require_trained_model=require_measured,
     )
 
@@ -749,7 +780,7 @@ def test_a_plan_whose_stop_is_too_far_is_refused_here_as_well_as_upstream():
 
 
 def test_the_usual_refusals_still_apply():
-    subject = a_composer(minimum=0.7, missing=1)
+    subject = a_composer(margin=0.5, missing=1)
     assert subject.compose(a_vector(), CalibratedStub(0.5), a_timing(), a_plan()).refusal == CONVICTION_TOO_LOW
     assert subject.compose(
         a_vector(missing=("a", "b")), CalibratedStub(0.9), a_timing(), a_plan()
@@ -761,7 +792,7 @@ def test_the_usual_refusals_still_apply():
 def test_a_composer_with_no_risk_ceiling_is_refused_at_construction():
     with pytest.raises(ValueError):
         BearOpinionComposer(
-            minimum_conviction=0.55, maximum_missing_features=1,
+            conviction_floor=a_floor(), maximum_missing_features=1,
             maximum_risk_fraction=0.0, require_trained_model=False,
         )
 
@@ -987,3 +1018,25 @@ def test_the_watcher_is_judged_too():
         subject.observe_outcome(True)
     assert subject.invalidation_record.is_fitted
     assert subject.invalidation_record.value > 0.6
+
+
+def test_a_short_is_planned_before_any_short_has_closed_from_the_symbols_own_range():
+    """The bull bot needed this to produce its first trade; so does the bear."""
+    clock = Clock()
+    subject = a_proposer(minimum_reward=1.0, clock=clock)
+    # Forty prints swinging 2% inside the claimed horizon, then a short candidate.
+    for index in range(40):
+        subject.observe_price(VENUE, SYMBOL, 100.0 + (2.0 if index % 2 else 0.0))
+        clock.advance_seconds(1.0)
+    candidate = a_side_candidate()
+    plan, outcome = subject.propose(candidate, ConvictionStub(0.8))
+    assert plan is not None, outcome
+    assert plan.stop_price > 100.0 and all(target.price < 100.0 for target in plan.targets)
+    assert "no short has closed in it yet" in plan.reason
+
+
+def test_too_few_prints_refuse_a_cold_start_plan_by_name():
+    subject = a_proposer()
+    subject.observe_price(VENUE, SYMBOL, 100.0)
+    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
+    assert plan is None and outcome == NO_RANGE

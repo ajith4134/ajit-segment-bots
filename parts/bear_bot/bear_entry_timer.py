@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import ENTER_NOW, SHORT, STAND_DOWN, WAIT_FOR_TRIGGER, EntryTiming
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -82,7 +83,7 @@ class BearEntryTimer:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         window_length: int,
         minimum_observations: int,
         trigger_validity_seconds: float,
@@ -92,14 +93,12 @@ class BearEntryTimer:
         prior_entry_cost_fraction: float,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         if trigger_validity_seconds <= 0:
             raise ValueError(
                 "a trigger with no life is a short taken later by reasoning that has aged out, "
                 "having paid carry the whole way"
             )
-        self._minimum_conviction = minimum_conviction
+        self._floor, self._floor_reason = conviction_floor.before_any_plan()
         self._window_length = window_length
         self._minimum = minimum_observations
         self._validity_seconds = trigger_validity_seconds
@@ -134,12 +133,12 @@ class BearEntryTimer:
     def decide(self, candidate, conviction) -> EntryTiming:
         self.standing.decisions += 1
 
-        if conviction.probability < self._minimum_conviction:
+        if conviction.probability < self._floor:
             return self._stand_down(
                 candidate, CONVICTION_TOO_LOW,
                 f"conviction is {conviction.probability:.1%}, below the "
-                f"{self._minimum_conviction:.1%} this bot shorts on "
-                f"({'measured' if conviction.is_measured else 'and not yet a measured frequency'})",
+                f"{self._floor:.1%} this bot shorts on ({self._floor_reason}; "
+                f"{'measured' if conviction.is_measured else 'not yet a measured frequency'})",
             )
 
         window = self._prices.get((candidate.venue_id, candidate.symbol))
@@ -296,4 +295,64 @@ def run_bear_entry_timer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The timer decides on a pair: the candidate that was accepted, and the
+    conviction the model reached about it. Conviction is a level per symbol -- the
+    model's current belief -- and the candidate is the event that asks for a
+    decision, so a candidate with no conviction yet is not timed at all rather than
+    timed against a belief nobody formed.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    candidates = Batch(read=context.bus.reader("bear-side-candidate"))
+    convictions = LatestByKey(
+        read=context.bus.reader("bear-calibrated-conviction"),
+        key_of=lambda conviction: (conviction.venue_id, conviction.symbol),
+    )
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    quality = Batch(read=context.bus.reader("entry-quality"))
+    publish_timings = context.bus.publisher_for("bear-entry-timing")
+
+    def read_candidates_and_convictions(timer):
+        for trade in trades.payloads():
+            timer.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for rule in rules.payloads():
+            timer.observe_playbook_rule(rule)
+        for entry in quality.payloads():
+            timer.observe_entry_quality(entry)
+        belief = convictions.mapping()
+        pairs = []
+        for candidate in candidates.payloads():
+            conviction = belief.get((candidate.venue_id, candidate.symbol))
+            if conviction is not None:
+                pairs.append((candidate, conviction))
+        return tuple(pairs)
+
+    return run_bear_entry_timer(
+        timer=BearEntryTimer(
+            conviction_floor=ConvictionFloor(
+                fee_rate=context.number("taker_fee_rate"),
+                margin=context.number("bear_conviction_margin_over_break_even"),
+                fallback_reward_to_risk=context.number("bear_exit_minimum_reward_to_risk"),
+            ),
+            window_length=int(context.number("bear_entry_window_length")),
+            minimum_observations=int(context.number("bear_entry_minimum_observations")),
+            trigger_validity_seconds=context.number("bear_entry_trigger_validity"),
+            minimum_extension_quantile=context.number("bear_entry_minimum_extension_quantile"),
+            entry_quality_window=int(context.number("bear_entry_quality_window")),
+            prior_extension_floor=context.number("bear_entry_prior_extension_floor"),
+            prior_entry_cost_fraction=context.number("bear_entry_prior_entry_cost_fraction"),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_convictions=read_candidates_and_convictions,
+        publish_timings=publish_timings,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

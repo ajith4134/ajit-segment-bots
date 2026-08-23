@@ -24,15 +24,24 @@ price forecast flagged out of distribution.
 
 from __future__ import annotations
 
+import pathlib
 import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import SHORT, RawConviction
+from runtime.learned_state import (
+    STARTED_COLD_UNREADABLE,
+    CheckpointSchedule,
+    LearnedStateStore,
+)
+from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.online_learner import OnlineLogisticModel
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "bear-conviction-model"
+# The checkpoint is addressed by component, as the bull bot's is.
+COMPONENT = "conviction"
 BOT = "bear-bot"
 
 PART_DECLARATION = PartDeclaration(
@@ -71,6 +80,11 @@ class ModelStanding:
     live_model: str = CHAMPION
     mean_absolute_error: float = 0.0
     by_symbol: dict = field(default_factory=dict)
+    # What the checkpoint said at start, as in the bull model (ported 2026-08-23).
+    checkpoint_verdict: str | None = None
+    checkpoint_detail: str | None = None
+    checkpoint_saved_at_ns: int | None = None
+    checkpoints_written: int = 0
 
 
 @dataclass(frozen=True)
@@ -288,6 +302,39 @@ class BearConvictionModel:
         return self._models[name]
 
 
+    # -- what this part carries across the off switch (ported from the bull) --
+
+    def learned_settings(self) -> dict:
+        return self._models[CHAMPION].learned_settings()
+
+    def state(self) -> dict:
+        return {
+            "live": self._live,
+            "models": {name: model.state() for name, model in self._models.items()},
+            "labels_trained_on": self.standing.labels_trained_on,
+            "absolute_error_total": self._absolute_error_total,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        for name, stored in state["models"].items():
+            if name not in self._models:
+                raise ValueError(f"the checkpoint holds a model named {name!r} that this part does not run")
+            self._models[name].restore_state(stored)
+        live = state["live"]
+        if live not in self._models:
+            raise ValueError(f"the checkpoint names {live!r} live and this part does not hold it")
+        self._live = live
+        self.standing.live_model = live
+        self.standing.labels_trained_on = int(state["labels_trained_on"])
+        self._absolute_error_total = float(state["absolute_error_total"])
+        if self.standing.labels_trained_on:
+            self.standing.mean_absolute_error = self._absolute_error_total / self.standing.labels_trained_on
+
+    @property
+    def training_observations(self) -> int:
+        return self._models[self._live].observations
+
+
 def describe_conviction(model: BearConvictionModel) -> dict:
     return {
         "part_id": PART_ID,
@@ -301,9 +348,31 @@ def describe_conviction(model: BearConvictionModel) -> dict:
         "mean_absolute_training_error": model.standing.mean_absolute_error,
         "retrains": model.standing.retrains,
         "champion_swaps": model.standing.champion_swaps,
+        "checkpoint_verdict": model.standing.checkpoint_verdict,
+        "checkpoint_detail": model.standing.checkpoint_detail,
+        "checkpoint_saved_at_ns": model.standing.checkpoint_saved_at_ns,
+        "checkpoints_written": model.standing.checkpoints_written,
         "champion": model.model(CHAMPION).describe(),
         "challenger": model.model(CHALLENGER).describe(),
     }
+
+
+def restore_or_start_cold(model: BearConvictionModel, store, part_id: str = PART_ID) -> None:
+    """Adopt the previous process's model, or record why this one starts cold."""
+    restoration = store.restore(part_id, COMPONENT, model.learned_settings())
+    model.standing.checkpoint_saved_at_ns = restoration.saved_at_ns
+    if not restoration.was_restored:
+        model.standing.checkpoint_verdict = restoration.verdict
+        model.standing.checkpoint_detail = restoration.detail
+        return
+    try:
+        model.restore_state(restoration.state)
+    except (KeyError, TypeError, ValueError) as refusal:
+        model.standing.checkpoint_verdict = STARTED_COLD_UNREADABLE
+        model.standing.checkpoint_detail = f"{restoration.detail}, but it could not be adopted: {refusal}"
+        return
+    model.standing.checkpoint_verdict = restoration.verdict
+    model.standing.checkpoint_detail = restoration.detail
 
 
 def run_bear_conviction_model(
@@ -311,7 +380,12 @@ def run_bear_conviction_model(
     publish_convictions, health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    checkpoint=None,
 ) -> int:
+    """`checkpoint` is called with the model on every tick, as in the bull model:
+    whether enough has been learned to be worth an fsync is the schedule's
+    decision, and a part that only checkpointed after training would never
+    write the first one on a quiet market."""
     def tick() -> None:
         convictions = []
         for vector, is_flagged in read_vectors_flags_and_labels(model):
@@ -319,6 +393,8 @@ def run_bear_conviction_model(
             if conviction is not None:
                 convictions.append(conviction)
         publish_convictions(tuple(convictions))
+        if checkpoint is not None:
+            checkpoint(model)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -328,4 +404,158 @@ def run_bear_conviction_model(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This is the part the whole cold-start problem was about. It forms no conviction
+    until it has been trained, and until `signal-outcome-labeller` exists nothing
+    could train it -- see `docs/proposals/signal-outcome-labelling.md`.
+
+    A label arrives after the vector it belongs to, by the length of the claim's
+    horizon. So vectors are kept by symbol with the time they were built, and a
+    label is matched to the vector that was current when the claim was made, not to
+    whichever vector happens to be current when the label lands. Training on the
+    latter would teach the model to predict the past from the present.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    vectors = Batch(read=context.bus.reader("bear-feature-vector"))
+    flags = LatestByKey(
+        read=context.bus.reader("bear-feature-out-of-distribution-flag"),
+        key_of=lambda flag: (flag.venue_id, flag.symbol),
+    )
+    labels = Batch(read=context.bus.reader("training-label"))
+    weights = LatestByKey(
+        read=context.bus.reader("sample-weight"),
+        key_of=lambda weight: (weight.venue_id, weight.symbol),
+    )
+    forecasts = Batch(read=context.bus.reader("price-forecast"))
+    forecast_flags = Batch(read=context.bus.reader("forecast-out-of-distribution-flag"))
+    kline_windows = Batch(read=context.bus.reader("kline-window"))
+    rewards = Batch(read=context.bus.reader("learning-reward"))
+    publish_convictions = context.bus.publisher_for("bear-raw-conviction")
+
+    # Vectors kept per symbol with when they were built, so a label that arrives a
+    # horizon later can find the one that was current when the claim was made.
+    # Bounded by what the horizon can span, because this is a process's memory and
+    # an unbounded history of vectors is a leak with a good excuse.
+    remembered: dict[tuple[str, str], list] = {}
+    remembered_per_symbol = int(context.number("bear_remembered_vectors_per_symbol"))
+
+    def remember(vector) -> None:
+        key = (vector.venue_id, vector.symbol)
+        history = remembered.setdefault(key, [])
+        history.append(vector)
+        if len(history) > remembered_per_symbol:
+            del history[0]
+
+    def vector_current_at(venue_id: str, symbol: str, at_ns: int):
+        history = remembered.get((venue_id, symbol), ())
+        current = None
+        for vector in history:
+            if vector.built_at_ns <= at_ns:
+                current = vector
+            else:
+                break
+        return current
+
+    def read_vectors_flags_and_labels(model):
+        for forecast in forecasts.payloads():
+            model.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
+        for flag in forecast_flags.payloads():
+            model.observe_forecast_flag(flag.venue_id, flag.symbol, flag.is_out_of_distribution)
+        for window in kline_windows.payloads():
+            # The window carries candles; the model wants the three series it
+            # shapes features from. Unpacked here rather than in the model, which
+            # must not know the shape of a type another block publishes (T-4).
+            model.observe_kline_window(
+                window.venue_id,
+                window.symbol,
+                [candle.close for candle in window.candles],
+                [candle.high for candle in window.candles],
+                [candle.low for candle in window.candles],
+            )
+        for reward in rewards.payloads():
+            model.note_uninterpretable_reward(
+                f"{reward.detector} sent a shaped reward of {reward.reward!r} in state "
+                f"{reward.state!r}; no conversion from a shaped reward to a weight "
+                f"multiplier has been decided, and sample-weight is the input that carries one"
+            )
+
+        weight_by_symbol = weights.mapping()
+        for label in labels.payloads():
+            vector = vector_current_at(label.venue_id, label.symbol, label.claimed_at_ns)
+            if vector is None:
+                # A label for a symbol this bot never built a vector for. Not an
+                # error: the labeller scores every detector's claims, and the bull
+                # bot only builds vectors for the ones its filter accepted.
+                continue
+            outcome = label.label_for(THE_SETUP_WAS_RIGHT)
+            if outcome is None:
+                continue
+            weight = weight_by_symbol.get((label.venue_id, label.symbol))
+            model.train_from_label(
+                features=vector.features,
+                moved_the_expected_way=outcome,
+                seconds_to_resolve=float(getattr(label, "seconds_to_resolve", 0.0) or 0.0),
+                horizon_seconds=float(getattr(label, "horizon_seconds", 0.0) or 0.0) or float("inf"),
+                source=f"{label.detector}:{THE_SETUP_WAS_RIGHT}",
+                sample_weight=getattr(weight, "weight", None),
+            )
+
+        flag_by_symbol = flags.mapping()
+        judged = []
+        for vector in vectors.payloads():
+            remember(vector)
+            flag = flag_by_symbol.get((vector.venue_id, vector.symbol))
+            judged.append((vector, bool(flag.is_out_of_distribution) if flag else False))
+        return judged
+
+    model = BearConvictionModel(
+        learning_rate=context.number("bear_learning_rate"),
+        l2_regularisation=context.number("bear_l2_regularisation"),
+        feature_half_life_observations=context.number("bear_feature_half_life_observations"),
+        minimum_feature_observations=int(context.number("bear_minimum_feature_observations")),
+        minimum_training_observations=int(context.number("bear_minimum_training_observations")),
+        default_sample_weight=context.number("bear_default_sample_weight"),
+        maximum_sample_weight=context.number("bear_maximum_sample_weight"),
+    )
+
+    # What this bot has learned, carried across the off switch. Without it the
+    # model was rebuilt empty on every fork, and since it needs
+    # bear_minimum_training_observations outcomes of each class before its
+    # conviction is a measurement, a bot that was restarted more often than that
+    # took could never form an opinion at all. Measured on the run of 2026-08-22
+    # 17:37-18:42: 184 412 candidates noticed, no opinion formed, count back to
+    # zero at the next start.
+    store = LearnedStateStore(
+        pathlib.Path(str(context.setting("learned_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    restore_or_start_cold(model, store)
+    schedule = CheckpointSchedule(
+        int(context.number("learned_state_checkpoint_interval"))
+    )
+
+    def checkpoint(model: BearConvictionModel) -> None:
+        observations = model.training_observations
+        if not schedule.is_due(observations):
+            return
+        store.save(PART_ID, COMPONENT, model.state(), model.learned_settings())
+        schedule.record_written(observations)
+        model.standing.checkpoints_written += 1
+
+    return run_bear_conviction_model(
+        model=model,
+        control_socket=context.control_socket,
+        read_vectors_flags_and_labels=read_vectors_flags_and_labels,
+        publish_convictions=publish_convictions,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+        checkpoint=checkpoint,
     )

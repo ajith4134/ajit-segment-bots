@@ -26,6 +26,7 @@ percentage (RL-062).
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import SHORT, ExitPlan, ExitTarget
@@ -58,6 +59,10 @@ MAXIMUM_SHORT_FAVOURABLE_EXCURSION = 1.0
 NO_EXCURSION_PROFILE = "no-excursion-record-for-this-symbol"
 NO_PRICE = "no-price-for-this-symbol"
 NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
+# The cold-start path measures the stop from this symbol's own recent range;
+# too few prints inside the claimed horizon is its own refusal, not a missing
+# excursion record.
+NO_RANGE = "too-few-prints-in-the-window-to-measure-a-range"
 REWARD_BELOW_RISK = "reward-to-risk-below-floor"
 STOP_WOULD_BE_UNBOUNDED = "the-stop-this-symbol-needs-is-wider-than-a-short-can-carry"
 
@@ -99,8 +104,28 @@ class BearExitPlanProposer:
         maximum_stop_fraction: float,
         target_quantiles: tuple,
         minimum_reward_to_risk: float,
+        cold_start_stop_range_multiple: float,
+        cold_start_reward_multiples: tuple,
+        cold_start_minimum_prints: int,
+        cold_start_price_window: int,
         now_ns=time.time_ns,
     ) -> None:
+        # The cold-start path, ported from the bull proposer on 2026-08-23: before
+        # any short has closed there is no excursion record, and a proposer that
+        # refused every plan until one existed could never produce the first
+        # short that would make one. The stop is measured from this symbol's own
+        # range over the claimed horizon, the targets are multiples of that risk.
+        if cold_start_stop_range_multiple <= 0:
+            raise ValueError("a cold-start stop at or inside the measured range is the range itself")
+        if not cold_start_reward_multiples:
+            raise ValueError("a cold-start plan with no target never takes profit")
+        if len(cold_start_reward_multiples) != len(target_quantiles):
+            raise ValueError(
+                f"{len(cold_start_reward_multiples)} cold-start reward multiple(s) against "
+                f"{len(target_quantiles)} target(s): they are read position by position"
+            )
+        if cold_start_minimum_prints < 2:
+            raise ValueError("a range needs at least two prints")
         if stop_safety_multiple <= 1.0:
             raise ValueError(
                 "a stop at or inside the excursion a winner normally survives is a machine "
@@ -122,8 +147,13 @@ class BearExitPlanProposer:
         self._maximum_stop_fraction = maximum_stop_fraction
         self._target_quantiles = tuple(target_quantiles)
         self._minimum_reward_to_risk = minimum_reward_to_risk
+        self._cold_start_stop_multiple = cold_start_stop_range_multiple
+        self._cold_start_reward_multiples = tuple(cold_start_reward_multiples)
+        self._cold_start_minimum_prints = cold_start_minimum_prints
+        self._cold_start_price_window = cold_start_price_window
         self._now_ns = now_ns
         self._prices: dict[tuple[str, str], float] = {}
+        self._recent: dict[tuple[str, str], deque] = {}
         self._price_steps: dict[tuple[str, str], float] = {}
         self._excursions: dict[tuple[str, str], ExcursionProfile] = {}
         self._horizons: dict[str, HorizonProfile] = {}
@@ -131,7 +161,27 @@ class BearExitPlanProposer:
         self.standing = ProposerStanding()
 
     def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+        key = (venue_id, symbol)
+        self._prices[key] = price
+        window = self._recent.get(key)
+        if window is None:
+            window = deque(maxlen=self._cold_start_price_window)
+            self._recent[key] = window
+        window.append((self._now_ns(), price))
+
+    def live_range_fraction(self, venue_id: str, symbol: str, seconds: float):
+        """How far this symbol traded through the last `seconds`, as a fraction of price."""
+        window = self._recent.get((venue_id, symbol))
+        if not window:
+            return None
+        cutoff = self._now_ns() - int(max(0.0, seconds) * 1e9)
+        inside = [price for at_ns, price in window if at_ns >= cutoff]
+        if len(inside) < self._cold_start_minimum_prints:
+            return None
+        highest, lowest, last = max(inside), min(inside), inside[-1]
+        if last <= 0 or highest <= lowest:
+            return None
+        return (highest - lowest) / last, len(inside)
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, price_step: float) -> None:
         self._price_steps[(venue_id, symbol)] = price_step
@@ -153,15 +203,37 @@ class BearExitPlanProposer:
         if price is None or price <= 0:
             return None, self._refuse(NO_PRICE)
 
-        profile = self._excursions.get(key)
-        if profile is None or not profile.is_fitted:
-            return None, self._refuse(NO_EXCURSION_PROFILE)
-
         horizon = self._horizons.get(candidate.detector)
-        if horizon is None or not horizon.is_fitted:
+        claimed_seconds = float(getattr(candidate, "horizon_seconds", 0.0) or 0.0)
+        if horizon is not None and horizon.is_fitted:
+            horizon_seconds = horizon.median_seconds
+            horizon_source = f"{horizon.trades_observed} recorded outcome(s) for this detector"
+        elif claimed_seconds > 0:
+            horizon_seconds = claimed_seconds
+            horizon_source = "the horizon the detector itself claimed"
+        else:
             return None, self._refuse(NO_HORIZON)
 
-        stop_fraction, widened = self._stop_fraction(key, profile)
+        profile = self._excursions.get(key)
+        measured = profile is not None and profile.is_fitted
+        widened = False
+        if measured:
+            stop_fraction, widened = self._stop_fraction(key, profile)
+            stop_source = (
+                f"{self._stop_multiple:.2g}x the {profile.adverse_excursion:.2%} adverse "
+                f"excursion short winners in this symbol survive"
+            )
+        else:
+            ranged = self.live_range_fraction(candidate.venue_id, candidate.symbol, horizon_seconds)
+            if ranged is None:
+                return None, self._refuse(NO_RANGE)
+            range_fraction, prints = ranged
+            stop_fraction = range_fraction * self._cold_start_stop_multiple
+            stop_source = (
+                f"{self._cold_start_stop_multiple:g}x the {range_fraction:.2%} this symbol "
+                f"traded through in {horizon_seconds:.0f}s across {prints} print(s); no short "
+                f"has closed in it yet"
+            )
         if stop_fraction > self._maximum_stop_fraction:
             # Refused rather than clamped. Clamping would produce a stop inside
             # what this symbol's winners normally survive -- a plan that is
@@ -171,11 +243,14 @@ class BearExitPlanProposer:
 
         stop_price = self._on_step(key, price * (1.0 + stop_fraction), round_down=False)
         if stop_price <= price:
-            return None, self._refuse(NO_EXCURSION_PROFILE)
+            return None, self._refuse(NO_EXCURSION_PROFILE if measured else NO_RANGE)
 
-        targets = self._targets(key, price, profile)
+        targets = (
+            self._targets(key, price, profile) if measured
+            else self._cold_start_targets(key, price, stop_fraction)
+        )
         if not targets:
-            return None, self._refuse(NO_EXCURSION_PROFILE)
+            return None, self._refuse(NO_EXCURSION_PROFILE if measured else NO_RANGE)
 
         risk = stop_price - price
         weighted_reward = sum((price - target.price) * target.fraction for target in targets)
@@ -197,23 +272,23 @@ class BearExitPlanProposer:
                 targets=targets,
                 invalidation_reason=(
                     f"a close above {stop_price:.8g} is further against this short than "
-                    f"{profile.trades_observed} recorded shorts in {candidate.symbol} normally "
-                    f"survive, and a short that keeps being wrong keeps getting worse"
+                    + (
+                        f"{profile.trades_observed} recorded shorts in {candidate.symbol} normally survive"
+                        if measured else f"{candidate.symbol} moved through its claimed horizon"
+                    )
+                    + ", and a short that keeps being wrong keeps getting worse"
                 ),
-                horizon_seconds=horizon.median_seconds,
+                horizon_seconds=horizon_seconds,
                 risk_fraction=stop_fraction,
                 reward_to_risk=reward_to_risk,
                 reason=(
-                    f"stop {stop_fraction:.2%} above {price:.8g}, which is "
-                    f"{self._stop_multiple:.2g}x the {profile.adverse_excursion:.2%} adverse "
-                    f"excursion short winners in this symbol survive"
+                    f"stop {stop_fraction:.2%} above {price:.8g}, which is {stop_source}"
                     + (" and widened again by the stop audit" if widened else "")
                     + f", inside the {self._maximum_stop_fraction:.0%} a short is allowed to "
                     f"risk because its loss has no ceiling; {len(targets)} target(s), weighted "
                     f"reward-to-risk {reward_to_risk:.2f}; resolved within "
-                    f"{horizon.median_seconds:.0f}s, the recorded median for "
-                    f"{candidate.detector}, not extended for conviction because carry accrues "
-                    f"against a short every settlement"
+                    f"{horizon_seconds:.0f}s ({horizon_source}), not extended for conviction "
+                    f"because carry accrues against a short every settlement"
                 ),
                 planned_at_ns=self._now_ns(),
             ),
@@ -231,6 +306,30 @@ class BearExitPlanProposer:
                 widened = True
                 self.standing.stops_widened_by_audit += 1
         return fraction, widened
+
+    def _cold_start_targets(self, key, price: float, stop_fraction: float) -> tuple:
+        """Take-profits below entry at reward-to-risk multiples of the measured stop."""
+        targets = []
+        for multiple, (_quantile, fraction) in zip(
+            self._cold_start_reward_multiples, self._target_quantiles, strict=True
+        ):
+            reach = min(stop_fraction * multiple, MAXIMUM_SHORT_FAVOURABLE_EXCURSION)
+            if reach <= 0:
+                continue
+            target_price = self._on_step(key, price * (1.0 - reach), round_down=True)
+            if target_price <= 0:
+                continue
+            targets.append(
+                ExitTarget(
+                    price=target_price,
+                    fraction=fraction,
+                    reason=(
+                        f"{multiple:g}x the {stop_fraction:.2%} this symbol's own range put the "
+                        f"stop at; no excursion record exists to place a quantile from yet"
+                    ),
+                )
+            )
+        return tuple(targets)
 
     def _targets(self, key, price: float, profile: ExcursionProfile) -> tuple:
         """Scale-outs below entry, clamped by the fact that price cannot go below zero."""
@@ -328,4 +427,88 @@ def run_bear_exit_plan_proposer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+def _paired_targets(context) -> tuple[tuple[float, float], ...]:
+    """Quantiles and the share each takes, zipped from two flat settings; a
+    mismatch is refused by name, as in the bull proposer."""
+    quantiles = list(context.setting("bear_exit_target_quantiles").value)
+    fractions = list(context.setting("bear_exit_target_fractions").value)
+    if len(quantiles) != len(fractions):
+        raise ValueError(
+            f"bear_exit_target_quantiles has {len(quantiles)} entries and "
+            f"bear_exit_target_fractions has {len(fractions)}; they are read position by position"
+        )
+    return tuple(zip(quantiles, fractions, strict=True))
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The same pairing as the entry timer, for the same reason: a plan for a trade
+    nobody has a conviction about is a plan for a trade that will not be taken.
+
+    Three of its inputs -- excursion profiles, horizon profiles and stop audits --
+    come from closed-trade decoding and will be empty until trades have closed. The
+    proposer already has priors for that case and says which it used, so a stop
+    placed before any trade has been decoded is visibly a stop placed on a prior.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    candidates = Batch(read=context.bus.reader("bear-side-candidate"))
+    convictions = LatestByKey(
+        read=context.bus.reader("bear-calibrated-conviction"),
+        key_of=lambda conviction: (conviction.venue_id, conviction.symbol),
+    )
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    excursions = Batch(read=context.bus.reader("excursion-profile"))
+    horizons = Batch(read=context.bus.reader("horizon-profile"))
+    audits = Batch(read=context.bus.reader("stop-audit"))
+    publish_plans = context.bus.publisher_for("bear-exit-plan")
+
+    def read_candidates_and_profiles(proposer):
+        for trade in trades.payloads():
+            proposer.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for profile in profiles.payloads():
+            proposer.observe_symbol_profile(profile)
+        for excursion in excursions.payloads():
+            proposer.observe_excursion_profile(excursion)
+        for horizon in horizons.payloads():
+            proposer.observe_horizon_profile(horizon)
+        for audit in audits.payloads():
+            proposer.observe_stop_audit(audit)
+        belief = convictions.mapping()
+        pairs = []
+        for candidate in candidates.payloads():
+            conviction = belief.get((candidate.venue_id, candidate.symbol))
+            if conviction is not None:
+                pairs.append((candidate, conviction))
+        return tuple(pairs)
+
+    return run_bear_exit_plan_proposer(
+        proposer=BearExitPlanProposer(
+            stop_safety_multiple=context.number("bear_exit_stop_safety_multiple"),
+            target_quantiles=_paired_targets(context),
+            minimum_reward_to_risk=context.number("bear_exit_minimum_reward_to_risk"),
+            maximum_stop_fraction=context.number("risk_maximum_stop_fraction"),
+            # What the plan is built from before any trade has closed: this
+            # symbol's own range over the horizon the detector claimed. Every one
+            # of these is replaced the moment the excursion record for that
+            # symbol fits, so they set the first trades rather than all of them.
+            cold_start_stop_range_multiple=context.number("bear_cold_start_stop_range_multiple"),
+            cold_start_reward_multiples=tuple(
+                float(multiple)
+                for multiple in context.setting("bear_cold_start_reward_multiples").value
+            ),
+            cold_start_minimum_prints=int(context.number("bear_cold_start_minimum_prints")),
+            cold_start_price_window=int(context.number("bear_cold_start_price_window")),
+        ),
+        control_socket=context.control_socket,
+        read_candidates_and_profiles=read_candidates_and_profiles,
+        publish_plans=publish_plans,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

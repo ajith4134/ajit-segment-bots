@@ -1487,3 +1487,333 @@ note  = "operator, 2026-08-23: the cost assumed before enough fills have been me
 value = 0.9
 unit  = "probability"
 note  = "operator, 2026-08-23: the fill rate assumed for a resting order before measured. Nine in ten; a market order fills, a limit order usually does."
+
+[bear_default_setup_weight]
+value = 1.0
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_default_setup_weight (2026-08-22): the weight the bear bot gives a detector it has no record of yet. One means an unproven detector's signal is taken at face value and neither favoured nor discounted, which is the only honest starting point -- the weight is then learned from what that detector's calls actually did (RL-060), and bull-setup-weight-learner is what moves it."
+
+[bear_minimum_setup_weight]
+value = 0.1
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_minimum_setup_weight (2026-08-22): the floor a detector's learned weight cannot fall below, so a detector that has been wrong lately is discounted rather than silenced. Zero would be a detector that can never recover, because a weight of zero stops its candidates being seen and so stops any evidence that it has improved from ever arriving."
+
+[bear_minimum_weighted_strength]
+value = 0.5
+unit  = "weighted signal strength"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_minimum_weighted_strength (2026-08-22): how strong a candidate must be after its detector's weight is applied before the bear bot works on it at all. At the default weight of 1.0 this admits any candidate of half strength or more. Judgement, and the thing that would settle it is the realised hit rate by weighted-strength bucket once trades have outcomes -- deliberately permissive for a first run, because a filter tuned before there is any outcome data is tuned against nothing."
+
+[bear_feature_short_window]
+value = 64
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_feature_short_window (2026-08-22): the shorter of the two price windows whose ratio tells the bear bot whether volatility is rising. Measured: at 202-883 trades a second on the busiest symbols, 64 trades is a third of a second of market on Binance aggregates and under a tenth on Bybit prints -- fast enough to be a current reading rather than a memory."
+
+[bear_feature_long_window]
+value = 512
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_feature_long_window (2026-08-22): the longer window in that ratio, eight times the short one. The ratio is what carries information, so the gap between them matters more than either: eight-to-one means a burst has to persist across roughly an order of magnitude of market time to move it, rather than every fast tick registering as a regime change. Must be longer than the short window; the builder refuses at construction if it is not."
+
+[bear_feature_minimum_observations]
+value = 64
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_feature_minimum_observations (2026-08-22): the fewest prices before a feature is computed at all. Set to the short window, so a feature is either measured over a full window or reported as missing -- and the composer counts missing features rather than substituting zeros, which is what stops a symbol nobody has watched from looking like a symbol with nothing happening."
+
+[bear_reference_order_size_quote]
+value = 1000.0
+unit  = "USDT"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_reference_order_size_quote (2026-08-22): the order size the bear bot measures book impact against. Measured on 20000 real trades per symbol across twelve symbols: the median trade is 166 USDT on binance-usdm (100 ms aggregates) and 55 USDT on bybit-linear (single prints), with the 95th percentile near 20000 USDT on BTCUSDT. A thousand sits above the median trade -- so impact is a real question rather than noise -- and well below the size at which the biggest symbols start to move."
+
+[bear_outlier_deviation_threshold]
+value = 4.0
+unit  = "robust standard deviations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_outlier_deviation_threshold (2026-08-22): how far from its own history a feature must sit before the vector is flagged as out of distribution. Four rather than the conventional three: crypto features are fat-tailed, and the cost of a false flag is a trade not taken while the cost of a missed one is a model asked to judge a market it has never seen. Judgement -- what would settle it is the model's realised error rate on flagged against unflagged vectors."
+
+[bear_outlier_minimum_observations]
+value = 200
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_outlier_minimum_observations (2026-08-22): how many vectors must be seen before the rejector claims to know what normal looks like. Below it every judgement reads as unjudgeable, which is a state rather than a pass -- a distribution estimated from a handful of points would flag whatever happened to differ from a small sample."
+
+[bear_outlier_half_life_observations]
+value = 2000.0
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_outlier_half_life_observations (2026-08-22): how quickly the rejector forgets old feature values. What counts as normal in this market changes, and a distribution built from a week ago would flag today's ordinary conditions. Ten times the minimum observation count, so the estimate is never dominated by the newest handful."
+
+[bear_outlier_maximum_unjudgeable_fraction]
+value = 0.5
+unit  = "fraction of features"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_outlier_maximum_unjudgeable_fraction (2026-08-22): how much of a vector may be unjudgeable before the whole vector is called unjudgeable rather than clean. Half: a verdict resting on a minority of the features is a verdict about a different vector than the one presented, and reporting it as clean would be the exact failure Rule 8 exists to prevent."
+
+[bear_learning_rate]
+value = 0.01
+unit  = "step size"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_learning_rate (2026-08-22): how far the bear conviction model moves its weights per training observation. Small, because the label arrives short after the prediction and a large step turns one late outcome into a new model. Judgement anchored on the online-learning convention of a rate well below one over the feature count; what would settle it is the model's out-of-sample error against a sweep, which needs closed trades that do not exist yet."
+
+[bear_feature_half_life_observations]
+value = 5000.0
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_feature_half_life_observations (2026-08-22): how quickly the model's per-feature normalisation forgets older values. Longer than the rejector's 2000 deliberately: the rejector asks whether this vector is strange right now, the model asks what scale a feature usually has, and a scale that moved as fast as the strangeness test would make the model's inputs jump for reasons the market did not."
+
+[bear_minimum_feature_observations]
+value = 200
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_minimum_feature_observations (2026-08-22): how many values of a feature are needed before the model will normalise it. Below it the feature is reported as unavailable rather than scaled by a mean and deviation estimated from almost nothing."
+
+[bear_minimum_training_observations]
+value = 100
+unit  = "labelled observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_minimum_training_observations (2026-08-22): how many labelled outcomes of each class the model needs before it reports itself fitted. Below it the model returns its prior and says so, and with bear_opinion_require_trained_model set the composer forms no opinion at all -- which is the honest state for a model that has never been trained. Both classes, not just enough rows: a model trained on 500 rights and no wrongs has learned that everything works."
+
+[bear_default_sample_weight]
+value = 1.0
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_default_sample_weight (2026-08-22): what one training observation counts for when nothing has said otherwise. One, so that a weight is a deliberate departure rather than a scale nobody chose."
+
+[bear_maximum_sample_weight]
+value = 10.0
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_maximum_sample_weight (2026-08-22): the most any single observation may count for. Ten times the default: a bounded ceiling means an upstream part that miscomputed a weight can distort training but cannot replace it, which is the difference between a bad batch and a destroyed model."
+
+[bear_calibration_bin_count]
+value = 10
+unit  = "bins"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_calibration_bin_count (2026-08-22): how many buckets the calibrator splits raw conviction into when comparing claimed confidence against realised hit rate. Ten gives each bin a tenth of the range; fewer would hide miscalibration inside a wide bin, more would leave each bin with too few outcomes to estimate from at the volumes a first run produces."
+
+[bear_calibration_minimum_observations]
+value = 50
+unit  = "observations per bin"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_calibration_minimum_observations (2026-08-22): how many outcomes a bin needs before its correction is applied rather than reported as unmeasured. Fifty is where a hit rate's standard error falls to about seven percentage points, which is finer than the bin width the ten-bin split gives."
+
+[bear_calibration_half_life_observations]
+value = 1000.0
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_calibration_half_life_observations (2026-08-22): how quickly the calibrator forgets old outcomes. A model that has been retrained is a different model, and its old calibration describes a predictor that no longer exists."
+
+[bear_conviction_margin_over_break_even]
+value = 0.0
+unit  = "probability"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_conviction_margin_over_break_even (2026-08-23): how far above its plan's break-even probability the bear bot's conviction must be before the bot will time an entry or form an opinion. The break-even itself is arithmetic from the plan -- (1 + fees in units of risk) / (1 + reward to risk), runtime/edge_arithmetic.py -- and replaces the 0.55 literal that stood in bear_entry_minimum_conviction and bear_opinion_minimum_conviction. That literal was set before the model had seen an outcome; measured on the live run of 2026-08-23 the model's output never left 0.44-0.50, so it refused 325 of 327 intents, and the learning loop behind a closed trade never ran. Zero margin on paper, by RL-005: paper is the unrestricted experiment, a trade worth exactly nothing on average is the boundary of what is worth learning from, and the size expresses how much edge there is. What would settle a non-zero margin is realised expectancy per conviction bucket, which needs closed trades."
+
+[bear_entry_window_length]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_window_length (2026-08-22): how many prices the entry timer keeps to judge whether the current one is extended. Matched to the pair test's window so the timer is judging the same stretch of market the candidate came from."
+
+[bear_entry_minimum_observations]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_minimum_observations (2026-08-22): a full window before the timer judges extension, for the same reason every other estimator here requires one -- a quantile over a handful of points is not a quantile."
+
+[bear_entry_trigger_validity]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_trigger_validity (2026-08-22): how short an entry trigger stays valid before it is discarded. Matched to spread_reversion_horizon: the trigger exists to act on a candidate whose expected move has that horizon, and a trigger outliving the move it was raised for is an order placed on a reason that has expired."
+
+[bear_entry_maximum_extension_quantile]
+value = 0.8
+unit  = "quantile"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_maximum_extension_quantile (2026-08-22): how extended a price may be, within its own recent range, and still be entered. Above the 80th percentile the bear bot waits: buying the top of the observed range is where a reversion setup turns into a momentum bet nobody intended."
+
+[bear_entry_quality_window]
+value = 200
+unit  = "entries"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_quality_window (2026-08-22): how many past entries the timer scores itself over when learning what its fills actually cost. Two hundred is enough for a stable mean cost while still reflecting current conditions."
+
+[bear_entry_prior_extension_cap]
+value = 0.8
+unit  = "quantile"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_prior_extension_cap (2026-08-22): the extension cap the timer uses before it has measured any entries of its own -- the same as the configured cap, so an untrained timer behaves as configured rather than more permissively. It is a prior, displaced as entry quality accrues (RL-060)."
+
+[bear_entry_prior_entry_cost_fraction]
+value = 0.0005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_prior_entry_cost_fraction (2026-08-22): what the timer assumes an entry costs in slippage before it has measured its own fills -- five basis points. Anchored to the taker fee it will also pay, so the assumed all-in cost of entering is roughly twice the fee rather than zero. A prior of zero would have the timer believe entering is free, which is the assumption that makes a marginal edge look tradeable."
+
+[bear_exit_stop_safety_multiple]
+value = 2.0
+unit  = "multiples of recent deviation"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_exit_stop_safety_multiple (2026-08-22): how far beyond the symbol's own recent deviation a stop is placed. Two, so ordinary noise does not take the position out: a stop inside one deviation is hit by the market doing nothing unusual, which converts volatility into realised loss."
+
+[bear_exit_target_quantiles]
+value = [0.5, 0.75, 0.9]
+unit  = "quantiles of the observed excursion distribution"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_exit_target_quantiles (2026-08-22): where profit targets are placed, as quantiles of how far this symbol's moves have actually run. Three targets rather than one, because the distribution has a short right tail and a single target either leaves it all or waits for a move most trades do not make. Quantiles rather than fixed percentages so the plan adapts per symbol without anyone tuning it."
+
+[bear_exit_minimum_reward_to_risk]
+value = 1.5
+unit  = "ratio"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_exit_minimum_reward_to_risk (2026-08-22): the least a plan's first target may pay relative to what the stop risks, before the trade is refused as not worth taking. Judgement: at 1.5 a bot right half the time is profitable before costs, which is the minimum bar for a plan whose hit rate has never been measured. What would settle it is the realised distribution of reward to risk once trades close."
+
+[bear_exit_conviction_horizon_multiple]
+value = 2.0
+unit  = "multiples of the candidate horizon"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_exit_conviction_horizon_multiple (2026-08-22): how much longer than the detector's own horizon a high-conviction position is given to work. The detector says the move should happen within its horizon; conviction is a statement about whether it will, not about when, so a strong opinion earns patience rather than a wider stop."
+
+[bear_opinion_maximum_missing_features]
+value = 7
+unit  = "features"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_opinion_maximum_missing_features (2026-08-23): how many features may be missing from a vector before the composer refuses to form an opinion on it. Set from the model rather than from judgement: bull-conviction-model has trained on 1,408 outcomes using exactly five features -- detector_strength, price_z_score, realised_volatility_fraction, return_over_window and setup_weight -- and those five are precisely the ones this spine can build. Measured on 3,000 real ZECUSDT prints on 2026-08-23: 6 of the 12 are unavailable with a calibrated detector and 7 before it calibrates. Three need order-book-snapshot and order-book-reader has no start_part; funding_rate and funding_forecast_change both need funding-forecast and funding-rate-forecaster is not started; volatility_ratio_short_to_long needs a short-window volatility the 64-observation window does not yet yield. Seven, so the bot may act on the features its model was actually trained on. Demanding the other seven is demanding features no decision has ever used. Missing is still named, never defaulted. Every producer that comes on lowers the real count and this ceiling comes down with it -- and the gate that would replace this number outright is one that refuses when a feature the model was trained on is missing, rather than counting features it never saw."
+
+[bear_opinion_require_trained_model]
+value = true
+unit  = "true or false"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_opinion_require_trained_model (2026-08-22): whether the composer refuses a conviction from a model that has never been trained. True, and the intent is unchanged from the day it was written -- the alternative is a bot whose first trades come from a model that has never seen an outcome, which RL-060 exists to prevent. What changed is what it tests. It read conviction.is_measured, which is whether the *calibration* has been fitted, and calibration needs a bot-scorecard, which needs trade episodes, which need trades: a gate that demanded a measurement trading itself has to produce. Measured on the live run of 2026-08-23 07:48-08:09: 653 opinions formed, 653 refused, and no amount of waiting would have changed it. It now tests whether the model is fitted -- bear_minimum_training_observations labelled outcomes of each class -- which is what the original note meant by 'has never seen an outcome'. The calibration still applies the moment it fits; it is no longer a precondition for the first trade."
+
+[bear_remembered_vectors_per_symbol]
+value = 64
+unit  = "feature vectors"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_remembered_vectors_per_symbol (2026-08-22): how many recent feature vectors the bear conviction model keeps per symbol so a label arriving a horizon later can be matched to the vector that was current when the claim was made. Sixty-four covers a 60-second horizon comfortably -- the filter accepts at most one candidate per detector per symbol at a time, so vectors accrue at the rate candidates do, not at the rate trades do. It is a bound on a process's memory: an unbounded history of vectors is a leak with a good excuse."
+
+[bear_exit_target_fractions]
+value = [0.4, 0.4, 0.2]
+unit  = "fraction of the position"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_exit_target_fractions (2026-08-22): how much of the position each target takes, in the same order as bear_exit_target_quantiles. Front-loaded: most of the position is taken at the two nearer targets and a fifth is left to run to the 90th percentile, because the far target is by construction reached least often. They must sum to one -- a plan whose fractions leave a remainder is a plan holding a position nobody decided to hold, and the proposer refuses it at construction."
+
+[bear_cold_start_stop_range_multiple]
+value = 1.5
+unit  = "multiples of the observed range"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_cold_start_stop_range_multiple (2026-08-23): how far beyond the range a symbol actually traded through the cold-start stop sits, before any trade has closed. One and a half, on the same reasoning as bear_exit_stop_safety_multiple: a stop inside the movement the symbol makes anyway is a machine for being stopped out of trades that were going to work. Lower than the excursion-record multiple because the range already spans the whole window rather than being a quantile of adverse moves -- it is a wider base to start from. A judgement, and what settles it is the realised stop-out rate of the first hundred cold-start trades against the ones planned from an excursion record."
+
+[bear_cold_start_reward_multiples]
+value = [1.0, 2.0, 3.0]
+unit  = "multiples of the risk"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_cold_start_reward_multiples (2026-08-23): where cold-start targets sit, as reward-to-risk multiples of the stop, paired position by position with bear_exit_target_fractions. Multiples of the risk rather than quantiles of an excursion record, because before a trade has closed there is no record to take a quantile of. The risk is still measured -- it came from the symbol's own range -- so 2R on a symbol that swings 0.4% and 2R on one that swings 0.05% are different prices. One, two and three so the nearest rung clears bear_exit_minimum_reward_to_risk on its own and the far one is left to run."
+
+[bear_cold_start_minimum_prints]
+value = 20
+unit  = "trade prints"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_cold_start_minimum_prints (2026-08-23): how many of the venue's own prints must fall inside the claimed horizon before a range may be measured from them. Twenty, because a range over a handful of prints is those prints rather than a range, and a stop placed from it would be a stop placed from noise. Measured on the tape 2026-08-22: BTCUSDT prints about 4 a second, so a 60s horizon carries roughly 240 -- the bar binds on quiet symbols, which is exactly where it should."
+
+[bear_cold_start_price_window]
+value = 4000
+unit  = "trade prints per symbol"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_cold_start_price_window (2026-08-23): how many recent prints per symbol the proposer keeps so a range can be measured over the horizon the detector claimed. Four thousand covers a 60s horizon on the busiest symbol measured (BTCUSDT at ~4 prints a second leaves 16x headroom) and is bounded because this is a process's memory -- an unbounded price history is a leak with a good excuse, and T-3 says an off part releases its memory."
+
+[bear_invalidation_reversal_to_reduce]
+value = 0.4
+unit  = "fraction of entry features"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_invalidation_reversal_to_reduce (2026-08-23): the share of the features that made a setup a short which must have changed sign before bull-position-invalidation-watcher asks to reduce the position. Two in five: fewer reversed features is the noise of a thesis still standing, and a reduce rather than a close keeps the evidence coming in at smaller size. Unmeasured until invalidation outcomes have been scored; the watcher learns its own hit rate from them."
+
+[bear_invalidation_reversal_to_close]
+value = 0.8
+unit  = "fraction of entry features"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_invalidation_reversal_to_close (2026-08-23): the share of entry features reversed at which the watcher asks to close. Four in five -- nearly everything that argued for the trade now argues against it -- so a close on thesis grounds is rare and a stop is still what ends most losing trades."
+
+[bear_invalidation_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_invalidation_prior_hit_rate (2026-08-23): how often the watcher's invalidation calls are assumed right before any have been scored. A coin flip, the honest prior for a judgement that has never been checked; the prior carries bear_invalidation_prior_weight observations' worth of weight and the measured rate takes over from there."
+
+[bear_invalidation_prior_weight]
+value = 4.0
+unit  = "observations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_invalidation_prior_weight (2026-08-23): how many scored outcomes the watcher's prior hit rate is worth. Four, so the measured rate dominates after a handful of calls and the prior never outvotes a week of evidence."
+
+[bear_invalidation_minimum_observations]
+value = 20
+unit  = "scored invalidations"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_invalidation_minimum_observations (2026-08-23): how many scored invalidation calls the watcher needs before its conviction in a call is a measurement rather than the prior. Twenty, the same floor the calibrator uses for a frequency to be read as one."
+
+[bear_setup_weight_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_setup_weight_prior_hit_rate (2026-08-23): the hit rate a detector is assumed to have before bull-setup-weight-learner has seen its closed trades. A coin flip; the learner weights a detector up or down from here as its record departs from the base rate of the others."
+
+[bear_setup_weight_prior_weight]
+value = 4.0
+unit  = "closed trades"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_setup_weight_prior_weight (2026-08-23): how many closed trades the prior hit rate is worth in the learner's Bayesian update. Four, so a new detector is neither trusted nor distrusted on its first few trades."
+
+[bear_setup_weight_minimum_observations]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_setup_weight_minimum_observations (2026-08-23): how many closed trades a detector needs before the learner moves its weight off one. Twenty, the least at which a hit rate separates from the base rate at all."
+
+[bear_setup_weight_minimum]
+value = 0.25
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_setup_weight_minimum (2026-08-23): the least weight a detector's setups may be given, whatever its record. A quarter rather than zero: a detector weighted to nothing produces no trades and therefore no evidence that could ever restore it."
+
+[bear_setup_weight_maximum]
+value = 3.0
+unit  = "weight"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_setup_weight_maximum (2026-08-23): the most weight a detector may be given. Three, so one detector with a good week cannot swamp the rest of the bot's evidence."
+
+[bear_settlements_per_day]
+value = 3.0
+unit  = "funding settlements per day"
+note  = "operator, 2026-08-23: how many times a day funding is charged on a short, used by the bear bot to turn a funding rate into a carry over its horizon when the symbol's own interval is not known. Three, the eight-hourly default on both venues; the catalogue carries each symbol's real interval where the venue states it (132 of Binance's 872 symbols on 2026-08-22 did not)."
+
+[bear_maximum_carry_fraction_of_horizon]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the most funding a short may be projected to pay over its horizon before bear-setup-filter refuses the setup. One percent: at the 1.5 reward-to-risk and the stops the plans set, a short that pays a percent to be held has paid away its edge before the move."
+
+[bear_outlier_dangerous_side_threshold]
+value = 4.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far a feature may sit from its usual range on the side that is dangerous for a short -- a squeeze already under way -- before bear-outlier-rejector refuses the vector outright rather than flagging it. Four, twice the ordinary outlier threshold: a short into a four-sigma squeeze is the trade that ends accounts."
+
+[bear_squeeze_room_deviation]
+value = 1.5
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far the short-squeeze room feature -- how much the price could rise before shorts are forced out -- may sit below its usual level before the rejector flags the vector. One and a half, tighter than the general two because this is the one feature whose tail is the bear bot's own loss."
+
+[bear_rising_volatility_deviation]
+value = 1.5
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far realised volatility may sit above its usual level before the rejector flags a short setup. One and a half, for the same reason as the squeeze room: a short in rising volatility is a short whose stop is reached by noise."
+
+[bear_entry_minimum_extension_quantile]
+value = 0.2
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of a symbol's measured bounces below which the bear entry timer will not enter -- the price must have bounced at least this far from its low for the short to be entered into a bounce rather than into the hole. A fifth, mirroring bull_entry_maximum_extension_quantile at 0.8 from the other side."
+
+[bear_entry_prior_extension_floor]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the bounce assumed worth waiting for before the timer has measured a symbol's own. One percent, below the 1.5% largest intraday move measured on the captured thirty, so an ordinary bounce reaches it."
+
+[bear_setup_weight_loss_window]
+value = 200
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many recent losses per detector bear-setup-weight-learner keeps to measure the tail of a detector's losses. Two hundred, the learning window used throughout."
+
+[bear_setup_weight_prior_loss_fraction]
+value = 0.02
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the size of a losing short assumed before a detector's losses have been measured. Two percent, the stop the plans set plus slippage through it -- a short's loss is unbounded in principle, and the prior must be the stop, not the median."
+
+[bear_setup_weight_prior_win_fraction]
+value = 0.02
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the size of a winning short assumed before measured. Two percent, so the prior tail ratio is one and a detector is neither favoured nor discounted on no evidence."
+
+[bear_setup_weight_tail_quantile]
+value = 0.95
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of a detector's losses read as its tail. The ninety-fifth: one short in twenty goes that badly."
+
+[bear_setup_weight_tolerated_tail_ratio]
+value = 3.0
+unit  = "multiple of the typical win"
+note  = "operator, 2026-08-23: how large a detector's tail loss may be, relative to its typical win, before the learner discounts the detector for it whatever its hit rate. Three: a short setup that wins often and loses three wins at a time once in twenty is a setup that loses."
+
+[bear_invalidation_squeeze_room_collapse]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far the squeeze room measured at entry must have collapsed before the watcher asks to close a short. Half: the room a short had to be wrong in has halved, and the squeeze that closes it is that much closer."
+
+[bear_invalidation_volatility_rise]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far realised volatility must have risen since entry before the watcher asks to reduce a short. Half again: the noise that reaches the stop has grown by half."
+
+[bear_invalidation_carry_fraction_of_expected_move]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of the move a short was expected to make that its funding carry may have eaten before the watcher asks to close it on carry grounds. Half: past that the trade is paying to wait for less than it can make."
+
+[bear_l2_regularisation]
+value = 0.0001
+unit  = "penalty coefficient"
+note  = "operator, 2026-08-23, mirrored for the short side from bull_l2_regularisation (2026-08-22): how strongly the model is pulled back towards small weights. Nonzero so that a feature which happens to line up with a handful of early outcomes cannot dominate; small enough that it does not erase a real relationship. Judgement, to be replaced by a value chosen on held-out data once there is held-out data."
