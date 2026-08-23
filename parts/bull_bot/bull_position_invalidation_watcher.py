@@ -322,3 +322,86 @@ def run_bull_position_invalidation_watcher(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A thesis is recorded the first time a long is seen open, from the latest
+    feature vector for its symbol at that moment -- the reasons the bot had
+    when it entered -- and forgotten when the position goes flat. Each open
+    long is then checked against the vector that is current now. A regime
+    break from the detector marks every thesis entered in that regime.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    positions = Batch(read=context.bus.reader("position"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    vectors = LatestByKey(read=context.bus.reader("bull-feature-vector"), key_of=lambda v: (v.venue_id, v.symbol))
+    breaks = Batch(read=context.bus.reader("regime-break-alert"))
+    publish_opinions = context.bus.publisher_for("directional-opinion")
+    watcher = BullPositionInvalidationWatcher(
+        reversal_fraction_to_reduce=context.number("bull_invalidation_reversal_to_reduce"),
+        reversal_fraction_to_close=context.number("bull_invalidation_reversal_to_close"),
+        prior_invalidation_hit_rate=context.number("bull_invalidation_prior_hit_rate"),
+        prior_weight=context.number("bull_invalidation_prior_weight"),
+        half_life_observations=context.number("bull_feature_half_life_observations"),
+        minimum_observations=int(context.number("bull_invalidation_minimum_observations")),
+    )
+    held: dict[tuple[str, str], object] = {}
+    regimes: dict[tuple[str, str], str] = {}
+    thesis_horizon = (
+        context.number("spread_reversion_horizon")
+        * context.number("bull_exit_conviction_horizon_multiple")
+    )
+
+    def read_positions_and_features(_watcher):
+        trades.payloads()
+        for alert in breaks.payloads():
+            watcher.observe_regime_break(alert.regime, alert.has_broken)
+        current = vectors.mapping()
+        for position in positions.payloads():
+            key = (position.venue_id, position.symbol)
+            if position.is_flat or position.quantity < 0:
+                if key in held:
+                    held.pop(key)
+                    watcher.forget_position(*key)
+                continue
+            if key not in held:
+                vector = current.get(key)
+                if vector is None:
+                    continue  # no reasons on record yet; the check says so
+                regime = vector.sources.get("regime") or vector.features.get("regime") or "unclassified"
+                regimes[key] = str(regime)
+                watcher.record_entry(
+                    HeldThesis(
+                        venue_id=key[0], symbol=key[1],
+                        entry_features=dict(vector.features), entry_regime=str(regime),
+                        entry_price=position.average_entry_price,
+                        # The longest the bot's own plan could have given the
+                        # trade: the detector's horizon at the conviction multiple.
+                        # The plan itself is not an input of this part.
+                        horizon_seconds=thesis_horizon,
+                        opened_at_ns=position.opened_at_ns,
+                        detector=str(vector.sources.get("detector_strength", "")).removeprefix("detector:"),
+                    )
+                )
+            held[key] = position
+        return tuple(
+            (position, current[key]) for key, position in held.items() if key in current
+        )
+
+    def publish(opinions) -> None:
+        if opinions:
+            publish_opinions(opinions)
+
+    return run_bull_position_invalidation_watcher(
+        watcher=watcher,
+        control_socket=context.control_socket,
+        read_positions_and_features=read_positions_and_features,
+        publish_opinions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

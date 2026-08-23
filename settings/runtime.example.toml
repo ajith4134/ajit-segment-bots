@@ -952,3 +952,53 @@ note  = "operator, 2026-08-23: the fee the venue charges on a liquidation, appli
 value = 0.005
 unit  = "fraction of price"
 note  = "operator, 2026-08-23: how far past the liquidation price the simulator fills a liquidated position, standing in for the venue closing it at the bankruptcy price rather than the liquidation price. Half a percent, the maintenance_margin_rate the liquidation distance is built from: the gap between liquidation and bankruptcy is the maintenance margin."
+
+[bull_invalidation_reversal_to_reduce]
+value = 0.4
+unit  = "fraction of entry features"
+note  = "operator, 2026-08-23: the share of the features that made a setup a long which must have changed sign before bull-position-invalidation-watcher asks to reduce the position. Two in five: fewer reversed features is the noise of a thesis still standing, and a reduce rather than a close keeps the evidence coming in at smaller size. Unmeasured until invalidation outcomes have been scored; the watcher learns its own hit rate from them."
+
+[bull_invalidation_reversal_to_close]
+value = 0.8
+unit  = "fraction of entry features"
+note  = "operator, 2026-08-23: the share of entry features reversed at which the watcher asks to close. Four in five -- nearly everything that argued for the trade now argues against it -- so a close on thesis grounds is rare and a stop is still what ends most losing trades."
+
+[bull_invalidation_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: how often the watcher's invalidation calls are assumed right before any have been scored. A coin flip, the honest prior for a judgement that has never been checked; the prior carries bull_invalidation_prior_weight observations' worth of weight and the measured rate takes over from there."
+
+[bull_invalidation_prior_weight]
+value = 4.0
+unit  = "observations"
+note  = "operator, 2026-08-23: how many scored outcomes the watcher's prior hit rate is worth. Four, so the measured rate dominates after a handful of calls and the prior never outvotes a week of evidence."
+
+[bull_invalidation_minimum_observations]
+value = 20
+unit  = "scored invalidations"
+note  = "operator, 2026-08-23: how many scored invalidation calls the watcher needs before its conviction in a call is a measurement rather than the prior. Twenty, the same floor the calibrator uses for a frequency to be read as one."
+
+[bull_setup_weight_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: the hit rate a detector is assumed to have before bull-setup-weight-learner has seen its closed trades. A coin flip; the learner weights a detector up or down from here as its record departs from the base rate of the others."
+
+[bull_setup_weight_prior_weight]
+value = 4.0
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many closed trades the prior hit rate is worth in the learner's Bayesian update. Four, so a new detector is neither trusted nor distrusted on its first few trades."
+
+[bull_setup_weight_minimum_observations]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many closed trades a detector needs before the learner moves its weight off one. Twenty, the least at which a hit rate separates from the base rate at all."
+
+[bull_setup_weight_minimum]
+value = 0.25
+unit  = "weight"
+note  = "operator, 2026-08-23: the least weight a detector's setups may be given, whatever its record. A quarter rather than zero: a detector weighted to nothing produces no trades and therefore no evidence that could ever restore it."
+
+[bull_setup_weight_maximum]
+value = 3.0
+unit  = "weight"
+note  = "operator, 2026-08-23: the most weight a detector may be given. Three, so one detector with a good week cannot swamp the rest of the bot's evidence."
