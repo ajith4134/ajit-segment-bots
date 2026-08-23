@@ -385,15 +385,33 @@ def start_part(context) -> int:
             if not getattr(standing, "may_request", True)
         )
 
+    import time as _time
+
+    last_published = [None, float("-inf")]
+    republish_after = context.health_interval_seconds
+
     def publish_plan(budget, refusal) -> None:
         """A refusal is published as nothing, and recorded on the part's own standing.
 
         The plan type carries plans. A refusal is not a plan with zero connections
         -- a consumer reading that would subscribe to nothing and look healthy --
         so nothing is published and the reason stays where the board reads it.
+
+        An unchanged plan is republished once per health interval, not on every
+        tick. The part now wakes on each arriving message (2026-08-23) and
+        re-plans every time, which sent the same plan to the feed reader thirty
+        times a second; the reader's tick is a blocking socket drain, so it lost
+        most of them and reported the loss. Once an interval keeps the property
+        the old behaviour had -- a reader started after the planner still gets
+        the plan within a second -- without the flood.
         """
-        if budget is not None:
-            publish_plan_messages([budget.plan])
+        if budget is None:
+            return
+        now = _time.monotonic()
+        if budget.plan == last_published[0] and now - last_published[1] < republish_after:
+            return
+        publish_plan_messages([budget.plan])
+        last_published[0], last_published[1] = budget.plan, now
 
     return run_stream_budget_planner(
         adapters=adapters,

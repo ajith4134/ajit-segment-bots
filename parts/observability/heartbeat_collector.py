@@ -358,6 +358,14 @@ def start_part(context) -> int:
         publish_table((table,))
         write_heartbeat_table(table_path, table, collector.standing)
 
+    def emit_and_observe_own_health(health) -> None:
+        # A part never receives its own message (wiring rule 1), so the collector
+        # would be the one part missing from its own table -- and the table is
+        # where the boards read what is alive. It observes its own report as it
+        # sends it.
+        context.emit_health(health)
+        collector.observe_health(health)
+
     return run_heartbeat_collector(
         collector=collector,
         control_socket=context.control_socket,
@@ -366,5 +374,5 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
-        emit_health=context.emit_health,
+        emit_health=emit_and_observe_own_health,
     )

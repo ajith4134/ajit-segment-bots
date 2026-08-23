@@ -86,6 +86,17 @@ LIVE_SPINE = (
     # writes. Until it was on the spine (2026-08-23) nothing consumed the
     # staleness or input loss every part had been reporting.
     "heartbeat-collector",
+    # The governor, observing and not yet acting (RL-068: the governor spine
+    # before the futures vertical). These four measure the machine and the
+    # parts on it and the planner publishes what it would switch; gate-actuator
+    # is deliberately not here, because a plan it enforced could switch the feed
+    # reader off, and an hour of tape not captured is gone. Turning it on is the
+    # operator's call, taken after the plans have been read for a while.
+    "hardware-scanner",
+    "part-priority-reader",
+    "part-appetite-meter",
+    "switching-planner",
+    "off-state-verifier",
     # The feed. These three replace operate/start_trade_capture.py entirely: the
     # catalogue picks the symbols, the planner packs them onto connections, and the
     # reader writes the tape and publishes market-data.

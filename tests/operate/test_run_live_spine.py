@@ -131,6 +131,8 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         # consumers downstream; it is started first so the earliest reports have
         # an inbox, which is the opposite of this rule on purpose.
         "heartbeat-collector",
+        # Same reason: it meters every part's health, its own consumers included.
+        "part-appetite-meter",
     }
 
     for part_id, inputs in consumes.items():
