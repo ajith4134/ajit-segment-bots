@@ -332,3 +332,84 @@ def run_regime_memory_store(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A regime's signature is built from what the classifier measured --
+    its volatility and Hurst exponent. The signature's other two
+    dimensions, correlation and typical move, are on no input this part
+    declares and are held constant, so they contribute nothing to any
+    distance rather than a number nobody measured. An occurrence is
+    recorded when a transition flag says a trade ended in a different
+    regime from the one it opened in, with the trade's own duration; an
+    instruction's outcome is recorded against the regime the episode that
+    produced it names. Every classified regime is recognised each tick.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    flags = Batch(read=context.bus.reader("regime-transition-flag"))
+    publish_memories = context.bus.publisher_for("regime-memory")
+    store = RegimeMemoryStore(
+        minimum_occurrences=int(context.number("regime_memory_minimum_occurrences")),
+        signature_tolerance=context.number("regime_memory_signature_tolerance"),
+        minimum_instruction_trades=int(context.number("decoding_minimum_trades")),
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    HELD_CONSTANT = 0.0  # the unmeasured dimensions, identical in every signature
+    episode_by_trade: dict[str, object] = {}
+    signature_of_regime: dict[str, RegimeSignature] = {}
+
+    def signature_for(reading) -> RegimeSignature | None:
+        if reading.volatility is None or reading.hurst is None:
+            return None
+        return RegimeSignature(
+            volatility=float(reading.volatility), correlation=HELD_CONSTANT,
+            typical_move=HELD_CONSTANT, hurst=float(reading.hurst),
+        )
+
+    def read_regimes(_store):
+        scorecards.payloads()
+        for reading in regimes.mapping().values():
+            signature = signature_for(reading)
+            if signature is not None:
+                signature_of_regime[reading.regime] = signature
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            episode_by_trade[trade_id] = episode
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            instruction_id = conditions.get("instruction_id")
+            if instruction_id is not None:
+                store.record_instruction_outcome(episode.regime, str(instruction_id), episode.realised > 0)
+        for flag in flags.payloads():
+            if not flag.changed or flag.regime_at_entry is None:
+                continue
+            signature = signature_of_regime.get(flag.regime_at_entry)
+            episode = episode_by_trade.get(flag.trade_id)
+            if signature is None or episode is None:
+                continue
+            duration = max(0.0, ((flag.changed_at_ns or episode.closed_at_ns) - episode.opened_at_ns) / 1e9)
+            store.record_occurrence(flag.regime_at_entry, signature, duration, str(flag.regime_at_exit))
+        return tuple(signature_of_regime[name] for name in sorted(signature_of_regime))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_memories(kept)
+
+    return run_regime_memory_store(
+        store=store,
+        control_socket=context.control_socket,
+        read_regimes=read_regimes,
+        publish_memories=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

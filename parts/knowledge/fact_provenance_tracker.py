@@ -307,3 +307,56 @@ def run_fact_provenance_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A semantic fact is tracked under its venue, symbol and key with the
+    source it named; a research finding under its id, derived from the
+    sources it cites; a source document under its id, with its reference.
+    """
+    from runtime.input_assembly import Batch
+
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    findings = Batch(read=context.bus.reader("research-finding"))
+    documents = Batch(read=context.bus.reader("source-document"))
+    publish_provenance = context.bus.publisher_for("fact-provenance")
+    tracker = FactProvenanceTracker()
+
+    def read_facts(_tracker):
+        records = []
+        for document in documents.payloads():
+            records.append({
+                "fact_key": f"document:{document.document_id}", "source": document.kind,
+                "source_reference": document.source_reference, "derived_from": (), "source_kind": "source-document",
+            })
+        for finding in findings.payloads():
+            references = tuple(str(r) for r in finding.source_references)
+            records.append({
+                "fact_key": f"finding:{finding.finding_id}", "source": finding.topic,
+                "source_reference": references[0] if references else None,
+                "derived_from": tuple(f"document:{r}" for r in references), "source_kind": "research-finding",
+            })
+        for fact in facts.payloads():
+            records.append({
+                "fact_key": f"{fact.venue_id}:{fact.symbol}:{fact.key}", "source": fact.source,
+                "source_reference": fact.source_reference, "derived_from": (), "source_kind": fact.source,
+            })
+        return tuple(records)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_provenance(kept)
+
+    return run_fact_provenance_tracker(
+        tracker=tracker,
+        control_socket=context.control_socket,
+        read_facts=read_facts,
+        publish_provenance=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

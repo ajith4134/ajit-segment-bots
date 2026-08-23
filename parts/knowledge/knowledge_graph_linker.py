@@ -274,3 +274,67 @@ def run_knowledge_graph_linker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every arrival is offered as an is-about link, the one relation that
+    claims no cause: a fact is about its symbol, a recalled episode's
+    detector is about the regime it was recalled in, an instruction is
+    about its regime tag, a skill is about each of its sections. Strength
+    is what the source measured -- a fact's confidence, a recall's
+    similarity, a history's hit rate, a skill's backtest score. The links
+    from every node touched go out.
+    """
+    from runtime.input_assembly import Batch
+
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    recalls = Batch(read=context.bus.reader("recalled-episode"))
+    histories = Batch(read=context.bus.reader("instruction-history"))
+    skills = Batch(read=context.bus.reader("available-skill"))
+    publish_links = context.bus.publisher_for("knowledge-link")
+    linker = KnowledgeGraphLinker(
+        minimum_strength=context.number("knowledge_link_minimum_strength"),
+        half_life_seconds=context.number("knowledge_link_half_life_seconds"),
+    )
+
+    def read_knowledge(_linker):
+        touched: set[str] = set()
+        for fact in facts.payloads():
+            node = f"{fact.venue_id}:{fact.symbol}"
+            linker.link(node, fact.key, IS_ABOUT, float(fact.confidence.value), fact.source, max(1, int(fact.confidence.observations)))
+            touched.add(node)
+        for recall in recalls.payloads():
+            for recalled in recall.episodes:
+                episode = recalled.episode
+                linker.link(episode.detector, episode.regime, IS_ABOUT, float(recalled.similarity), "recalled-episode")
+                touched.add(episode.detector)
+        for history in histories.payloads():
+            if history.regime_tag and history.trades > 0:
+                strength = max(0.0, min(1.0, (history.realised > 0) * 1.0))
+                linker.link(history.instruction_id, str(history.regime_tag), IS_ABOUT, strength, "instruction-history", max(1, history.trades))
+                touched.add(history.instruction_id)
+        for skill in skills.payloads():
+            if skill.backtest_score is None:
+                continue
+            for section in skill.sections:
+                linker.link(skill.skill_id, str(section), IS_ABOUT, float(skill.backtest_score), "available-skill")
+            touched.add(skill.skill_id)
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_links(kept)
+
+    return run_knowledge_graph_linker(
+        linker=linker,
+        control_socket=context.control_socket,
+        read_knowledge=read_knowledge,
+        publish_links=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

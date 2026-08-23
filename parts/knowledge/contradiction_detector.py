@@ -304,3 +304,61 @@ def run_contradiction_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Facts, rules and links are observed as they arrive and every check runs
+    over everything held. A rule's condition is read back from its own
+    `when` clause, which the playbook writes as measurement, comparison,
+    threshold. No correlation reaches this part, so links are checked
+    against facts with none -- a link can be refuted by a fact, never by a
+    correlation nobody measured.
+    """
+    from runtime.input_assembly import Batch
+
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    links = Batch(read=context.bus.reader("knowledge-link"))
+    publish_contradictions = context.bus.publisher_for("knowledge-contradiction")
+    detector = ContradictionDetector(value_tolerance=context.number("contradiction_value_tolerance"))
+    rules_seen: set[str] = set()
+
+    def condition_of(rule) -> dict:
+        tokens = str(rule.when).split()
+        if len(tokens) < 3:
+            return {}
+        try:
+            threshold = float(tokens[2])
+        except ValueError:
+            return {"measurement": tokens[0], "comparison": tokens[1]}
+        return {"measurement": tokens[0], "comparison": tokens[1], "threshold": threshold}
+
+    def read_knowledge(_detector):
+        for fact in facts.payloads():
+            detector.observe_fact(fact)
+        for rule in rules.payloads():
+            if rule.rule_id in rules_seen or not rule.is_active:
+                continue
+            rules_seen.add(rule.rule_id)
+            detector.observe_rule(rule, condition_of(rule))
+        for link in links.payloads():
+            detector.observe_link(link.left, link.right, link.kind, float(link.strength))
+        return {}
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_contradictions(kept)
+
+    return run_contradiction_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_knowledge=read_knowledge,
+        publish_contradictions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

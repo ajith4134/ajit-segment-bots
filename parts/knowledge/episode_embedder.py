@@ -276,3 +276,48 @@ def run_episode_embedder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every episode's conditions are observed first, so the standardisation
+    learns the distribution, and then embedded. No feature reliability
+    reaches this part -- its one input is the episode -- so every dimension
+    carries the default weight the settings name.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_embeddings = context.bus.publisher_for("episode-embedding")
+    embedder = EpisodeEmbedder(
+        dimensions=tuple(str(d) for d in context.setting("embedding_dimensions").value),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("decoding_minimum_trades")),
+        minimum_features=int(context.number("embedding_minimum_features")),
+        default_reliability=context.number("learning_prior_hit_rate"),
+    )
+
+    def read_episodes(_embedder):
+        jobs = []
+        for episode in episodes.payloads():
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            embedder.observe_conditions(conditions)
+            jobs.append((episode.episode_id, conditions))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_embeddings(kept)
+
+    return run_episode_embedder(
+        embedder=embedder,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_embeddings=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

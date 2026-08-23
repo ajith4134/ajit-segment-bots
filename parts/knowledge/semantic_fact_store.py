@@ -265,3 +265,71 @@ def run_semantic_fact_store(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The journal is read for what it measures about a symbol: consecutive
+    funding settlements give the funding interval. A fact confidence from
+    the scheduler updates the held estimate; a contradiction is read and
+    drained, since the store already keeps both sides of one.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.knowledge_types import FROM_MEASUREMENT, FUNDING_INTERVAL
+
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    confidences = Batch(read=context.bus.reader("fact-confidence"))
+    contradictions = Batch(read=context.bus.reader("knowledge-contradiction"))
+    publish_facts = context.bus.publisher_for("semantic-fact")
+    store = SemanticFactStore(
+        prior_confidence=context.number("learning_prior_hit_rate"),
+        contradiction_tolerance=context.number("contradiction_value_tolerance"),
+    )
+    last_settlement_ns: dict[tuple[str, str], int] = {}
+    settlements_seen: dict[tuple[str, str], int] = {}
+
+    def read_journal(_store):
+        contradictions.payloads()
+        for confidence in confidences.payloads():
+            parts_of_key = confidence.fact_key.split(":", 2)
+            if len(parts_of_key) == 3:
+                store.update_confidence(parts_of_key[0], parts_of_key[1], parts_of_key[2], float(confidence.confidence))
+        offers = []
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            if entry.kind != "funding-settlement":
+                continue
+            venue_id, symbol = payload.get("venue_id"), payload.get("symbol")
+            settled_at = payload.get("settled_at_ns")
+            if venue_id is None or symbol is None or settled_at is None:
+                continue
+            key = (str(venue_id), str(symbol))
+            previous = last_settlement_ns.get(key)
+            last_settlement_ns[key] = int(settled_at)
+            if previous is None or int(settled_at) <= previous:
+                continue
+            settlements_seen[key] = settlements_seen.get(key, 0) + 1
+            offers.append({
+                "venue_id": key[0], "symbol": key[1], "key": FUNDING_INTERVAL,
+                "value": (int(settled_at) - previous) / 1e9, "source": FROM_MEASUREMENT,
+                "source_reference": f"journal:{getattr(entry, 'sequence', getattr(entry, 'entry_id', ''))}",
+                "observations": settlements_seen[key],
+            })
+        return tuple(offers)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_facts(kept)
+
+    return run_semantic_fact_store(
+        store=store,
+        control_socket=context.control_socket,
+        read_journal=read_journal,
+        publish_facts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

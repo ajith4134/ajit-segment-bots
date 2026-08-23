@@ -2942,3 +2942,78 @@ note  = "operator, 2026-08-23: how many past distances the gauge ranks a new one
 value = 3.0
 unit  = "squared Mahalanobis distance"
 note  = "operator, 2026-08-23: the distance the gauge's percentile estimator assumes before it has history: the expected squared distance of a draw from its own covariance is the number of symbols, and three is the minimum market."
+
+[contradiction_value_tolerance]
+value = 0.1
+unit  = "relative fraction"
+note  = "operator, 2026-08-23: how far two values of the same fact may differ before contradiction-detector and semantic-fact-store call them a contradiction rather than two readings. A tenth."
+
+[embedding_dimensions]
+value = ["holding_seconds", "entry_percentile", "cost_share", "attribution_residual", "standardised_outcome", "captured_fraction", "effective_bets", "fraction_in_the_new_regime"]
+unit  = "episode condition names"
+note  = "operator, 2026-08-23: the numeric conditions a closed episode carries that episode-embedder standardises into its vector, in the order trade-episode-encoder measures them. Only measured values: a label is not a dimension."
+
+[embedding_minimum_features]
+value = 3
+unit  = "features"
+note  = "operator, 2026-08-23: how many of the dimensions an episode must carry, standardised, before its embedding is usable. Three."
+
+[episodic_maximum_returned]
+value = 10
+unit  = "episodes"
+note  = "operator, 2026-08-23: how many similar episodes episodic-trade-store returns per recall. Ten."
+
+[episodic_minimum_similarity]
+value = 0.5
+unit  = "similarity"
+note  = "operator, 2026-08-23: the similarity below which a remembered episode is not like this one. A half."
+
+[episodic_maximum_held]
+value = 10000
+unit  = "episodes"
+note  = "operator, 2026-08-23: how many episodes the store holds before the oldest go. Ten thousand, about a month of paper trades."
+
+[fact_recheck_below]
+value = 0.5
+unit  = "confidence"
+note  = "operator, 2026-08-23: the decayed confidence below which forgetting-curve-scheduler says a fact is worth rechecking. A half."
+
+[fact_default_half_life_seconds]
+value = 604800.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a fact of a kind with no half-life of its own takes to lose half its confidence. A week."
+
+[knowledge_link_minimum_strength]
+value = 0.3
+unit  = "strength"
+note  = "operator, 2026-08-23: the relation strength below which knowledge-graph-linker records nothing. Three tenths."
+
+[knowledge_link_half_life_seconds]
+value = 2592000.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long an unseen link takes to decay to half its strength. Thirty days."
+
+[knowledge_confidence_floor]
+value = 0.2
+unit  = "confidence"
+note  = "operator, 2026-08-23: the confidence below which knowledge-pruner may call a fact gone, if nothing reads it. A fifth."
+
+[knowledge_idle_seconds_before_useless]
+value = 2592000.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a fact may go unread before the pruner considers it useless. Thirty days: old is not the same as useless."
+
+[regime_memory_minimum_occurrences]
+value = 2
+unit  = "occurrences"
+note  = "operator, 2026-08-23: how many times a regime must have occurred before regime-memory-store has a memory of it. Two: seen once is a story."
+
+[regime_memory_signature_tolerance]
+value = 0.25
+unit  = "relative distance"
+note  = "operator, 2026-08-23: how far a signature may sit from a remembered one and still be recognised as that regime. A quarter."
+
+[symbol_profile_new_listing_seconds]
+value = 604800.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long after listing a symbol's every profile field is treated as thin. A week."

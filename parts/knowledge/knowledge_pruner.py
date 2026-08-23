@@ -299,3 +299,78 @@ def run_knowledge_pruner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A fact is established when stored, read when a skill that cites it is
+    loaded into a decision or an instruction that uses it is scored, and
+    its confidence follows the scheduler. A contradiction names the
+    better-sourced side as the one with the higher confidence; an
+    invalidated provenance marks the fact as resting on something wrong.
+    Every key seen is judged once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    usefulness = Batch(read=context.bus.reader("skill-usefulness"))
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    provenance = Batch(read=context.bus.reader("fact-provenance"))
+    contradictions = Batch(read=context.bus.reader("knowledge-contradiction"))
+    confidences = Batch(read=context.bus.reader("fact-confidence"))
+    publish_stale = context.bus.publisher_for("stale-knowledge")
+    pruner = KnowledgePruner(
+        confidence_floor=context.number("knowledge_confidence_floor"),
+        idle_seconds_before_useless=context.number("knowledge_idle_seconds_before_useless"),
+    )
+    keys_seen: set[str] = set()
+    last_judged = [float("-inf")]
+
+    def read_knowledge(_pruner):
+        for fact in facts.payloads():
+            key = f"{fact.venue_id}:{fact.symbol}:{fact.key}"
+            keys_seen.add(key)
+            pruner.observe_established(key, int(fact.observed_at_ns))
+            pruner.observe_confidence(key, float(fact.confidence.value))
+            if fact.superseded_at_ns is not None:
+                pruner.observe_supersession(key, key, True)
+        for confidence in confidences.payloads():
+            keys_seen.add(confidence.fact_key)
+            pruner.observe_confidence(confidence.fact_key, float(confidence.confidence))
+        for record in provenance.payloads():
+            keys_seen.add(record.fact_key)
+            if record.state == "an-ancestor-was-found-to-be-wrong":
+                pruner.observe_invalidated_ancestor(record.fact_key)
+        for contradiction in contradictions.payloads():
+            better = contradiction.left if contradiction.left_confidence >= contradiction.right_confidence else contradiction.right
+            worse = contradiction.right if better == contradiction.left else contradiction.left
+            pruner.observe_contradiction(worse, better)
+        for score in usefulness.payloads():
+            if score.decisions_loaded_into > 0:
+                pruner.observe_read(score.skill_id)
+        for card in scorecards.payloads():
+            pruner.observe_read(card.instruction_id)
+        now = _time.monotonic()
+        if now - last_judged[0] < context.health_interval_seconds:
+            return ()
+        last_judged[0] = now
+        return tuple(sorted(keys_seen))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_stale(kept)
+
+    return run_knowledge_pruner(
+        pruner=pruner,
+        control_socket=context.control_socket,
+        read_knowledge=read_knowledge,
+        publish_stale=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

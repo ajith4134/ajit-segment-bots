@@ -281,3 +281,52 @@ def run_instruction_archive(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every written instruction is archived; a retirement or a resurrection
+    is recorded against it. Histories go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    instructions = Batch(read=context.bus.reader("opportunity-instruction"))
+    retirements = Batch(read=context.bus.reader("retired-instruction"))
+    publish_history = context.bus.publisher_for("instruction-history")
+    archive = InstructionArchive()
+    last_publish = [float("-inf")]
+
+    def read_instructions(_archive) -> None:
+        for instruction in instructions.payloads():
+            if archive.history_of(instruction.instruction_id) is None:
+                archive.archive(instruction)
+        for record in retirements.payloads():
+            if archive.history_of(record.instruction_id) is None:
+                continue
+            if record.state == "retired" and record.because:
+                archive.record_retirement(record.instruction_id, str(record.because))
+            elif record.state == "resurrected":
+                archive.record_resurrection(record.instruction_id)
+
+    def publish(items) -> None:
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_history(kept)
+            last_publish[0] = now
+
+    return run_instruction_archive(
+        archive=archive,
+        control_socket=context.control_socket,
+        read_instructions=read_instructions,
+        publish_history=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

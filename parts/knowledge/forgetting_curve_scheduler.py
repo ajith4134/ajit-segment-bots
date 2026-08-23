@@ -267,3 +267,49 @@ def run_forgetting_curve_scheduler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A fact's kind is its key, and its initial confidence is the one the
+    store estimated. Confidences go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    provenance = Batch(read=context.bus.reader("fact-provenance"))
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    publish_confidences = context.bus.publisher_for("fact-confidence")
+    scheduler = ForgettingCurveScheduler(
+        recheck_below=context.number("fact_recheck_below"),
+        default_half_life_seconds=context.number("fact_default_half_life_seconds"),
+    )
+    last_publish = [float("-inf")]
+
+    def read_provenance(_scheduler) -> None:
+        for record in provenance.payloads():
+            scheduler.observe_provenance(record)
+        for fact in facts.payloads():
+            scheduler.observe_fact(f"{fact.venue_id}:{fact.symbol}:{fact.key}", fact.key, float(fact.confidence.value))
+
+    def publish(items) -> None:
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_confidences(kept)
+            last_publish[0] = now
+
+    return run_forgetting_curve_scheduler(
+        scheduler=scheduler,
+        control_socket=context.control_socket,
+        read_provenance=read_provenance,
+        publish_confidences=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

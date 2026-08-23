@@ -285,3 +285,69 @@ def run_symbol_profile_store(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A print gives a quote volume and, against the previous print on the
+    same venue and symbol, a move; a book update gives a spread. A
+    published fact with a numeric value is observed under its key. Every
+    venue and symbol touched in a tick is rebuilt.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+
+    market = Batch(read=context.bus.reader("market-data"))
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    publish_profiles = context.bus.publisher_for("symbol-profile")
+    store = SymbolProfileStore(
+        window=int(context.number("learning_window")),
+        minimum_observations=int(context.number("decoding_minimum_trades")),
+        new_listing_seconds=context.number("symbol_profile_new_listing_seconds"),
+    )
+    last_price: dict[tuple[str, str], float] = {}
+    last_spread: dict[tuple[str, str], float] = {}
+
+    def read_market(_store):
+        touched: set[tuple[str, str]] = set()
+        for item in market.payloads():
+            key = (item.venue_id, item.symbol)
+            if isinstance(item, BookUpdate) and item.bids and item.asks:
+                bid, ask = float(item.bids[0][0]), float(item.asks[0][0])
+                mid = (bid + ask) / 2
+                if mid > 0:
+                    last_spread[key] = (ask - bid) / mid
+            elif isinstance(item, NormalisedTrade) and item.price > 0:
+                previous = last_price.get(key)
+                last_price[key] = item.price
+                if previous is None or previous <= 0:
+                    continue
+                store.observe_market(
+                    item.venue_id, item.symbol,
+                    spread_fraction=last_spread.get(key, 0.0),
+                    quote_volume=item.price * item.quantity,
+                    move_fraction=(item.price - previous) / previous,
+                )
+                touched.add(key)
+        for fact in facts.payloads():
+            if isinstance(fact.value, (int, float)) and not isinstance(fact.value, bool):
+                store.observe_published_fact(fact.venue_id, fact.symbol, fact.key, float(fact.value))
+                touched.add((fact.venue_id, fact.symbol))
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_profiles(kept)
+
+    return run_symbol_profile_store(
+        store=store,
+        control_socket=context.control_socket,
+        read_market=read_market,
+        publish_profiles=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

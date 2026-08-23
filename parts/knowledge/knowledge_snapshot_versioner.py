@@ -260,3 +260,53 @@ def run_knowledge_snapshot_versioner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Each store's contents are the identifiers seen on its channel; a fact's
+    identifier carries its value so a changed value is a changed store. A
+    snapshot is published only when taken -- an unchanged tick is not a
+    version.
+    """
+    from runtime.input_assembly import Batch
+
+    facts = Batch(read=context.bus.reader("semantic-fact"))
+    rules = Batch(read=context.bus.reader("playbook-rule"))
+    histories = Batch(read=context.bus.reader("instruction-history"))
+    skills = Batch(read=context.bus.reader("available-skill"))
+    publish_snapshots = context.bus.publisher_for("knowledge-snapshot")
+    versioner = KnowledgeSnapshotVersioner()
+    contents: dict[str, dict[str, str]] = {FACTS: {}, RULES: {}, INSTRUCTIONS: {}, SKILLS: {}}
+
+    def read_stores(_versioner) -> None:
+        for fact in facts.payloads():
+            contents[FACTS][f"{fact.venue_id}:{fact.symbol}:{fact.key}"] = f"{fact.key}={fact.value!r}@{fact.source}"
+        for rule in rules.payloads():
+            if rule.is_active:
+                contents[RULES][rule.rule_id] = f"{rule.rule_id}:{rule.when}"
+            else:
+                contents[RULES].pop(rule.rule_id, None)
+        for history in histories.payloads():
+            contents[INSTRUCTIONS][history.instruction_id] = f"{history.instruction_id}:{'retired' if history.is_retired else 'live'}"
+        for skill in skills.payloads():
+            contents[SKILLS][skill.skill_id] = f"{skill.skill_id}@{skill.version}"
+        for store, identifiers in contents.items():
+            versioner.observe_contents(store, tuple(sorted(identifiers.values())))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None and item.was_taken)
+        if kept:
+            publish_snapshots(kept)
+
+    return run_knowledge_snapshot_versioner(
+        versioner=versioner,
+        control_socket=context.control_socket,
+        read_stores=read_stores,
+        publish_snapshots=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

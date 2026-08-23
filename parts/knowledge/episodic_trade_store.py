@@ -293,3 +293,52 @@ def run_episodic_trade_store(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every closed episode is appended and, once its embedding arrives, made
+    findable by it. Each new episode is also a query: what happened last
+    time it looked like this on this venue and symbol -- which is the
+    recall the brain reads before the next decision there.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    embeddings = Batch(read=context.bus.reader("episode-embedding"))
+    publish_recalls = context.bus.publisher_for("recalled-episode")
+    store = EpisodicTradeStore(
+        maximum_returned=int(context.number("episodic_maximum_returned")),
+        minimum_similarity=context.number("episodic_minimum_similarity"),
+        maximum_held=int(context.number("episodic_maximum_held")),
+    )
+    embedding_of: dict[str, object] = {}
+
+    def read_episodes(_store):
+        for embedding in embeddings.payloads():
+            if embedding.is_usable:
+                embedding_of[embedding.episode_id] = embedding
+                store.observe_embedding(embedding.episode_id, embedding)
+        queries = []
+        for episode in episodes.payloads():
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            queries.append((episode.venue_id, episode.symbol, conditions, embedding_of.get(episode.episode_id)))
+            store.append(episode)
+        return tuple(queries)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_recalls(kept)
+
+    return run_episodic_trade_store(
+        store=store,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_recalls=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
