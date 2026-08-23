@@ -288,3 +288,63 @@ def run_tail_copy_selector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An external position from the on-chain reader is turned into this part's
+    own shape; no on-chain reader runs in phase 1, so none arrives.
+    """
+    from runtime.input_assembly import Batch
+
+    externals = Batch(read=context.bus.reader("external-position"))
+    scores = Batch(read=context.bus.reader("copy-score"))
+    latencies = Batch(read=context.bus.reader("copy-latency"))
+    publish_follow_candidates = context.bus.publisher_for("follow-candidate")
+    selector = TailCopySelector(
+        minimum_copy_score=context.number("tail_copy_minimum_score"),
+        maximum_fraction_of_move_lost_to_latency=context.number("tail_copy_maximum_fraction_lost_to_latency"),
+        maximum_followers=int(context.number("tail_copy_maximum_followers")),
+        latency_quantile=context.number("tail_copy_latency_quantile"),
+        latency_window=int(context.number("learning_window")),
+        prior_latency_seconds=context.number("tail_copy_prior_latency"),
+        prior_copy_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+        default_setup_weight=context.number("tail_default_setup_weight"),
+    )
+
+    def read_external_positions(_selector):
+        for score in scores.payloads():
+            if score.their_return is not None and score.symbol:
+                selector.observe_copy_outcome(score.trader_id, "", score.symbol, score.copyable_return is not None and score.copyable_return > 0)
+        for latency in latencies.payloads():
+            selector.observe_move_speed(latency.venue_id, latency.symbol, latency.adverse_move_fraction / max(latency.detection_delay_seconds, 1e-9))
+        jobs = []
+        for external in externals.payloads():
+            if external.notional is None or external.opened_at_ns is None:
+                continue
+            position = ExternalPosition(
+                trader_id=external.trader_id, venue_id=external.venue_id, symbol=external.symbol,
+                direction=external.side, notional=external.notional, opened_at_ns=external.opened_at_ns,
+                followers_observed=0, is_exitable_by_us=external.is_full_book,
+            )
+            jobs.append((position, context.number("tail_prior_normal_move_fraction")))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        if items:
+            publish_follow_candidates(items)
+
+    return run_tail_copy_selector(
+        selector=selector,
+        control_socket=context.control_socket,
+        read_external_positions=read_external_positions,
+        publish_follow_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

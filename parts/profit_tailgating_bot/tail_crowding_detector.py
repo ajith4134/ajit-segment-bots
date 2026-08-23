@@ -268,3 +268,53 @@ def run_tail_crowding_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+    from runtime.order_book import OrderBookSnapshot
+
+    candidates = Batch(read=context.bus.reader("follow-candidate"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    funding = Batch(read=context.bus.reader("funding-forecast"))
+    sentiment = Batch(read=context.bus.reader("sentiment-reading"))
+    publish_readings = context.bus.publisher_for("crowding-reading")
+    detector = TailCrowdingDetector(
+        book_imbalance_threshold=context.number("tail_crowding_book_imbalance_threshold"),
+        funding_deviation_threshold=context.number("tail_crowding_funding_deviation_threshold"),
+        sentiment_deviation_threshold=context.number("tail_crowding_sentiment_deviation_threshold"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_sources=int(context.number("tail_crowding_minimum_sources")),
+    )
+    venues_of: dict[str, set[str]] = {}
+
+    def read_candidates_and_sources(_detector):
+        for book in books.payloads():
+            if isinstance(book, OrderBookSnapshot):
+                detector.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
+                venues_of.setdefault(book.symbol, set()).add(book.venue_id)
+        for forecast in funding.payloads():
+            if forecast.predicted_rate is not None:
+                detector.observe_funding(forecast.venue_id, forecast.symbol, forecast.predicted_rate)
+                venues_of.setdefault(forecast.symbol, set()).add(forecast.venue_id)
+        for reading in sentiment.payloads():
+            for venue_id in venues_of.get(reading.symbol, ()):
+                detector.observe_sentiment(venue_id, reading.symbol, reading.level)
+        return tuple(candidates.payloads())
+
+    def publish(items) -> None:
+        if items:
+            publish_readings(items)
+
+    return run_tail_crowding_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_candidates_and_sources=read_candidates_and_sources,
+        publish_readings=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -294,3 +294,51 @@ def run_tail_mover_qualifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    candidates = Batch(read=context.bus.reader("entry-candidate"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    weights = Batch(read=context.bus.reader("tail-setup-weight"))
+    publish_follow_candidates = context.bus.publisher_for("follow-candidate")
+    qualifier = TailMoverQualifier(
+        window_length=int(context.number("tail_window_length")),
+        minimum_observations_in_move=int(context.number("tail_minimum_observations_in_move")),
+        minimum_fraction_of_normal_move=context.number("tail_minimum_fraction_of_normal_move"),
+        maximum_fraction_of_normal_move=context.number("tail_maximum_fraction_of_normal_move"),
+        move_quantile=context.number("tail_move_quantile"),
+        move_window=int(context.number("tail_move_window")),
+        prior_normal_move_fraction=context.number("tail_prior_normal_move_fraction"),
+        minimum_remaining_over_cost=context.number("tail_minimum_remaining_over_cost"),
+        default_setup_weight=context.number("tail_default_setup_weight"),
+        minimum_setup_weight=context.number("tail_minimum_setup_weight"),
+    )
+    round_trip = 2.0 * context.number("taker_fee_rate")
+
+    def read_candidates_and_market(_qualifier):
+        for trade in trades.payloads():
+            qualifier.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for profile in profiles.payloads():
+            qualifier.observe_symbol_profile(profile.venue_id, profile.symbol, round_trip)
+        for weight in weights.payloads():
+            qualifier.observe_setup_weight(weight.detector, weight.weight)
+        return tuple(candidates.payloads())
+
+    def publish(items) -> None:
+        if items:
+            publish_follow_candidates(items)
+
+    return run_tail_mover_qualifier(
+        qualifier=qualifier,
+        control_socket=context.control_socket,
+        read_candidates_and_market=read_candidates_and_market,
+        publish_follow_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

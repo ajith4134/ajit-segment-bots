@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from runtime.bot_opinion import (
     CONVICTION_TOO_LOW, ENTER_NOW, NO_EXIT_PLAN, STAND_DOWN, DirectionalOpinion, stand_down,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -66,13 +67,11 @@ class TailOpinionComposer:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
-        self._minimum_conviction = minimum_conviction
+        self._floor = conviction_floor
         self._require_trained_model = require_trained_model
         self._now_ns = now_ns
         self.standing = ComposerStanding()
@@ -94,11 +93,16 @@ class TailOpinionComposer:
                 conviction.calibrated,
             )
 
-        if conviction.probability < self._minimum_conviction:
+        plan_floor = (
+            self._floor.for_plan(exit_plan.reward_to_risk, exit_plan.risk_fraction)
+            if exit_plan is not None and exit_plan.is_complete else self._floor.before_any_plan()
+        )
+        floor, floor_reason = plan_floor
+        if conviction.probability < floor:
             return self._stand_down(
                 venue_id, symbol, candidate.direction, CONVICTION_TOO_LOW,
                 f"conviction is {conviction.probability:.1%} against a floor of "
-                f"{self._minimum_conviction:.1%}",
+                f"{floor:.1%} ({floor_reason})",
                 conviction.calibrated,
             )
 
@@ -221,4 +225,50 @@ def run_tail_opinion_composer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.edge_arithmetic import ConvictionFloor
+    from runtime.input_assembly import Batch, LatestByKey
+
+    convictions = Batch(read=context.bus.reader("tail-calibrated-conviction"))
+    plans = LatestByKey(read=context.bus.reader("tail-exit-plan"), key_of=lambda p: (p.venue_id, p.symbol))
+    candidates = LatestByKey(read=context.bus.reader("follow-candidate"), key_of=lambda c: (c.venue_id, c.symbol))
+    publish_opinions = context.bus.publisher_for("directional-opinion")
+    composer = TailOpinionComposer(
+        conviction_floor=ConvictionFloor(
+            fee_rate=context.number("taker_fee_rate"),
+            margin=context.number("bull_conviction_margin_over_break_even"),
+            fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+        ),
+        require_trained_model=bool(context.setting("bull_opinion_require_trained_model").value),
+    )
+
+    def read_judgements():
+        plan_by_symbol = plans.mapping()
+        candidate_by_symbol = candidates.mapping()
+        jobs = []
+        for conviction in convictions.payloads():
+            key = (conviction.venue_id, conviction.symbol)
+            candidate = candidate_by_symbol.get(key)
+            if candidate is None:
+                continue
+            jobs.append((candidate, conviction, plan_by_symbol.get(key)))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        if items:
+            publish_opinions(items)
+
+    return run_tail_opinion_composer(
+        composer=composer,
+        control_socket=context.control_socket,
+        read_judgements=read_judgements,
+        publish_opinions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

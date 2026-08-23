@@ -290,3 +290,45 @@ def run_tail_move_remaining_estimator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    candidates = Batch(read=context.bus.reader("follow-candidate"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    forecasts = Batch(read=context.bus.reader("price-forecast"))
+    publish_readings = context.bus.publisher_for("move-remaining")
+    estimator = TailMoveRemainingEstimator(
+        window_length=int(context.number("tail_window_length")),
+        minimum_observations=int(context.number("tail_minimum_observations_in_move")),
+        move_quantile=context.number("tail_move_quantile"),
+        move_window=int(context.number("tail_move_window")),
+        prior_normal_move_fraction=context.number("tail_prior_normal_move_fraction"),
+        agreement_fraction=context.number("tail_agreement_fraction"),
+        decay_lookback=int(context.number("tail_decay_lookback")),
+    )
+
+    def read_candidates_and_market(_estimator):
+        for trade in trades.payloads():
+            estimator.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for forecast in forecasts.payloads():
+            if forecast.expected_return is not None:
+                estimator.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
+        return tuple(candidates.payloads())
+
+    def publish(items) -> None:
+        if items:
+            publish_readings(items)
+
+    return run_tail_move_remaining_estimator(
+        estimator=estimator,
+        control_socket=context.control_socket,
+        read_candidates_and_market=read_candidates_and_market,
+        publish_readings=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

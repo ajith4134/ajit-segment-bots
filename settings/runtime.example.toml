@@ -2187,3 +2187,158 @@ note  = "operator, 2026-08-23: how far the journal's fill time may differ from t
 value = 0.01
 unit  = "USDT"
 note  = "operator, 2026-08-23: how far the attributed components of a trade's result may fail to sum to the realised result before pnl-attributor says they do not reconcile. A cent."
+
+[tail_default_setup_weight]
+value = 1.0
+unit  = "weight"
+note  = "operator, 2026-08-23: the weight a follow setup carries before tail-setup-weight-learner has a record for its source and detector. One, neutral."
+
+[tail_minimum_setup_weight]
+value = 0.2
+unit  = "weight"
+note  = "operator, 2026-08-23: the least weight a follow setup may carry and still qualify. A fifth, as for the bull bot's bull_minimum_setup_weight."
+
+[tail_window_length]
+value = 50
+unit  = "prints"
+note  = "operator, 2026-08-23: how many recent prints the tailgating bot keeps per symbol to measure the move under way. Fifty, a few minutes on the captured symbols; a move is a thing of minutes."
+
+[tail_minimum_observations_in_move]
+value = 5
+unit  = "prints"
+note  = "operator, 2026-08-23: how many prints a move must span before the qualifier calls it a move rather than a print. Five."
+
+[tail_minimum_fraction_of_normal_move]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far, as a fraction of the symbol's normal move, a move must have gone before it is worth tailgating. A fifth: earlier it is not yet a mover."
+
+[tail_maximum_fraction_of_normal_move]
+value = 0.8
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far, as a fraction of the normal move, a move may have gone before tailgating it is chasing. Four fifths."
+
+[tail_move_quantile]
+value = 0.5
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of completed moves read as the symbol's normal move. The median."
+
+[tail_move_window]
+value = 200
+unit  = "completed moves"
+note  = "operator, 2026-08-23: how many completed moves per symbol the tailgating bot keeps for its normal-move quantile. Two hundred."
+
+[tail_prior_normal_move_fraction]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the normal move assumed before enough moves have completed on a symbol. One percent, under the 1.5% largest intraday move measured on the captured thirty today."
+
+[tail_minimum_remaining_over_cost]
+value = 2.0
+unit  = "multiple"
+note  = "operator, 2026-08-23: how many times the round-trip cost the remaining move must be for a mover to qualify. Twice: a move with one round trip left pays the fees and nothing else."
+
+[tail_agreement_fraction]
+value = 0.4
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far two estimates of the move remaining may disagree before tail-move-remaining-estimator reports disagreement rather than a figure. Two fifths."
+
+[tail_decay_lookback]
+value = 5
+unit  = "prints"
+note  = "operator, 2026-08-23: how many recent prints the estimator reads for the move's momentum decaying. Five."
+
+[tail_copy_minimum_score]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the copy-worthiness score a trader needs, measured, before tail-copy-selector follows. Just above the coin flip."
+
+[tail_copy_maximum_fraction_lost_to_latency]
+value = 0.3
+unit  = "fraction of the move"
+note  = "operator, 2026-08-23: the most of a copied move that may be lost to the delay between the trader's entry and ours before the copy is refused. Three tenths."
+
+[tail_copy_maximum_followers]
+value = 50
+unit  = "followers"
+note  = "operator, 2026-08-23: how many other followers a position may visibly have before copying it is joining a crowd. Fifty; no on-chain position feed runs in phase 1, so unmeasured."
+
+[tail_copy_latency_quantile]
+value = 0.8
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of measured copy latency the selector plans for. The eightieth."
+
+[tail_copy_prior_latency]
+value = 2.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the copy latency assumed before measured. Two seconds: on-chain confirmation plus an order round trip."
+
+[tail_crowding_book_imbalance_threshold]
+value = 0.6
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of visible book depth on one side above which the book is read as crowded in that direction. Three fifths."
+
+[tail_crowding_funding_deviation_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far the funding rate must sit from its usual level before it reads as a crowded position. Two."
+
+[tail_crowding_sentiment_deviation_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far sentiment must sit from its usual level before it reads as crowded. Two."
+
+[tail_crowding_minimum_sources]
+value = 2
+unit  = "sources"
+note  = "operator, 2026-08-23: how many of the three crowding sources must be measured before a reading is made. Two; one source is a guess about the crowd."
+
+[tail_trail_safety_multiple]
+value = 1.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: how many times the symbol's measured retracement the trailing stop sits behind the best price. One and a half, the bull bot's stop safety multiple."
+
+[tail_minimum_trail_fraction]
+value = 0.002
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the narrowest a trail may be. Twenty basis points, a few spreads."
+
+[tail_tighten_after_gain_fraction]
+value = 0.02
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the gain after which the trail is tightened. Two percent, profit_lock_break_even_trigger."
+
+[tail_tightened_trail_multiple]
+value = 0.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: the trail multiple once tightened. Half the safety multiple."
+
+[tail_counterfactual_window]
+value = 100
+unit  = "exit counterfactuals"
+note  = "operator, 2026-08-23: how many exit counterfactuals the planner keeps per symbol to learn its trail from. A hundred."
+
+[tail_counterfactual_quantile]
+value = 0.6
+unit  = "quantile"
+note  = "operator, 2026-08-23: the quantile of counterfactual retracements the trail is set beyond. Six tenths."
+
+[tail_prior_trail_fraction]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the trail assumed before retracements have been measured on a symbol. One percent, as for profit_lock_prior_retracement."
+
+[tail_winner_maximum_retraced_fraction]
+value = 0.3
+unit  = "fraction of the gain"
+note  = "operator, 2026-08-23: how much of its gain a held winner may have given back and still be added to. Three tenths."
+
+[tail_winner_maximum_symbol_share_of_book]
+value = 0.3
+unit  = "fraction of the book"
+note  = "operator, 2026-08-23: the most of the whole book one symbol may hold after tail-winner-selector adds to it, as a fraction inside (0, 1) -- the selector's own rule, which refused a first value written as a multiple. Three tenths: adding to a winner is how a diversified book becomes a single bet, and a third of the book in one symbol is the edge of that."
+
+[tail_winner_minimum_profit_fraction]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far in profit a held position must be before tail-winner-selector adds to it. Half a percent, twice the round trip."

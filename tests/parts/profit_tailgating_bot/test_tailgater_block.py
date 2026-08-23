@@ -47,6 +47,7 @@ from runtime.bot_opinion import (
     FROM_THE_BOOK, LONG, NOT_CROWDED, NO_EXIT_PLAN, ONLY_ONE_ESTIMATE, SHORT, STAND_DOWN,
     BotScorecard, CrowdingReading, ExitTarget, FollowCandidate, MoveRemaining,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.market_signal import CONTINUATION, make_candidate
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -767,9 +768,11 @@ class CalibratedStub:
         self.reason = "conviction"
 
 
-def a_tail_composer(minimum=0.55, require_measured=False):
+def a_tail_composer(margin=0.0, require_measured=False):
+    # The plan's own break-even plus a margin, as for the bull and bear bots.
     return TailOpinionComposer(
-        minimum_conviction=minimum, require_trained_model=require_measured
+        conviction_floor=ConvictionFloor(fee_rate=0.00055, margin=margin, fallback_reward_to_risk=1.5),
+        require_trained_model=require_measured,
     )
 
 
@@ -810,7 +813,7 @@ def test_a_plan_that_names_a_target_is_refused():
 
 
 def test_a_conviction_below_the_floor_and_a_missing_plan_both_stand_down():
-    subject = a_tail_composer(minimum=0.7)
+    subject = a_tail_composer(margin=0.5)
     assert subject.compose(a_follow(), CalibratedStub(0.5), a_trail_plan()).action == STAND_DOWN
     assert subject.compose(a_follow(), CalibratedStub(0.9), None).refusal == NO_EXIT_PLAN
 

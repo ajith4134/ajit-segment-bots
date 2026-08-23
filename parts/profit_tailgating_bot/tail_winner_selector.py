@@ -258,3 +258,51 @@ def run_tail_winner_selector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = LatestByKey(read=context.bus.reader("position"), key_of=lambda p: (p.venue_id, p.symbol))
+    trades = Batch(read=context.bus.reader("market-data"))
+    peaks = Batch(read=context.bus.reader("peak-excursion"))
+    verdicts = Batch(read=context.bus.reader("pair-verdict"))
+    publish_follow_candidates = context.bus.publisher_for("follow-candidate")
+    selector = TailWinnerSelector(
+        maximum_retraced_fraction=context.number("tail_winner_maximum_retraced_fraction"),
+        maximum_symbol_share_of_book=context.number("tail_winner_maximum_symbol_share_of_book"),
+        minimum_profit_fraction=context.number("tail_winner_minimum_profit_fraction"),
+        default_setup_weight=context.number("tail_default_setup_weight"),
+    )
+
+    def read_positions_and_verdicts(_selector):
+        for peak in peaks.payloads():
+            selector.observe_peak_excursion(peak)
+        for verdict in verdicts.payloads():
+            selector.observe_pair_verdict(verdict)
+        trades.payloads()
+        held = [p for p in positions.mapping().values() if not p.is_flat]
+        book_value = 0.0
+        for position in held:
+            notional = abs(position.quantity) * position.average_entry_price
+            selector.observe_exposure(position.venue_id, position.symbol, notional)
+            book_value += notional
+        selector.observe_book_value(book_value)
+        return tuple(held)
+
+    def publish(items) -> None:
+        if items:
+            publish_follow_candidates(items)
+
+    return run_tail_winner_selector(
+        selector=selector,
+        control_socket=context.control_socket,
+        read_positions_and_verdicts=read_positions_and_verdicts,
+        publish_follow_candidates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

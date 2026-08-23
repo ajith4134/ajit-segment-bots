@@ -334,3 +334,109 @@ def run_tail_follow_conviction_model(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A conviction is formed for every follow candidate whose move-remaining
+    and crowding readings have both arrived. Training labels for the bot's
+    own follows train it; scorecards, rewards, champion choices and retrain
+    requests are applied as they arrive. What it learns is checkpointed
+    under learned_state_root, as the bull and bear models are.
+    """
+    import pathlib
+
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.learned_state import CheckpointSchedule, LearnedStateStore
+
+    candidates = Batch(read=context.bus.reader("follow-candidate"))
+    remaining = LatestByKey(read=context.bus.reader("move-remaining"), key_of=lambda r: (r.venue_id, r.symbol))
+    crowding = LatestByKey(read=context.bus.reader("crowding-reading"), key_of=lambda c: (c.venue_id, c.symbol))
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    labels = Batch(read=context.bus.reader("training-label"))
+    weights = LatestByKey(read=context.bus.reader("sample-weight"), key_of=lambda w: (w.venue_id, w.symbol))
+    retrains = Batch(read=context.bus.reader("retrain-request"))
+    champions = Batch(read=context.bus.reader("champion-choice"))
+    rewards = Batch(read=context.bus.reader("learning-reward"))
+    publish_convictions = context.bus.publisher_for("tail-calibrated-conviction")
+    model = TailFollowConvictionModel(
+        learning_rate=context.number("bull_learning_rate"),
+        l2_regularisation=context.number("bull_l2_regularisation"),
+        feature_half_life_observations=context.number("bull_feature_half_life_observations"),
+        minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
+        minimum_training_observations=int(context.number("bull_minimum_training_observations")),
+        calibration_bin_count=int(context.number("bull_calibration_bin_count")),
+        calibration_minimum_observations=int(context.number("bull_calibration_minimum_observations")),
+        calibration_half_life=context.number("bull_calibration_half_life_observations"),
+        default_sample_weight=context.number("bull_default_sample_weight"),
+        maximum_sample_weight=context.number("bull_maximum_sample_weight"),
+        refuse_when_views_disagree=True,
+    )
+    store = LearnedStateStore(pathlib.Path(str(context.setting("learned_state_root").value)).expanduser())
+    store.root.mkdir(parents=True, exist_ok=True)
+    if hasattr(model, "learned_settings") and hasattr(model, "restore_state"):
+        restoration = store.restore(PART_ID, "conviction", model.learned_settings())
+        if restoration.was_restored:
+            try:
+                model.restore_state(restoration.state)
+            except (KeyError, TypeError, ValueError):
+                pass
+    schedule = CheckpointSchedule(int(context.number("learned_state_checkpoint_interval")))
+    remembered: dict[tuple[str, str], object] = {}
+
+    def read_candidates_and_readings(_model):
+        for scorecard in scorecards.payloads():
+            if getattr(scorecard, "bot", None) == BOT:
+                model.observe_scorecard(scorecard)
+        for reward in rewards.payloads():
+            if reward.reward is not None:
+                model.observe_learning_reward(reward.detector, reward.reward)
+        for choice in champions.payloads():
+            if getattr(choice, "model_name", None) == PART_ID:
+                model.apply_champion_choice(getattr(choice, "chosen", "champion"))
+        for request in retrains.payloads():
+            if request.model_name == PART_ID and request.state == "scheduled":
+                model.apply_retrain_request("challenger")
+        weight_by_symbol = weights.mapping()
+        for label in labels.payloads():
+            candidate = remembered.get((label.venue_id, label.symbol))
+            if candidate is None or candidate.detector != label.detector:
+                continue
+            outcome = label.labels.get("the-setup-was-right") if isinstance(label.labels, dict) else None
+            if outcome is None:
+                continue
+            weight = weight_by_symbol.get((label.venue_id, label.symbol))
+            model.train(
+                model.features_for(candidate, remaining.mapping().get((label.venue_id, label.symbol)), crowding.mapping().get((label.venue_id, label.symbol))),
+                bool(outcome), candidate.source, getattr(weight, "weight", None),
+            )
+        by_symbol_remaining = remaining.mapping()
+        by_symbol_crowding = crowding.mapping()
+        jobs = []
+        for candidate in candidates.payloads():
+            key = (candidate.venue_id, candidate.symbol)
+            remembered[key] = candidate
+            if key in by_symbol_remaining and key in by_symbol_crowding:
+                jobs.append((candidate, by_symbol_remaining[key], by_symbol_crowding[key]))
+        return tuple(jobs)
+
+    def publish(convictions) -> None:
+        if convictions:
+            publish_convictions(convictions)
+        if hasattr(model, "state") and hasattr(model, "training_observations"):
+            observations = model.training_observations
+            if schedule.is_due(observations):
+                store.save(PART_ID, "conviction", model.state(), model.learned_settings())
+                schedule.record_written(observations)
+
+    return run_tail_follow_conviction_model(
+        model=model,
+        control_socket=context.control_socket,
+        read_candidates_and_readings=read_candidates_and_readings,
+        publish_convictions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

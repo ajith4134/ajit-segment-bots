@@ -364,3 +364,53 @@ def run_tail_trailing_exit_planner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+
+    candidates = Batch(read=context.bus.reader("follow-candidate"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    profiles = Batch(read=context.bus.reader("symbol-profile"))
+    counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
+    excursions = Batch(read=context.bus.reader("excursion-profile"))
+    remaining = LatestByKey(read=context.bus.reader("move-remaining"), key_of=lambda r: (r.venue_id, r.symbol)) if "move-remaining" in context.declaration.consumes else None
+    publish_plans = context.bus.publisher_for("tail-exit-plan")
+    planner = TailTrailingExitPlanner(
+        trail_safety_multiple=context.number("tail_trail_safety_multiple"),
+        minimum_trail_fraction=context.number("tail_minimum_trail_fraction"),
+        tighten_after_gain_fraction=context.number("tail_tighten_after_gain_fraction"),
+        tightened_trail_multiple=context.number("tail_tightened_trail_multiple"),
+        counterfactual_window=int(context.number("tail_counterfactual_window")),
+        counterfactual_quantile=context.number("tail_counterfactual_quantile"),
+        prior_trail_fraction=context.number("tail_prior_trail_fraction"),
+    )
+
+    def read_candidates_and_market(_planner):
+        for trade in trades.payloads():
+            planner.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for profile in profiles.payloads():
+            step = (profile.fields or {}).get("price_increment") if isinstance(profile.fields, dict) else None
+            if step:
+                planner.observe_symbol_profile(profile.venue_id, profile.symbol, float(step))
+        for counterfactual in counterfactuals.payloads():
+            planner.observe_exit_counterfactual(counterfactual)
+        for profile in excursions.payloads():
+            planner.observe_retracement_profile(profile)
+        return tuple((candidate, None) for candidate in candidates.payloads())
+
+    def publish(items) -> None:
+        if items:
+            publish_plans(items)
+
+    return run_tail_trailing_exit_planner(
+        planner=planner,
+        control_socket=context.control_socket,
+        read_candidates_and_market=read_candidates_and_market,
+        publish_plans=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

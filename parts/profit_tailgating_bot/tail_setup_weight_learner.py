@@ -248,3 +248,44 @@ def run_tail_setup_weight_learner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    publish_weights = context.bus.publisher_for("tail-setup-weight")
+    learner = TailSetupWeightLearner(
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_observations=int(context.number("learning_minimum_observations")),
+        minimum_weight=context.number("tail_minimum_setup_weight"),
+        maximum_weight=context.number("bull_setup_weight_maximum"),
+    )
+    last_publish = [float("-inf")]
+
+    def tick() -> None:
+        for scorecard in scorecards.payloads():
+            if getattr(scorecard, "bot", None) == BOT:
+                learner.observe_scorecard(scorecard)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        weights = learner.all_weights()
+        if weights:
+            publish_weights(weights)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )
