@@ -239,3 +239,50 @@ def run_market_event_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The announcement reader publishes what it read with the announcement
+    inside; this part classifies that announcement's headline and kind.
+    """
+    from runtime.input_assembly import Batch
+
+    reads = Batch(read=context.bus.reader("venue-announcement"))
+    publish_events = context.bus.publisher_for("market-event")
+    reader = MarketEventReader()
+
+    def read_announcements():
+        announcements = []
+        for read in reads.payloads():
+            announcement = getattr(read, "announcement", read)
+            if announcement is None:
+                continue
+            announcements.append(
+                VenueAnnouncement(
+                    venue_id=str(announcement.venue_id),
+                    title=str(getattr(announcement, "headline", getattr(announcement, "title", ""))),
+                    body=str(getattr(announcement, "kind", getattr(announcement, "body", ""))) + " " + " ".join(getattr(announcement, "symbols", ())),
+                    published_at_ns=int(announcement.published_at_ns),
+                    url=getattr(announcement, "source_reference", getattr(announcement, "url", None)),
+                    effective_at_ns=announcement.effective_at_ns,
+                )
+            )
+        return tuple(announcements)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_events(kept)
+
+    return run_market_event_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_announcements=read_announcements,
+        publish_events=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

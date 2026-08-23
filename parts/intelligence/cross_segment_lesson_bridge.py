@@ -259,3 +259,93 @@ def run_cross_segment_lesson_bridge(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A decoded instruction is a lesson about the mechanism its change names:
+    a stop lesson is about sizing, a fee or slippage lesson about execution,
+    a funding lesson about carry, a regime lesson about regime, and a
+    detector lesson about this segment's own instrument, which stays home.
+    A loss cause is one occurrence of the mechanism that produced it. Each
+    lesson is offered to the bridge once per health interval; the bridge
+    says whether it has held often enough to cross.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.trade_decoding_types import (
+        COSTS_ATE_IT, THE_ENTRY_WAS_EARLY, THE_ENTRY_WAS_LATE, THE_EXIT_WAS_LATE,
+        THE_REGIME_TURNED, THE_STOP_WAS_INSIDE_THE_NOISE, THE_STOP_WAS_TOO_WIDE,
+    )
+
+    instructions = Batch(read=context.bus.reader("decoded-trade-instruction"))
+    causes = Batch(read=context.bus.reader("loss-cause"))
+    publish_lessons = context.bus.publisher_for("cross-segment-lesson")
+    segment = str(context.setting("segment_id").value)
+    bridge = CrossSegmentLessonBridge(
+        minimum_occurrences=int(context.number("lesson_minimum_occurrences")),
+        minimum_hold_rate=context.number("lesson_minimum_hold_rate"),
+        prior_hold_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    mechanism_of_change_prefix = {
+        "stop": SIZING, "pnl-from": EXECUTION, "sequence": REGIME, "detector": INSTRUMENT_SPECIFIC,
+    }
+    mechanism_of_cause = {
+        COSTS_ATE_IT: EXECUTION, THE_EXIT_WAS_LATE: EXECUTION,
+        THE_ENTRY_WAS_EARLY: EXECUTION, THE_ENTRY_WAS_LATE: EXECUTION,
+        THE_STOP_WAS_INSIDE_THE_NOISE: SIZING, THE_STOP_WAS_TOO_WIDE: SIZING,
+        THE_REGIME_TURNED: REGIME,
+    }
+    lessons: dict[tuple[str, str], dict] = {}
+    offered_at: dict[tuple[str, str], float] = {}
+
+    def mechanism_of(instruction) -> str:
+        change = str(instruction.change)
+        prefix, _, rest = change.partition(":")
+        if prefix == "pnl-from" and "funding" in rest:
+            return CARRY
+        return mechanism_of_change_prefix.get(prefix, INSTRUMENT_SPECIFIC)
+
+    def read_lessons(_bridge):
+        for instruction in instructions.payloads():
+            key = (mechanism_of(instruction), str(instruction.change))
+            lessons[key] = {
+                "instruction_id": instruction.instruction_id, "applies_when": dict(instruction.applies_when),
+                "trades_supporting": instruction.trades_supporting, "expected_effect": instruction.expected_effect,
+            }
+            bridge.observe_occurrence(key[0], key[1], instruction.can_be_acted_on)
+        for loss in causes.payloads():
+            mechanism = mechanism_of_cause.get(loss.cause)
+            if mechanism is None:
+                continue
+            key = (mechanism, str(loss.cause))
+            lessons.setdefault(key, {"from_losses": True})
+            bridge.observe_occurrence(mechanism, str(loss.cause), bool(loss.is_fitted))
+        now = _time.monotonic()
+        due = []
+        for key, evidence in lessons.items():
+            if now - offered_at.get(key, float("-inf")) < context.health_interval_seconds:
+                continue
+            offered_at[key] = now
+            due.append((key[0], key[1], segment, dict(evidence)))
+        return tuple(due)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_lessons(kept)
+
+    return run_cross_segment_lesson_bridge(
+        bridge=bridge,
+        control_socket=context.control_socket,
+        read_lessons=read_lessons,
+        publish_lessons=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

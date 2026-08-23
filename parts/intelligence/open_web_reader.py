@@ -246,3 +246,43 @@ def run_open_web_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No fetcher is installed on this machine: the box has no outbound web
+    client configured for this part, so every gap is answered with
+    FETCH_FAILED by name and nothing is published. The budget and the
+    backlog bound are real and apply the moment a fetcher is installed
+    through `install_fetcher`; a reader that fetched without them would be
+    collecting, not learning.
+    """
+    from runtime.input_assembly import Batch
+
+    gaps = Batch(read=context.bus.reader("skill-gap"))
+    publish_ideas = context.bus.publisher_for("web-idea")
+    reader = OpenWebReader(
+        fetches_per_window=int(context.number("web_fetches_per_window")),
+        window_seconds=context.number("web_fetch_window_seconds"),
+        maximum_untested_backlog=int(context.number("web_maximum_untested_backlog")),
+    )
+
+    def read_skill_gaps(_reader):
+        return tuple(gap for gap in gaps.payloads() if getattr(gap, "query", None))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_ideas(kept)
+
+    return run_open_web_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_skill_gaps=read_skill_gaps,
+        publish_ideas=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

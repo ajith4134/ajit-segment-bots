@@ -287,3 +287,86 @@ def run_counterfactual_replayer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every print is kept, because a replay is read off the tape between the
+    moments a decision spanned. For each closed episode two alternatives are
+    replayed: standing aside over the same period, and the opinion that was
+    overruled -- the latest opinion on that venue and symbol whose side
+    differed from the action taken. Intents are read for the horizon the
+    decision claimed.
+    """
+    from dataclasses import dataclass
+
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    @dataclass(frozen=True)
+    class ReplayableEpisode:
+        venue_id: str
+        symbol: str
+        realised_fraction: float
+        side: str | None
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    opinions = LatestByKey(read=context.bus.reader("directional-opinion"), key_of=lambda o: (o.bot, o.venue_id, o.symbol))
+    intents = LatestByKey(read=context.bus.reader("trade-intent"), key_of=lambda i: (i.venue_id, i.symbol))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_outcomes = context.bus.publisher_for("counterfactual-outcome")
+    replayer = CounterfactualReplayer(
+        round_trip_cost_fraction=context.number("regret_cost_fraction"),
+        maximum_gap_seconds=context.number("counterfactual_maximum_gap_seconds"),
+        minimum_tape_points=int(context.number("counterfactual_minimum_tape_points")),
+    )
+
+    def side_of(action: str) -> str | None:
+        lowered = str(action).lower()
+        if LONG in lowered or "buy" in lowered:
+            return LONG
+        if SHORT in lowered or "sell" in lowered:
+            return SHORT
+        return None
+
+    def read_episodes(_replayer):
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                replayer.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+        intents.mapping()
+        held = opinions.mapping()
+        jobs = []
+        for episode in episodes.payloads():
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            taken = side_of(episode.action)
+            replayable = ReplayableEpisode(
+                venue_id=episode.venue_id, symbol=episode.symbol,
+                realised_fraction=float(conditions.get("realised_fraction", episode.realised) or 0.0),
+                side=taken,
+            )
+            alternatives = [(STOOD_ASIDE, None, int(episode.opened_at_ns), int(episode.closed_at_ns), 1.0)]
+            overruled = [
+                o for (bot, venue_id, symbol), o in held.items()
+                if (venue_id, symbol) == (episode.venue_id, episode.symbol) and o.side in (LONG, SHORT) and o.side != taken
+            ]
+            if overruled:
+                alternatives.append((THE_OVERRULED_OPINION, overruled[0].side, int(episode.opened_at_ns), int(episode.closed_at_ns), 1.0))
+            jobs.append((replayable, tuple(alternatives)))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_outcomes(kept)
+
+    return run_counterfactual_replayer(
+        replayer=replayer,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_outcomes=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

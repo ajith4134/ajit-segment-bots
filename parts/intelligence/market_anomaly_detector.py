@@ -292,3 +292,65 @@ def run_market_anomaly_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every print is a price and a volume; a book update is a top of book; a
+    feed gap marks the venue and symbol as inside one until its next print;
+    a consolidated price is the cross-venue reference with how many venues
+    stood behind it. Every venue and symbol touched in a tick is checked.
+    Coverage is read and drained: which venues carry a symbol is already in
+    the consolidated price's contributor count.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+
+    market = Batch(read=context.bus.reader("market-data"))
+    gaps = Batch(read=context.bus.reader("feed-gap"))
+    consolidated = Batch(read=context.bus.reader("consolidated-price"))
+    coverage = Batch(read=context.bus.reader("feed-coverage"))
+    publish_anomalies = context.bus.publisher_for("market-anomaly")
+    detector = MarketAnomalyDetector(
+        disagreement_threshold=context.number("anomaly_disagreement_threshold"),
+        stale_after_seconds=context.number("feed_coverage_window"),
+        minimum_volume_for_a_move=context.number("anomaly_minimum_quote_volume_for_a_move"),
+        move_threshold=context.number("anomaly_move_threshold"),
+        window_length=int(context.number("anomaly_window_length")),
+    )
+
+    def read_market(_detector):
+        coverage.payloads()
+        touched: set[tuple[str, str]] = set()
+        for gap in gaps.payloads():
+            detector.observe_feed_gap(gap.venue_id, gap.symbol, True)
+            touched.add((gap.venue_id, gap.symbol))
+        for item in market.payloads():
+            if isinstance(item, NormalisedTrade):
+                detector.observe_feed_gap(item.venue_id, item.symbol, False)
+                detector.observe_price(item.venue_id, item.symbol, item.price, item.venue_time_ns)
+                detector.observe_volume(item.venue_id, item.symbol, item.price * item.quantity)
+                touched.add((item.venue_id, item.symbol))
+            elif isinstance(item, BookUpdate) and item.bids and item.asks:
+                detector.observe_book(item.venue_id, item.symbol, float(item.bids[0][0]), float(item.asks[0][0]))
+                touched.add((item.venue_id, item.symbol))
+        for price in consolidated.payloads():
+            detector.observe_consolidated_price(price.symbol, price.price, len(price.contributing_venues))
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_anomalies(kept)
+
+    return run_market_anomaly_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_market=read_market,
+        publish_anomalies=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

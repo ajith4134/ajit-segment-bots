@@ -347,3 +347,66 @@ def run_regime_break_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One price per symbol per tick, the latest print, so every symbol sits on
+    the same clock. A classified event that changes the rules -- a delisting,
+    a leverage or funding change, a settlement -- is observed with its
+    symbols. The regimes checked are the ones the journal has named: a
+    regime no entry has mentioned is not one this system is in.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    events = Batch(read=context.bus.reader("market-event"))
+    publish_alerts = context.bus.publisher_for("regime-break-alert")
+    detector = RegimeBreakDetector(
+        established_window=int(context.number("regime_break_established_window")),
+        recent_window=int(context.number("regime_break_recent_window")),
+        minimum_observations=int(context.number("regime_break_minimum_observations")),
+        volatility_step_multiple=context.number("regime_break_volatility_step_multiple"),
+        correlation_jump=context.number("regime_break_correlation_jump"),
+        persistence_observations=int(context.number("regime_break_persistence_observations")),
+    )
+    # The market-event data type's own vocabulary for events that change the
+    # rules -- named here by value, because a part names data, never another part.
+    rule_changing = {"delisting", "leverage-or-margin-tier-change", "funding-interval-or-cap-change", "contract-settlement"}
+    regimes_named: set[str] = set()
+
+    def read_market_and_events(_detector):
+        latest: dict[str, float] = {}
+        for (venue_id, symbol), trade in trades.mapping().items():
+            if isinstance(trade, NormalisedTrade):
+                latest[symbol] = trade.price
+        for symbol, price in latest.items():
+            detector.observe_price(symbol, price)
+        for event in events.payloads():
+            if event.event_type in rule_changing:
+                detector.observe_market_event(event.event_type, tuple(event.symbols))
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            regime = payload.get("regime") or payload.get("entry_regime")
+            if regime:
+                regimes_named.add(str(regime))
+        return tuple(sorted(regimes_named))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_alerts(kept)
+
+    return run_regime_break_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_market_and_events=read_market_and_events,
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

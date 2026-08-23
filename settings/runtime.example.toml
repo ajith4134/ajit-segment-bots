@@ -2747,3 +2747,198 @@ note  = "operator, 2026-08-23: the fitted hit rate above which the miner refuses
 value = 50
 unit  = "formulas"
 note  = "operator, 2026-08-23: how many formulas from the declared space the miner evaluates per tick, so one tick stays short and the health report keeps its cadence. Fifty."
+
+[coverage_minimum_opportunities]
+value = 20
+unit  = "opportunities"
+note  = "operator, 2026-08-23: how many opportunities a context must have shown before abstention-coverage-auditor reports its coverage. Twenty, the observation floor used throughout."
+
+[coverage_minimum_near_misses]
+value = 5
+unit  = "near misses"
+note  = "operator, 2026-08-23: how many resolved near misses a context needs before the auditor says what abstaining cost. Five."
+
+[coverage_missed_return_window]
+value = 50
+unit  = "near misses"
+note  = "operator, 2026-08-23: how many recent missed returns the auditor keeps per context for its median. Fifty."
+
+[coverage_prior_missed_return]
+value = 0.0
+unit  = "fraction"
+note  = "operator, 2026-08-23: the missed return the auditor assumes before any near miss has resolved. Nothing: a prior that claimed abstention costs money would be a conclusion before the evidence."
+
+[refutation_permutations]
+value = 200
+unit  = "permutations"
+note  = "operator, 2026-08-23: how many label shuffles causal-refutation-battery runs to place an instruction's record against chance. Two hundred: enough to resolve one in twenty, cheap enough per instruction."
+
+[refutation_subperiods]
+value = 4
+unit  = "subperiods"
+note  = "operator, 2026-08-23: into how many time slices the battery cuts a record to ask whether the edge lived in all of them. Four."
+
+[refutation_concentration_threshold]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of an instruction's profit one subperiod may hold before the edge is called concentrated rather than stable. Half."
+
+[correlation_window_length]
+value = 256
+unit  = "observations"
+note  = "operator, 2026-08-23: how many price observations per symbol the correlation mapper and the turbulence gauge keep. Two hundred and fifty-six, about an hour at the feed's sampled rate."
+
+[correlation_minimum_shared_observations]
+value = 64
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations two symbols must share before their correlation is a measurement. Sixty-four."
+
+[correlation_cluster_threshold]
+value = 0.7
+unit  = "absolute Pearson correlation"
+note  = "operator, 2026-08-23: the correlation above which two symbols are one exposure, for the cluster mapper and the cross-segment exposure watch. Seven tenths."
+
+[counterfactual_maximum_gap_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the longest silence inside a replayed period the counterfactual replayer will read across. A minute; past it the tape has a hole and the replay would be invented."
+
+[counterfactual_minimum_tape_points]
+value = 10
+unit  = "prints"
+note  = "operator, 2026-08-23: how many prints a replayed period must contain. Ten."
+
+[lesson_minimum_occurrences]
+value = 5
+unit  = "occurrences"
+note  = "operator, 2026-08-23: how many times a lesson must have been seen before cross-segment-lesson-bridge considers sending it. Five."
+
+[lesson_minimum_hold_rate]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: how often a lesson must have held before it crosses to another segment. Three in five."
+
+[signal_bridge_deviation_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far from its own normal a funding rate or transfer must sit before cross-segment-signal-bridge sends it. Two."
+
+[signal_bridge_minimum_observations]
+value = 30
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations of a quantity the signal bridge needs before it has a normal to deviate from. Thirty."
+
+[signal_bridge_validity_seconds]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a cross-segment signal stays relevant. Fifteen minutes."
+
+[critic_component_weights]
+value = [0.25, 0.2, 0.2, 0.15, 0.2]
+unit  = "weights"
+note  = "operator, 2026-08-23: how decision-quality-critic weighs its five components, in order: the evidence was complete, the conviction was a measured frequency, the case against was heard, the failure was anticipated, it beat its alternatives. They sum to one; evidence carries most because a decision on incomplete evidence is wrong before it is made."
+
+[edge_decay_block_size]
+value = 20
+unit  = "trades"
+note  = "operator, 2026-08-23: how many trades make one block in edge-decay-tracker's fit. Twenty, the observation floor."
+
+[edge_decay_minimum_blocks]
+value = 3
+unit  = "blocks"
+note  = "operator, 2026-08-23: how many blocks a decay fit needs. Three: two points always fit a line."
+
+[edge_decay_minimum_initial_excess]
+value = 0.02
+unit  = "hit-rate points"
+note  = "operator, 2026-08-23: the excess over base rate an instruction's first block must show before there is an edge to decay. Two points."
+
+[forgetting_recall_threshold]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: the recall on an old era below which forgetting-auditor says a model has forgotten it. A coin flip."
+
+[anomaly_disagreement_threshold]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far one venue's print may sit from the consolidated price before market-anomaly-detector calls the venues in disagreement. Half a percent, several spreads on the liquid perpetuals."
+
+[anomaly_minimum_quote_volume_for_a_move]
+value = 1000.0
+unit  = "quote currency"
+note  = "operator, 2026-08-23: how much must have traded behind a move before the detector believes it. A thousand USDT."
+
+[anomaly_move_threshold]
+value = 0.01
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the move inside the window that the detector checks for volume behind it. One percent."
+
+[anomaly_window_length]
+value = 64
+unit  = "prints"
+note  = "operator, 2026-08-23: how many prints per venue and symbol the detector keeps. Sixty-four."
+
+[web_fetches_per_window]
+value = 10
+unit  = "fetches"
+note  = "operator, 2026-08-23: how many web fetches open-web-reader may make per window. Ten."
+
+[web_fetch_window_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window the fetch budget is counted over. An hour."
+
+[web_maximum_untested_backlog]
+value = 20
+unit  = "ideas"
+note  = "operator, 2026-08-23: how many fetched ideas may wait untested before the reader stops fetching. Twenty: reading more than can be tested is collecting, not learning."
+
+[regime_break_established_window]
+value = 512
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations define what a regime was. Five hundred and twelve."
+
+[regime_break_recent_window]
+value = 64
+unit  = "observations"
+note  = "operator, 2026-08-23: how many recent observations are compared against the established regime. Sixty-four."
+
+[regime_break_minimum_observations]
+value = 128
+unit  = "observations"
+note  = "operator, 2026-08-23: how many observations a regime needs before a break can be declared. One hundred and twenty-eight."
+
+[regime_break_volatility_step_multiple]
+value = 2.0
+unit  = "multiple"
+note  = "operator, 2026-08-23: how many times its established level recent volatility must reach, and stay, to be a step. Double."
+
+[regime_break_correlation_jump]
+value = 0.3
+unit  = "correlation"
+note  = "operator, 2026-08-23: how far average pairwise correlation must rise for things that moved independently to count as moving together. Three tenths."
+
+[regime_break_persistence_observations]
+value = 16
+unit  = "observations"
+note  = "operator, 2026-08-23: how many consecutive observations a step must persist before it is a break rather than a spike. Sixteen."
+
+[competence_minimum_coverage]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of opportunities a bot must have acted on before self-model-reporter trusts its hit rate in a context. Half: below it the sample is the trades it happened to like."
+
+[turbulence_minimum_symbols]
+value = 3
+unit  = "symbols"
+note  = "operator, 2026-08-23: how many symbols turbulence-index-gauge needs. Three: turbulence is a property of a market, not of one symbol."
+
+[turbulence_percentile_window]
+value = 512
+unit  = "measurements"
+note  = "operator, 2026-08-23: how many past distances the gauge ranks a new one against. Five hundred and twelve."
+
+[turbulence_prior_distance]
+value = 3.0
+unit  = "squared Mahalanobis distance"
+note  = "operator, 2026-08-23: the distance the gauge's percentile estimator assumes before it has history: the expected squared distance of a draw from its own covariance is the number of symbols, and three is the minimum market."

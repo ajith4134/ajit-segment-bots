@@ -301,3 +301,55 @@ def run_self_model_reporter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Coverage arrives per venue, symbol and regime and is observed as such.
+    A closed trade with its venue, symbol and regime is what a competence
+    is built from, and neither scorecard on this part's inputs carries all
+    three: a bot scorecard aggregates across symbols, an instruction
+    scorecard names no context. They are read and drained, and every
+    context the coverage reports name is mapped as unmeasured -- the true
+    state until a record with a context reaches this part. A forgetting
+    report names a model, not a context, and is drained too.
+    """
+    from runtime.input_assembly import Batch
+
+    coverage = Batch(read=context.bus.reader("coverage-report"))
+    drained = tuple(
+        Batch(read=context.bus.reader(name))
+        for name in ("bot-scorecard", "instruction-scorecard", "forgetting-report")
+    )
+    publish_map = context.bus.publisher_for("competence-map")
+    reporter = SelfModelReporter(
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        minimum_coverage=context.number("competence_minimum_coverage"),
+        competence_threshold=context.number("hypothesis_working_threshold"),
+    )
+
+    def read_records(_reporter) -> None:
+        for source in drained:
+            source.payloads()
+        for report in coverage.payloads():
+            if report.coverage is not None:
+                reporter.observe_coverage(report.venue_id, report.symbol, float(report.coverage))
+
+    def publish(competence_map) -> None:
+        if competence_map is not None:
+            publish_map((competence_map,))
+
+    return run_self_model_reporter(
+        reporter=reporter,
+        control_socket=context.control_socket,
+        read_records=read_records,
+        publish_map=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

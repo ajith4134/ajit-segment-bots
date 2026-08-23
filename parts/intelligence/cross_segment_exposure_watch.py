@@ -322,3 +322,47 @@ def run_cross_segment_exposure_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every position is this segment's: the one the settings name. A symbol's
+    underlying is the symbol with the settlement currency taken off its end.
+    No correlation reaches this part -- `position` is its only input -- so
+    every cross-underlying pair is reported as unmeasured, which is the true
+    state, not a guess at one.
+    """
+    from runtime.input_assembly import Batch
+
+    positions = Batch(read=context.bus.reader("position"))
+    publish_view = context.bus.publisher_for("exposure-view")
+    segment = str(context.setting("segment_id").value)
+    settlement = str(context.setting("settlement_currency").value)
+    watch = CrossSegmentExposureWatch(
+        correlation_threshold=context.number("correlation_cluster_threshold"),
+        minimum_correlation_observations=int(context.number("correlation_minimum_shared_observations")),
+    )
+
+    def underlying_of(symbol: str) -> str:
+        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+
+    def read_positions(_watch) -> None:
+        for position in positions.payloads():
+            watch.set_underlying(position.symbol, underlying_of(position.symbol))
+            watch.observe_position(segment, position)
+
+    def publish(view) -> None:
+        if view is not None:
+            publish_view((view,))
+
+    return run_cross_segment_exposure_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_positions=read_positions,
+        publish_view=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

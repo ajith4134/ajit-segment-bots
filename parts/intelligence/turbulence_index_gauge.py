@@ -306,3 +306,55 @@ def run_turbulence_index_gauge(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One return per symbol per tick: the log change from the price sampled
+    at the previous tick to the latest print now. Sampling on the tick puts
+    every symbol on one clock, which a covariance across symbols needs.
+    """
+    import math
+
+    from runtime.input_assembly import LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    publish_index = context.bus.publisher_for("turbulence-index")
+    gauge = TurbulenceIndexGauge(
+        window_observations=int(context.number("correlation_window_length")),
+        minimum_observations=int(context.number("correlation_minimum_shared_observations")),
+        minimum_symbols=int(context.number("turbulence_minimum_symbols")),
+        percentile_window=int(context.number("turbulence_percentile_window")),
+        prior_distance=context.number("turbulence_prior_distance"),
+    )
+    sampled: dict[str, float] = {}
+
+    def read_returns(_gauge) -> None:
+        latest: dict[str, float] = {}
+        for (venue_id, symbol), trade in trades.mapping().items():
+            if isinstance(trade, NormalisedTrade) and trade.price > 0:
+                latest[symbol] = trade.price
+        returns = {
+            symbol: math.log(price / sampled[symbol])
+            for symbol, price in latest.items() if symbol in sampled and sampled[symbol] > 0
+        }
+        sampled.update(latest)
+        if returns:
+            gauge.observe_returns(returns)
+
+    def publish(index) -> None:
+        if index is not None:
+            publish_index((index,))
+
+    return run_turbulence_index_gauge(
+        gauge=gauge,
+        control_socket=context.control_socket,
+        read_returns=read_returns,
+        publish_index=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

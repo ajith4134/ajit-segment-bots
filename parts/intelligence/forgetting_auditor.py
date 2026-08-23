@@ -288,3 +288,59 @@ def run_forgetting_auditor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every closed episode is kept under the era it opened in -- its calendar
+    month -- so each model version registered can be asked whether it still
+    recalls the eras before the one it was trained in. No model here exposes
+    a predictor to replay against, so recall is estimated only from what has
+    been observed, and a model with nothing observed is reported as having
+    nothing to replay, not as intact. Recalled episodes are the store's
+    memory, not a model's; they are read and drained.
+    """
+    import datetime
+
+    from runtime.input_assembly import Batch
+
+    versions = Batch(read=context.bus.reader("model-version"))
+    recalled = Batch(read=context.bus.reader("recalled-episode"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_reports = context.bus.publisher_for("forgetting-report")
+    auditor = ForgettingAuditor(
+        minimum_episodes_per_era=int(context.number("decoding_minimum_trades")),
+        recall_threshold=context.number("forgetting_recall_threshold"),
+        prior_recall=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    models_seen: set[str] = set()
+
+    def era_of(opened_at_ns: int) -> str:
+        return datetime.datetime.fromtimestamp(opened_at_ns / 1e9, datetime.UTC).strftime("%Y-%m")
+
+    def read_models_and_episodes(_auditor):
+        recalled.payloads()
+        for episode in episodes.payloads():
+            auditor.observe_training_episode(era_of(int(episode.opened_at_ns)), episode)
+        for version in versions.payloads():
+            models_seen.add(str(version.model_name))
+        return tuple(sorted(models_seen))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_reports(kept)
+
+    return run_forgetting_auditor(
+        auditor=auditor,
+        control_socket=context.control_socket,
+        read_models_and_episodes=read_models_and_episodes,
+        publish_reports=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

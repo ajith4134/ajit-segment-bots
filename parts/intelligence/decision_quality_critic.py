@@ -309,3 +309,107 @@ def run_decision_quality_critic(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A closed episode is scored against the rationale, premortem, counter-
+    argument and counterfactual last seen for its venue and symbol, and is
+    a near miss when one was recorded there. The model's narrative arrives
+    as a validated output for this part's purpose naming the same venue and
+    symbol; until it does the score is the measured one, and no model is
+    configured in phase 1. The other inputs are read and drained: the
+    critic builds its own facts from what it scores.
+    """
+    from dataclasses import dataclass
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    @dataclass(frozen=True)
+    class ScorableEpisode:
+        venue_id: str
+        symbol: str
+        was_profitable: bool
+        realised_fraction: float
+        entry_conviction: float
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    rationales = LatestByKey(read=context.bus.reader("decision-rationale"), key_of=lambda r: (r.venue_id, r.symbol))
+    premortems = LatestByKey(read=context.bus.reader("premortem-note"), key_of=lambda n: (n.venue_id, n.symbol))
+    arguments = LatestByKey(read=context.bus.reader("counter-argument"), key_of=lambda a: (a.venue_id, a.symbol))
+    counterfactuals = LatestByKey(read=context.bus.reader("counterfactual-outcome"), key_of=lambda c: (c.venue_id, c.symbol))
+    near_misses = Batch(read=context.bus.reader("near-miss-episode"))
+    drained = tuple(
+        Batch(read=context.bus.reader(name))
+        for name in ("directional-opinion", "verified-snapshot", "outcome-significance", "trade-narrative")
+    )
+    publish_scores = context.bus.publisher_for("decision-quality-score")
+    publish_requests = context.bus.publisher_for("llm-request")
+    weights = [float(w) for w in context.setting("critic_component_weights").value]
+    components = (
+        EVIDENCE_WAS_COMPLETE, CONVICTION_WAS_MEASURED, THE_CASE_AGAINST_WAS_HEARD,
+        THE_FAILURE_WAS_ANTICIPATED, IT_BEAT_ITS_ALTERNATIVES,
+    )
+    critic = DecisionQualityCritic(
+        component_weights=dict(zip(components, weights, strict=True)),
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    pending: dict[tuple[str, str], tuple] = {}
+    near_miss_contexts: set[tuple[str, str]] = set()
+
+    def as_scorable(episode) -> ScorableEpisode:
+        conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+        return ScorableEpisode(
+            venue_id=episode.venue_id, symbol=episode.symbol,
+            was_profitable=episode.realised > 0,
+            realised_fraction=float(conditions.get("realised_fraction", episode.realised) or 0.0),
+            entry_conviction=float(conditions.get("conviction", 0.0) or 0.0),
+        )
+
+    def read_episodes(_critic):
+        for source in drained:
+            source.payloads()
+        for miss in near_misses.payloads():
+            near_miss_contexts.add((miss.venue_id, miss.symbol))
+        answered = {}
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            key = (str(value.get("venue_id", "")), str(value.get("symbol", "")))
+            if key in pending:
+                answered[key] = output.text
+        by_rationale, by_premortem = rationales.mapping(), premortems.mapping()
+        by_argument, by_counterfactual = arguments.mapping(), counterfactuals.mapping()
+        jobs = []
+        for key, text in answered.items():
+            scorable, rationale, premortem, argument, counterfactual, near_miss = pending.pop(key)
+            jobs.append((scorable, rationale, premortem, argument, counterfactual, text, near_miss))
+        for episode in episodes.payloads():
+            key = (episode.venue_id, episode.symbol)
+            job = (
+                as_scorable(episode), by_rationale.get(key), by_premortem.get(key),
+                by_argument.get(key), by_counterfactual.get(key), key in near_miss_contexts,
+            )
+            near_miss_contexts.discard(key)
+            pending[key] = job
+            jobs.append((*job[:5], None, job[5]))
+        return tuple(jobs)
+
+    def publish_some(publish):
+        return lambda items: publish(tuple(i for i in items if i is not None)) if any(i is not None for i in items) else None
+
+    return run_decision_quality_critic(
+        critic=critic,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_scores=publish_some(publish_scores),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

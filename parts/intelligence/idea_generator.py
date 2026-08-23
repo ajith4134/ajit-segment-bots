@@ -330,3 +330,83 @@ def run_idea_generator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A gap is a context a closed trade came from that no archived instruction
+    is tagged for. Web ideas are kept for proposing. Archived instruction
+    statements are what "already tried" is checked against, and the latest
+    regime memory and knowledge links are the facts a model's proposal is
+    verified against. The family every idea is counted in is this segment's
+    one idea family, so the trial count is the count of everything proposed
+    here. A model answer arrives as a validated output for this part's
+    purpose; none is configured in phase 1.
+    """
+    from runtime.input_assembly import Batch
+
+    web_ideas = Batch(read=context.bus.reader("web-idea"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    histories = Batch(read=context.bus.reader("instruction-history"))
+    links = Batch(read=context.bus.reader("knowledge-link"))
+    memories = Batch(read=context.bus.reader("regime-memory"))
+    drained = (Batch(read=context.bus.reader("bot-scorecard")), Batch(read=context.bus.reader("sentiment-reading")))
+    publish_ideas = context.bus.publisher_for("novel-idea")
+    publish_requests = context.bus.publisher_for("llm-request")
+    generator = IdeaGenerator(
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    family = f"ideas:{context.setting('segment_id').value}"
+    covered_regimes: set[str] = set()
+    gaps_raised: set[tuple[str, str, str]] = set()
+    facts: dict = {}
+
+    def read_sources(_generator):
+        for source in drained:
+            source.payloads()
+        for idea in web_ideas.payloads():
+            generator.observe_web_idea(idea)
+        for history in histories.payloads():
+            if history.regime_tag:
+                covered_regimes.add(str(history.regime_tag))
+            generator.observe_instruction_history(
+                f"{history.measurement} {history.comparison} {history.threshold}"
+            )
+        for memory in memories.payloads():
+            facts["regime"] = memory.regime
+            facts["regime_occurrences"] = memory.occurrences
+            if memory.median_duration_seconds is not None:
+                facts["regime_median_duration_seconds"] = memory.median_duration_seconds
+        for link in links.payloads():
+            facts[f"link:{link.left}->{link.right}"] = link.strength
+        for episode in episodes.payloads():
+            key = (episode.venue_id, episode.symbol, episode.regime)
+            if episode.regime not in covered_regimes and key not in gaps_raised:
+                gaps_raised.add(key)
+                generator.observe_gap(*key)
+            facts["venue_id"], facts["symbol"] = episode.venue_id, episode.symbol
+        if facts:
+            generator.observe_facts(facts)
+        model_output = None
+        for output in outputs.payloads():
+            if output.purpose == PURPOSE:
+                model_output = output.text
+        return family, model_output
+
+    def publish_some(publish):
+        return lambda items: publish(tuple(items)) if items else None
+
+    return run_idea_generator(
+        generator=generator,
+        control_socket=context.control_socket,
+        read_sources=read_sources,
+        publish_ideas=publish_some(publish_ideas),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

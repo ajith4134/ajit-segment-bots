@@ -280,3 +280,71 @@ def run_abstention_coverage_auditor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An opinion is an opportunity: acted on when it carries no refusal,
+    abstained from when it does. A closed episode confirms the context was
+    real; a resolved near miss says what abstaining returned. Opinions name
+    no regime, so a context's regime is the one its features carry, and
+    otherwise the one the episode names.
+    """
+    from runtime.input_assembly import Batch
+
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    near_misses = Batch(read=context.bus.reader("near-miss-episode"))
+    publish_reports = context.bus.publisher_for("coverage-report")
+    auditor = AbstentionCoverageAuditor(
+        minimum_opportunities=int(context.number("coverage_minimum_opportunities")),
+        prior_near_miss_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_near_misses=int(context.number("coverage_minimum_near_misses")),
+        missed_return_window=int(context.number("coverage_missed_return_window")),
+        prior_missed_return=context.number("coverage_prior_missed_return"),
+    )
+    regime_of_context: dict[tuple[str, str], str] = {}
+
+    def regime_for(venue_id: str, symbol: str, features) -> str:
+        named = features.get("regime") if isinstance(features, dict) else None
+        if named:
+            regime_of_context[(venue_id, symbol)] = str(named)
+        return regime_of_context.get((venue_id, symbol), "unknown")
+
+    def read_opportunities(_auditor) -> None:
+        for episode in episodes.payloads():
+            regime_of_context[(episode.venue_id, episode.symbol)] = episode.regime
+        for opinion in opinions.payloads():
+            regime = regime_for(opinion.venue_id, opinion.symbol, opinion.features_summary)
+            auditor.observe_opportunity(
+                opinion.venue_id, opinion.symbol, regime,
+                was_acted_on=opinion.refusal is None, refusal=opinion.refusal,
+            )
+        for miss in near_misses.payloads():
+            if not miss.is_resolved or miss.would_have_realised is None:
+                continue
+            regime = regime_of_context.get((miss.venue_id, miss.symbol), "unknown")
+            auditor.observe_near_miss(
+                miss.venue_id, miss.symbol, regime,
+                would_have_won=float(miss.would_have_realised) > 0.0,
+                would_have_returned=float(miss.would_have_realised),
+            )
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_reports(kept)
+
+    return run_abstention_coverage_auditor(
+        auditor=auditor,
+        control_socket=context.control_socket,
+        read_opportunities=read_opportunities,
+        publish_reports=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

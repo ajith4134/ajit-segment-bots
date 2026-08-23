@@ -380,3 +380,61 @@ def run_causal_refutation_battery(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A trade belongs to the instruction its conditions name, or failing that
+    to its detector's family. The feature attribution last seen for the same
+    venue and symbol is what the instruction's mechanism is checked against.
+    An instruction is judged when a scorecard arrives with at least the
+    trades the battery needs; judging earlier would be a verdict on a
+    sample the tests cannot resolve.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    attributions = LatestByKey(read=context.bus.reader("feature-attribution"), key_of=lambda a: (a.venue_id, a.symbol))
+    publish_verdicts = context.bus.publisher_for("refutation-verdict")
+    minimum_trades = int(context.number("decoding_minimum_trades"))
+    battery = CausalRefutationBattery(
+        permutations=int(context.number("refutation_permutations")),
+        minimum_trades=minimum_trades,
+        subperiods=int(context.number("refutation_subperiods")),
+        concentration_threshold=context.number("refutation_concentration_threshold"),
+        significance=context.number("power_significance"),
+    )
+
+    def instruction_of(episode) -> str:
+        conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+        return str(conditions.get("instruction_id") or episode.detector)
+
+    def read_episodes(_battery):
+        by_context = attributions.mapping()
+        for episode in episodes.payloads():
+            instruction_id = instruction_of(episode)
+            battery.observe_trade(instruction_id, episode.realised > 0, float(episode.realised), int(episode.closed_at_ns))
+            attribution = by_context.get((episode.venue_id, episode.symbol))
+            if attribution is not None and isinstance(attribution.contributions, dict):
+                battery.observe_feature_attribution(instruction_id, dict(attribution.contributions))
+                if attribution.strongest:
+                    battery.observe_claimed_mechanism(instruction_id, str(attribution.strongest))
+        return tuple(card.instruction_id for card in scorecards.payloads() if card.trades >= minimum_trades)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_verdicts(kept)
+
+    return run_causal_refutation_battery(
+        battery=battery,
+        control_socket=context.control_socket,
+        read_episodes=read_episodes,
+        publish_verdicts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

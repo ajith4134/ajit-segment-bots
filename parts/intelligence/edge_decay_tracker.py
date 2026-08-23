@@ -296,3 +296,64 @@ def run_edge_decay_tracker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A scorecard carries cumulative trades and wins; the difference from the
+    last one seen for the same instruction is the closed trades since, fed
+    as the wins then the losses it counted. Episodes that name their
+    instruction in their conditions are observed one by one instead, which
+    keeps their order; an instruction is tracked one way or the other,
+    never both, so no trade counts twice.
+    """
+    from runtime.input_assembly import Batch
+
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_half_lives = context.bus.publisher_for("edge-half-life")
+    tracker = EdgeDecayTracker(
+        block_size=int(context.number("edge_decay_block_size")),
+        minimum_blocks=int(context.number("edge_decay_minimum_blocks")),
+        minimum_initial_excess=context.number("edge_decay_minimum_initial_excess"),
+    )
+    last_counts: dict[str, tuple[int, int]] = {}
+    tracked_by_episode: set[str] = set()
+
+    def read_scorecards(_tracker) -> None:
+        for episode in episodes.payloads():
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            instruction_id = conditions.get("instruction_id")
+            if instruction_id is None:
+                continue
+            tracked_by_episode.add(str(instruction_id))
+            tracker.observe_closed_trade(str(instruction_id), episode.realised > 0)
+        for card in scorecards.payloads():
+            if card.instruction_id in tracked_by_episode:
+                continue
+            trades_before, wins_before = last_counts.get(card.instruction_id, (0, 0))
+            new_trades, new_wins = card.trades - trades_before, card.wins - wins_before
+            if new_trades <= 0:
+                continue
+            last_counts[card.instruction_id] = (card.trades, card.wins)
+            for _ in range(max(0, new_wins)):
+                tracker.observe_closed_trade(card.instruction_id, True)
+            for _ in range(max(0, new_trades - max(0, new_wins))):
+                tracker.observe_closed_trade(card.instruction_id, False)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_half_lives(kept)
+
+    return run_edge_decay_tracker(
+        tracker=tracker,
+        control_socket=context.control_socket,
+        read_scorecards=read_scorecards,
+        publish_half_lives=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

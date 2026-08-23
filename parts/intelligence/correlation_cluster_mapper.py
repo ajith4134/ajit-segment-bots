@@ -266,3 +266,47 @@ def run_correlation_cluster_mapper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One price per symbol per tick -- the latest print -- so every symbol's
+    series is sampled on the same clock and a correlation is between
+    simultaneous observations, not between one symbol's every print and
+    another's.
+    """
+    from runtime.input_assembly import LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    publish_clusters = context.bus.publisher_for("correlation-cluster")
+    mapper = CorrelationClusterMapper(
+        window_length=int(context.number("correlation_window_length")),
+        minimum_shared_observations=int(context.number("correlation_minimum_shared_observations")),
+        cluster_threshold=context.number("correlation_cluster_threshold"),
+    )
+
+    def read_prices(_mapper) -> None:
+        latest_by_symbol: dict[str, float] = {}
+        for (venue_id, symbol), trade in trades.mapping().items():
+            if isinstance(trade, NormalisedTrade):
+                latest_by_symbol[symbol] = trade.price
+        for symbol, price in latest_by_symbol.items():
+            mapper.observe_price(symbol, price)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_clusters(kept)
+
+    return run_correlation_cluster_mapper(
+        mapper=mapper,
+        control_socket=context.control_socket,
+        read_prices=read_prices,
+        publish_clusters=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

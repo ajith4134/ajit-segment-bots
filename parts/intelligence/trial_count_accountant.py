@@ -252,3 +252,59 @@ def run_trial_count_accountant(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every written instruction is a trial in its hypothesis's family that
+    survived to be written; every mutation is a trial in its family; every
+    model version is a trial in the model's family, survived if promoted;
+    every trade cluster is a trial in its correlation group. Ledgers go out
+    for every family once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    instructions = Batch(read=context.bus.reader("opportunity-instruction"))
+    mutations = Batch(read=context.bus.reader("mutated-hypothesis"))
+    versions = Batch(read=context.bus.reader("model-version"))
+    clusters = Batch(read=context.bus.reader("trade-cluster"))
+    publish_ledgers = context.bus.publisher_for("trial-ledger")
+    accountant = TrialCountAccountant(nominal_significance=context.number("power_significance"))
+    last_publish = [float("-inf")]
+
+    def family_of_hypothesis(hypothesis_id: str) -> str:
+        return hypothesis_id.rsplit(":", 1)[0] if ":" in hypothesis_id else hypothesis_id
+
+    def read_trials(_accountant) -> None:
+        for instruction in instructions.payloads():
+            accountant.record_trial(f"{INSTRUCTIONS}:{family_of_hypothesis(instruction.hypothesis_id)}", True)
+        for mutation in mutations.payloads():
+            accountant.record_trial(f"{HYPOTHESES}:{mutation.family}", False)
+        for version in versions.payloads():
+            accountant.record_trial(f"{MODEL_VERSIONS}:{version.model_name}", bool(getattr(version, "promoted", False)))
+        for outcome in clusters.payloads():
+            for cluster in getattr(outcome, "clusters", ()) or ():
+                accountant.record_trial(f"{TRADE_CLUSTERS}:{cluster.correlation_group}", False)
+
+    def publish(items) -> None:
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_ledgers(kept)
+            last_publish[0] = now
+
+    return run_trial_count_accountant(
+        accountant=accountant,
+        control_socket=context.control_socket,
+        read_trials=read_trials,
+        publish_ledgers=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

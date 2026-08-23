@@ -306,3 +306,78 @@ def run_cross_segment_signal_bridge(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This segment's prices, positions and funding forecasts are observed
+    under its own name; a whale transfer is observed under the chain it was
+    seen on. Each tick asks, for every underlying touched, what the other
+    two segments should know about it. An underlying is the symbol with the
+    settlement currency taken off its end.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    transfers = Batch(read=context.bus.reader("whale-transfer"))
+    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    forecasts = Batch(read=context.bus.reader("funding-forecast"))
+    positions = Batch(read=context.bus.reader("position"))
+    publish_signals = context.bus.publisher_for("cross-segment-signal")
+    segment = str(context.setting("segment_id").value)
+    settlement = str(context.setting("settlement_currency").value)
+    others = tuple(s for s in (FUTURES, SPOT, OPTIONS) if s != segment)
+    bridge = CrossSegmentSignalBridge(
+        deviation_threshold=context.number("signal_bridge_deviation_threshold"),
+        minimum_observations=int(context.number("signal_bridge_minimum_observations")),
+        half_life_observations=context.number("learning_half_life_observations"),
+        validity_seconds=context.number("signal_bridge_validity_seconds"),
+    )
+
+    def underlying_of(symbol: str) -> str:
+        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+
+    def read_observations(_bridge):
+        touched: set[str] = set()
+        for (venue_id, symbol), trade in trades.mapping().items():
+            if isinstance(trade, NormalisedTrade):
+                underlying = underlying_of(symbol)
+                bridge.observe_segment_price(segment, underlying, trade.price)
+                touched.add(underlying)
+        for position in positions.payloads():
+            underlying = underlying_of(position.symbol)
+            bridge.observe_position(segment, underlying, position.quantity != 0)
+            touched.add(underlying)
+        for forecast in forecasts.payloads():
+            if forecast.predicted_rate is None:
+                continue
+            underlying = underlying_of(forecast.symbol)
+            bridge.observe_funding(underlying, segment, float(forecast.predicted_rate))
+            touched.add(underlying)
+        for read in transfers.payloads():
+            transfer = getattr(read, "transfer", None)
+            if transfer is None:
+                continue
+            bridge.observe_whale_transfer(
+                str(transfer.asset), str(transfer.chain), float(transfer.quantity),
+                f"{transfer.from_kind}->{transfer.to_kind}",
+            )
+            touched.add(str(transfer.asset))
+        return tuple((other, underlying) for underlying in sorted(touched) for other in others)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_signals(kept)
+
+    return run_cross_segment_signal_bridge(
+        bridge=bridge,
+        control_socket=context.control_socket,
+        read_observations=read_observations,
+        publish_signals=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
