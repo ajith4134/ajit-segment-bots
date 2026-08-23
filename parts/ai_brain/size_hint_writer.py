@@ -228,6 +228,8 @@ def describe_size_hints(writer: SizeHintWriter) -> dict:
 def run_size_hint_writer(
     writer: SizeHintWriter, control_socket, read_intents_and_convictions, publish_hints,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         intents = read_intents_and_convictions(writer)
@@ -239,4 +241,6 @@ def run_size_hint_writer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

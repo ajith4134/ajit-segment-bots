@@ -236,6 +236,8 @@ def describe_trial_counting(accountant: TrialCountAccountant) -> dict:
 def run_trial_count_accountant(
     accountant: TrialCountAccountant, control_socket, read_trials, publish_ledgers,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_trials(accountant)
@@ -247,4 +249,6 @@ def run_trial_count_accountant(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

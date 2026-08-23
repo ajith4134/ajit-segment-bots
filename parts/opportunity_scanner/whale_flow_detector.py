@@ -175,6 +175,8 @@ def describe_whale_flow(detector: WhaleFlowDetector) -> dict:
 def run_whale_flow_detector(
     detector: WhaleFlowDetector, control_socket, read_transfers, publish_candidates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         candidates = []
@@ -190,4 +192,6 @@ def run_whale_flow_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

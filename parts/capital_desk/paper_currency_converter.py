@@ -198,6 +198,8 @@ def describe_conversion(converter: PaperCurrencyConverter) -> dict:
 def run_paper_currency_converter(
     converter: PaperCurrencyConverter, control_socket, read_rates_and_requests, publish_conversions,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         rates, requests = read_rates_and_requests()
@@ -211,4 +213,6 @@ def run_paper_currency_converter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

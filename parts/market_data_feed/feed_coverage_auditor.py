@@ -170,6 +170,8 @@ def describe_coverage(auditor: FeedCoverageAuditor) -> dict:
 def run_feed_coverage_auditor(
     auditor: FeedCoverageAuditor, control_socket, read_observations, publish_coverage,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_observations(auditor)
@@ -181,4 +183,91 @@ def run_feed_coverage_auditor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The expected universe comes from symbol-universe, republished in full by
+    the catalogue reader; the evidence comes from every trade, candle and book
+    that crosses the bus. The streams a symbol is expected on are the ones the
+    plan is capable of: trades always, and the others only when a reader for
+    them is on -- which the auditor cannot know, so it expects what the readers
+    it can see deliver, and reports trades alone as full coverage until a
+    candle or book for any symbol proves another stream is on.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.order_book import OrderBookSnapshot
+    from runtime.venues.venue_adapter import NormalisedCandle, NormalisedTrade
+
+    market_data = Batch(read=context.bus.reader("market-data"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    standings = Batch(read=context.bus.reader("venue-standing"))
+    publish_coverage = context.bus.publisher_for("feed-coverage")
+
+    streams_seen: set[StreamKind] = {StreamKind.TRADE}
+    auditors = [FeedCoverageAuditor(
+        expected_streams=(StreamKind.TRADE,),
+        coverage_window_seconds=context.number("feed_coverage_window"),
+    )]
+
+    def widen_expectation(kind: StreamKind) -> None:
+        # A stream seen once is a stream expected from then on: the auditor is
+        # rebuilt with the wider expectation and re-told the universe it knew.
+        if kind in streams_seen:
+            return
+        streams_seen.add(kind)
+        previous = auditors[0]
+        auditors[0] = FeedCoverageAuditor(
+            expected_streams=tuple(sorted(streams_seen)),
+            coverage_window_seconds=context.number("feed_coverage_window"),
+        )
+        for symbol, venues in previous._expected.items():
+            for venue_id in venues:
+                auditors[0].expect_symbol(symbol, venue_id)
+        for venue_id, state in previous._standing.items():
+            auditors[0].set_venue_standing(venue_id, state)
+
+    def read_observations(_auditor) -> None:
+        for entry in universe.payloads():
+            auditors[0].expect_symbol(entry.symbol, entry.venue_id)
+        for standing in standings.payloads():
+            auditors[0].set_venue_standing(standing.venue_id, standing.state)
+        for item in market_data.payloads():
+            if isinstance(item, NormalisedTrade):
+                auditors[0].observe(item.venue_id, item.symbol, StreamKind.TRADE)
+            elif isinstance(item, NormalisedCandle):
+                widen_expectation(StreamKind.CANDLE)
+                auditors[0].observe(item.venue_id, item.symbol, StreamKind.CANDLE)
+        for book in books.payloads():
+            if isinstance(book, OrderBookSnapshot):
+                widen_expectation(StreamKind.BOOK)
+                auditors[0].observe(book.venue_id, book.symbol, StreamKind.BOOK)
+
+    import time as _time
+
+    last_audit = [float("-inf")]
+
+    def tick() -> None:
+        # Observations are taken on every wake; the audit is a statement about
+        # the whole universe over a five-minute window and is published once
+        # per health interval, not on every arriving trade.
+        read_observations(None)
+        now = _time.monotonic()
+        if now - last_audit[0] >= context.health_interval_seconds:
+            publish_coverage(auditors[0].audit_all())
+            last_audit[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

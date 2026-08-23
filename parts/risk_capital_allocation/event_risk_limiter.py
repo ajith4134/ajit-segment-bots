@@ -225,6 +225,8 @@ def describe_events(limiter: EventRiskLimiter) -> dict:
 def run_event_risk_limiter(
     limiter: EventRiskLimiter, control_socket, read_events, publish_limit,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_events(limiter)
@@ -236,4 +238,6 @@ def run_event_risk_limiter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

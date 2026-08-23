@@ -236,6 +236,8 @@ def describe_liquidity(grader: LiquidityGrader) -> dict:
 def run_liquidity_grader(
     grader: LiquidityGrader, control_socket, read_books, publish_grades,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         symbols = read_books(grader)
@@ -247,4 +249,6 @@ def run_liquidity_grader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

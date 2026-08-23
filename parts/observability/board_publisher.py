@@ -154,6 +154,8 @@ def describe_publishing(publisher: BoardPublisher) -> dict:
 def run_board_publisher(
     publisher: BoardPublisher, control_socket, read_snapshot, publish_link,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         snapshot = read_snapshot()
@@ -166,4 +168,6 @@ def run_board_publisher(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

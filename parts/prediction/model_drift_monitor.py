@@ -268,6 +268,8 @@ def describe_drift_monitoring(monitor: ModelDriftMonitor) -> dict:
 def run_model_drift_monitor(
     monitor: ModelDriftMonitor, control_socket, read_accuracy_and_reports, publish_alerts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         models = read_accuracy_and_reports(monitor)
@@ -281,4 +283,6 @@ def run_model_drift_monitor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

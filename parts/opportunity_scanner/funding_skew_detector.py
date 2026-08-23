@@ -190,6 +190,8 @@ def describe_funding_skew(detector: FundingSkewDetector) -> dict:
 def run_funding_skew_detector(
     detector: FundingSkewDetector, control_socket, read_funding, publish_candidates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         symbols = read_funding(detector)
@@ -206,4 +208,6 @@ def run_funding_skew_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

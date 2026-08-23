@@ -298,6 +298,8 @@ def describe_promotion_gate(gate: PromptPromotionGate) -> dict:
 def run_prompt_promotion_gate(
     gate: PromptPromotionGate, control_socket, read_candidates, publish_promotions,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for challenger_id, incumbent_id, template_id in read_candidates(gate):
@@ -311,4 +313,6 @@ def run_prompt_promotion_gate(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

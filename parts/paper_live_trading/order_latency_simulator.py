@@ -226,6 +226,8 @@ def describe_latency(simulator: OrderLatencySimulator) -> dict:
 def run_order_latency_simulator(
     simulator: OrderLatencySimulator, control_socket, read_orders, publish_delayed,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         orders = read_orders(simulator)
@@ -238,4 +240,6 @@ def run_order_latency_simulator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

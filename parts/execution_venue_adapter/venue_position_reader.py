@@ -173,6 +173,8 @@ def describe_positions(reader: VenuePositionReader) -> dict:
 def run_venue_position_reader(
     reader: VenuePositionReader, control_socket, read_venues, publish_reports,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         reports = []
@@ -186,4 +188,6 @@ def run_venue_position_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

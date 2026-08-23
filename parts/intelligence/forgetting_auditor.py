@@ -272,6 +272,8 @@ def describe_forgetting(auditor: ForgettingAuditor) -> dict:
 def run_forgetting_auditor(
     auditor: ForgettingAuditor, control_socket, read_models_and_episodes, publish_reports,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         models = read_models_and_episodes(auditor)
@@ -283,4 +285,6 @@ def run_forgetting_auditor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

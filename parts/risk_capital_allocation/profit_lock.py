@@ -238,6 +238,8 @@ def describe_profit_lock(lock: ProfitLock) -> dict:
 def run_profit_lock(
     lock: ProfitLock, control_socket, read_positions, publish_adjustments,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         adjustments = [lock.adjust(**position) for position in read_positions()]
@@ -249,4 +251,6 @@ def run_profit_lock(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -240,6 +240,8 @@ def describe_sample_weights(assigner: SampleWeightAssigner) -> dict:
 def run_sample_weight_assigner(
     assigner: SampleWeightAssigner, control_socket, read_labels, publish_weights,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_weights(
@@ -255,4 +257,6 @@ def run_sample_weight_assigner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

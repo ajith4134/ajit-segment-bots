@@ -188,6 +188,8 @@ def describe_drawdowns(tracker: DrawdownEpisodeTracker) -> dict:
 def run_drawdown_episode_tracker(
     tracker: DrawdownEpisodeTracker, control_socket, read_equity, publish_episode,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for equity in read_equity():
@@ -201,4 +203,6 @@ def run_drawdown_episode_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

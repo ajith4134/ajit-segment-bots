@@ -229,6 +229,8 @@ def describe_shortfall(decomposer: ShortfallDecomposer) -> dict:
 def run_shortfall_decomposer(
     decomposer: ShortfallDecomposer, control_socket, read_orders, publish_breakdowns,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for order_id, trade_id in read_orders():
@@ -242,4 +244,6 @@ def run_shortfall_decomposer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -250,6 +250,8 @@ def describe_survival(monitor: SurvivalTierMonitor) -> dict:
 def run_survival_tier_monitor(
     monitor: SurvivalTierMonitor, control_socket, read_resources, publish_tier,
     seconds_per_reading: float, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for resource, fraction in read_resources():
@@ -262,4 +264,6 @@ def run_survival_tier_monitor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

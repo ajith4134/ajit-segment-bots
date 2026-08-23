@@ -216,6 +216,8 @@ def describe_evaluation(evaluator: PromptEvaluator) -> dict:
 def run_prompt_evaluator(
     evaluator: PromptEvaluator, control_socket, read_runs, publish_scores,
     publish_requests, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for version_id, purpose, cases, results, requests in read_runs():
@@ -233,4 +235,6 @@ def run_prompt_evaluator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -40,6 +40,8 @@ from runtime.venues.venue_adapter import (
     ContractFunding,
     HeartbeatDiscipline,
     MessageFacts,
+    BookUpdate,
+    NormalisedCandle,
     NormalisedTrade,
     SequenceContinuity,
     StreamRequest,
@@ -378,6 +380,63 @@ class BybitLinearAdapter(VenueAdapter):
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.NON_DECREASING
         return SequenceContinuity.NOT_NUMBERED
+
+    def read_candles(self, payload: bytes) -> tuple[NormalisedCandle, ...]:
+        """Every kline entry in the batch; `confirm` is the closed flag.
+
+        Bybit does not send a trade count in its kline stream, so `trades` is
+        None rather than zero: zero would read as a minute in which nothing
+        traded, and the venue said no such thing. The interval is the venue's
+        own unit (minutes as a string), passed through unchanged.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict):
+            return ()
+        topic = message.get("topic")
+        if not topic or not topic.startswith(f"{CANDLE_TOPIC_PREFIX}."):
+            return ()
+        _prefix, interval, symbol = topic.split(".", 2)
+        venue_time_ns = int(message["ts"]) * MILLISECONDS_TO_NANOSECONDS
+        return tuple(
+            NormalisedCandle(
+                venue_id=VENUE_ID,
+                symbol=symbol,
+                interval=str(candle.get("interval", interval)),
+                open_time_ns=int(candle["start"]) * MILLISECONDS_TO_NANOSECONDS,
+                close_time_ns=int(candle["end"]) * MILLISECONDS_TO_NANOSECONDS,
+                open=float(candle["open"]),
+                high=float(candle["high"]),
+                low=float(candle["low"]),
+                close=float(candle["close"]),
+                volume=float(candle["volume"]),
+                quote_volume=float(candle["turnover"]),
+                trades=None,
+                is_closed=bool(candle["confirm"]),
+                venue_time_ns=venue_time_ns,
+            )
+            for candle in message.get("data", ())
+        )
+
+    def read_book_update(self, payload: bytes) -> BookUpdate | None:
+        """A snapshot replaces the book; a delta amends it, and a zero quantity
+        removes that level. `u` is the update id the continuity check reads."""
+        message = json.loads(payload)
+        if not isinstance(message, dict):
+            return None
+        topic = message.get("topic")
+        if not topic or not topic.startswith(f"{BOOK_TOPIC_PREFIX}."):
+            return None
+        book = message["data"]
+        symbol = book.get("s") or topic.split(".", 2)[2]
+        return BookUpdate(
+            venue_id=VENUE_ID,
+            symbol=symbol,
+            bids=tuple((float(price), float(quantity)) for price, quantity in book.get("b", ())),
+            asks=tuple((float(price), float(quantity)) for price, quantity in book.get("a", ())),
+            is_snapshot=message.get("type") == SNAPSHOT_MESSAGE_TYPE,
+            sequence=int(book["u"]),
+            venue_time_ns=int(message["ts"]) * MILLISECONDS_TO_NANOSECONDS,
+        )
 
     def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
         """Every print in the batch, and a batch can hold up to 1024 of them.

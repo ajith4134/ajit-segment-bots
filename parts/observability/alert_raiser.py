@@ -189,6 +189,8 @@ def describe_alerts(raiser: AlertRaiser) -> dict:
 def run_alert_raiser(
     raiser: AlertRaiser, control_socket, read_conditions, publish_alerts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         raised = [raiser.raise_alert(**condition) for condition in read_conditions()]
@@ -200,4 +202,6 @@ def run_alert_raiser(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

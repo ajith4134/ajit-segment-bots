@@ -296,6 +296,8 @@ def describe_feed_reading(reader: ArxivFeedReader) -> dict:
 def run_arxiv_feed_reader(
     reader: ArxivFeedReader, control_socket, read_gaps, publish_documents,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for gap in read_gaps():
@@ -309,4 +311,6 @@ def run_arxiv_feed_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

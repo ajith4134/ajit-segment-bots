@@ -233,6 +233,8 @@ def describe_pattern_mining(miner: WinnerPatternMiner) -> dict:
 def run_winner_pattern_miner(
     miner: WinnerPatternMiner, control_socket, read_conditions, publish_patterns,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for condition_name, value in read_conditions():
@@ -246,4 +248,6 @@ def run_winner_pattern_miner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

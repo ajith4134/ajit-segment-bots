@@ -226,6 +226,8 @@ def describe_polling(poller: OrderStatePoller) -> dict:
 def run_order_state_poller(
     poller: OrderStatePoller, control_socket, read_events, publish_polls,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_events(poller)
@@ -237,4 +239,6 @@ def run_order_state_poller(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

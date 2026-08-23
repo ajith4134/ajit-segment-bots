@@ -244,6 +244,8 @@ def describe_semantic_facts(store: SemanticFactStore) -> dict:
 def run_semantic_fact_store(
     store: SemanticFactStore, control_socket, read_journal, publish_facts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         offers = read_journal(store)
@@ -260,4 +262,6 @@ def run_semantic_fact_store(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

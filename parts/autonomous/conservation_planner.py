@@ -247,6 +247,8 @@ def describe_conservation(planner: ConservationPlanner) -> dict:
 def run_conservation_planner(
     planner: ConservationPlanner, control_socket, read_tier, publish_plans,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for tier in read_tier():
@@ -260,4 +262,6 @@ def run_conservation_planner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

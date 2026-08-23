@@ -199,6 +199,8 @@ def describe_gaps(detector: FeedGapDetector) -> dict:
 def run_feed_gap_detector(
     detector: FeedGapDetector, control_socket, read_messages, publish_gap,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for facts in read_messages():
@@ -214,4 +216,59 @@ def run_feed_gap_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    One detector per captured venue, because continuity is a venue's property:
+    Binance numbers aggregate trades and Bybit does not, and a detector that
+    compared one venue's sequence against the other's rule would report gaps
+    that never happened. Each trade on the bus becomes the facts the detector
+    reads -- symbol, venue time, sequence -- keyed to its venue.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_gaps = context.bus.publisher_for("feed-gap")
+    threshold = context.number("feed_gap_threshold")
+    detectors = {
+        adapter.venue_id: FeedGapDetector(adapter=adapter, feed_gap_threshold_seconds=threshold)
+        for adapter in load_captured_venue_adapters(context.settings[RUNTIME_SCOPE])
+    }
+
+    def tick() -> None:
+        found = []
+        for trade in trades.payloads():
+            detector = detectors.get(trade.venue_id)
+            if detector is None:
+                continue  # a venue the operator has not turned on; not this part's call
+            gap = detector.observe(
+                MessageFacts(
+                    stream_kind=StreamKind.TRADE,
+                    symbol=trade.symbol,
+                    venue_time_ns=trade.venue_time_ns,
+                    sequence=trade.sequence,
+                )
+            )
+            if gap is not None:
+                found.append(gap)
+        for detector in detectors.values():
+            found.extend(detector.check_for_silence())
+        if found:
+            publish_gaps(found)
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

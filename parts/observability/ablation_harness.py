@@ -219,6 +219,8 @@ def describe_ablation(harness: AblationHarness) -> dict:
 def run_ablation_harness(
     harness: AblationHarness, control_socket, read_measurements, publish_scorecard,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         scorecard = read_measurements(harness)
@@ -231,4 +233,6 @@ def run_ablation_harness(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

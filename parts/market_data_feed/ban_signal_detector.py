@@ -194,6 +194,8 @@ def describe_standings(detector: BanSignalDetector) -> dict:
 def run_ban_signal_detector(
     detector: BanSignalDetector, control_socket, read_signals, publish_standings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_signals(detector)
@@ -205,4 +207,55 @@ def run_ban_signal_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Three signals, all from the bus: data arriving clears a venue's silence
+    count, a feed gap raises it, and a rate budget says how much of the venue's
+    own allowance is spent. HTTP responses and raw stream payloads are observed
+    by the parts that hold those sockets, which publish what they see; this part
+    reads the standing out of what reached it.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    market_data = Batch(read=context.bus.reader("market-data"))
+    gaps = Batch(read=context.bus.reader("feed-gap"))
+    budgets = Batch(read=context.bus.reader("venue-rate-budget"))
+    publish_standings = context.bus.publisher_for("venue-standing")
+    adapters = {
+        adapter.venue_id: adapter
+        for adapter in load_captured_venue_adapters(context.settings[RUNTIME_SCOPE])
+    }
+    detector = BanSignalDetector(
+        adapters=adapters,
+        gaps_before_withheld=int(context.number("venue_gaps_before_throttled")),
+    )
+
+    def read_signals(_detector) -> None:
+        seen: set[str] = set()
+        for item in market_data.payloads():
+            seen.add(item.venue_id)
+        for venue_id in seen:
+            detector.observe_data(venue_id)
+        for gap in gaps.payloads():
+            detector.observe_feed_gap(gap.venue_id)
+        for budget in budgets.payloads():
+            detector.observe_rate_budget(budget.venue_id, budget.spent, budget.limit)
+
+    return run_ban_signal_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_signals=read_signals,
+        publish_standings=publish_standings,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

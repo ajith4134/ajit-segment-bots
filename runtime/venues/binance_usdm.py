@@ -36,6 +36,8 @@ from typing import Mapping, Sequence
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 from runtime.trading_types import BUY, DATED_FUTURE, PERPETUAL_FUTURE, SELL
 from runtime.venues.venue_adapter import (
+    BookUpdate,
+    NormalisedCandle,
     BanSignal,
     ConnectionDiscipline,
     ContractFunding,
@@ -420,6 +422,51 @@ class BinanceUsdmAdapter(VenueAdapter):
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.INCREMENTS_BY_ONE
         return SequenceContinuity.NOT_NUMBERED
+
+    def read_candles(self, payload: bytes) -> tuple[NormalisedCandle, ...]:
+        """The one kline update a frame carries: `k` is the candle, `k.x` says closed.
+
+        `n` is the venue's own trade count for the bar, `q` its quote volume;
+        both are what the venue reported, not recomputed from aggregate trades,
+        which would count 100 ms aggregates as trades.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict) or message.get("e") != CANDLE_EVENT:
+            return ()
+        candle = message["k"]
+        return (
+            NormalisedCandle(
+                venue_id=VENUE_ID,
+                symbol=message["s"],
+                interval=str(candle["i"]),
+                open_time_ns=int(candle["t"]) * MILLISECONDS_TO_NANOSECONDS,
+                close_time_ns=int(candle["T"]) * MILLISECONDS_TO_NANOSECONDS,
+                open=float(candle["o"]),
+                high=float(candle["h"]),
+                low=float(candle["l"]),
+                close=float(candle["c"]),
+                volume=float(candle["v"]),
+                quote_volume=float(candle["q"]),
+                trades=int(candle["n"]),
+                is_closed=bool(candle["x"]),
+                venue_time_ns=int(message["E"]) * MILLISECONDS_TO_NANOSECONDS,
+            ),
+        )
+
+    def read_book_update(self, payload: bytes) -> BookUpdate | None:
+        """A partial-depth push: the whole top-N, so every message is a snapshot."""
+        message = json.loads(payload)
+        if not isinstance(message, dict) or message.get("e") != BOOK_EVENT:
+            return None
+        return BookUpdate(
+            venue_id=VENUE_ID,
+            symbol=message["s"],
+            bids=tuple((float(price), float(quantity)) for price, quantity in message.get("b", ())),
+            asks=tuple((float(price), float(quantity)) for price, quantity in message.get("a", ())),
+            is_snapshot=True,
+            sequence=int(message["u"]),
+            venue_time_ns=int(message["T"]) * MILLISECONDS_TO_NANOSECONDS,
+        )
 
     def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
         """One aggregate trade per message, or none if this is not a trade message.

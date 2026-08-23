@@ -235,6 +235,8 @@ def describe_guard(guard: LiveSwitchGuard) -> dict:
 def run_live_switch_guard(
     guard: LiveSwitchGuard, control_socket, read_mode_and_bots, publish_limit,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         money_mode, bot_ids = read_mode_and_bots(guard)
@@ -246,4 +248,6 @@ def run_live_switch_guard(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

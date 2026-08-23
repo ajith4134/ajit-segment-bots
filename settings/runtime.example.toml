@@ -642,3 +642,33 @@ note  = "operator, 2026-08-23: how old a part's last health report may be before
 value = 4194304
 unit  = "bytes"
 note  = "operator, 2026-08-23: SO_SNDBUF on a part's one publishing socket. Every datagram in flight to every consumer is charged to this buffer until that consumer reads it, so at the kernel default of 212992 one consumer 250 messages behind silenced the sends to all thirteen market-data readers: measured on the live spine, each lost the same 250 messages a second. 4194304 is net.core.wmem_max on this box, the most the kernel grants without CAP_NET_ADMIN -- a larger request is clamped to it silently, and the bus reads back what it was given. Twenty times the default, so thirteen consumers each a full inbox behind still leave headroom; a buffer large enough that nothing is ever lost does not exist, because loss is how RL-066 answers a consumer that is slower than its producer."
+
+[feed_jump_threshold_increments]
+value = 20
+unit  = "price increments"
+note  = "operator, 2026-08-23: how far a closed candle's open may sit from the previous close, in the symbol's own tick, before feed-jump-detector calls it a jump. Measured on today's tape across six symbols on both venues: the 99th percentile of the close-to-open move at minute boundaries is 1 to 11 ticks (BTCUSDT 7, ETHUSDT 1, DOGEUSDT 2.6, PUMPUSDT 2.5, TRUMPUSDT 10.8). Twenty sits above all of them, so a normal boundary is never reported and a stop inside the gap is. Re-measure when the universe widens; an illiquid symbol's normal boundary is wider."
+
+[feed_jump_threshold_fraction]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the jump threshold used where the symbol declares no price increment, reported as inferred rather than declared. Measured on today's tape: the 99th percentile boundary move was at most 0.45% (TRUMPUSDT on bybit-linear), with single outliers to 1.46%. Half a percent is above the 99th percentile on every symbol measured and below the outliers that are exactly what this part exists to report."
+
+[consolidated_price_maximum_quote_age]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long cross-venue-price-consolidator believes a venue's last trade after that venue goes quiet, before the venue drops out of the consolidated price. Five seconds: both venues print the top thirty symbols several times a second (BTCUSDT aggTrade about 4 a second on 2026-08-22), so a venue silent for five is a venue whose price is no longer current, and a stale quote pulling a consolidated price is worse than a missing one because nothing downstream can see it. This was the part's own default until it became a setting."
+
+[feed_coverage_window]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a stream may be silent on a symbol before feed-coverage-auditor says that stream no longer covers it. Five minutes, deliberately longer than feed_gap_threshold: a gap is an alert about one stream and this is a statement about whether the symbol is covered at all, and it must not flap on one quiet minute -- the thinnest symbol in the captured thirty printed at least once a minute on 2026-08-22. This was the part's own default until it became a setting."
+
+[venue_gaps_before_throttled]
+value = 3
+unit  = "consecutive feed gaps"
+note  = "operator, 2026-08-23: how many feed gaps in a row on one venue, with no data between them, before ban-signal-detector reads the venue as throttling us rather than as momentarily quiet. One gap is a quiet symbol; feed-gap-detector fires one per silent stream past feed_gap_threshold, so three consecutive with nothing arriving means the venue stopped delivering across the streams we hold, which is what a withheld stream looks like from the outside. A judgement until a real throttle has been observed; what would settle it is the gap count seen in the minute before the first measured 429."
+
+[api_key_rejection_rest]
+value = 600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long api-key-pool-rotator rests a key after a venue rejects it before offering it again. Ten minutes, which is the least Bybit holds a 403 (code 20003) before lifting it automatically, so a key offered sooner would be rejected again and count twice. Binance escalates 429 to 418 with a ban of two minutes to three days, so on that venue ten minutes is the floor, not the ceiling. No keys are held in phase 1 (RL-062); the rest applies the day one exists."

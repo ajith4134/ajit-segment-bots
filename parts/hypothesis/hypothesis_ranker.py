@@ -260,6 +260,8 @@ def describe_ranking(ranker: HypothesisRanker) -> dict:
 def run_hypothesis_ranker(
     ranker: HypothesisRanker, control_socket, read_inputs, publish_priorities,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         hypothesis_ids = read_inputs(ranker)
@@ -271,4 +273,6 @@ def run_hypothesis_ranker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

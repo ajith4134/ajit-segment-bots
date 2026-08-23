@@ -263,6 +263,8 @@ def describe_instruction_writing(writer: InstructionWriter) -> dict:
 def run_instruction_writer(
     writer: InstructionWriter, control_socket, read_hypotheses, publish_instructions,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         instructions = []
@@ -278,4 +280,6 @@ def run_instruction_writer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

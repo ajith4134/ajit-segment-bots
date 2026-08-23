@@ -227,6 +227,8 @@ def describe_decision_costs(accountant: DecisionCostAccountant) -> dict:
 def run_decision_cost_accountant(
     accountant: DecisionCostAccountant, control_socket, read_decisions, publish_costs,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for decision_id in read_decisions(accountant):
@@ -238,4 +240,6 @@ def run_decision_cost_accountant(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

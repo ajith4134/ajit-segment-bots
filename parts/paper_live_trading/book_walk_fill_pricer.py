@@ -186,6 +186,8 @@ def describe_pricing(pricer: BookWalkFillPricer) -> dict:
 def run_book_walk_fill_pricer(
     pricer: BookWalkFillPricer, control_socket, read_books_and_orders, publish_estimates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         books, orders = read_books_and_orders()
@@ -199,4 +201,6 @@ def run_book_walk_fill_pricer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

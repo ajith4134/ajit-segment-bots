@@ -270,6 +270,8 @@ def describe_strategy_mining(miner: GithubStrategyMiner) -> dict:
 def run_github_strategy_miner(
     miner: GithubStrategyMiner, control_socket, read_ideas, publish_findings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for idea, mechanisms, defects, stars in read_ideas():
@@ -283,4 +285,6 @@ def run_github_strategy_miner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

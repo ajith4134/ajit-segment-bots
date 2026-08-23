@@ -227,6 +227,8 @@ def describe_web_reading(reader: OpenWebReader) -> dict:
 def run_open_web_reader(
     reader: OpenWebReader, control_socket, read_skill_gaps, publish_ideas,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         ideas = []
@@ -241,4 +243,6 @@ def run_open_web_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

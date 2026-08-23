@@ -228,6 +228,8 @@ def describe_progress(detector: NoProgressDetector) -> dict:
 def run_no_progress_detector(
     detector: NoProgressDetector, control_socket, read_counts, publish_faults,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for stage, count in read_counts():
@@ -243,4 +245,6 @@ def run_no_progress_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

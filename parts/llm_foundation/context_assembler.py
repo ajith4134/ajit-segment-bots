@@ -255,6 +255,8 @@ def describe_assembly(assembler: ContextAssembler) -> dict:
 def run_context_assembler(
     assembler: ContextAssembler, control_socket, read_jobs, publish_contexts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for request_id, snapshot, hits, budget in read_jobs():
@@ -268,4 +270,6 @@ def run_context_assembler(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

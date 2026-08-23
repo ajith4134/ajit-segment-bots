@@ -250,6 +250,8 @@ def describe_embedding(embedder: KnowledgeEmbedder) -> dict:
 def run_knowledge_embedder(
     embedder: KnowledgeEmbedder, control_socket, read_texts, publish_embeddings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for source_kind, source_reference, text in read_texts():
@@ -263,4 +265,6 @@ def run_knowledge_embedder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

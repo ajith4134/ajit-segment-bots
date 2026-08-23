@@ -204,6 +204,8 @@ def describe_filtering(filter_: BearSetupFilter) -> dict:
 def run_bear_setup_filter(
     setup_filter: BearSetupFilter, control_socket, read_candidates_and_weights,
     publish_side_candidates, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         candidates = read_candidates_and_weights(setup_filter)
@@ -215,4 +217,6 @@ def run_bear_setup_filter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

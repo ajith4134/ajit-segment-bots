@@ -114,6 +114,8 @@ def describe_duty_cycles(planner: DutyCyclePlanner) -> dict:
 def run_duty_cycle_planner(
     planner: DutyCyclePlanner, control_socket, read_activity, read_heavy_parts, publish_duty_cycles,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for hour, day, messages in read_activity():
@@ -126,4 +128,6 @@ def run_duty_cycle_planner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

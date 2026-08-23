@@ -264,6 +264,55 @@ class NormalisedTrade:
 
 
 @dataclass(frozen=True)
+class NormalisedCandle:
+    """One candle update, in this project's own terms, with the venue's closed flag.
+
+    Both venues push updates to the *current* candle continuously and only one
+    field says which update is the last one for its minute -- `k.x` on Binance,
+    `confirm` on Bybit. That flag is carried rather than used to filter, because
+    a consumer that wants the live bar and one that wants only finished bars are
+    both legitimate and neither should have to know what a venue calls it.
+    """
+
+    venue_id: str
+    symbol: str
+    interval: str
+    open_time_ns: int
+    close_time_ns: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    quote_volume: float
+    # None when the venue does not send a count: Bybit's kline stream has no
+    # trade count, and zero would read as a minute in which nothing traded.
+    trades: int | None
+    is_closed: bool
+    venue_time_ns: int
+
+
+@dataclass(frozen=True)
+class BookUpdate:
+    """One order-book message in this project's terms: levels, and whether they
+    replace the book or amend it.
+
+    Binance's partial-depth stream sends a fresh top-N every push, so every
+    message is a snapshot. Bybit sends one snapshot and then deltas in which a
+    quantity of zero removes the level. The flag is what lets one keeper hold
+    both without knowing which venue phrased it which way.
+    """
+
+    venue_id: str
+    symbol: str
+    bids: tuple[tuple[float, float], ...]
+    asks: tuple[tuple[float, float], ...]
+    is_snapshot: bool
+    sequence: int
+    venue_time_ns: int
+
+
+@dataclass(frozen=True)
 class BanSignal:
     """The venue telling us to stop, in whatever form that venue tells us.
 
@@ -433,6 +482,21 @@ class VenueAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
+    def read_candles(self, payload: bytes) -> tuple[NormalisedCandle, ...]:
+        """Every candle update inside one stream message, in this project's terms.
+
+        Empty for a message that carries no candle, for the same reason
+        read_trades is: a caller never has to ask what kind of message it holds.
+        A tuple because Bybit packs the closing update of one minute and the
+        opening update of the next into one message.
+        """
+
+    @abc.abstractmethod
+    def read_book_update(self, payload: bytes) -> BookUpdate | None:
+        """The book levels inside one stream message, or None for a message that
+        carries no book -- a trade, a candle, a control frame."""
+
+    @abc.abstractmethod
     def read_previous_sequence(self, payload: bytes) -> int | None:
         """The sequence this message says its predecessor had, or None.
 
@@ -566,6 +630,8 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
 QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_message_facts",
     "read_trades",
+    "read_candles",
+    "read_book_update",
     "read_previous_sequence",
     "read_catalogue_cursor",
     "read_quote_volumes",

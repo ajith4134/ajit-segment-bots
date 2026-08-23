@@ -164,6 +164,8 @@ def describe_consolidation(consolidator: CrossVenuePriceConsolidator) -> dict:
 def run_cross_venue_price_consolidator(
     consolidator: CrossVenuePriceConsolidator, control_socket, read_quotes, publish_prices,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for quote in read_quotes():
@@ -176,4 +178,71 @@ def run_cross_venue_price_consolidator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every trade on market-data is a venue's quote for that symbol at that
+    moment; the consolidator keeps the latest per venue and weights them. A
+    venue's standing arrives separately and a banned venue is excluded by name,
+    because a venue that has told us to stop is not a venue whose last price is
+    still its price.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    standings = Batch(read=context.bus.reader("venue-standing"))
+    publish_prices = context.bus.publisher_for("consolidated-price")
+    consolidator = CrossVenuePriceConsolidator(
+        maximum_quote_age_seconds=context.number("consolidated_price_maximum_quote_age"),
+    )
+
+    import time as _time
+
+    touched: set[str] = set()
+    last_full = [float("-inf")]
+
+    def read_quotes():
+        for standing in standings.payloads():
+            consolidator.set_venue_standing(standing.venue_id, standing.state)
+        for trade in trades.payloads():
+            if not isinstance(trade, NormalisedTrade):
+                continue  # a candle update is not a quote
+            touched.add(trade.symbol)
+            yield VenueQuote(
+                venue_id=trade.venue_id,
+                symbol=trade.symbol,
+                price=trade.price,
+                quantity=trade.quantity,
+                observed_at_ns=trade.venue_time_ns,
+            )
+
+    def tick() -> None:
+        # Only the symbols that traded since the last wake are re-consolidated;
+        # a price nothing moved is the price already published. The full set
+        # goes out once per health interval so staleness exclusions are
+        # re-evaluated for symbols that have gone quiet.
+        for quote in read_quotes():
+            consolidator.observe_quote(quote)
+        now = _time.monotonic()
+        if now - last_full[0] >= context.health_interval_seconds:
+            publish_prices(consolidator.consolidate_all())
+            last_full[0] = now
+        elif touched:
+            publish_prices(tuple(consolidator.consolidate(symbol) for symbol in sorted(touched)))
+        touched.clear()
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

@@ -160,6 +160,8 @@ def describe_probes(runner: ProbeRunner) -> dict:
 def run_probe_runner(
     runner: ProbeRunner, control_socket, publish_results,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     return run_part(
         declaration=PART_DECLARATION,
@@ -167,4 +169,6 @@ def run_probe_runner(
         do_one_tick=lambda: publish_results(runner.run_all()),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

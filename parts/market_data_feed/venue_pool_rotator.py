@@ -48,6 +48,9 @@ class RotatorStanding:
     unroutable: int = 0
     by_venue: dict[str, int] = field(default_factory=dict)
     venues_banned: int = 0
+    # Routings decided that nothing could act on, because no routed REST fetch
+    # exists yet (RL-062). Counted so the gap is a number, not a silence.
+    routings_with_no_fetch_path: int = 0
 
 
 class VenuePoolRotator:
@@ -145,6 +148,8 @@ def describe_rotation(rotator: VenuePoolRotator) -> dict:
 def run_venue_pool_rotator(
     rotator: VenuePoolRotator, control_socket, read_requests, publish_routing,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for request_class, symbol in read_requests():
@@ -156,4 +161,57 @@ def run_venue_pool_rotator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The rotator keeps, from the bus, which venues carry each symbol, what each
+    venue's standing is, and how much of its rate budget is left. The blueprint
+    says it produces market-data and order-book-snapshot -- the routed REST
+    fetch of a symbol a stream does not carry. No REST market-data fetch exists
+    in phase 1, so this part publishes nothing on either type and its standing
+    says so (RL-062): `routings_with_no_fetch_path` counts every routing that
+    was decided and could not be acted on. The routing itself is real and is
+    what the fetch will be built on.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    standings = Batch(read=context.bus.reader("venue-standing"))
+    budgets = Batch(read=context.bus.reader("venue-rate-budget"))
+    plans = LatestValue(read=context.bus.reader("stream-plan"))
+    # Declared, never called: the fetch these would carry does not exist yet.
+    context.bus.publisher_for("market-data")
+    context.bus.publisher_for("order-book-snapshot")
+    rotator = VenuePoolRotator()
+
+    carries: dict[str, set[str]] = {}
+
+    def read_requests():
+        for entry in universe.payloads():
+            carries.setdefault(entry.symbol, set()).add(entry.venue_id)
+            rotator.set_symbol_venues(entry.symbol, carries[entry.symbol])
+        for standing in standings.payloads():
+            rotator.set_venue_standing(standing.venue_id, standing.state)
+        for budget in budgets.payloads():
+            rotator.set_rate_headroom(budget.venue_id, budget.remaining_fraction)
+        plans.value()
+        return ()  # nothing asks for a routed fetch until a fetch path exists
+
+    def publish_routing(routing) -> None:
+        rotator.standing.routings_with_no_fetch_path += 1
+
+    return run_venue_pool_rotator(
+        rotator=rotator,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_routing=publish_routing,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

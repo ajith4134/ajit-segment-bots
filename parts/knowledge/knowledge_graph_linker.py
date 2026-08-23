@@ -254,6 +254,8 @@ def describe_links(linker: KnowledgeGraphLinker) -> dict:
 def run_knowledge_graph_linker(
     linker: KnowledgeGraphLinker, control_socket, read_knowledge, publish_links,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         nodes = read_knowledge(linker)
@@ -269,4 +271,6 @@ def run_knowledge_graph_linker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

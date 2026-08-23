@@ -244,6 +244,8 @@ def describe_classification(classifier: OrderRejectClassifier) -> dict:
 def run_order_reject_classifier(
     classifier: OrderRejectClassifier, control_socket, read_statuses, publish_reasons,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         rejections, outcomes = read_statuses()
@@ -259,4 +261,6 @@ def run_order_reject_classifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

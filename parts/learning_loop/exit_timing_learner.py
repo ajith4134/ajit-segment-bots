@@ -297,6 +297,8 @@ def describe_exit_timing(learner: ExitTimingLearner) -> dict:
 def run_exit_timing_learner(
     learner: ExitTimingLearner, control_socket, read_exits, publish_scorecards,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         contexts = read_exits(learner)
@@ -310,4 +312,6 @@ def run_exit_timing_learner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

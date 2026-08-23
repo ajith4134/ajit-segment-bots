@@ -224,6 +224,8 @@ def describe_sentiment_reading(reader: SocialSentimentReader) -> dict:
 def run_social_sentiment_reader(
     reader: SocialSentimentReader, control_socket, read_universe, publish_readings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for symbol in read_universe():
@@ -237,4 +239,6 @@ def run_social_sentiment_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

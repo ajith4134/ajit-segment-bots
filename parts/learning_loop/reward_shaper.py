@@ -273,6 +273,8 @@ def describe_reward_shaping(shaper: RewardShaper) -> dict:
 def run_reward_shaper(
     shaper: RewardShaper, control_socket, read_closed_trades, publish_rewards,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_rewards(
@@ -288,4 +290,6 @@ def run_reward_shaper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -206,6 +206,8 @@ def describe_skew(monitor: ClockSkewMonitor) -> dict:
 def run_clock_skew_monitor(
     monitor: ClockSkewMonitor, control_socket, read_statuses, publish_alerts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_statuses(monitor)
@@ -218,4 +220,6 @@ def run_clock_skew_monitor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

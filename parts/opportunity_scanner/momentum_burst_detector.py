@@ -189,6 +189,8 @@ def describe_bursts(detector: MomentumBurstDetector) -> dict:
 def run_momentum_burst_detector(
     detector: MomentumBurstDetector, control_socket, read_prices_and_regimes, publish_candidates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         regimes = read_prices_and_regimes(detector)
@@ -205,4 +207,6 @@ def run_momentum_burst_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

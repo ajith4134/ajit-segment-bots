@@ -171,6 +171,8 @@ def describe_balances(reader: VenueBalanceReader) -> dict:
 def run_venue_balance_reader(
     reader: VenueBalanceReader, control_socket, publish_balances,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     return run_part(
         declaration=PART_DECLARATION,
@@ -178,4 +180,6 @@ def run_venue_balance_reader(
         do_one_tick=lambda: publish_balances(reader.read_all()),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

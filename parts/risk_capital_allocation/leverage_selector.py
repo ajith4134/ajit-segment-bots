@@ -194,6 +194,8 @@ def describe_leverage(selector: LeverageSelector) -> dict:
 def run_leverage_selector(
     selector: LeverageSelector, control_socket, read_intents, publish_choices,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_choices(tuple(selector.choose(**intent) for intent in read_intents()))
@@ -204,4 +206,6 @@ def run_leverage_selector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

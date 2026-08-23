@@ -259,6 +259,8 @@ def describe_playbook(playbook: ProceduralPlaybook) -> dict:
 def run_procedural_playbook(
     playbook: ProceduralPlaybook, control_socket, read_instructions, publish_rules,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_instructions(playbook)
@@ -270,4 +272,6 @@ def run_procedural_playbook(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

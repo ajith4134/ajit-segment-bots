@@ -254,6 +254,8 @@ def describe_leaderboard_reading(reader: LeaderboardReader) -> dict:
 def run_leaderboard_reader(
     reader: LeaderboardReader, control_socket, boards_to_read, publish_traders,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, period_days in boards_to_read():
@@ -267,4 +269,6 @@ def run_leaderboard_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -268,6 +268,8 @@ def describe_copy_selection(selector: TailCopySelector) -> dict:
 def run_tail_copy_selector(
     selector: TailCopySelector, control_socket, read_external_positions,
     publish_follow_candidates, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         selected = []
@@ -283,4 +285,6 @@ def run_tail_copy_selector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

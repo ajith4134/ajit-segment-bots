@@ -142,6 +142,8 @@ def describe_jumps(detector: FeedJumpDetector) -> dict:
 def run_feed_jump_detector(
     detector: FeedJumpDetector, control_socket, read_closed_candles, publish_jump,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for candle in read_closed_candles():
@@ -155,4 +157,56 @@ def run_feed_jump_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    market-data carries trades and candle updates alike; this part reads the
+    candles and only the closed ones, since a jump is a closed bar's open
+    against the previous closed bar's close and an open bar has no close yet.
+    A trade on the same type is not an error, it is simply not a candle.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedCandle
+
+    updates = Batch(read=context.bus.reader("market-data"))
+    publish_jumps = context.bus.publisher_for("feed-jump")
+    detector = FeedJumpDetector(
+        jump_threshold_increments=context.number("feed_jump_threshold_increments"),
+        jump_threshold_fraction=context.number("feed_jump_threshold_fraction"),
+    )
+
+    def tick() -> None:
+        found = []
+        for update in updates.payloads():
+            if not isinstance(update, NormalisedCandle) or not update.is_closed:
+                continue
+            jump = detector.observe_closed_candle(
+                Candle(
+                    venue_id=update.venue_id,
+                    symbol=update.symbol,
+                    open_time_ns=update.open_time_ns,
+                    open_price=update.open,
+                    close_price=update.close,
+                    high_price=update.high,
+                    low_price=update.low,
+                )
+            )
+            if jump is not None:
+                found.append(jump)
+        if found:
+            publish_jumps(found)
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

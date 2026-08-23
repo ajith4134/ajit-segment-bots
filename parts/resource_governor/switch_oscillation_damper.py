@@ -113,6 +113,8 @@ def describe_flapping(damper: SwitchOscillationDamper) -> dict:
 def run_switch_oscillation_damper(
     damper: SwitchOscillationDamper, control_socket, read_switch_records, publish_flap,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for part_id, state in read_switch_records():
@@ -126,4 +128,6 @@ def run_switch_oscillation_damper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

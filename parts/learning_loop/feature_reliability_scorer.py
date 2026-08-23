@@ -298,6 +298,8 @@ def describe_feature_reliability(scorer: FeatureReliabilityScorer) -> dict:
 def run_feature_reliability_scorer(
     scorer: FeatureReliabilityScorer, control_socket, read_episodes, publish_reliability,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_episodes(scorer)
@@ -309,4 +311,6 @@ def run_feature_reliability_scorer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

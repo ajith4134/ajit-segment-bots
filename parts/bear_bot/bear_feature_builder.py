@@ -328,6 +328,8 @@ def describe_feature_building(builder: BearFeatureBuilder) -> dict:
 def run_bear_feature_builder(
     builder: BearFeatureBuilder, control_socket, read_candidates_and_market,
     publish_vectors, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         candidates = read_candidates_and_market(builder)
@@ -339,4 +341,6 @@ def run_bear_feature_builder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

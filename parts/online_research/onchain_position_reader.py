@@ -244,6 +244,8 @@ def describe_position_reading(reader: OnchainPositionReader) -> dict:
 def run_onchain_position_reader(
     reader: OnchainPositionReader, control_socket, read_tracked_traders,
     publish_positions, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for trader in read_tracked_traders():
@@ -257,4 +259,6 @@ def run_onchain_position_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

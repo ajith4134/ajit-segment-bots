@@ -236,6 +236,8 @@ def describe_budgets(budgeter: VenueRateBudgeter) -> dict:
 def run_venue_rate_budgeter(
     budgeter: VenueRateBudgeter, control_socket, read_events, publish_budgets,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_events(budgeter)
@@ -247,4 +249,6 @@ def run_venue_rate_budgeter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -189,6 +189,8 @@ def describe_splitting(splitter: WalkForwardSplitter) -> dict:
 def run_walk_forward_splitter(
     splitter: WalkForwardSplitter, control_socket, read_windows, publish_splits,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for window in read_windows():
@@ -202,4 +204,6 @@ def run_walk_forward_splitter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

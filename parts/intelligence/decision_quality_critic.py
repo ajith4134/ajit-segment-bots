@@ -285,6 +285,8 @@ def describe_decision_quality(critic: DecisionQualityCritic) -> dict:
 def run_decision_quality_critic(
     critic: DecisionQualityCritic, control_socket, read_episodes, publish_scores,
     publish_requests, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         scores = []
@@ -304,4 +306,6 @@ def run_decision_quality_critic(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

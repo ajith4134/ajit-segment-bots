@@ -364,6 +364,8 @@ def describe_refutation(battery: CausalRefutationBattery) -> dict:
 def run_causal_refutation_battery(
     battery: CausalRefutationBattery, control_socket, read_episodes, publish_verdicts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         instructions = read_episodes(battery)
@@ -375,4 +377,6 @@ def run_causal_refutation_battery(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -261,6 +261,8 @@ def describe_sweeps(sweeper: UniversalSymbolSweeper) -> dict:
 def run_universal_symbol_sweeper(
     sweeper: UniversalSymbolSweeper, control_socket, read_universe, publish,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         universe, conditions = read_universe(sweeper)
@@ -272,4 +274,6 @@ def run_universal_symbol_sweeper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -259,6 +259,8 @@ def describe_vol_regression(regressor: RealisedVolRegressor) -> dict:
 def run_realised_vol_regressor(
     regressor: RealisedVolRegressor, control_socket, read_feature_sets, publish_forecasts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         feature_sets = read_feature_sets(regressor)
@@ -270,4 +272,6 @@ def run_realised_vol_regressor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

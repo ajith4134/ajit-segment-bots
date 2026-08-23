@@ -226,6 +226,8 @@ def describe_quota_watching(watch: SubscriptionQuotaWatch) -> dict:
 def run_subscription_quota_watch(
     watch: SubscriptionQuotaWatch, control_socket, read_records, publish_quota,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for record in read_records():
@@ -238,4 +240,6 @@ def run_subscription_quota_watch(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

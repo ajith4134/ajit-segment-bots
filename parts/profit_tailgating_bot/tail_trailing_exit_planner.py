@@ -344,6 +344,8 @@ def describe_trailing(planner: TailTrailingExitPlanner) -> dict:
 def run_tail_trailing_exit_planner(
     planner: TailTrailingExitPlanner, control_socket, read_candidates_and_market,
     publish_plans, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         plans = []
@@ -359,4 +361,6 @@ def run_tail_trailing_exit_planner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

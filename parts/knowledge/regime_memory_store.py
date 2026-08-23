@@ -316,6 +316,8 @@ def describe_regime_memory(store: RegimeMemoryStore) -> dict:
 def run_regime_memory_store(
     store: RegimeMemoryStore, control_socket, read_regimes, publish_memories,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         signatures = read_regimes(store)
@@ -327,4 +329,6 @@ def run_regime_memory_store(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

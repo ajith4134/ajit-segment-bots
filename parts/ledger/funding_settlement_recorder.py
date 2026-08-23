@@ -177,6 +177,8 @@ def describe_funding(recorder: FundingSettlementRecorder) -> dict:
 def run_funding_settlement_recorder(
     recorder: FundingSettlementRecorder, control_socket, read_positions_and_funding, publish_settlements,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         positions, funding_events = read_positions_and_funding()
@@ -195,4 +197,6 @@ def run_funding_settlement_recorder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -97,6 +97,8 @@ def run_trade_stream_reader(
     drain_interval_seconds: float,
     health_interval_seconds: float,
     emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     """Run this part until the governor turns it off, capturing all the while.
 
@@ -120,6 +122,8 @@ def run_trade_stream_reader(
             do_one_tick=reader.capture_one_tick,
             emit_health=emit_health,
             health_interval_seconds=health_interval_seconds,
+            input_descriptors=input_descriptors,
+            tick_floor_seconds=tick_floor_seconds,
         )
     finally:
         reader.close()

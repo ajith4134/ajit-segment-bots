@@ -264,6 +264,8 @@ def describe_coverage(auditor: AbstentionCoverageAuditor) -> dict:
 def run_abstention_coverage_auditor(
     auditor: AbstentionCoverageAuditor, control_socket, read_opportunities, publish_reports,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_opportunities(auditor)
@@ -275,4 +277,6 @@ def run_abstention_coverage_auditor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

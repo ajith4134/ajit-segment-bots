@@ -258,6 +258,8 @@ def describe_embedding(embedder: EpisodeEmbedder) -> dict:
 def run_episode_embedder(
     embedder: EpisodeEmbedder, control_socket, read_episodes, publish_embeddings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         episodes = read_episodes(embedder)
@@ -271,4 +273,6 @@ def run_episode_embedder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

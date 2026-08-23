@@ -293,6 +293,8 @@ def describe_ensembling(ensembler: ForecastEnsembler) -> dict:
 def run_forecast_ensembler(
     ensembler: ForecastEnsembler, control_socket, read_forecasts, publish_ensembles,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         groups = read_forecasts(ensembler)
@@ -309,4 +311,6 @@ def run_forecast_ensembler(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

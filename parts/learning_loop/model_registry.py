@@ -260,6 +260,8 @@ def describe_registry(registry: ModelRegistry) -> dict:
 def run_model_registry(
     registry: ModelRegistry, control_socket, read_requests, publish_versions,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         registrations = read_requests(registry)
@@ -276,4 +278,6 @@ def run_model_registry(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

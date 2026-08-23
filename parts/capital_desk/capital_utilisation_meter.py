@@ -174,6 +174,8 @@ def describe_utilisation(meter: CapitalUtilisationMeter) -> dict:
 def run_capital_utilisation_meter(
     meter: CapitalUtilisationMeter, control_socket, read_capital, publish_utilisation,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_capital(meter)
@@ -185,4 +187,6 @@ def run_capital_utilisation_meter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

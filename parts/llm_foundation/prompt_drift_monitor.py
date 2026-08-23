@@ -223,6 +223,8 @@ def describe_drift_monitoring(monitor: PromptDriftMonitor) -> dict:
 def run_prompt_drift_monitor(
     monitor: PromptDriftMonitor, control_socket, read_scores, publish_alerts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for score, model_id in read_scores():
@@ -235,4 +237,6 @@ def run_prompt_drift_monitor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

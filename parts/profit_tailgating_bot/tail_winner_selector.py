@@ -242,6 +242,8 @@ def describe_winner_selection(selector: TailWinnerSelector) -> dict:
 def run_tail_winner_selector(
     selector: TailWinnerSelector, control_socket, read_positions_and_verdicts,
     publish_follow_candidates, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         positions = read_positions_and_verdicts(selector)
@@ -253,4 +255,6 @@ def run_tail_winner_selector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

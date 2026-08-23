@@ -249,6 +249,8 @@ def describe_outage_riding(rider: VenueOutageRider) -> dict:
 def run_venue_outage_rider(
     rider: VenueOutageRider, control_socket, read_messages, publish_states,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, at_ns in read_messages():
@@ -262,4 +264,6 @@ def run_venue_outage_rider(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

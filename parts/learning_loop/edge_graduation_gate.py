@@ -288,6 +288,8 @@ def describe_graduation(gate: EdgeGraduationGate) -> dict:
 def run_edge_graduation_gate(
     gate: EdgeGraduationGate, control_socket, read_records, publish_maturity,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         contexts = read_records(gate)
@@ -299,4 +301,6 @@ def run_edge_graduation_gate(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -290,6 +290,8 @@ def describe_provenance(tracker: FactProvenanceTracker) -> dict:
 def run_fact_provenance_tracker(
     tracker: FactProvenanceTracker, control_socket, read_facts, publish_provenance,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_provenance(
@@ -302,4 +304,6 @@ def run_fact_provenance_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

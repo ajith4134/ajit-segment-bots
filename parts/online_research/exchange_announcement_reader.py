@@ -262,6 +262,8 @@ def describe_announcement_reading(reader: ExchangeAnnouncementReader) -> dict:
 def run_exchange_announcement_reader(
     reader: ExchangeAnnouncementReader, control_socket, read_rows, publish_announcements,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for row in read_rows():
@@ -275,4 +277,6 @@ def run_exchange_announcement_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

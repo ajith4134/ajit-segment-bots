@@ -146,6 +146,8 @@ def describe_pool(rotator: ApiKeyPoolRotator) -> dict:
 def run_api_key_pool_rotator(
     rotator: ApiKeyPoolRotator, control_socket, read_events, publish_standings,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_events(rotator)
@@ -157,4 +159,44 @@ def run_api_key_pool_rotator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No keys are registered, because none are held (RL-062): a private call in
+    phase 1 has nowhere to route and the standings this publishes are empty and
+    say so. What it does consume is real -- a caller that was rejected publishes
+    the key's standing back and the rotator rests it, and a venue's own standing
+    withholds every key on it.
+    """
+    from runtime.input_assembly import Batch
+
+    venues = Batch(read=context.bus.reader("venue-standing"))
+    rejections = Batch(read=context.bus.reader("key-standing"))
+    publish_standings = context.bus.publisher_for("key-standing")
+    rotator = ApiKeyPoolRotator(rejection_rest_seconds=context.number("api_key_rejection_rest"))
+
+    def read_events(_rotator) -> None:
+        for standing in venues.payloads():
+            rotator.set_venue_standing(standing.venue_id, standing.state)
+        for standing in rejections.payloads():
+            # Only a rejection from a caller is news to the pool; its own
+            # standings do not come back to it (a part never receives its own
+            # message), and another pool's serving key is not this pool's.
+            if standing.state == KEY_REJECTED:
+                rotator.record_rejection(standing.venue_id, standing.key_id, standing.reason)
+
+    return run_api_key_pool_rotator(
+        rotator=rotator,
+        control_socket=context.control_socket,
+        read_events=read_events,
+        publish_standings=publish_standings,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

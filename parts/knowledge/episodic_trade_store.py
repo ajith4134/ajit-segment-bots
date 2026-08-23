@@ -272,6 +272,8 @@ def describe_episodic_store(store: EpisodicTradeStore) -> dict:
 def run_episodic_trade_store(
     store: EpisodicTradeStore, control_socket, read_episodes, publish_recalls,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         queries = read_episodes(store)
@@ -288,4 +290,6 @@ def run_episodic_trade_store(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

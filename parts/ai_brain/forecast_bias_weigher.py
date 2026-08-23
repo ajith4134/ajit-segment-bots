@@ -192,6 +192,8 @@ def describe_forecast_bias(weigher: ForecastBiasWeigher) -> dict:
 def run_forecast_bias_weigher(
     weigher: ForecastBiasWeigher, control_socket, read_forecasts_and_trust, publish_biases,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_biases(
@@ -207,4 +209,6 @@ def run_forecast_bias_weigher(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

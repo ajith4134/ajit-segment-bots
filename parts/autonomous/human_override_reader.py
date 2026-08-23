@@ -219,6 +219,8 @@ def describe_override_reading(reader: HumanOverrideReader) -> dict:
 def run_human_override_reader(
     reader: HumanOverrideReader, control_socket, publish_overrides,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         reading = reader.read()
@@ -231,4 +233,6 @@ def run_human_override_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

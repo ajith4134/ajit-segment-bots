@@ -187,6 +187,8 @@ def describe_conservation(auditor: FundConservationAuditor) -> dict:
 def run_fund_conservation_auditor(
     auditor: FundConservationAuditor, control_socket, read_fills, publish_alerts,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         alerts = []
@@ -203,4 +205,6 @@ def run_fund_conservation_auditor(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

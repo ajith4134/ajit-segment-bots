@@ -199,6 +199,8 @@ def describe_capping(capper: FillVolumeCapper) -> dict:
 def run_fill_volume_capper(
     capper: FillVolumeCapper, control_socket, read_bars, read_requests, publish_sizes,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, at_ns, volume in read_bars():
@@ -214,4 +216,6 @@ def run_fill_volume_capper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

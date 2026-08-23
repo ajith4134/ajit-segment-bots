@@ -245,6 +245,8 @@ def describe_falsification(falsifier: HypothesisFalsifier) -> dict:
 def run_hypothesis_falsifier(
     falsifier: HypothesisFalsifier, control_socket, read_hypotheses, publish_criteria,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_criteria(
@@ -259,4 +261,6 @@ def run_hypothesis_falsifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -235,6 +235,8 @@ def describe_folding(view: FoldedCircuitView) -> dict:
 def run_folded_circuit_view(
     view: FoldedCircuitView, control_socket, read_states, publish_map,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for part_id, state in read_states():
@@ -249,4 +251,6 @@ def run_folded_circuit_view(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

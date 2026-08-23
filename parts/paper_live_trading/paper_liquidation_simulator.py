@@ -236,6 +236,8 @@ def describe_liquidations(simulator: PaperLiquidationSimulator) -> dict:
 def run_paper_liquidation_simulator(
     simulator: PaperLiquidationSimulator, control_socket, read_positions_and_candles, publish_fills,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         intervals = read_positions_and_candles(simulator)
@@ -248,4 +250,6 @@ def run_paper_liquidation_simulator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

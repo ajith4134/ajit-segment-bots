@@ -217,6 +217,8 @@ def describe_rendering(renderer: PromptRenderer) -> dict:
 def run_prompt_renderer(
     renderer: PromptRenderer, control_socket, read_jobs, publish_rendered,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for request, version, context in read_jobs():
@@ -230,4 +232,6 @@ def run_prompt_renderer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

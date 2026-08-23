@@ -139,6 +139,8 @@ def run_order_book_reader(
     book_snapshot_interval_seconds: float,
     health_interval_seconds: float,
     emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     """Run this part until the governor turns it off, capturing all the while."""
     reader = OrderBookReader(
@@ -158,6 +160,8 @@ def run_order_book_reader(
             do_one_tick=reader.capture_one_tick,
             emit_health=emit_health,
             health_interval_seconds=health_interval_seconds,
+            input_descriptors=input_descriptors,
+            tick_floor_seconds=tick_floor_seconds,
         )
     finally:
         reader.close()
@@ -170,4 +174,84 @@ __all__ = [
     "PART_ID",
     "describe_capture",
     "run_order_book_reader",
+    "start_part",
 ]
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The tape gets the venue's bytes, thinned only where that is safe; the bus
+    gets the *book* -- every update applied by runtime.order_book.OrderBookKeeper,
+    so a consumer reads a top-N it can use rather than a delta it would have to
+    keep a book from. A delta the keeper cannot apply publishes nothing, and the
+    keeper's own count says how many that was.
+    """
+    from runtime.input_assembly import LatestValue
+    from runtime.order_book import OrderBookKeeper
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    settings = context.settings[RUNTIME_SCOPE]
+    adapters = {adapter.venue_id: adapter for adapter in load_captured_venue_adapters(settings)}
+    tape_root = pathlib.Path(str(settings.entries["tape_root"].value)).expanduser()
+    publish_books = context.bus.publisher_for("order-book-snapshot")
+    plans = LatestValue(read=context.bus.reader("stream-plan"))
+    standings = LatestValue(read=context.bus.reader("venue-standing"))
+    keeper = OrderBookKeeper(depth_levels=int(context.number("book_depth_levels")))
+
+    readers: dict[str, OrderBookReader] = {}
+    planned = [None]
+
+    def rebuild_readers_if_the_plan_changed() -> None:
+        plan = plans.value()
+        standings.value()
+        if plan is None or plan == planned[0]:
+            return
+        for reader in readers.values():
+            reader.close()
+        readers.clear()
+        for venue_id, adapter in sorted(adapters.items()):
+            if not plan.assignments_for(venue_id, CAPTURED_STREAM_KIND):
+                continue
+            readers[venue_id] = OrderBookReader(
+                adapter=adapter,
+                plan=plan,
+                tape_root=tape_root,
+                writeback_interval_bytes=int(context.number("writeback_interval")),
+                reconnect_backoff_floor_seconds=context.number("venue_reconnect_backoff_floor"),
+                reconnect_backoff_ceiling_seconds=context.number("venue_reconnect_backoff_ceiling"),
+                drain_interval_seconds=context.number("stream_drain_interval"),
+                book_snapshot_interval_seconds=context.number("book_snapshot_interval"),
+            )
+        planned[0] = plan
+
+    def on_recorded(payload: bytes, adapter) -> None:
+        update = adapter.read_book_update(payload)
+        if update is None:
+            return
+        book = keeper.apply(update)
+        if book is not None:
+            publish_books((book,))
+
+    def capture_and_publish() -> None:
+        rebuild_readers_if_the_plan_changed()
+        for venue_id, reader in readers.items():
+            adapter = adapters[venue_id]
+            reader.capture_one_tick(
+                on_recorded_payload=lambda payload, adapter=adapter: on_recorded(payload, adapter)
+            )
+
+    try:
+        return run_part(
+            declaration=PART_DECLARATION,
+            control_socket=context.control_socket,
+            do_one_tick=capture_and_publish,
+            emit_health=context.emit_health,
+            health_interval_seconds=context.health_interval_seconds,
+            input_descriptors=context.input_descriptors,
+            tick_floor_seconds=context.tick_floor_seconds,
+        )
+    finally:
+        for reader in readers.values():
+            reader.close()

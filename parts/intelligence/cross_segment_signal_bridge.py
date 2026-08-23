@@ -287,6 +287,8 @@ def describe_bridging(bridge: CrossSegmentSignalBridge) -> dict:
 def run_cross_segment_signal_bridge(
     bridge: CrossSegmentSignalBridge, control_socket, read_observations, publish_signals,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         requests = read_observations(bridge)
@@ -301,4 +303,6 @@ def run_cross_segment_signal_bridge(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

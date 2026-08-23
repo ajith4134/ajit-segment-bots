@@ -150,3 +150,57 @@ def test_signed_quantity_says_which_way_the_aggressor_went(read_captured_payload
     assert all(
         trade.quote_volume == pytest.approx(trade.price * trade.quantity) for trade in trades
     )
+
+
+# ---- candles, normalised on read the same way ---------------------------------
+
+BINANCE_KLINE_RUN = "2026-08-22-market-ws-kline-through-close.jsonl"
+BYBIT_KLINE_RUN = "2026-08-22-public-linear-kline-through-close.jsonl"
+
+
+def candles_from(adapter, records):
+    return [candle for _received_at_ns, payload in records for candle in adapter.read_candles(payload)]
+
+
+@pytest.mark.parametrize(
+    "venue_id, capture",
+    [(BINANCE, BINANCE_KLINE_RUN), (BYBIT, BYBIT_KLINE_RUN)],
+)
+def test_a_captured_kline_run_yields_candles_and_exactly_the_closes_the_venue_flagged(
+    venue_id, capture, read_captured_payloads
+):
+    """Both runs were captured through a minute boundary, so each carries one
+    close. The closed flag is the one field the candle reader exists to keep."""
+    adapter = load_venue_adapter(venue_id)
+    candles = candles_from(adapter, read_captured_payloads(venue_id, capture))
+    assert candles
+    assert all(candle.venue_id == venue_id and candle.symbol == "BTCUSDT" for candle in candles)
+    assert all(candle.high >= max(candle.open, candle.close) >= min(candle.open, candle.close) >= candle.low > 0 for candle in candles)
+    assert all(candle.open_time_ns < candle.close_time_ns for candle in candles)
+    assert sum(candle.is_closed for candle in candles) == 1
+
+
+def test_bybit_packs_the_close_and_the_next_open_into_one_message(read_captured_payloads):
+    adapter = load_venue_adapter(BYBIT)
+    per_message = [
+        adapter.read_candles(payload) for _t, payload in read_captured_payloads(BYBIT, BYBIT_KLINE_RUN)
+    ]
+    two = next(batch for batch in per_message if len(batch) == 2)
+    assert two[0].is_closed and not two[1].is_closed
+    assert two[1].open_time_ns == two[0].close_time_ns + 1_000_000, "the next minute starts where this one ends"
+
+
+def test_bybit_sends_no_trade_count_and_that_is_none_not_zero(read_captured_payloads):
+    adapter = load_venue_adapter(BYBIT)
+    assert all(c.trades is None for c in candles_from(adapter, read_captured_payloads(BYBIT, BYBIT_KLINE_RUN)))
+    binance = load_venue_adapter(BINANCE)
+    assert all(c.trades is not None for c in candles_from(binance, read_captured_payloads(BINANCE, BINANCE_KLINE_RUN)))
+
+
+@pytest.mark.parametrize(
+    "venue_id, capture",
+    [(BINANCE, BINANCE_TRADE_RUN), (BYBIT, BYBIT_TRADE_RUN)],
+)
+def test_a_message_that_is_not_a_candle_yields_no_candles(venue_id, capture, read_captured_payloads):
+    adapter = load_venue_adapter(venue_id)
+    assert candles_from(adapter, read_captured_payloads(venue_id, capture)) == []

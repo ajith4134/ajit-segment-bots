@@ -242,6 +242,8 @@ def describe_forecast_trust(learner: ForecastTrustLearner) -> dict:
 def run_forecast_trust_learner(
     learner: ForecastTrustLearner, control_socket, read_follows, publish_trust,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_follows(learner)
@@ -253,4 +255,6 @@ def run_forecast_trust_learner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

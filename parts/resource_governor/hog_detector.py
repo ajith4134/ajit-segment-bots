@@ -144,6 +144,8 @@ def describe_hogs(detector: HogDetector) -> dict:
 def run_hog_detector(
     detector: HogDetector, control_socket, read_usage_and_capacity, publish_reports,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         usages, capacity = read_usage_and_capacity()
@@ -155,4 +157,6 @@ def run_hog_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

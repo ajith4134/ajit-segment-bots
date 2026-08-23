@@ -215,6 +215,8 @@ def describe_cascades(detector: LiquidationCascadeDetector) -> dict:
 def run_liquidation_cascade_detector(
     detector: LiquidationCascadeDetector, control_socket, read_map, publish_candidates,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         symbols = read_map(detector)
@@ -231,4 +233,6 @@ def run_liquidation_cascade_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

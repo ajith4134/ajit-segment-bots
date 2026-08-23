@@ -256,6 +256,8 @@ def describe_horizon_profiling(profiler: HoldingHorizonProfiler) -> dict:
 def run_holding_horizon_profiler(
     profiler: HoldingHorizonProfiler, control_socket, read_counterfactuals,
     publish_profiles, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for setup, horizon, realised in read_counterfactuals():
@@ -271,4 +273,6 @@ def run_holding_horizon_profiler(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

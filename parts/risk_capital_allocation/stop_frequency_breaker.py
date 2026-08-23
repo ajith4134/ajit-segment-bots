@@ -178,6 +178,8 @@ def describe_stop_frequency(breaker: StopFrequencyBreaker) -> dict:
 def run_stop_frequency_breaker(
     breaker: StopFrequencyBreaker, control_socket, read_closed_trades, publish_limit,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for was_stopped_out in read_closed_trades():
@@ -189,4 +191,6 @@ def run_stop_frequency_breaker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

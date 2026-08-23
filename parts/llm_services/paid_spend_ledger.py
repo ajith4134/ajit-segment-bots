@@ -231,6 +231,8 @@ def describe_spend_ledger(ledger: PaidSpendLedger) -> dict:
 def run_paid_spend_ledger(
     ledger: PaidSpendLedger, control_socket, read_records, publish_spend,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for record in read_records():
@@ -243,4 +245,6 @@ def run_paid_spend_ledger(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

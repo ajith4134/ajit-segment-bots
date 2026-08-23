@@ -219,6 +219,8 @@ def describe_replacement_planning(planner: PartReplacementPlanner) -> dict:
 def run_part_replacement_planner(
     planner: PartReplacementPlanner, control_socket, read_faults, publish_plans,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for fault in read_faults():
@@ -232,4 +234,6 @@ def run_part_replacement_planner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -135,6 +135,8 @@ def describe_io_pressure(meter: IoPressureMeter, pressure: IoPressure | None) ->
 def run_io_pressure_meter(
     meter: IoPressureMeter, control_socket, publish_pressure,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     return run_part(
         declaration=PART_DECLARATION,
@@ -142,4 +144,6 @@ def run_io_pressure_meter(
         do_one_tick=lambda: publish_pressure(meter.measure()),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

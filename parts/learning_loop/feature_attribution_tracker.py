@@ -243,6 +243,8 @@ def describe_attribution(tracker: FeatureAttributionTracker) -> dict:
 def run_feature_attribution_tracker(
     tracker: FeatureAttributionTracker, control_socket, read_convictions, publish_attributions,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_attributions(
@@ -258,4 +260,6 @@ def run_feature_attribution_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

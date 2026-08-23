@@ -220,6 +220,8 @@ def describe_entropy_magnitude(forecaster: EntropyMagnitudeForecaster) -> dict:
 def run_entropy_magnitude_forecaster(
     forecaster: EntropyMagnitudeForecaster, control_socket, read_entropy_and_features,
     publish_forecasts, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_forecasts(
@@ -235,4 +237,6 @@ def run_entropy_magnitude_forecaster(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

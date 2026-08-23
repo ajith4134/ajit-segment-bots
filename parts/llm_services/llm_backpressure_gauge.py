@@ -277,6 +277,8 @@ def describe_backpressure(gauge: LlmBackpressureGauge) -> dict:
 def run_llm_backpressure_gauge(
     gauge: LlmBackpressureGauge, control_socket, read_state, publish_backpressure,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_state(gauge)
@@ -288,4 +290,6 @@ def run_llm_backpressure_gauge(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

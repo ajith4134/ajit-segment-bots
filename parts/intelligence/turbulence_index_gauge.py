@@ -290,6 +290,8 @@ def describe_turbulence(gauge: TurbulenceIndexGauge) -> dict:
 def run_turbulence_index_gauge(
     gauge: TurbulenceIndexGauge, control_socket, read_returns, publish_index,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_returns(gauge)
@@ -301,4 +303,6 @@ def run_turbulence_index_gauge(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -265,6 +265,8 @@ def describe_setup_weights(learner: BullSetupWeightLearner) -> dict:
 def run_bull_setup_weight_learner(
     learner: BullSetupWeightLearner, control_socket, read_scorecards, publish_weights,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_scorecards(learner)
@@ -276,4 +278,6 @@ def run_bull_setup_weight_learner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

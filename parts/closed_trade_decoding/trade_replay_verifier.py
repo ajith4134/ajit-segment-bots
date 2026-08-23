@@ -267,6 +267,8 @@ def describe_replay_verification(verifier: TradeReplayVerifier) -> dict:
 def run_trade_replay_verifier(
     verifier: TradeReplayVerifier, control_socket, read_trades, publish_mismatches,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for trade_id, fill_ids in read_trades():
@@ -280,4 +282,6 @@ def run_trade_replay_verifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

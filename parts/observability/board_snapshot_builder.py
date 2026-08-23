@@ -209,6 +209,8 @@ def describe_board(builder: BoardSnapshotBuilder) -> dict:
 def run_board_snapshot_builder(
     builder: BoardSnapshotBuilder, control_socket, read_inputs, publish_snapshot,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         expected = read_inputs(builder)
@@ -220,4 +222,6 @@ def run_board_snapshot_builder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

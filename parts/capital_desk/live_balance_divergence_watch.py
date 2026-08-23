@@ -231,6 +231,8 @@ def describe_divergence(watch: LiveBalanceDivergenceWatch) -> dict:
 def run_live_balance_divergence_watch(
     watch: LiveBalanceDivergenceWatch, control_socket, read_balances, publish,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         segments = read_balances(watch)
@@ -243,4 +245,6 @@ def run_live_balance_divergence_watch(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

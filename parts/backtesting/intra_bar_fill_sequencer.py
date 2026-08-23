@@ -191,6 +191,8 @@ def describe_sequencing(sequencer: IntraBarFillSequencer) -> dict:
 def run_intra_bar_fill_sequencer(
     sequencer: IntraBarFillSequencer, control_socket, read_jobs, publish_sequences,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for job in read_jobs():
@@ -204,4 +206,6 @@ def run_intra_bar_fill_sequencer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

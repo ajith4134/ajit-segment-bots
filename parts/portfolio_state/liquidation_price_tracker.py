@@ -162,6 +162,8 @@ def describe_liquidations(tracker: LiquidationPriceTracker) -> dict:
 def run_liquidation_price_tracker(
     tracker: LiquidationPriceTracker, control_socket, read_inputs, publish_liquidations,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_inputs(tracker)
@@ -173,4 +175,6 @@ def run_liquidation_price_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

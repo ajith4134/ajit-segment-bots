@@ -263,6 +263,8 @@ def describe_chat_reading(reader: CommunityChatReader) -> dict:
 def run_community_chat_reader(
     reader: CommunityChatReader, control_socket, read_channels, publish_documents,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_documents(tuple(reader.read(channel) for channel in read_channels()))
@@ -273,4 +275,6 @@ def run_community_chat_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

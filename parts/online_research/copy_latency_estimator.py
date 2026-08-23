@@ -202,6 +202,8 @@ def describe_latency_estimation(estimator: CopyLatencyEstimator) -> dict:
 def run_copy_latency_estimator(
     estimator: CopyLatencyEstimator, control_socket, read_pairs, publish_latency,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol in read_pairs(estimator):
@@ -213,4 +215,6 @@ def run_copy_latency_estimator(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

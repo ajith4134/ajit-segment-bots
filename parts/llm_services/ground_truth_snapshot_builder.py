@@ -237,6 +237,8 @@ def describe_snapshot_building(builder: GroundTruthSnapshotBuilder) -> dict:
 def run_ground_truth_snapshot_builder(
     builder: GroundTruthSnapshotBuilder, control_socket, read_requests,
     publish_snapshots, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, required in read_requests(builder):
@@ -250,4 +252,6 @@ def run_ground_truth_snapshot_builder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

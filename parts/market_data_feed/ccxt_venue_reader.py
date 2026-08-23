@@ -106,6 +106,8 @@ def run_candle_stream_reader(
     drain_interval_seconds: float,
     health_interval_seconds: float,
     emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     """Run this part until the governor turns it off, capturing all the while."""
     reader = CandleStreamReader(
@@ -124,9 +126,88 @@ def run_candle_stream_reader(
             do_one_tick=reader.capture_one_tick,
             emit_health=emit_health,
             health_interval_seconds=health_interval_seconds,
+            input_descriptors=input_descriptors,
+            tick_floor_seconds=tick_floor_seconds,
         )
     finally:
         reader.close()
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The same shape as venue-trade-stream-reader's, one stream kind apart: the
+    plan says which venues carry candles, a recorder per venue writes the tape,
+    and every candle update in a recorded payload goes onto the bus as
+    market-data, normalised once by the adapter (spec 2.2) with the venue's own
+    closed flag on it. A consumer that wants only finished bars filters on the
+    flag; this part does not decide that for it.
+    """
+    from runtime.input_assembly import LatestValue
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.venues.adapter_registry import load_captured_venue_adapters
+
+    settings = context.settings[RUNTIME_SCOPE]
+    adapters = {adapter.venue_id: adapter for adapter in load_captured_venue_adapters(settings)}
+    tape_root = pathlib.Path(str(settings.entries["tape_root"].value)).expanduser()
+    publish_candles = context.bus.publisher_for("market-data")
+    plans = LatestValue(read=context.bus.reader("stream-plan"))
+    # venue-standing is declared and read so a withheld venue is not reconnected
+    # to; the recorder itself backs off on the connection, and the standing is
+    # consulted when the plan is rebuilt.
+    standings = LatestValue(read=context.bus.reader("venue-standing"))
+
+    readers: dict[str, CandleStreamReader] = {}
+    planned = [None]
+
+    def rebuild_readers_if_the_plan_changed() -> None:
+        plan = plans.value()
+        standings.value()
+        # By value, never by identity: the planner republishes an unchanged plan
+        # once per interval, and an identity check would reopen every venue
+        # connection each time.
+        if plan is None or plan == planned[0]:
+            return
+        for reader in readers.values():
+            reader.close()
+        readers.clear()
+        for venue_id, adapter in sorted(adapters.items()):
+            if not plan.assignments_for(venue_id, CAPTURED_STREAM_KIND):
+                continue  # this plan gives that venue no candles; not this part's call
+            readers[venue_id] = CandleStreamReader(
+                adapter=adapter,
+                plan=plan,
+                tape_root=tape_root,
+                writeback_interval_bytes=int(context.number("writeback_interval")),
+                reconnect_backoff_floor_seconds=context.number("venue_reconnect_backoff_floor"),
+                reconnect_backoff_ceiling_seconds=context.number("venue_reconnect_backoff_ceiling"),
+                drain_interval_seconds=context.number("stream_drain_interval"),
+            )
+        planned[0] = plan
+
+    def capture_and_publish() -> None:
+        rebuild_readers_if_the_plan_changed()
+        for venue_id, reader in readers.items():
+            adapter = adapters[venue_id]
+            reader.capture_one_tick(
+                on_recorded_payload=lambda payload, adapter=adapter: publish_candles(
+                    adapter.read_candles(payload)
+                )
+            )
+
+    try:
+        return run_part(
+            declaration=PART_DECLARATION,
+            control_socket=context.control_socket,
+            do_one_tick=capture_and_publish,
+            emit_health=context.emit_health,
+            health_interval_seconds=context.health_interval_seconds,
+            input_descriptors=context.input_descriptors,
+            tick_floor_seconds=context.tick_floor_seconds,
+        )
+    finally:
+        for reader in readers.values():
+            reader.close()
 
 
 __all__ = [
@@ -137,4 +218,5 @@ __all__ = [
     "describe_capture",
     "is_closed_candle",
     "run_candle_stream_reader",
+    "start_part",
 ]

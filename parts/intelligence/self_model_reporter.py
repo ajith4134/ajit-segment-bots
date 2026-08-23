@@ -285,6 +285,8 @@ def describe_competence(reporter: SelfModelReporter) -> dict:
 def run_self_model_reporter(
     reporter: SelfModelReporter, control_socket, read_records, publish_map,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_records(reporter)
@@ -296,4 +298,6 @@ def run_self_model_reporter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

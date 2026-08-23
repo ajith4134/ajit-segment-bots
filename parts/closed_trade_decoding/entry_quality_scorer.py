@@ -227,6 +227,8 @@ def describe_entry_scoring(scorer: EntryQualityScorer) -> dict:
 def run_entry_quality_scorer(
     scorer: EntryQualityScorer, control_socket, read_closed_trades, publish_qualities,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for trade_id, closed_trade in read_closed_trades():
@@ -240,4 +242,6 @@ def run_entry_quality_scorer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

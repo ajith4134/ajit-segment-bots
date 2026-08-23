@@ -235,6 +235,8 @@ def describe_gap_finding(finder: CapabilityGapFinder) -> dict:
 def run_capability_gap_finder(
     finder: CapabilityGapFinder, control_socket, read_signals, publish_gaps,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for job in read_signals(finder):
@@ -248,4 +250,6 @@ def run_capability_gap_finder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

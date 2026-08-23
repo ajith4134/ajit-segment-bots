@@ -252,6 +252,8 @@ def describe_narrative_writing(writer: TradeNarrativeWriter) -> dict:
 def run_trade_narrative_writer(
     writer: TradeNarrativeWriter, control_socket, read_episodes, publish_narratives,
     publish_requests, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for trade_id, episode, loss_cause, phrased in read_episodes():
@@ -267,4 +269,6 @@ def run_trade_narrative_writer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

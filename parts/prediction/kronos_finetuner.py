@@ -260,6 +260,8 @@ def describe_finetuning(finetuner: KronosFinetuner) -> dict:
 def run_kronos_finetuner(
     finetuner: KronosFinetuner, control_socket, read_windows_and_requests, publish_model,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_windows_and_requests(finetuner)
@@ -273,4 +275,6 @@ def run_kronos_finetuner(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

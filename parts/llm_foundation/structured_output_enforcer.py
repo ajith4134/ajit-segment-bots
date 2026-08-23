@@ -297,6 +297,8 @@ def describe_enforcement(enforcer: StructuredOutputEnforcer) -> dict:
 def run_structured_output_enforcer(
     enforcer: StructuredOutputEnforcer, control_socket, read_responses, publish_outputs,
     publish_retries, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for response, version, facts in read_responses():
@@ -312,4 +314,6 @@ def run_structured_output_enforcer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

@@ -195,6 +195,8 @@ def describe_upstream_watch(watch: UpstreamImprovementWatch) -> dict:
 def run_upstream_improvement_watch(
     watch: UpstreamImprovementWatch, control_socket, read_notices, publish_changes,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for job in read_notices():
@@ -208,4 +210,6 @@ def run_upstream_improvement_watch(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )

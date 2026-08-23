@@ -236,6 +236,8 @@ def describe_verification(verifier: TraderRecordVerifier) -> dict:
 def run_trader_record_verifier(
     verifier: TraderRecordVerifier, control_socket, read_traders, publish_records,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for trader_id in read_traders(verifier):
@@ -247,4 +249,6 @@ def run_trader_record_verifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
