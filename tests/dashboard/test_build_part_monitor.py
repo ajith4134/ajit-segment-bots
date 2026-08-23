@@ -293,3 +293,73 @@ def test_a_block_with_no_parts_is_red_not_vacuously_green():
     is_complete, proof = build_part_monitor.block_completion([])
     assert is_complete is False
     assert proof
+
+
+# ---- RUNNING: read from the collector's table, never inferred ------------------
+
+def _write_table(path: Path, collected_at_ns: int, beats):
+    import json
+
+    path.write_text(json.dumps({
+        "schema_version": 1, "part_id": "heartbeat-collector",
+        "collected_at_ns": collected_at_ns,
+        "reporting": sum(1 for b in beats if b["state"] == "reporting"),
+        "late": 0, "silent": sum(1 for b in beats if b["state"] == "silent"),
+        "never_reported": 0, "heartbeats": beats,
+    }))
+
+
+def test_a_fresh_table_makes_a_reporting_part_alive(tmp_path):
+    monitor = _import_build_part_monitor()
+    table = tmp_path / "heartbeat-table.json"
+    _write_table(table, 1_000_000_000_000, [
+        {"part_id": "a", "state": "reporting", "age_seconds": 0.4, "rate_ratio": 1.0,
+         "staleness_seconds": 0.3, "input_loss": []},
+        {"part_id": "b", "state": "silent", "age_seconds": 40.0, "rate_ratio": 1.0,
+         "staleness_seconds": 40.0, "input_loss": []},
+    ])
+    alive, note = monitor.probe_live_heartbeats(
+        table, now_ns=1_000_000_000_000 + 2_000_000_000, silent_after_seconds=10.0
+    )
+    assert set(alive) == {"a"}
+    assert "1 reporting" in note and "1 silent" in note
+
+
+def test_a_stale_table_proves_nothing_about_any_part(tmp_path):
+    """The collector's last word is not current either (Rule 8)."""
+    monitor = _import_build_part_monitor()
+    table = tmp_path / "heartbeat-table.json"
+    _write_table(table, 1_000_000_000_000, [
+        {"part_id": "a", "state": "reporting", "age_seconds": 0.4, "rate_ratio": 1.0,
+         "staleness_seconds": 0.3, "input_loss": []},
+    ])
+    alive, note = monitor.probe_live_heartbeats(
+        table, now_ns=1_000_000_000_000 + 60_000_000_000, silent_after_seconds=10.0
+    )
+    assert alive == {}
+    assert "collector itself has stopped" in note
+
+
+def test_no_table_is_its_own_reading(tmp_path):
+    monitor = _import_build_part_monitor()
+    alive, note = monitor.probe_live_heartbeats(tmp_path / "none.json", now_ns=1, silent_after_seconds=10.0)
+    assert alive == {} and "has not written one" in note
+
+
+def test_running_is_reached_only_from_tested(monkeypatch, tmp_path):
+    """A heartbeat from an untested part does not climb; the proof says why."""
+    monitor = _import_build_part_monitor()
+    registry = monitor.load_feature_registry()
+    tested_id = next(
+        f["id"] for f in registry.features
+        if monitor.probe_part_rung(f["id"], monitor.find_source_files())[0] == monitor.TESTED
+    )
+    monkeypatch.setattr(
+        monitor, "probe_live_heartbeats",
+        lambda *a, **k: ({tested_id: "heartbeat-table.json: reported 0.5s ago"}, "one alive"),
+    )
+    states = monitor.measure_parts()
+    by_id = {s.part_id: s for s in states}
+    assert by_id[tested_id].rung == monitor.RUNNING
+    assert "reported 0.5s ago" in by_id[tested_id].proof
+    assert monitor.part_is_measured_complete(by_id[tested_id])

@@ -127,6 +127,10 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         # it: it limits the sizer, and what it limits against is the positions the
         # sizer's own orders produced. There is no ordering that makes that a line.
         "exposure-limiter",
+        # The collector reads part-health from every part, including its own
+        # consumers downstream; it is started first so the earliest reports have
+        # an inbox, which is the opposite of this rule on purpose.
+        "heartbeat-collector",
     }
 
     for part_id, inputs in consumes.items():

@@ -595,3 +595,77 @@ def test_nothing_filled_reads_as_waiting_not_as_healthy(board):
     result = board.probe_decision_freshness([])
     assert result.state == board.WAITING
     assert "nothing has filled yet" in result.value
+
+
+# ---- Parts alive: the first consumer of staleness and input loss ---------------
+
+def _heartbeat_table(path, collected_at_ns, beats):
+    import json
+
+    path.write_text(json.dumps({
+        "schema_version": 1, "part_id": "heartbeat-collector",
+        "collected_at_ns": collected_at_ns,
+        "reporting": sum(1 for b in beats if b["state"] == "reporting"),
+        "late": 0, "silent": sum(1 for b in beats if b["state"] == "silent"),
+        "never_reported": 0, "heartbeats": beats,
+    }))
+
+
+@pytest.fixture
+def heartbeat_settings(board, monkeypatch, tmp_path):
+    table = tmp_path / "heartbeat-table.json"
+
+    class Document:
+        def read_value(self, name):
+            return {"heartbeat_table_path": str(table), "heartbeat_silent_after_seconds": 10.0}[name]
+
+    monkeypatch.setattr(board, "load_settings_document", lambda *_a, **_k: Document())
+    return table
+
+
+def test_parts_alive_is_not_measured_without_a_table(board, heartbeat_settings):
+    result = board.probe_parts_alive(now_ns=1)
+    assert result.state == board.UNMEASURED
+    assert "heartbeat-collector has not run" in result.proof
+
+
+def test_input_loss_fails_the_tile_and_names_the_part(board, heartbeat_settings):
+    """The frozen-price defect of 2026-08-23, as the tile would have shown it."""
+    _heartbeat_table(heartbeat_settings, 10_000_000_000, [
+        {"part_id": "bull-feature-builder", "state": "reporting", "age_seconds": 0.3,
+         "rate_ratio": 1.0, "staleness_seconds": 0.2, "input_loss": [["market-data", 3400]]},
+        {"part_id": "position-sizer", "state": "reporting", "age_seconds": 0.5,
+         "rate_ratio": 1.0, "staleness_seconds": 0.4, "input_loss": []},
+    ])
+    result = board.probe_parts_alive(now_ns=11_000_000_000)
+    assert result.state == board.FAILING
+    assert "bull-feature-builder" in result.proof and "3400" in result.proof
+
+
+def test_a_silent_part_fails_the_tile(board, heartbeat_settings):
+    _heartbeat_table(heartbeat_settings, 10_000_000_000, [
+        {"part_id": "a", "state": "silent", "age_seconds": 45.0, "rate_ratio": 1.0,
+         "staleness_seconds": 45.0, "input_loss": []},
+    ])
+    result = board.probe_parts_alive(now_ns=11_000_000_000)
+    assert result.state == board.FAILING and "a" in result.proof
+
+
+def test_a_dead_collector_is_failing_not_its_last_good_table(board, heartbeat_settings):
+    _heartbeat_table(heartbeat_settings, 10_000_000_000, [
+        {"part_id": "a", "state": "reporting", "age_seconds": 0.3, "rate_ratio": 1.0,
+         "staleness_seconds": 0.2, "input_loss": []},
+    ])
+    result = board.probe_parts_alive(now_ns=10_000_000_000 + 30_000_000_000)
+    assert result.state == board.FAILING and "collector itself has stopped" in result.proof
+
+
+def test_everything_reporting_with_no_loss_reads_ok(board, heartbeat_settings):
+    _heartbeat_table(heartbeat_settings, 10_000_000_000, [
+        {"part_id": "a", "state": "reporting", "age_seconds": 0.3, "rate_ratio": 1.0,
+         "staleness_seconds": 0.2, "input_loss": []},
+        {"part_id": "b", "state": "reporting", "age_seconds": 0.9, "rate_ratio": 1.0,
+         "staleness_seconds": 0.8, "input_loss": []},
+    ])
+    result = board.probe_parts_alive(now_ns=11_000_000_000)
+    assert result.state == board.OK and result.value == "2 of 2 reporting"

@@ -602,3 +602,56 @@ def test_the_system_recovers_before_the_next_ablation():
     assert subject.begin_ablation("b") == RECOVERING
     clock.now += 31
     assert subject.begin_ablation("b") == ABLATING
+
+
+# ---- heartbeat-collector: the table as a file, and what rides on it -----------
+
+def test_input_loss_rides_on_the_heartbeat():
+    """PartHealth carried input_loss since the substrate was built and nothing
+    read it: on 2026-08-23 a symbol's price sat frozen 56 minutes in a part
+    whose health read fine. The table is the first consumer."""
+    subject = collector(Clock())
+    subject.observe_health(
+        PartHealth("the-model", "on", 1.0, 0.1, 1, None, input_loss=(("market-data", 12),))
+    )
+    assert subject.heartbeat_of("the-model").input_loss == (("market-data", 12),)
+
+
+def test_the_table_file_round_trips_and_is_read_by_nothing_older(tmp_path):
+    from parts.observability.heartbeat_collector import (
+        read_heartbeat_table_file, write_heartbeat_table,
+    )
+
+    clock = Clock()
+    subject = collector(clock, late=5.0, silent=30.0)
+    subject.observe_health(PartHealth("a", "on", 1.0, 0.2, 1, None, input_loss=(("fill", 1),)))
+    clock.now += 6
+    subject.observe_health(PartHealth("b", "on", 0.5, 0.1, 2, None))
+    path = tmp_path / "heartbeat-table.json"
+
+    write_heartbeat_table(path, subject.read_table(), subject.standing)
+    document = read_heartbeat_table_file(path)
+
+    assert document["reporting"] == 1 and document["late"] == 1
+    by_id = {beat["part_id"]: beat for beat in document["heartbeats"]}
+    assert by_id["a"]["state"] == LATE
+    assert by_id["a"]["input_loss"] == [["fill", 1]]
+    assert by_id["b"]["state"] == REPORTING and by_id["b"]["rate_ratio"] == 0.5
+    assert not list(tmp_path.glob(".*.partial")), "the temp file is replaced, never left"
+
+
+def test_a_missing_or_half_written_table_reads_as_none_not_as_quiet(tmp_path):
+    from parts.observability.heartbeat_collector import read_heartbeat_table_file
+
+    assert read_heartbeat_table_file(tmp_path / "absent.json") is None
+    (tmp_path / "half.json").write_text('{"schema_version": 1, "heartbeats": [')
+    assert read_heartbeat_table_file(tmp_path / "half.json") is None
+    (tmp_path / "other.json").write_text('{"schema_version": 99}')
+    assert read_heartbeat_table_file(tmp_path / "other.json") is None
+
+
+def test_heartbeat_collector_carries_the_entry_point_the_launcher_needs():
+    from parts.observability import heartbeat_collector
+    from runtime.part_launcher import PART_ENTRY_POINT
+
+    assert callable(getattr(heartbeat_collector, PART_ENTRY_POINT))

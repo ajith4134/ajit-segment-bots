@@ -45,6 +45,10 @@ from parts.ledger.trade_lifecycle_recorder import (  # noqa: E402
     LIFECYCLE_STAGES,
     REPEATABLE_STAGES,
 )
+from parts.observability.heartbeat_collector import (  # noqa: E402
+    REPORTING as HEARTBEAT_REPORTING,
+    read_heartbeat_table_file,
+)
 from runtime.journal import GENESIS_DIGEST, compute_digest  # noqa: E402
 from runtime.settings_reader import load_settings_document, settings_directory  # noqa: E402
 
@@ -938,6 +942,83 @@ def probe_exit_plans() -> ProbeResult:
     )
 
 
+def probe_parts_alive(now_ns: int | None = None) -> ProbeResult:
+    """Every running part's own word about itself: its age, its staleness, what it lost.
+
+    This is the first consumer of `PartHealth.input_loss` and `staleness_seconds`.
+    Both had been reported by every part since the substrate was built, and
+    nothing read them -- which is how a symbol's price sat frozen for 56 minutes
+    on 2026-08-23 inside a part whose health read fine, and the bot decided a
+    trade on it. Read from the table heartbeat-collector writes, the same file
+    the part monitor's RUNNING rung is read from.
+
+    FAILING when any part is silent, or any part reports input loss, or any
+    part's staleness is past the silence threshold: each of those is a decision
+    made on data that is not what the market is saying now.
+    """
+    runtime = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    path = pathlib.Path(str(runtime.read_value("heartbeat_table_path"))).expanduser()
+    silent_after = float(runtime.read_value("heartbeat_silent_after_seconds"))
+    document = read_heartbeat_table_file(path)
+    if document is None:
+        return ProbeResult(
+            "Parts alive", UNMEASURED, "no heartbeat table",
+            f"{path} does not exist or is unreadable: heartbeat-collector has not run, so "
+            f"no part's staleness or input loss has been read by anything",
+        )
+    if now_ns is None:
+        import time
+
+        now_ns = time.time_ns()
+    table_age = (now_ns - int(document.get("collected_at_ns", 0))) / 1e9
+    if table_age >= silent_after:
+        return ProbeResult(
+            "Parts alive", FAILING, f"collector silent {table_age:.0f}s",
+            f"{path} was written {table_age:.0f}s ago, past the {silent_after:.0f}s silence "
+            f"threshold; the collector itself has stopped and nothing in it is current",
+        )
+    beats = document.get("heartbeats", [])
+    silent = [b["part_id"] for b in beats if b.get("state") != HEARTBEAT_REPORTING]
+    lossy = [
+        (b["part_id"], b.get("input_loss"))
+        for b in beats if b.get("input_loss")
+    ]
+    stale = [
+        (b["part_id"], float(b.get("staleness_seconds") or 0.0))
+        for b in beats
+        if b.get("staleness_seconds") is not None
+        and float(b["staleness_seconds"]) >= silent_after
+    ]
+    reporting = document.get("reporting", 0)
+    total = len(beats)
+    proof = f"{path}, written {table_age:.0f}s ago: {reporting} of {total} reporting"
+    if silent:
+        return ProbeResult(
+            "Parts alive", FAILING, f"{len(silent)} not reporting",
+            f"{proof}; not reporting: {', '.join(sorted(silent))}",
+        )
+    if lossy:
+        worst = max(lossy, key=lambda item: sum(count for _kind, count in item[1]))
+        return ProbeResult(
+            "Parts alive", FAILING, f"{len(lossy)} lost input",
+            f"{proof}; input lost by {', '.join(sorted(part for part, _loss in lossy))}; "
+            f"worst {worst[0]} lost {worst[1]}",
+        )
+    if stale:
+        worst = max(stale, key=lambda item: item[1])
+        return ProbeResult(
+            "Parts alive", FAILING, f"{len(stale)} stale",
+            f"{proof}; ticked more than {silent_after:.0f}s ago: {worst[0]} at {worst[1]:.0f}s",
+        )
+    if total == 0:
+        return ProbeResult("Parts alive", WAITING, "nothing has reported", proof)
+    worst_staleness = max((float(b.get("staleness_seconds") or 0.0) for b in beats), default=0.0)
+    return ProbeResult(
+        "Parts alive", OK, f"{reporting} of {total} reporting",
+        f"{proof}, no input loss, worst staleness {worst_staleness:.1f}s",
+    )
+
+
 def probe_decision_freshness(entries: list[dict]) -> ProbeResult:
     """How far the price a decision was made at sits from the price it filled at.
 
@@ -1018,6 +1099,7 @@ def run_all_probes():
     results = [
         probe_money_mode(),
         probe_trading_half(running),
+        probe_parts_alive(),
         probe_feed(read_tape_last_write_seconds()),
         probe_noticed(entries, live_from_ns),
         probe_opened(trades, journal_path),

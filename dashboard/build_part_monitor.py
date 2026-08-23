@@ -278,14 +278,92 @@ def check_wiring_against_blueprint(registry: FeatureRegistry, sources: list[Path
     return WiringCheck(tuple(checked), mismatches)
 
 
+def read_heartbeat_table_path() -> Path:
+    """Where the operator's settings say heartbeat-collector writes its table."""
+    from runtime.settings_reader import load_settings_document, settings_directory
+
+    document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    return Path(str(document.read_value("heartbeat_table_path"))).expanduser()
+
+
+def probe_live_heartbeats(
+    table_path: Path | None = None,
+    now_ns: int | None = None,
+    silent_after_seconds: float | None = None,
+) -> tuple[dict[str, str], str]:
+    """Which parts are alive right now, and the evidence.
+
+    Reads the table heartbeat-collector writes -- the same file, not a second
+    count kept for the board. Returns {part_id: proof} for every part whose
+    latest report is REPORTING in a table that is itself fresh, and a sentence
+    saying what was read. A table older than the collector's own silence
+    threshold proves nothing about any part: the collector that wrote it has
+    stopped, and its last word must not be shown as current (Rule 8).
+    """
+    project_root = str(PROJECT)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from parts.observability.heartbeat_collector import REPORTING, read_heartbeat_table_file
+
+    if table_path is None:
+        try:
+            table_path = read_heartbeat_table_path()
+        except Exception as refusal:  # the settings file is the operator's; say why
+            return {}, f"no heartbeat table: settings refused ({refusal})"
+    if silent_after_seconds is None:
+        try:
+            from runtime.settings_reader import load_settings_document, settings_directory
+
+            silent_after_seconds = float(
+                load_settings_document(settings_directory() / "runtime.toml", "runtime")
+                .read_value("heartbeat_silent_after_seconds")
+            )
+        except Exception:
+            silent_after_seconds = None
+    document = read_heartbeat_table_file(table_path)
+    if document is None:
+        return {}, f"no heartbeat table at {table_path}: heartbeat-collector has not written one"
+    if now_ns is None:
+        import time
+
+        now_ns = time.time_ns()
+    table_age = (now_ns - int(document.get("collected_at_ns", 0))) / 1e9
+    if silent_after_seconds is not None and table_age >= silent_after_seconds:
+        return {}, (
+            f"heartbeat table at {table_path} is {table_age:.0f}s old, past the "
+            f"{silent_after_seconds:.0f}s silence threshold: the collector itself has stopped"
+        )
+    alive = {}
+    for beat in document.get("heartbeats", ()):
+        if beat.get("state") == REPORTING:
+            alive[beat["part_id"]] = (
+                f"{table_path.name}: reported {beat.get('age_seconds', 0.0):.1f}s before a table "
+                f"written {table_age:.0f}s ago (rate {beat.get('rate_ratio')}, "
+                f"staleness {beat.get('staleness_seconds')}s, input loss {beat.get('input_loss') or 'none'})"
+            )
+    return alive, (
+        f"heartbeat table at {table_path}, written {table_age:.0f}s ago: "
+        f"{document.get('reporting', 0)} reporting, {document.get('late', 0)} late, "
+        f"{document.get('silent', 0)} silent"
+    )
+
+
 def _measure_build_state() -> tuple[list[PartState], WiringCheck]:
     registry = load_feature_registry()
     sources = find_source_files()
     broken = parts_in_violation(registry)
     wiring = check_wiring_against_blueprint(registry, sources)
+    alive, _heartbeat_note = probe_live_heartbeats()
     states = []
     for feature in registry.features:
         rung, proof = probe_part_rung(feature["id"], sources)
+        # RUNNING sits above TESTED on the ladder and is reached only from it: a
+        # part that reports a heartbeat but has no test is a part running
+        # unproven, and the proof says so rather than the rung climbing.
+        if rung == TESTED and feature["id"] in alive:
+            rung, proof = RUNNING, f"{proof}; {alive[feature['id']]}"
+        elif feature["id"] in alive:
+            proof = f"{proof}; reporting a heartbeat but not TESTED, so it does not climb"
         if feature["id"] in wiring.mismatches:
             rung, proof = FAILING, wiring.mismatches[feature["id"]]
         elif feature["id"] in broken:
@@ -414,6 +492,7 @@ def render_wiring_check_note(wiring: WiringCheck) -> str:
 
 def render_page() -> str:
     states, wiring = _measure_build_state()
+    _alive, heartbeat_note = probe_live_heartbeats()
     categories = category_lookup()
     stamped = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     commit = read_last_commit()
@@ -600,11 +679,13 @@ def render_page() -> str:
   </header>
 
   <div class="banner">
-    <div><b>{counts[DECLARED]} of {total} parts are at DECLARED{failing_clause}.</b>
-      This project is a blueprint: {len(categories)} blocks and {total} parts described, with
-      no implementation written. That reading is correct, and a board showing parts
-      "working" would be fiction.</div>
-    <div>The cells climb as code lands. Re-run
+    <div><b>{counts[DECLARED]} of {total} parts are at DECLARED, {counts[IMPLEMENTED]} IMPLEMENTED,
+      {counts[TESTED]} TESTED, {counts[RUNNING]} RUNNING{failing_clause}.</b>
+      {len(categories)} blocks and {total} parts in the blueprint. TESTED means a source file
+      and a test file naming the part exist, nothing more; RUNNING means the part reported a
+      heartbeat in the last few seconds. Neither says the part does its job on live data.</div>
+    <div>Liveness: {esc(heartbeat_note)}.</div>
+    <div>The cells climb as code lands and as parts run. Re-run
       <code>python3 dashboard/build_part_monitor.py</code> to remeasure.</div>
   </div>
 

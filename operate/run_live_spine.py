@@ -81,6 +81,11 @@ SWITCH_ENDPOINT_BACKLOG = 16
 # Comments say what each one is here for, because a list of part ids is a list of
 # decisions and the decisions are the point.
 LIVE_SPINE = (
+    # First, so the earliest health reports have an inbox to land in: it consumes
+    # part-health from every other part here, and a board reads the table it
+    # writes. Until it was on the spine (2026-08-23) nothing consumed the
+    # staleness or input loss every part had been reporting.
+    "heartbeat-collector",
     # The feed. These three replace operate/start_trade_capture.py entirely: the
     # catalogue picks the symbols, the planner packs them onto connections, and the
     # reader writes the tape and publishes market-data.

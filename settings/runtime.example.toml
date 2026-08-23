@@ -627,3 +627,18 @@ note  = "operator, 2026-08-23: how many recent prints per symbol the proposer ke
 value = 0.004
 unit  = "fraction of the decision price"
 note  = "operator, 2026-08-23: how far the market may have moved from the price a decision was made at before the book refuses to fill it. Measured, not chosen: BTCUSDT traded through 0.133% in the 28 seconds captured on 2026-08-22, so four tenths of a per cent is roughly three of those windows -- wide enough that ordinary movement between a decision and its fill passes, narrow enough that the 6% gap seen on 2026-08-23 at 10:25:15 does not. That gap was a decision priced at an ENAUSDT market 56 minutes gone. A live venue would fill such an order without complaint; this refusal is a guard on the decision, never a simulation of the venue, and paper-fill-simulator names it separately for exactly that reason. It comes down as decision staleness is measured and fixed rather than guarded against."
+
+[heartbeat_table_path]
+value = "~/.local/share/ajit-segment-bots/heartbeat-table.json"
+unit  = "path"
+note  = "operator, 2026-08-23: where heartbeat-collector writes the latest health of every part that has reported, with its age. Written so a board built in another process can read which parts are alive: until this existed the part monitor's RUNNING rung was unreachable and 41 live parts rendered as never run. Beside the learned state, not under /tmp -- though unlike the learned state a table lost to a reboot is the correct reading, since nothing is running after one."
+
+[heartbeat_late_after_seconds]
+value = 3.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old a part's last health report may be before the collector calls it late. Three part_health_interval periods: one missed report is a scheduling hiccup under load, three in a row is not. Measured on the live run of 2026-08-23: at 30 symbols every spine part reports within 1.1 s of the last."
+
+[heartbeat_silent_after_seconds]
+value = 10.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old a part's last health report may be before the collector calls it silent and the boards stop showing its last word as current. Ten seconds is five supervision intervals of the live spine (2 s), so a part that died is silent here before the supervisor has restarted it -- the board sees the death, not only the restart record."

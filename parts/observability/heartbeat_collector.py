@@ -51,6 +51,12 @@ class Heartbeat:
     staleness_seconds: float | None
     refused_control_frame: str | None
     reason: str
+    # What the part's inputs lost since it started, per data type. Carried here
+    # because this table is the first place anything reads it: PartHealth has
+    # carried input_loss since the substrate was built and, measured on
+    # 2026-08-23, nothing consumed it while a symbol's price sat frozen for 56
+    # minutes in a part whose health read fine.
+    input_loss: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_healthy(self) -> bool:
@@ -140,7 +146,7 @@ class HeartbeatCollector:
                     Heartbeat(
                         part_id=part_id, state=NEVER_REPORTED, age_seconds=None,
                         reported_state=None, rate_ratio=None, staleness_seconds=None,
-                        refused_control_frame=None,
+                        refused_control_frame=None, input_loss=(),
                         reason="this part is expected but has never reported; it may never have started",
                     )
                 )
@@ -177,6 +183,10 @@ class HeartbeatCollector:
                     rate_ratio=getattr(health, "rate_ratio", None),
                     staleness_seconds=getattr(health, "staleness_seconds", None),
                     refused_control_frame=getattr(health, "refused_control_frame", None),
+                    input_loss=tuple(
+                        (str(kind), int(count))
+                        for kind, count in getattr(health, "input_loss", ()) or ()
+                    ),
                     reason=reason,
                 )
             )
@@ -228,4 +238,127 @@ def run_heartbeat_collector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+    )
+
+
+# ---- the table as a file, so a board built in another process can read it ------
+
+# Written beside the learned state rather than on the bus alone: every board this
+# project renders is built by a process that is not on the bus, and the part
+# monitor's RUNNING rung was unreachable for exactly that reason -- the rung was
+# declared, nothing wrote the evidence anywhere a board could read it, and every
+# live part rendered as if it had never run.
+TABLE_SCHEMA_VERSION = 1
+
+
+def heartbeat_table_as_document(table: HeartbeatTable, standing: CollectorStanding) -> dict:
+    return {
+        "schema_version": TABLE_SCHEMA_VERSION,
+        "part_id": PART_ID,
+        "collected_at_ns": table.collected_at_ns,
+        "reporting": table.reporting,
+        "late": table.late,
+        "silent": table.silent,
+        "never_reported": table.never_reported,
+        "parts_expected": standing.parts_expected,
+        "reports_received": standing.reports_received,
+        "heartbeats": [
+            {
+                "part_id": beat.part_id,
+                "state": beat.state,
+                "age_seconds": beat.age_seconds,
+                "reported_state": beat.reported_state,
+                "rate_ratio": beat.rate_ratio,
+                "staleness_seconds": beat.staleness_seconds,
+                "refused_control_frame": beat.refused_control_frame,
+                "input_loss": list(beat.input_loss),
+                "reason": beat.reason,
+            }
+            for beat in table.heartbeats
+        ],
+    }
+
+
+def write_heartbeat_table(path, table: HeartbeatTable, standing: CollectorStanding) -> None:
+    """Replace the table file atomically.
+
+    A reader must never see half a table: a board that read a truncated file would
+    either fail to build or, worse, build from the parts that happened to be
+    written first. Temp file beside the destination, then `os.replace`. No fsync:
+    this is a live observation, and after a reboot a missing or old table is the
+    correct reading -- nothing was running.
+    """
+    import json
+    import os
+    import pathlib
+    import tempfile
+
+    destination = pathlib.Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent,
+        prefix=f".{destination.name}.", suffix=".partial", delete=False,
+    )
+    try:
+        with handle:
+            json.dump(heartbeat_table_as_document(table, standing), handle, sort_keys=True)
+        os.replace(handle.name, destination)
+    except BaseException:
+        pathlib.Path(handle.name).unlink(missing_ok=True)
+        raise
+
+
+def read_heartbeat_table_file(path) -> dict | None:
+    """The last table written, or None when there is none or it cannot be read.
+
+    None is a state the caller must render as its own thing (NOT MEASURED), never
+    as 'all quiet': a collector that never ran and a system with nothing running
+    look identical from here, and only the former is a gap in the evidence.
+    """
+    import json
+    import pathlib
+
+    try:
+        document = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict) or document.get("schema_version") != TABLE_SCHEMA_VERSION:
+        return None
+    return document
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Expected parts are the ones that have reported at least once: a part knows
+    nothing about the circuit (T-4), so this one cannot be handed the list of what
+    should be running. NEVER_REPORTED is therefore reachable only through
+    `expect_part`, which is the governor's to call once it places parts. Until then
+    a part that never started is invisible here and visible in the launcher's own
+    record -- stated rather than papered over.
+    """
+    import pathlib
+
+    from runtime.input_assembly import Batch
+
+    health_reports = Batch(read=context.bus.reader("part-health"))
+    publish_table = context.bus.publisher_for("heartbeat-table")
+    table_path = pathlib.Path(str(context.setting("heartbeat_table_path").value)).expanduser()
+
+    collector = HeartbeatCollector(
+        late_after_seconds=context.number("heartbeat_late_after_seconds"),
+        silent_after_seconds=context.number("heartbeat_silent_after_seconds"),
+    )
+
+    def publish_and_write(table: HeartbeatTable) -> None:
+        publish_table((table,))
+        write_heartbeat_table(table_path, table, collector.standing)
+
+    return run_heartbeat_collector(
+        collector=collector,
+        control_socket=context.control_socket,
+        read_health=health_reports.payloads,
+        publish_table=publish_and_write,
+        health_interval_seconds=context.health_interval_seconds,
+        emit_health=context.emit_health,
     )
