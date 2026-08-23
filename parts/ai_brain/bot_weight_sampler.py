@@ -279,3 +279,58 @@ def run_bot_weight_sampler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Scorecards carry each bot's record per regime and are adopted whole;
+    regret per bot per regime is observed as it is tracked; the weights for
+    the regime the market is in now go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    regrets = Batch(read=context.bus.reader("bot-regret"))
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    publish_weights = context.bus.publisher_for("bot-weight")
+    sampler = BotWeightSampler(
+        prior_hit_rate=context.number("brain_prior_hit_rate"),
+        prior_weight=context.number("brain_prior_weight"),
+        half_life_observations=context.number("brain_half_life_observations"),
+        minimum_observations=int(context.number("brain_minimum_observations")),
+        minimum_weight=context.number("bot_weight_minimum"),
+        maximum_weight=context.number("bot_weight_maximum"),
+        regret_weight=context.number("bot_weight_regret_weight"),
+        exploration_floor_observations=int(context.number("bot_weight_exploration_floor_observations")),
+        exploration_weight=context.number("bot_weight_exploration_weight"),
+    )
+    last_publish = [float("-inf")]
+
+    def tick() -> None:
+        for scorecard in scorecards.payloads():
+            sampler.observe_scorecard(scorecard.bot, scorecard)
+        for regret in regrets.payloads():
+            if regret.median_regret is not None:
+                sampler.observe_regret(regret.bot, regret.regime, regret.median_regret)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        # One weight set per regime currently observed on any symbol.
+        seen = {r.regime for r in regimes.mapping().values() if r.is_classified}
+        weights = tuple(weight for regime in sorted(seen) for weight in sampler.weights_in(regime))
+        if weights:
+            publish_weights(weights)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

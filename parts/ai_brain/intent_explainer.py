@@ -228,3 +228,73 @@ def run_intent_explainer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    opinions = LatestByKey(read=context.bus.reader("directional-opinion"), key_of=lambda o: (o.bot, o.venue_id, o.symbol))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    snapshots = Batch(read=context.bus.reader("verified-snapshot"))
+    attributions = Batch(read=context.bus.reader("feature-attribution"))
+    publish_rationales = context.bus.publisher_for("decision-rationale")
+    publish_requests = context.bus.publisher_for("llm-request")
+    explainer = IntentExplainer(
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    # Intents judged without a model answer are remembered by symbol until a
+    # validated output for this part's purpose names the same symbol in its
+    # value; then the judgement is made again with the model's text. No model
+    # is configured in phase 1, so today every judgement is the measured one.
+    pending: dict[tuple[str, str], tuple] = {}
+
+    def take_model_outputs():
+        answered = {}
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            key = (str(value.get("venue_id", "")), str(value.get("symbol", "")))
+            if key in pending:
+                answered[key] = output.text
+        return answered
+
+    def opinions_for(venue_id, symbol):
+        return [o for (bot, v, s), o in opinions.mapping().items() if (v, s) == (venue_id, symbol)]
+
+    def read_intents_and_output(_explainer):
+        for snapshot in snapshots.payloads():
+            explainer.observe_verified_snapshot(snapshot.venue_id, snapshot.symbol, snapshot.facts)
+        for attribution in attributions.payloads():
+            explainer.observe_feature_attribution(attribution.venue_id, attribution.symbol, attribution.contributions)
+        answered = take_model_outputs()
+        judgements = []
+        for key, text in answered.items():
+            intent, held = pending.pop(key)
+            judgements.append((intent, held, text))
+        for intent in intents.payloads():
+            if not intent.is_actionable:
+                continue
+            key = (intent.venue_id, intent.symbol)
+            held = opinions_for(*key)
+            pending[key] = (intent, held)
+            judgements.append((intent, held, None))
+        return tuple(judgements)
+
+    def publish_some(publish):
+        return lambda items: publish(items) if items else None
+
+    return run_intent_explainer(
+        explainer=explainer,
+        control_socket=context.control_socket,
+        read_intents_and_output=read_intents_and_output,
+        publish_rationales=publish_some(publish_rationales),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -324,3 +324,87 @@ def run_devils_advocate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch, LatestByKey
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    opinions = LatestByKey(read=context.bus.reader("directional-opinion"), key_of=lambda o: (o.bot, o.venue_id, o.symbol))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    snapshots = Batch(read=context.bus.reader("verified-snapshot"))
+    memories = LatestByKey(read=context.bus.reader("regime-memory"), key_of=lambda m: m.regime)
+    publish_arguments = context.bus.publisher_for("counter-argument")
+    publish_requests = context.bus.publisher_for("llm-request")
+    advocate = DevilsAdvocate(
+        veto_when_objection_hit_rate_above=context.number("devils_advocate_veto_hit_rate"),
+        minimum_observations=int(context.number("brain_minimum_observations")),
+        prior_objection_hit_rate=context.number("brain_prior_hit_rate"),
+        prior_weight=context.number("brain_prior_weight"),
+        half_life_observations=context.number("brain_half_life_observations"),
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    # Intents judged without a model answer are remembered by symbol until a
+    # validated output for this part's purpose names the same symbol in its
+    # value; then the judgement is made again with the model's text. No model
+    # is configured in phase 1, so today every judgement is the measured one.
+    pending: dict[tuple[str, str], tuple] = {}
+
+    def take_model_outputs():
+        answered = {}
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            key = (str(value.get("venue_id", "")), str(value.get("symbol", "")))
+            if key in pending:
+                answered[key] = output.text
+        return answered
+
+    def opinions_for(venue_id, symbol):
+        return [o for (bot, v, s), o in opinions.mapping().items() if (v, s) == (venue_id, symbol)]
+
+    def regime_for(venue_id, symbol, held) -> str:
+        # The regime the opinions were formed in, read off what they carry;
+        # regime-memory is consulted so a remembered regime's record is current.
+        memories.mapping()
+        for opinion in held:
+            summary = getattr(opinion, "features_summary", None) or {}
+            regime = (summary.get("sources") or {}).get("regime") if isinstance(summary, dict) else None
+            if regime:
+                return str(regime)
+        return "unclassified"
+
+    def read_intents_and_output(_advocate):
+        for snapshot in snapshots.payloads():
+            advocate.observe_verified_snapshot(snapshot.venue_id, snapshot.symbol, snapshot.facts)
+        answered = take_model_outputs()
+        judgements = []
+        for key, text in answered.items():
+            intent, held = pending.pop(key)
+            judgements.append((intent, held, regime_for(*key, held), text))
+        for intent in intents.payloads():
+            if not intent.is_actionable:
+                continue
+            key = (intent.venue_id, intent.symbol)
+            held = opinions_for(*key)
+            pending[key] = (intent, held)
+            judgements.append((intent, held, regime_for(*key, held), None))
+        return tuple(judgements)
+
+    def publish_some(publish):
+        return lambda items: publish(items) if items else None
+
+    return run_devils_advocate(
+        advocate=advocate,
+        control_socket=context.control_socket,
+        read_intents_and_output=read_intents_and_output,
+        publish_arguments=publish_some(publish_arguments),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

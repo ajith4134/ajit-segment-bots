@@ -277,3 +277,80 @@ def run_brain_self_reflector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A closed trade arrives as the encoder's episode, which carries what the
+    trade was and how it ended; the reflector's own episode shape is built
+    from it. The premortem, counter-argument and rationale written before
+    the trade are what the reflection judges the reasoning against.
+    """
+    from runtime.input_assembly import Batch
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    rationales = Batch(read=context.bus.reader("decision-rationale"))
+    snapshots = Batch(read=context.bus.reader("knowledge-snapshot"))
+    premortems = Batch(read=context.bus.reader("premortem-note"))
+    arguments = Batch(read=context.bus.reader("counter-argument"))
+    narratives = Batch(read=context.bus.reader("trade-narrative"))
+    publish_notes = context.bus.publisher_for("reflection-note")
+    publish_requests = context.bus.publisher_for("llm-request")
+    reflector = BrainSelfReflector(
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+    pending: dict[tuple[str, str], object] = {}
+
+    def as_reflectable(encoded) -> TradeEpisode:
+        held = max(0.0, (encoded.closed_at_ns - encoded.opened_at_ns) / 1e9)
+        conditions = encoded.conditions if isinstance(encoded.conditions, dict) else {}
+        entry_conviction = float(conditions.get("conviction", 0.0) or 0.0)
+        return TradeEpisode(
+            venue_id=encoded.venue_id, symbol=encoded.symbol,
+            was_profitable=encoded.realised > 0,
+            realised_fraction=float(conditions.get("realised_fraction", encoded.realised) or 0.0),
+            how_it_ended=str(encoded.outcome), seconds_held=held,
+            entry_conviction=entry_conviction,
+            conviction_was_measured=bool(conditions.get("conviction_was_measured", False)),
+        )
+
+    def read_episodes_and_output(_reflector):
+        for note in premortems.payloads():
+            reflector.observe_premortem(note)
+        for argument in arguments.payloads():
+            reflector.observe_counter_argument(argument)
+        for rationale in rationales.payloads():
+            reflector.observe_rationale(rationale)
+        snapshots.payloads()
+        narratives.payloads()
+        judgements = []
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            key = (str(value.get("venue_id", "")), str(value.get("symbol", "")))
+            if key in pending:
+                judgements.append((pending.pop(key), output.text))
+        for encoded in episodes.payloads():
+            episode = as_reflectable(encoded)
+            pending[(episode.venue_id, episode.symbol)] = episode
+            judgements.append((episode, None))
+        return tuple(judgements)
+
+    def publish_some(publish):
+        return lambda items: publish(items) if items else None
+
+    return run_brain_self_reflector(
+        reflector=reflector,
+        control_socket=context.control_socket,
+        read_episodes_and_output=read_episodes_and_output,
+        publish_notes=publish_some(publish_notes),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

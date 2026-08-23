@@ -280,3 +280,66 @@ def run_opinion_conflict_resolver(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Opinions are gathered per symbol; a ruling is made for each symbol that
+    received an opinion this wake, in that symbol's current regime. A bot's
+    hit rate in a regime is read off the maturity the graduation gate
+    publishes, as its conditions record it, when that record carries one.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    maturities = Batch(read=context.bus.reader("bot-maturity"))
+    memories = Batch(read=context.bus.reader("regime-memory"))
+    publish_rulings = context.bus.publisher_for("conflict-ruling")
+    resolver = OpinionConflictResolver(
+        maturity_gap_trades=int(context.number("exploration_maturity_gap_trades")),
+        minimum_regime_hit_rate=context.number("conflict_minimum_regime_hit_rate"),
+        remember_rulings=bool(context.setting("conflict_remember_rulings").value),
+    )
+    held: dict[tuple[str, str], dict] = {}
+
+    def read_opinions_and_regime(_resolver):
+        for maturity in maturities.payloads():
+            resolver.observe_bot_maturity(
+                BotMaturity(
+                    bot=maturity.bot, regime=maturity.regime,
+                    trades_here=maturity.trades_here, is_mature=maturity.is_mature,
+                )
+            )
+            hit_rate = (maturity.conditions_met or {}).get("hit_rate") if isinstance(maturity.conditions_met, dict) else None
+            if isinstance(hit_rate, (int, float)):
+                resolver.observe_regime_hit_rate(maturity.bot, maturity.regime, float(hit_rate))
+        for memory in memories.payloads():
+            if getattr(memory, "state", "") == "ended":
+                resolver.forget_regime(memory.regime)
+        touched = set()
+        for opinion in opinions.payloads():
+            key = (opinion.venue_id, opinion.symbol)
+            held.setdefault(key, {})[opinion.bot] = opinion
+            touched.add(key)
+        regime_by_symbol = regimes.mapping()
+        return tuple(
+            (tuple(held[key].values()), regime_by_symbol[key])
+            for key in sorted(touched) if key in regime_by_symbol and len(held[key]) > 1
+        )
+
+    def publish(rulings) -> None:
+        if rulings:
+            publish_rulings(rulings)
+
+    return run_opinion_conflict_resolver(
+        resolver=resolver,
+        control_socket=context.control_socket,
+        read_opinions_and_regime=read_opinions_and_regime,
+        publish_rulings=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

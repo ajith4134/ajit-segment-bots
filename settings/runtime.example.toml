@@ -1002,3 +1002,143 @@ note  = "operator, 2026-08-23: the least weight a detector's setups may be given
 value = 3.0
 unit  = "weight"
 note  = "operator, 2026-08-23: the most weight a detector may be given. Three, so one detector with a good week cannot swamp the rest of the bot's evidence."
+
+[brain_prior_hit_rate]
+value = 0.5
+unit  = "probability"
+note  = "operator, 2026-08-23: the hit rate the brain assumes for a bot, an objection or a forecaster before it has a scored record. A coin flip, the one prior that claims nothing; every brain part that learns a rate starts here and the measured rate takes over at brain_prior_weight observations."
+
+[brain_prior_weight]
+value = 4.0
+unit  = "observations"
+note  = "operator, 2026-08-23: how many scored observations the brain's prior hit rate is worth. Four, as for the bots' own learners: a prior that outvoted a week of evidence would be a rule in disguise."
+
+[brain_half_life_observations]
+value = 500.0
+unit  = "observations"
+note  = "operator, 2026-08-23: how quickly the brain's learned rates forget. Five hundred, the same as the bots' feature learners: long enough that a rate is a measurement, short enough that a regime that ended a month ago no longer decides."
+
+[brain_minimum_observations]
+value = 20
+unit  = "observations"
+note  = "operator, 2026-08-23: how many scored observations a brain rate needs before it is read as a frequency rather than the prior. Twenty, the floor used throughout for a rate to mean anything."
+
+[bot_weight_minimum]
+value = 0.25
+unit  = "weight"
+note  = "operator, 2026-08-23: the least weight bot-weight-sampler gives a bot in a regime. A quarter rather than zero, so a bot weighted down keeps producing the evidence that could restore it."
+
+[bot_weight_maximum]
+value = 3.0
+unit  = "weight"
+note  = "operator, 2026-08-23: the most weight a bot gets in a regime, so one bot's good week cannot silence the other two."
+
+[bot_weight_regret_weight]
+value = 1.0
+unit  = "multiplier"
+note  = "operator, 2026-08-23: how much a bot's measured regret -- the times its passed-over opinion would have been right -- counts against its hit rate in the sampler. One: regret and hits are both outcomes of the same opinions, and until one is shown to predict better than the other they are weighed the same."
+
+[bot_weight_exploration_floor_observations]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23: below this many trades in a regime a bot is given bot_weight_exploration_weight rather than a learned weight, so an unexplored bot is tried rather than ignored."
+
+[bot_weight_exploration_weight]
+value = 1.0
+unit  = "weight"
+note  = "operator, 2026-08-23: the weight an unexplored bot is given. One, the neutral weight: neither favoured nor penalised until it has a record."
+
+[llm_claim_relative_tolerance]
+value = 0.02
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far a number a model writes may differ from the measured fact it cites before the sentence is removed as unsupported. Two percent, which is within rounding of a price or a percentage stated to three figures and outside any honest restatement of a measurement that was wrong."
+
+[llm_maximum_sentences]
+value = 4
+unit  = "sentences"
+note  = "operator, 2026-08-23: the most sentences a brain part asks a model for. Four: a premortem, a counter-argument or a rationale longer than that is read by nobody at decision speed, and every sentence is one more claim to verify against the facts."
+
+[devils_advocate_veto_hit_rate]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: the measured hit rate an objection needs -- how often raising it would have been right -- before devils-advocate lets it veto a decision rather than merely be recorded. Three in five, above the coin flip by enough that at twenty observations it is not noise."
+
+[exploration_maximum_open_pairs]
+value = 1
+unit  = "pairs"
+note  = "operator, 2026-08-23: how many exploration pairs -- a long from one bot against a short from another, opened to find out which is right -- may be open at once. One on paper, because each pair is two positions' worth of risk spent on information rather than on expectancy."
+
+[exploration_maturity_gap_trades]
+value = 20
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many more trades one bot must have in a regime than another before the brain treats their disagreement as the mature bot's call rather than a question worth a pair. Twenty, the observation floor used throughout."
+
+[exploration_maximum_cost_fraction]
+value = 0.002
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: the most a pair may cost in fees and spread, both legs, for the information to be worth buying. Twenty basis points, roughly the two-leg round trip at the venues' taker fees; a symbol that costs more to learn from is learned from by watching."
+
+[exploration_minimum_information_value]
+value = 0.05
+unit  = "information value"
+note  = "operator, 2026-08-23: the least the opener's information value -- how much the two bots' records in this regime would move on one more outcome -- must be to open a pair. A judgement until pairs have been opened; what would settle it is the realised change in the bots' hit rates per pair."
+
+[forecast_bias_maximum]
+value = 0.05
+unit  = "probability"
+note  = "operator, 2026-08-23: the most a forecast may shade a decision's conviction. Five percent, the same cap the arbiter applies (arbiter_maximum_forecast_shade): a forecast may shade, never make, the decision."
+
+[forecast_bias_minimum_trust]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the directional accuracy a forecaster needs, measured, before its forecast shades anything. Just above the coin flip; below it the forecast is noise and the bias is zero."
+
+[intent_timing_validity]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a timed intent stays actionable after the gate passes it. Sixty seconds, the spread-reversion detector's own horizon: an intent older than the move it was about is about a market that has gone."
+
+[intent_timing_maximum_price_drift]
+value = 0.004
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far the price may move from the one the intent was decided at before the gate refuses it, the same figure as maximum_decision_price_drift and for the same reason: the fill simulator refuses such an order later, and refusing it here is cheaper."
+
+[conflict_minimum_regime_hit_rate]
+value = 0.55
+unit  = "probability"
+note  = "operator, 2026-08-23: the hit rate a bot needs in a regime, measured, before opinion-conflict-resolver rules in its favour against a bot with none. Just above the coin flip, at brain_minimum_observations."
+
+[conflict_remember_rulings]
+value = true
+unit  = "true or false"
+note  = "operator, 2026-08-23: whether a ruling on a symbol in a regime is remembered and reapplied while that regime lasts. True, so the brain does not re-litigate the same disagreement every tick; a regime break forgets them."
+
+[size_hint_floor_multiple]
+value = 0.25
+unit  = "multiple of the sized quantity"
+note  = "operator, 2026-08-23: the least a size hint may scale an order. A quarter, not zero: a hint of nothing is a veto, and vetoes belong to the limiters."
+
+[size_hint_ceiling_multiple]
+value = 2.0
+unit  = "multiple of the sized quantity"
+note  = "operator, 2026-08-23: the most a size hint may scale an order. Twice, inside every cap the limiters apply after it."
+
+[size_hint_conviction_reference]
+value = 0.6
+unit  = "probability"
+note  = "operator, 2026-08-23: the calibrated conviction at which a hint scales by one. Sixty percent, the middle of the band the bots have acted in on paper; below it the hint shrinks towards the floor, above it grows towards the ceiling."
+
+[size_hint_agreement_multiple]
+value = 1.2
+unit  = "multiple"
+note  = "operator, 2026-08-23: the extra scale when more than one bot agrees. A fifth more: agreement is evidence, and a fifth is what the arbiter's agreement bonus is worth in conviction."
+
+[size_hint_sole_opinion_multiple]
+value = 0.7
+unit  = "multiple"
+note  = "operator, 2026-08-23: the scale when only one bot had a view. Seven tenths, because every paper trade so far has been a sole opinion and a size that punished that harder would have produced none of the evidence the other bots need."
+
+[size_hint_unmeasured_multiple]
+value = 0.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: the scale when the conviction behind an intent is not yet a measured frequency. Half: an unmeasured conviction is an opinion, and an opinion is traded at half the size of a measurement."

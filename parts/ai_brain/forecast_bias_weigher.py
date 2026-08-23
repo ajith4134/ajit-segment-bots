@@ -212,3 +212,59 @@ def run_forecast_bias_weigher(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Trust per forecaster per situation is learned from the trust learner's
+    scored record; every ensemble forecast is weighed against the trust in
+    each of its contributors, under the situation named by the forecast's
+    state.
+    """
+    from runtime.input_assembly import Batch
+
+    forecasts = Batch(read=context.bus.reader("ensemble-forecast"))
+    trusts = Batch(read=context.bus.reader("forecast-trust"))
+    publish_biases = context.bus.publisher_for("forecast-bias")
+    weigher = ForecastBiasWeigher(
+        maximum_bias=context.number("forecast_bias_maximum"),
+        minimum_trust=context.number("forecast_bias_minimum_trust"),
+        prior_trust=context.number("brain_prior_hit_rate"),
+        prior_weight=context.number("brain_prior_weight"),
+        half_life_observations=context.number("brain_half_life_observations"),
+        minimum_observations=int(context.number("brain_minimum_observations")),
+    )
+
+    def read_forecasts_and_trust(_weigher):
+        for trust in trusts.payloads():
+            accuracy = trust.directional_accuracy
+            if getattr(accuracy, "observations", 0):
+                right = int(round(accuracy.value * accuracy.observations))
+                for _ in range(right):
+                    weigher.observe_forecast_outcome(trust.forecaster, trust.situation, True)
+                for _ in range(accuracy.observations - right):
+                    weigher.observe_forecast_outcome(trust.forecaster, trust.situation, False)
+        requests = []
+        for forecast in forecasts.payloads():
+            if forecast.expected_return is None:
+                continue
+            weigher.observe_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
+            for forecaster in sorted(forecast.contributors):
+                requests.append((forecast.venue_id, forecast.symbol, forecaster, forecast.state))
+        return tuple(requests)
+
+    def publish(biases) -> None:
+        if biases:
+            publish_biases(biases)
+
+    return run_forecast_bias_weigher(
+        weigher=weigher,
+        control_socket=context.control_socket,
+        read_forecasts_and_trust=read_forecasts_and_trust,
+        publish_biases=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

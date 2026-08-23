@@ -244,3 +244,47 @@ def run_size_hint_writer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    convictions = [
+        Batch(read=context.bus.reader(kind))
+        for kind in ("bull-calibrated-conviction", "bear-calibrated-conviction", "tail-calibrated-conviction")
+    ]
+    publish_hints = context.bus.publisher_for("size-hint")
+    writer = SizeHintWriter(
+        floor_multiple=context.number("size_hint_floor_multiple"),
+        ceiling_multiple=context.number("size_hint_ceiling_multiple"),
+        conviction_reference=context.number("size_hint_conviction_reference"),
+        agreement_multiple=context.number("size_hint_agreement_multiple"),
+        sole_opinion_multiple=context.number("size_hint_sole_opinion_multiple"),
+        unmeasured_multiple=context.number("size_hint_unmeasured_multiple"),
+    )
+
+    def read_intents_and_convictions(_writer):
+        for scorecard in scorecards.payloads():
+            writer.observe_scorecard(scorecard.bot, scorecard)
+        for source in convictions:
+            for conviction in source.payloads():
+                writer.observe_calibrated_conviction(conviction)
+        return tuple(intent for intent in intents.payloads() if intent.is_actionable)
+
+    def publish(hints) -> None:
+        if hints:
+            publish_hints(hints)
+
+    return run_size_hint_writer(
+        writer=writer,
+        control_socket=context.control_socket,
+        read_intents_and_convictions=read_intents_and_convictions,
+        publish_hints=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

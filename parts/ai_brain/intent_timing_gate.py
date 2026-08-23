@@ -222,3 +222,60 @@ def run_intent_timing_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The price an intent was decided at is the latest trade for its symbol
+    when the intent arrives; the gate then holds or passes it against the
+    bots' own timing and the price now.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    bull_timings = Batch(read=context.bus.reader("bull-entry-timing"))
+    bear_timings = Batch(read=context.bus.reader("bear-entry-timing"))
+    publish_timed = context.bus.publisher_for("timed-intent")
+    gate = IntentTimingGate(
+        validity_seconds=context.number("intent_timing_validity"),
+        maximum_price_drift_fraction=context.number("intent_timing_maximum_price_drift"),
+    )
+    prices: dict[tuple[str, str], float] = {}
+
+    def read_intents_and_timings(_gate):
+        for trade in trades.payloads():
+            if isinstance(trade, NormalisedTrade):
+                prices[(trade.venue_id, trade.symbol)] = trade.price
+                gate.observe_price(trade.venue_id, trade.symbol, trade.price)
+        for timing in bull_timings.payloads():
+            gate.observe_bot_timing(timing.bot, timing)
+        for timing in bear_timings.payloads():
+            gate.observe_bot_timing(timing.bot, timing)
+        actionable = []
+        for intent in intents.payloads():
+            if not intent.is_actionable:
+                continue
+            price = prices.get((intent.venue_id, intent.symbol))
+            if price is not None:
+                gate.record_decision_price(intent.venue_id, intent.symbol, price)
+            actionable.append(intent)
+        return tuple(actionable)
+
+    def publish(timed) -> None:
+        kept = tuple(item for item in timed if item is not None)
+        if kept:
+            publish_timed(kept)
+
+    return run_intent_timing_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_intents_and_timings=read_intents_and_timings,
+        publish_timed=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

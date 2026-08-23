@@ -286,3 +286,56 @@ def run_exploration_pair_opener(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Opinions are gathered per symbol and considered together with that
+    symbol's regime whenever one arrives. Round-trip cost per symbol is two
+    taker fees, the same figure every other part prices a round trip at.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    opinions = Batch(read=context.bus.reader("directional-opinion"))
+    maturities = Batch(read=context.bus.reader("bot-maturity"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    publish_intents = context.bus.publisher_for("trade-intent")
+    opener = ExplorationPairOpener(
+        maximum_open_pairs=int(context.number("exploration_maximum_open_pairs")),
+        maturity_gap_trades=int(context.number("exploration_maturity_gap_trades")),
+        maximum_cost_fraction=context.number("exploration_maximum_cost_fraction"),
+        minimum_information_value=context.number("exploration_minimum_information_value"),
+    )
+    round_trip = 2.0 * context.number("taker_fee_rate")
+    held: dict[tuple[str, str], dict] = {}
+
+    def read_opinions_and_regime(_opener):
+        for maturity in maturities.payloads():
+            opener.observe_bot_maturity(maturity.bot, maturity.regime, maturity.trades_here)
+        touched = set()
+        for opinion in opinions.payloads():
+            key = (opinion.venue_id, opinion.symbol)
+            held.setdefault(key, {})[opinion.bot] = opinion
+            opener.observe_round_trip_cost(opinion.venue_id, opinion.symbol, round_trip)
+            touched.add(key)
+        regime_by_symbol = regimes.mapping()
+        return tuple(
+            (tuple(held[key].values()), regime_by_symbol[key])
+            for key in sorted(touched) if key in regime_by_symbol
+        )
+
+    def publish(intents) -> None:
+        if intents:
+            publish_intents(intents)
+
+    return run_exploration_pair_opener(
+        opener=opener,
+        control_socket=context.control_socket,
+        read_opinions_and_regime=read_opinions_and_regime,
+        publish_intents=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
