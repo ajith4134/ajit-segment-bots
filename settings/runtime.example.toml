@@ -907,3 +907,48 @@ note  = "operator, 2026-08-23: how many trades must have closed before the break
 value = 5
 unit  = "closed trades"
 note  = "operator, 2026-08-23: how many trades after a trip the breaker stays tripped, at the size the sizer is left with. Five, so the bot re-enters small and the recovery is measured rather than assumed."
+
+[live_switch_minimum_closed_trades]
+value = 100
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many closed paper trades a bot needs before live-switch-guard will let its segment trade live money. A hundred: at the 1.5 reward-to-risk the plans aim for, a hundred trades separate a 55% hit rate from a coin flip at about two standard errors, which is the least evidence RL-005 (live only for what paper proved) can mean. On paper this guard publishes the full limit and judges nothing."
+
+[live_switch_minimum_days_traded]
+value = 14.0
+unit  = "days"
+note  = "operator, 2026-08-23: how many days of paper trading a bot needs before live. Two weeks, so a record spanning only one kind of week -- one regime, one funding cycle -- cannot graduate."
+
+[live_switch_maximum_drawdown_fraction]
+value = 0.2
+unit  = "fraction of peak paper equity"
+note  = "operator, 2026-08-23: the worst paper drawdown a bot may have shown and still go live. Twice risk_maximum_drawdown_fraction: a bot that tripped its own breaker once on paper has a record; one that tripped it twice over has a habit."
+
+[order_latency_prior]
+value = 0.25
+unit  = "seconds"
+note  = "operator, 2026-08-23: the round-trip latency order-latency-simulator assumes for a paper order before it has measured live round trips. A quarter second: REST order placement to both venues from this box measured 80 to 200 ms on 2026-08-22, and the prior sits above the slowest so a paper fill is never faster than a live one would have been."
+
+[order_latency_maximum]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the longest the simulator will hold an order whatever the measured latency says. Five seconds, beyond which a venue would have answered with an error rather than a fill, and a paper order held longer would be simulating an outage rather than latency."
+
+[order_latency_minimum_observations]
+value = 20
+unit  = "live round trips"
+note  = "operator, 2026-08-23: how many live round trips the simulator needs before it draws from the measured distribution rather than the prior. Twenty, the least a drawn quantile of latency can mean."
+
+[order_latency_window]
+value = 200
+unit  = "live round trips"
+note  = "operator, 2026-08-23: how many recent live round trips the simulator draws from. Two hundred, about a day of order placement at the rate paper is trading today, so a venue that slowed this afternoon is simulated as slow this afternoon."
+
+[liquidation_fee_rate]
+value = 0.0125
+unit  = "fraction of notional"
+note  = "operator, 2026-08-23: the fee the venue charges on a liquidation, applied by paper-liquidation-simulator so a paper liquidation costs what a live one would. 1.25%, Binance USD-M's published liquidation clearance fee for USDT perpetuals; Bybit charges the taker fee and keeps the remaining margin, which the bankruptcy slippage covers. The higher is used so paper is never the cheaper venue."
+
+[bankruptcy_slippage_fraction]
+value = 0.005
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: how far past the liquidation price the simulator fills a liquidated position, standing in for the venue closing it at the bankruptcy price rather than the liquidation price. Half a percent, the maintenance_margin_rate the liquidation distance is built from: the gap between liquidation and bankruptcy is the maintenance margin."

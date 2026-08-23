@@ -243,3 +243,52 @@ def run_order_latency_simulator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every routed order is held for a simulated round trip in paper mode and
+    passed straight through in live mode, which the simulator decides from
+    the money mode it is handed. Live round trips are observed by the parts
+    that hold venue sockets; none exist in phase 1, so the prior stands and
+    every delay says so.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    modes = LatestByKey(read=context.bus.reader("money-mode"), key_of=lambda m: m.segment)
+    publish_delayed = context.bus.publisher_for("delayed-order-request")
+    segment = str(context.setting("segment_id").value)
+    simulator = OrderLatencySimulator(
+        prior_latency_seconds=context.number("order_latency_prior"),
+        maximum_latency_seconds=context.number("order_latency_maximum"),
+        minimum_observations=int(context.number("order_latency_minimum_observations")),
+        window=int(context.number("order_latency_window")),
+    )
+
+    def read_orders(_simulator):
+        mode = modes.mapping().get(segment)
+        money_mode = mode.mode if mode is not None else PAPER
+        return tuple(
+            {
+                "client_order_id": order.client_order_id, "venue_id": order.venue_id,
+                "symbol": order.symbol, "money_mode": money_mode,
+            }
+            for order in orders.payloads()
+        )
+
+    def publish(delayed) -> None:
+        if delayed:
+            publish_delayed(delayed)
+
+    return run_order_latency_simulator(
+        simulator=simulator,
+        control_socket=context.control_socket,
+        read_orders=read_orders,
+        publish_delayed=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

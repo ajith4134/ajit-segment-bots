@@ -43,6 +43,7 @@ SURVIVED = "survived"
 LIQUIDATED = "liquidated"
 NOT_WATCHED = "no-liquidation-price-known"
 LIVE_NOT_SIMULATED = "live-position-not-simulated"
+PAPER = "paper"
 
 
 @dataclass(frozen=True)
@@ -252,4 +253,80 @@ def run_paper_liquidation_simulator(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Positions are watched from the reconciler's position stream, with the
+    liquidation price the tracker computes for each; every trade since the
+    last wake gives each symbol's high and low for the interval, which is the
+    path a liquidation would have triggered on. A liquidated position
+    publishes the fill that closes it, the way the venue would.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.trading_types import LONG, SHORT
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = Batch(read=context.bus.reader("position"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    liquidations = LatestByKey(read=context.bus.reader("liquidation-price"), key_of=lambda l: (l.venue_id, l.symbol))
+    modes = LatestByKey(read=context.bus.reader("money-mode"), key_of=lambda m: m.segment)
+    publish_fills = context.bus.publisher_for("fill")
+    segment = str(context.setting("segment_id").value)
+    simulator = PaperLiquidationSimulator(
+        liquidation_fee_rate=context.number("liquidation_fee_rate"),
+        bankruptcy_slippage_fraction=context.number("bankruptcy_slippage_fraction"),
+    )
+    open_positions: dict[tuple[str, str], object] = {}
+
+    def read_positions_and_candles(_simulator):
+        for position in positions.payloads():
+            key = (position.venue_id, position.symbol)
+            if position.quantity == 0:
+                open_positions.pop(key, None)
+            else:
+                open_positions[key] = position
+        liquidation_by_symbol = liquidations.mapping()
+        for key, position in open_positions.items():
+            liquidation = liquidation_by_symbol.get(key)
+            simulator.watch_position(
+                venue_id=key[0], symbol=key[1],
+                direction=LONG if position.quantity > 0 else SHORT,
+                quantity=abs(position.quantity),
+                entry_price=position.average_entry_price,
+                liquidation_price=None if liquidation is None else liquidation.liquidation_price,
+            )
+        highs: dict[tuple[str, str], float] = {}
+        lows: dict[tuple[str, str], float] = {}
+        for trade in trades.payloads():
+            if not isinstance(trade, NormalisedTrade):
+                continue
+            key = (trade.venue_id, trade.symbol)
+            highs[key] = max(highs.get(key, trade.price), trade.price)
+            lows[key] = min(lows.get(key, trade.price), trade.price)
+        mode = modes.mapping().get(segment)
+        money_mode = mode.mode if mode is not None else PAPER
+        return tuple(
+            {
+                "venue_id": key[0], "symbol": key[1],
+                "high_price": highs[key], "low_price": lows[key], "money_mode": money_mode,
+            }
+            for key in highs if key in open_positions
+        )
+
+    def publish(fills) -> None:
+        if fills:
+            publish_fills(fills)
+
+    return run_paper_liquidation_simulator(
+        simulator=simulator,
+        control_socket=context.control_socket,
+        read_positions_and_candles=read_positions_and_candles,
+        publish_fills=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
     )

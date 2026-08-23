@@ -204,3 +204,45 @@ def run_book_walk_fill_pricer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every book that crosses the bus updates the pricer; every routed order is
+    priced against the latest book for its symbol, including a stop order,
+    whose fill is a walk of the book the moment it triggers.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.order_book import OrderBookSnapshot
+
+    orders = Batch(read=context.bus.reader("order-request"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
+    publish_estimates = context.bus.publisher_for("fill-price-estimate")
+    pricer = BookWalkFillPricer()
+
+    def read_books_and_orders():
+        seen = [
+            {"venue_id": book.venue_id, "symbol": book.symbol, "bids": book.bids, "asks": book.asks}
+            for book in books.payloads() if isinstance(book, OrderBookSnapshot)
+        ]
+        requests = [
+            {"venue_id": order.venue_id, "symbol": order.symbol, "side": order.side, "quantity": order.quantity}
+            for order in orders.payloads() if order.quantity > 0
+        ]
+        return seen, requests
+
+    def publish(estimates) -> None:
+        if estimates:
+            publish_estimates(estimates)
+
+    return run_book_walk_fill_pricer(
+        pricer=pricer,
+        control_socket=context.control_socket,
+        read_books_and_orders=read_books_and_orders,
+        publish_estimates=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

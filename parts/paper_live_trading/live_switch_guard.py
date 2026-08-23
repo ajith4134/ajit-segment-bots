@@ -251,3 +251,56 @@ def run_live_switch_guard(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    On paper the guard publishes the full limit and judges nothing, which is
+    the case today. The maturity edge-graduation-gate publishes carries the
+    bot's trade count and its verdict but not the net result, worst drawdown
+    or days traded this guard judges live on; those are recorded here as
+    unknown -- zero result, total drawdown, no days -- so a segment switched
+    live before the maturity type carries them is refused, and the refusal
+    names what is missing. A guard that filled them in would be the
+    graduation it is meant to check.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    modes = LatestByKey(read=context.bus.reader("money-mode"), key_of=lambda m: m.segment)
+    maturities = Batch(read=context.bus.reader("bot-maturity"))
+    publish_limits = context.bus.publisher_for("risk-limit")
+    segment = str(context.setting("segment_id").value)
+    guard = LiveSwitchGuard(
+        minimum_closed_trades=int(context.number("live_switch_minimum_closed_trades")),
+        minimum_days_traded=context.number("live_switch_minimum_days_traded"),
+        maximum_drawdown_fraction=context.number("live_switch_maximum_drawdown_fraction"),
+    )
+    bots_seen: set[str] = set()
+
+    def read_mode_and_bots(_guard):
+        for maturity in maturities.payloads():
+            bot_id = getattr(maturity, "bot", None) or getattr(maturity, "bot_id", "")
+            bots_seen.add(bot_id)
+            guard.observe_paper_maturity(
+                BotMaturity(
+                    bot_id=bot_id,
+                    closed_trades=int(getattr(maturity, "trades_here", getattr(maturity, "closed_trades", 0))),
+                    net_result_after_costs=float(getattr(maturity, "net_result_after_costs", 0.0)),
+                    worst_drawdown_fraction=float(getattr(maturity, "worst_drawdown_fraction", 1.0)),
+                    days_traded=float(getattr(maturity, "days_traded", 0.0)),
+                )
+            )
+        mode = modes.mapping().get(segment)
+        return (mode.mode if mode is not None else PAPER), tuple(sorted(bots_seen))
+
+    return run_live_switch_guard(
+        guard=guard,
+        control_socket=context.control_socket,
+        read_mode_and_bots=read_mode_and_bots,
+        publish_limit=lambda limit: publish_limits((limit,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
