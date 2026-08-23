@@ -141,6 +141,11 @@ class BearConvictionCalibrator:
             scorecard_observations=estimate.observations,
             reason=reason,
             calibrated_at_ns=self._now_ns(),
+            # Carried through from the model that produced the raw number, so the
+            # composer can ask whether the model is trained without having to
+            # reach into a part it may not read (T-4).
+            model_observations=raw.belief.observations_trained_on,
+            model_is_trained=raw.belief.is_fitted,
         )
 
     def reliability(self, regime: str = ALL_REGIMES) -> tuple:

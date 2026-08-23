@@ -67,13 +67,13 @@ class TailOpinionComposer:
     def __init__(
         self,
         minimum_conviction: float,
-        require_measured_conviction: bool,
+        require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_conviction < 1.0:
             raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         self._minimum_conviction = minimum_conviction
-        self._require_measured = require_measured_conviction
+        self._require_trained_model = require_trained_model
         self._now_ns = now_ns
         self.standing = ComposerStanding()
 
@@ -102,12 +102,13 @@ class TailOpinionComposer:
                 conviction.calibrated,
             )
 
-        if self._require_measured and not conviction.is_measured:
+        if self._require_trained_model and not conviction.model_is_trained:
             return self._stand_down(
                 venue_id, symbol, candidate.direction, CONVICTION_TOO_LOW,
-                f"conviction is {conviction.probability:.1%} but follows from "
-                f"{candidate.source} have not been measured often enough for that to be a "
-                f"frequency, and this bot is configured to act only on measured ones",
+                f"conviction is {conviction.probability:.1%} from a model that has trained on "
+                f"{conviction.model_observations} outcome(s) of follows from {candidate.source}, "
+                f"and this bot is configured to act only on a model that has seen enough of both "
+                f"to be fitted",
                 conviction.calibrated,
             )
 

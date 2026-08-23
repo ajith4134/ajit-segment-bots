@@ -756,17 +756,20 @@ def test_a_trail_that_could_loosen_is_refused_at_construction():
 # ---- tail-opinion-composer --------------------------------------------------
 
 class CalibratedStub:
-    def __init__(self, probability, side=LONG, measured=True):
+    def __init__(self, probability, side=LONG, measured=True,
+                 model_is_trained=True, model_observations=1000):
         self.venue_id, self.symbol, self.side = VENUE, SYMBOL, side
         self.calibrated = an_estimate(probability, 200 if measured else 0, measured)
         self.probability = probability
         self.is_measured = measured
+        self.model_observations = model_observations
+        self.model_is_trained = model_is_trained
         self.reason = "conviction"
 
 
 def a_tail_composer(minimum=0.55, require_measured=False):
     return TailOpinionComposer(
-        minimum_conviction=minimum, require_measured_conviction=require_measured
+        minimum_conviction=minimum, require_trained_model=require_measured
     )
 
 
@@ -812,11 +815,32 @@ def test_a_conviction_below_the_floor_and_a_missing_plan_both_stand_down():
     assert subject.compose(a_follow(), CalibratedStub(0.9), None).refusal == NO_EXIT_PLAN
 
 
-def test_a_bot_can_be_told_to_act_only_on_measured_conviction():
-    opinion = a_tail_composer(require_measured=True).compose(
-        a_follow(), CalibratedStub(0.9, measured=False), a_trail_plan()
+def test_a_bot_can_be_told_to_act_only_on_a_trained_model():
+    """The gate tests the model, not the calibration.
+
+    It tested the calibration until 2026-08-23, and calibration needs a scorecard,
+    which needs closed trades, which need a trade -- so it could never pass. 653
+    opinions were refused by it on the live run before this was found. An
+    uncalibrated conviction from a trained model is now allowed through; one from
+    a model that has never been trained is not, which is what RL-060 asks for.
+    """
+    composer = a_tail_composer(require_measured=True)
+    untrained = composer.compose(
+        a_follow(),
+        CalibratedStub(0.9, measured=False, model_is_trained=False, model_observations=12),
+        a_trail_plan(),
     )
-    assert opinion.refusal is not None
+    assert untrained.refusal is not None
+    assert "12 outcome(s)" in untrained.reason
+
+    # Trained but never calibrated: allowed, because calibration is what trading
+    # produces rather than what it requires.
+    trained = composer.compose(
+        a_follow(),
+        CalibratedStub(0.9, measured=False, model_is_trained=True, model_observations=1408),
+        a_trail_plan(),
+    )
+    assert trained.refusal is None, trained.reason
 
 
 # ---- tail-setup-weight-learner ----------------------------------------------

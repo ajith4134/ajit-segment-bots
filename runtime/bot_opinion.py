@@ -148,6 +148,21 @@ class CalibratedConviction:
     scorecard_observations: int
     reason: str
     calibrated_at_ns: int
+    # What the model behind this number has been trained on. Carried because the
+    # two questions a composer has to ask are different, and asking one while
+    # meaning the other stopped the bot trading entirely on 2026-08-23:
+    #
+    #   "has this model ever seen an outcome?"      -> model_is_trained
+    #   "has this number been checked against       -> is_measured
+    #    observed frequencies?"
+    #
+    # The second cannot become true before the first trade closes: calibration
+    # needs a bot-scorecard, which needs trade episodes, which need trades. A
+    # composer that demanded it was demanding a measurement that trading itself
+    # has to produce. Defaulted so a conviction built before this field existed
+    # reads as untrained rather than as trained-by-omission.
+    model_observations: int = 0
+    model_is_trained: bool = False
 
     @property
     def probability(self) -> float:
@@ -155,6 +170,11 @@ class CalibratedConviction:
 
     @property
     def is_measured(self) -> bool:
+        """Whether this number has been checked against what actually happened.
+
+        False until enough trades have closed for the calibrator to fit. It is a
+        statement about the *calibration*, never about the model.
+        """
         return self.calibrated.is_fitted
 
 

@@ -46,6 +46,7 @@ from parts.bull_bot.bull_setup_filter import (
     SETUP_DISCOUNTED, WEIGHTED_STRENGTH_TOO_LOW, WRONG_SIDE, BullSetupFilter,
 )
 from parts.bull_bot.bull_setup_weight_learner import BullSetupWeightLearner
+from runtime.online_learner import ModelBelief
 from runtime.bot_opinion import (
     CLOSE_POSITION, CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, LONG,
     NO_EXIT_PLAN, REDUCE_POSITION, SHORT, STAND_DOWN, TIMING_REFUSED,
@@ -584,9 +585,19 @@ def test_a_kline_window_becomes_shape_features():
 # ---- bull-conviction-calibrator ---------------------------------------------
 
 class RawStub:
-    def __init__(self, probability):
+    def __init__(self, probability, trained_on=1000):
         self.venue_id, self.symbol, self.side = VENUE, SYMBOL, LONG
         self.probability = probability
+        # The belief the model formed, which the calibrator carries through so a
+        # composer can ask whether the *model* is trained without reaching into
+        # the model's part. A stub without it is not the type the calibrator
+        # declares it consumes.
+        self.belief = ModelBelief(
+            probability=probability, score=0.0, contributions={}, features_used=4,
+            features_unusable=(), observations_trained_on=trained_on,
+            is_fitted=trained_on >= 100,
+            reason="stubbed for this test",
+        )
 
 
 def a_bull_calibrator(minimum=50):
@@ -985,19 +996,26 @@ def test_targets_that_do_not_close_the_position_are_refused_at_construction():
 def a_composer(minimum=0.55, missing=1, require_measured=False):
     return BullOpinionComposer(
         minimum_conviction=minimum, maximum_missing_features=missing,
-        require_measured_conviction=require_measured,
+        require_trained_model=require_measured,
     )
 
 
 class CalibratedStub:
-    def __init__(self, probability, measured=True):
+    def __init__(self, probability, measured=True, model_is_trained=True,
+                 model_observations=1000):
         self.venue_id, self.symbol, self.side = VENUE, SYMBOL, LONG
         self.calibrated = an_estimate(
             probability, 200 if measured else 0, measured,
             "measured" if measured else "the prior",
         )
         self.probability = probability
+        # Two different questions, and conflating them stopped the bot trading
+        # entirely on 2026-08-23: whether this number has been checked against
+        # observed frequencies, and whether the model behind it has ever been
+        # trained. The composer asks the second.
         self.is_measured = measured
+        self.model_observations = model_observations
+        self.model_is_trained = model_is_trained
         self.reason = "conviction"
 
 
@@ -1051,12 +1069,32 @@ def test_a_conviction_below_the_floor_stands_down():
     assert opinion.refusal == CONVICTION_TOO_LOW
 
 
-def test_a_bot_can_be_told_to_act_only_on_measured_conviction():
-    opinion = a_composer(require_measured=True).compose(
-        a_vector(), CalibratedStub(0.9, measured=False), a_timing(), a_plan()
+def test_a_bot_can_be_told_to_act_only_on_a_trained_model():
+    """The gate tests the model, not the calibration.
+
+    It tested the calibration until 2026-08-23, and calibration needs a scorecard,
+    which needs closed trades, which need a trade -- so it could never pass. 653
+    opinions were refused by it on the live run before this was found. An
+    uncalibrated conviction from a trained model is now allowed through; one from
+    a model that has never been trained is not, which is what RL-060 asks for.
+    """
+    composer = a_composer(require_measured=True)
+    untrained = composer.compose(
+        a_vector(), CalibratedStub(0.9, measured=False, model_is_trained=False,
+                                   model_observations=12),
+        a_timing(), a_plan(),
     )
-    assert opinion.refusal == CONVICTION_TOO_LOW
-    assert "measured frequency" in opinion.reason
+    assert untrained.refusal == CONVICTION_TOO_LOW
+    assert "12 outcome(s)" in untrained.reason
+
+    # Trained but never calibrated: allowed, because calibration is what trading
+    # produces rather than what it requires.
+    trained = composer.compose(
+        a_vector(), CalibratedStub(0.9, measured=False, model_is_trained=True,
+                                   model_observations=1408),
+        a_timing(), a_plan(),
+    )
+    assert trained.refusal is None, trained.reason
 
 
 def test_a_stand_down_is_published_rather_than_dropped():

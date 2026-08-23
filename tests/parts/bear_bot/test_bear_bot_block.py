@@ -40,6 +40,7 @@ from parts.bear_bot.bear_setup_filter import (
     BearSetupFilter,
 )
 from parts.bear_bot.bear_setup_weight_learner import BearSetupWeightLearner
+from runtime.online_learner import ModelBelief
 from runtime.bot_opinion import (
     CLOSE_POSITION, CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, LONG,
     NO_EXIT_PLAN, REDUCE_POSITION, SHORT, STAND_DOWN, TIMING_REFUSED, WAIT_FOR_TRIGGER,
@@ -457,9 +458,19 @@ def test_promotion_is_delivered_and_the_live_model_cannot_be_wiped():
 # ---- bear-conviction-calibrator ---------------------------------------------
 
 class RawStub:
-    def __init__(self, probability):
+    def __init__(self, probability, trained_on=1000):
         self.venue_id, self.symbol, self.side = VENUE, SYMBOL, SHORT
         self.probability = probability
+        # The belief the model formed, which the calibrator carries through so a
+        # composer can ask whether the *model* is trained without reaching into
+        # the model's part. A stub without it is not the type the calibrator
+        # declares it consumes.
+        self.belief = ModelBelief(
+            probability=probability, score=0.0, contributions={}, features_used=4,
+            features_unusable=(), observations_trained_on=trained_on,
+            is_fitted=trained_on >= 100,
+            reason="stubbed for this test",
+        )
 
 
 def a_bear_calibrator(minimum=50):
@@ -695,7 +706,7 @@ def test_a_proposer_with_no_risk_ceiling_is_refused_at_construction():
 def a_composer(minimum=0.55, missing=1, maximum_risk=0.1, require_measured=False):
     return BearOpinionComposer(
         minimum_conviction=minimum, maximum_missing_features=missing,
-        maximum_risk_fraction=maximum_risk, require_measured_conviction=require_measured,
+        maximum_risk_fraction=maximum_risk, require_trained_model=require_measured,
     )
 
 
@@ -751,7 +762,7 @@ def test_a_composer_with_no_risk_ceiling_is_refused_at_construction():
     with pytest.raises(ValueError):
         BearOpinionComposer(
             minimum_conviction=0.55, maximum_missing_features=1,
-            maximum_risk_fraction=0.0, require_measured_conviction=False,
+            maximum_risk_fraction=0.0, require_trained_model=False,
         )
 
 

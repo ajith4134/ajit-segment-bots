@@ -67,7 +67,7 @@ class BearOpinionComposer:
         minimum_conviction: float,
         maximum_missing_features: int,
         maximum_risk_fraction: float,
-        require_measured_conviction: bool,
+        require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_conviction < 1.0:
@@ -82,7 +82,7 @@ class BearOpinionComposer:
         self._minimum_conviction = minimum_conviction
         self._maximum_missing = maximum_missing_features
         self._maximum_risk = maximum_risk_fraction
-        self._require_measured = require_measured_conviction
+        self._require_trained_model = require_trained_model
         self._now_ns = now_ns
         self.standing = ComposerStanding()
 
@@ -107,12 +107,12 @@ class BearOpinionComposer:
                 conviction.calibrated,
             )
 
-        if self._require_measured and not conviction.is_measured:
+        if self._require_trained_model and not conviction.model_is_trained:
             return self._stand_down(
                 venue_id, symbol, CONVICTION_TOO_LOW,
-                f"conviction is {conviction.probability:.1%} but it is still the model's own "
-                f"number rather than a measured frequency, and this bot is configured to short "
-                f"only on measured ones",
+                f"conviction is {conviction.probability:.1%} from a model that has trained on "
+                f"{conviction.model_observations} outcome(s), and this bot is configured to "
+                f"short only on a model that has seen enough of both to be fitted",
                 conviction.calibrated,
             )
 

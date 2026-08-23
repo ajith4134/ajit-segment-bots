@@ -331,7 +331,7 @@ note  = "operator, 2026-08-22: how many values of a feature are needed before th
 [bull_minimum_training_observations]
 value = 100
 unit  = "labelled observations"
-note  = "operator, 2026-08-22: how many labelled outcomes the model needs before its conviction is reported as measured rather than as an untrained guess. Until then the composer sees an unmeasured conviction and, with require_measured_conviction set, forms no opinion at all -- which is the honest state for a model that has never been trained, and the reason the first paper run's opinions come from a model that says so."
+note  = "operator, 2026-08-22: how many labelled outcomes of each class the model needs before it reports itself fitted. Below it the model returns its prior and says so, and with bull_opinion_require_trained_model set the composer forms no opinion at all -- which is the honest state for a model that has never been trained. Both classes, not just enough rows: a model trained on 500 rights and no wrongs has learned that everything works."
 
 [bull_default_sample_weight]
 value = 1.0
@@ -433,10 +433,10 @@ value = 7
 unit  = "features"
 note  = "operator, 2026-08-23: how many features may be missing from a vector before the composer refuses to form an opinion on it. Set from the model rather than from judgement: bull-conviction-model has trained on 1,408 outcomes using exactly five features -- detector_strength, price_z_score, realised_volatility_fraction, return_over_window and setup_weight -- and those five are precisely the ones this spine can build. Measured on 3,000 real ZECUSDT prints on 2026-08-23: 6 of the 12 are unavailable with a calibrated detector and 7 before it calibrates. Three need order-book-snapshot and order-book-reader has no start_part; funding_rate and funding_forecast_change both need funding-forecast and funding-rate-forecaster is not started; volatility_ratio_short_to_long needs a short-window volatility the 64-observation window does not yet yield. Seven, so the bot may act on the features its model was actually trained on. Demanding the other seven is demanding features no decision has ever used. Missing is still named, never defaulted. Every producer that comes on lowers the real count and this ceiling comes down with it -- and the gate that would replace this number outright is one that refuses when a feature the model was trained on is missing, rather than counting features it never saw."
 
-[bull_opinion_require_measured_conviction]
+[bull_opinion_require_trained_model]
 value = true
 unit  = "true or false"
-note  = "operator, 2026-08-22: whether the composer refuses a conviction the model reports as unmeasured -- one resting on the prior rather than on training. True, and this is what will stop the first paper run from trading on an untrained model: it is the correct behaviour, and if the first run produces no opinion this is why. The alternative is a bot whose first trades come from a model that has never seen an outcome, which RL-060 exists to prevent."
+note  = "operator, 2026-08-22, re-aimed 2026-08-23: whether the composer refuses a conviction from a model that has never been trained. True, and the intent is unchanged from the day it was written -- the alternative is a bot whose first trades come from a model that has never seen an outcome, which RL-060 exists to prevent. What changed is what it tests. It read conviction.is_measured, which is whether the *calibration* has been fitted, and calibration needs a bot-scorecard, which needs trade episodes, which need trades: a gate that demanded a measurement trading itself has to produce. Measured on the live run of 2026-08-23 07:48-08:09: 653 opinions formed, 653 refused, and no amount of waiting would have changed it. It now tests whether the model is fitted -- bull_minimum_training_observations labelled outcomes of each class -- which is what the original note meant by 'has never seen an outcome'. The calibration still applies the moment it fits; it is no longer a precondition for the first trade."
 
 [signal_label_move_fraction]
 value = 0.002
