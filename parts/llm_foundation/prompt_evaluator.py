@@ -238,3 +238,89 @@ def run_prompt_evaluator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every golden case for a purpose is run against every version for that
+    purpose: a request per pair goes out, and a validated output for this
+    part's evaluation purpose naming the case and version comes back as a
+    result. A version is evaluated on the cases it has answered once all
+    have; until then it is refused by name inside the evaluator. No model
+    is configured in phase 1, so today no result returns. Templates are
+    read and drained: the version carries what the evaluator needs.
+    """
+    from runtime.claim_verification import LlmRequest
+    from runtime.input_assembly import Batch
+
+    cases_in = Batch(read=context.bus.reader("golden-case"))
+    versions_in = Batch(read=context.bus.reader("prompt-version"))
+    templates = Batch(read=context.bus.reader("prompt-template"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    publish_scores = context.bus.publisher_for("prompt-score")
+    publish_requests = context.bus.publisher_for("llm-request")
+    evaluator = PromptEvaluator(minimum_cases=int(context.number("prompt_minimum_cases")))
+    maximum_sentences = int(context.number("llm_maximum_sentences"))
+    evaluation_purpose = f"evaluate:{PART_ID}"
+    cases_by_purpose: dict[str, dict[str, object]] = {}
+    versions_by_purpose: dict[str, dict[str, object]] = {}
+    requested: set[tuple[str, str]] = set()
+    answered: dict[str, set[str]] = {}
+
+    def request_for(case, version) -> LlmRequest:
+        facts = case.facts if isinstance(case.facts, dict) else {}
+        return LlmRequest(
+            purpose=evaluation_purpose, venue_id=str(facts.get("venue_id", "")), symbol=str(facts.get("symbol", "")),
+            instruction=f"{version.instruction}\n[case:{case.case_id}][version:{version.version_id}]",
+            facts=dict(facts), maximum_sentences=maximum_sentences, requested_at_ns=int(case.added_at_ns),
+        )
+
+    def read_runs():
+        templates.payloads()
+        for case in cases_in.payloads():
+            cases_by_purpose.setdefault(case.purpose, {})[case.case_id] = case
+        for version in versions_in.payloads():
+            versions_by_purpose.setdefault(version.purpose, {})[version.version_id] = version
+        results_by_version: dict[str, list] = {}
+        for output in outputs.payloads():
+            if output.purpose != evaluation_purpose:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            case_id, version_id = value.get("case_id"), value.get("version_id")
+            if case_id is None or version_id is None:
+                continue
+            answered.setdefault(str(version_id), set()).add(str(case_id))
+            results_by_version.setdefault(str(version_id), []).append(
+                CaseResult(
+                    case_id=str(case_id), version_id=str(version_id), was_schema_valid=True,
+                    unsupported_sentences=len(output.unsupported_claims), total_sentences=max(1, len(output.text.split("."))),
+                    agreed_with_outcome=value.get("agreed_with_outcome"), output_tokens=len(output.text) // 4,
+                    latency_seconds=0.0, repair_attempts=int(output.repair_attempts),
+                )
+            )
+        runs = []
+        for purpose, versions in versions_by_purpose.items():
+            cases = cases_by_purpose.get(purpose, {})
+            for version_id, version in versions.items():
+                requests = []
+                for case_id, case in cases.items():
+                    if (case_id, version_id) not in requested:
+                        requested.add((case_id, version_id))
+                        requests.append(request_for(case, version))
+                results = results_by_version.pop(version_id, [])
+                if requests or results:
+                    runs.append((version_id, purpose, tuple(cases.values()), tuple(results), tuple(requests)))
+        return tuple(runs)
+
+    return run_prompt_evaluator(
+        evaluator=evaluator,
+        control_socket=context.control_socket,
+        read_runs=read_runs,
+        publish_scores=lambda score: publish_scores((score,)),
+        publish_requests=lambda request: publish_requests((request,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

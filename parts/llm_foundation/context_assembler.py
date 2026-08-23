@@ -273,3 +273,50 @@ def run_context_assembler(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Hits are grouped by the query they answered, and a query's id is the
+    request it served. The snapshot is the latest verified one for the
+    venue and symbol the hits' request named in its query id, and failing
+    that the latest seen; the budget is the latest issued to the context
+    that asked. A request with no budget and no snapshot is assembled and
+    refused by name inside the assembler.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    hits = Batch(read=context.bus.reader("retrieval-hit"))
+    snapshots = LatestByKey(read=context.bus.reader("verified-snapshot"), key_of=lambda s: (s.venue_id, s.symbol))
+    budgets = LatestByKey(read=context.bus.reader("llm-part-budget"), key_of=lambda b: b.part_id)
+    publish_contexts = context.bus.publisher_for("prompt-context")
+    assembler = ContextAssembler(maximum_staleness_seconds=context.number("feed_coverage_window"))
+    latest_snapshot = [None]
+
+    def read_jobs():
+        by_query: dict[str, list] = {}
+        for hit in hits.payloads():
+            by_query.setdefault(hit.query_id, []).append(hit)
+        by_context = snapshots.mapping()
+        if by_context:
+            latest_snapshot[0] = max(by_context.values(), key=lambda s: s.measured_at_ns)
+        by_part = budgets.mapping()
+        jobs = []
+        for query_id, group in by_query.items():
+            pieces = query_id.split(":")
+            snapshot = by_context.get((pieces[1], pieces[2])) if len(pieces) >= 3 else None
+            budget = by_part.get(pieces[0]) if pieces else None
+            jobs.append((query_id, snapshot or latest_snapshot[0], tuple(group), budget))
+        return tuple(jobs)
+
+    return run_context_assembler(
+        assembler=assembler,
+        control_socket=context.control_socket,
+        read_jobs=read_jobs,
+        publish_contexts=lambda assembled: publish_contexts((assembled,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

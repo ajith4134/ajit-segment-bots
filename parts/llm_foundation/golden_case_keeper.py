@@ -268,3 +268,57 @@ def run_golden_case_keeper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A validated output is a candidate case, held until the trade it was
+    about closes on the same venue and symbol; then it is kept with the
+    outcome as its right answer. An output whose value names no venue and
+    symbol has no trade to wait for and is not a case.
+    """
+    from runtime.input_assembly import Batch
+
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    closed = Batch(read=context.bus.reader("closed-trade"))
+    publish_cases = context.bus.publisher_for("golden-case")
+    keeper = GoldenCaseKeeper(
+        balance_tolerance=context.number("golden_balance_tolerance"),
+        minimum_cases_before_balance_matters=int(context.number("golden_minimum_cases_before_balance_matters")),
+    )
+    waiting: dict[tuple[str, str], list] = {}
+
+    def read_closed_trades():
+        for output in outputs.payloads():
+            value = output.value if isinstance(output.value, dict) else {}
+            venue_id, symbol = value.get("venue_id"), value.get("symbol")
+            if venue_id is None or symbol is None:
+                continue
+            waiting.setdefault((str(venue_id), str(symbol)), []).append(output)
+        jobs = []
+        for trade in closed.payloads():
+            for output in waiting.pop((trade.venue_id, trade.symbol), []):
+                if output.validated_at_ns > trade.closed_at_ns:
+                    continue
+                value = output.value if isinstance(output.value, dict) else {}
+                facts = {k: v for k, v in value.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                jobs.append({
+                    "case_id": f"case:{output.output_id}", "purpose": output.purpose, "facts": facts,
+                    "fact_times_ns": {name: int(output.validated_at_ns) for name in facts},
+                    "context_sections": (), "expected_value": dict(value),
+                    "decided_at_ns": int(output.validated_at_ns), "outcome_known_at_ns": int(trade.closed_at_ns),
+                    "was_profitable": trade.realised_pnl > 0, "source_reference": f"output:{output.output_id}",
+                })
+        return tuple(jobs)
+
+    return run_golden_case_keeper(
+        keeper=keeper,
+        control_socket=context.control_socket,
+        read_closed_trades=read_closed_trades,
+        publish_cases=lambda case: publish_cases((case,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -290,3 +290,42 @@ def run_retrieval_index(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Embeddings are indexed as they arrive and scores adjust a source's
+    rank. A query needs a vector, and nothing this part consumes carries
+    one for the query's text -- the embedder is on the document side -- so
+    every query is answered NO_QUERY_VECTOR by name until the query itself
+    arrives embedded.
+    """
+    from runtime.input_assembly import Batch
+
+    embeddings = Batch(read=context.bus.reader("embedding"))
+    queries = Batch(read=context.bus.reader("retrieval-query"))
+    scores = Batch(read=context.bus.reader("retrieval-score"))
+    publish_hits = context.bus.publisher_for("retrieval-hit")
+    index = RetrievalIndex(
+        duplicate_similarity=context.number("retrieval_duplicate_similarity"),
+        usefulness_weight=context.number("retrieval_usefulness_weight"),
+        prior_usefulness=context.number("learning_prior_hit_rate"),
+    )
+
+    def read_embeddings():
+        for score in scores.payloads():
+            index.observe_score(score)
+        return embeddings.payloads()
+
+    return run_retrieval_index(
+        index=index,
+        control_socket=context.control_socket,
+        read_embeddings=read_embeddings,
+        read_queries=lambda: tuple((query, None) for query in queries.payloads()),
+        publish_hits=lambda hits: publish_hits(tuple(hits)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

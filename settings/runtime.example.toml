@@ -3137,3 +3137,123 @@ note  = "operator, 2026-08-23: how much each successive wait grows. Doubling."
 value = 1.0
 unit  = "calls"
 note  = "operator, 2026-08-23: what one subscription call costs against the quota. One."
+
+[golden_balance_tolerance]
+value = 0.2
+unit  = "fraction"
+note  = "operator, 2026-08-23: how far from half the share of profitable cases in a purpose's golden set may drift before golden-case-keeper refuses to tip it further. A fifth."
+
+[golden_minimum_cases_before_balance_matters]
+value = 10
+unit  = "cases"
+note  = "operator, 2026-08-23: how many cases a purpose needs before balance is enforced. Ten: a set of three cannot be balanced."
+
+[embedding_chunk_characters]
+value = 1200
+unit  = "characters"
+note  = "operator, 2026-08-23: how long one chunk of text knowledge-embedder embeds is. Twelve hundred, about three hundred tokens."
+
+[embedding_overlap_characters]
+value = 200
+unit  = "characters"
+note  = "operator, 2026-08-23: how much consecutive chunks overlap so a sentence split at a boundary is whole in one of them. Two hundred."
+
+[embedding_minimum_characters]
+value = 80
+unit  = "characters"
+note  = "operator, 2026-08-23: the shortest text worth embedding. Eighty: below it there is no meaning to find."
+
+[embedding_vector_dimensions]
+value = 384
+unit  = "dimensions"
+note  = "operator, 2026-08-23: the vector length the embedder expects from its model. Three hundred and eighty-four, the small sentence-embedding models' width; no embedding model is installed on this box, and a model of another width refuses at install."
+
+[llm_budget_starting_share]
+value = 0.05
+unit  = "fraction of the pool"
+note  = "operator, 2026-08-23: the share of the window's pool a part gets before its usefulness is measured. A twentieth."
+
+[prompt_drift_baseline_window]
+value = 20
+unit  = "scores"
+note  = "operator, 2026-08-23: how many scores of one version form its baseline. Twenty."
+
+[prompt_drift_deviation_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "operator, 2026-08-23: how far a new score must sit from the baseline before prompt-drift-monitor raises an alert. Two."
+
+[prompt_drift_minimum_baseline]
+value = 5
+unit  = "scores"
+note  = "operator, 2026-08-23: how many scores a baseline needs before drift can be measured against it. Five."
+
+[prompt_minimum_cases]
+value = 10
+unit  = "cases"
+note  = "operator, 2026-08-23: how many golden cases a prompt version must answer before prompt-evaluator scores it. Ten."
+
+[prompt_required_margin]
+value = 0.02
+unit  = "fraction"
+note  = "operator, 2026-08-23: how much better a challenger prompt must score than the incumbent to be promoted. Two points."
+
+[prompt_regression_tolerance]
+value = 0.01
+unit  = "fraction"
+note  = "operator, 2026-08-23: how much worse a challenger may be on any one dimension while still promotable. One point."
+
+[prompt_maximum_cost_ratio]
+value = 1.5
+unit  = "multiple"
+note  = "operator, 2026-08-23: how much more a challenger may cost per answer than the incumbent. Half again."
+
+[prompt_absolute_bar]
+value = [0.9, 0.8, 0.55]
+unit  = "fractions"
+note  = "operator, 2026-08-23: the least a first prompt version for a purpose must score to run at all, in the gate's dimension order: schema valid, factually supported, agreement with outcome. Nine in ten answers well-formed, four in five supported by the facts given, and agreement just above a coin flip."
+
+[retrieval_duplicate_similarity]
+value = 0.95
+unit  = "cosine similarity"
+note  = "operator, 2026-08-23: the similarity above which two stored chunks are the same chunk and only one is returned. Ninety-five hundredths."
+
+[retrieval_usefulness_weight]
+value = 0.3
+unit  = "weight"
+note  = "operator, 2026-08-23: how much a source's measured usefulness moves its rank against raw similarity. Three tenths."
+
+[retrieval_useful_margin]
+value = 0.05
+unit  = "fraction"
+note  = "operator, 2026-08-23: how much better answers must be with a source than without it before retrieval-quality-scorer calls it useful. Five points."
+
+[retrieval_maximum_hits]
+value = 5
+unit  = "hits"
+note  = "operator, 2026-08-23: how many chunks a retrieval query asks for. Five."
+
+[retrieval_minimum_similarity]
+value = 0.5
+unit  = "cosine similarity"
+note  = "operator, 2026-08-23: the similarity below which a chunk is not an answer to the query. A half."
+
+[retrieval_facts_that_make_it_unnecessary]
+value = 5
+unit  = "facts"
+note  = "operator, 2026-08-23: how many measured facts a request may carry before retrieval-querier decides it needs nothing retrieved. Five."
+
+[retrieval_minimum_subject_terms]
+value = 1
+unit  = "terms"
+note  = "operator, 2026-08-23: how many subject terms a request must yield before a query can be planned. One."
+
+[llm_maximum_repairs]
+value = 2
+unit  = "attempts"
+note  = "operator, 2026-08-23: how many times structured-output-enforcer asks the model to repair a malformed answer before giving up on the prompt. Two."
+
+[prompt_minimum_evidence]
+value = 3
+unit  = "findings or skills"
+note  = "operator, 2026-08-23: how many findings or skill sections prompt-template-author needs on a purpose before it writes a template from them. Three."

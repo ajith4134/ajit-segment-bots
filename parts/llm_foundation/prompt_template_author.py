@@ -321,3 +321,67 @@ def run_prompt_template_author(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Findings, skills and scores are the evidence. A template is written for
+    a purpose once enough evidence names it: its instruction is the
+    evidence's own statements, it declares the verified-facts context, and
+    its output shape is the one every purpose here shares -- a venue, a
+    symbol and a text. A model's draft arrives as a validated output for
+    the drafting purpose; none is configured in phase 1.
+    """
+    from runtime.input_assembly import Batch
+
+    findings = Batch(read=context.bus.reader("research-finding"))
+    skills = Batch(read=context.bus.reader("skill"))
+    scores = Batch(read=context.bus.reader("prompt-score"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    publish_templates = context.bus.publisher_for("prompt-template")
+    publish_requests = context.bus.publisher_for("llm-request")
+    author = PromptTemplateAuthor(minimum_evidence=int(context.number("prompt_minimum_evidence")))
+    purposes_with_evidence: dict[str, int] = {}
+    written_for: set[str] = set()
+    output_schema = {"venue_id": "str", "symbol": "str", "text": "str"}
+
+    def read_work(_author):
+        for finding in findings.payloads():
+            author.observe_finding(finding)
+            purposes_with_evidence[finding.topic] = purposes_with_evidence.get(finding.topic, 0) + 1
+        for skill in skills.payloads():
+            author.observe_skill(skill)
+            purposes_with_evidence[skill.title] = purposes_with_evidence.get(skill.title, 0) + 1
+        for score in scores.payloads():
+            author.observe_score(score)
+        drafts = {}
+        for output in outputs.payloads():
+            if output.purpose.startswith("draft-a-prompt-for-"):
+                drafts[output.purpose[len("draft-a-prompt-for-"):]] = output.text
+        jobs = []
+        for purpose, count in purposes_with_evidence.items():
+            if purpose in written_for:
+                continue
+            evidence = author.evidence_for(purpose)
+            if not evidence:
+                continue
+            written_for.add(purpose)
+            instruction = drafts.get(purpose) or "Using only the measured facts given, state what they show about " + purpose + ". " + " ".join(str(item) for item in evidence)
+            jobs.append({
+                "template_id": f"template:{purpose}", "purpose": purpose, "instruction": instruction,
+                "output_schema": dict(output_schema), "required_context_kinds": ("verified-facts",),
+            })
+        return tuple(jobs)
+
+    return run_prompt_template_author(
+        author=author,
+        control_socket=context.control_socket,
+        read_work=read_work,
+        publish_templates=lambda template: publish_templates((template,)),
+        publish_requests=lambda request: publish_requests((request,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

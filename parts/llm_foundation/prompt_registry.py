@@ -287,3 +287,25 @@ def run_prompt_registry(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    templates = Batch(read=context.bus.reader("prompt-template"))
+    promotions = Batch(read=context.bus.reader("prompt-promotion"))
+    publish_versions = context.bus.publisher_for("prompt-version")
+    registry = PromptRegistry()
+
+    return run_prompt_registry(
+        registry=registry,
+        control_socket=context.control_socket,
+        read_templates=lambda: templates.payloads(),
+        read_promotions=lambda: promotions.payloads(),
+        publish_versions=lambda version: publish_versions((version,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

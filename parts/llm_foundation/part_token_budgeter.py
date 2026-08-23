@@ -305,3 +305,60 @@ def run_part_token_budgeter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every part that has made a call is issued a budget each tick the pool
+    changes; the pool is the latest quota and spend. Usefulness is learned
+    from whether a part's call succeeded, which is what a record carries.
+    """
+    from runtime.input_assembly import Batch
+
+    records = Batch(read=context.bus.reader("llm-call-record"))
+    spends = Batch(read=context.bus.reader("llm-spend-state"))
+    quotas = Batch(read=context.bus.reader("llm-quota-state"))
+    publish_budgets = context.bus.publisher_for("llm-part-budget")
+    budgeter = PartTokenBudgeter(
+        window_seconds=context.number("llm_quota_window_seconds"),
+        starting_share=context.number("llm_budget_starting_share"),
+        prior_usefulness=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_usefulness_observations=int(context.number("decoding_minimum_trades")),
+        characters_per_token=context.number("llm_characters_per_token"),
+    )
+    parts_seen: set[str] = set()
+
+    def read_state(_budgeter):
+        changed = False
+        for quota in quotas.payloads():
+            budgeter.observe_quota(quota)
+            changed = True
+        for spend in spends.payloads():
+            budgeter.observe_spend(spend)
+            changed = True
+        touched: set[str] = set()
+        for record in records.payloads():
+            budgeter.observe_call(record)
+            budgeter.observe_usefulness(record.part_id, bool(record.succeeded))
+            parts_seen.add(record.part_id)
+            touched.add(record.part_id)
+        budgeter.roll_window()
+        return tuple(sorted(parts_seen if changed else touched))
+
+    def publish(issue) -> None:
+        if issue is not None and issue.budget is not None:
+            publish_budgets((issue.budget,))
+
+    return run_part_token_budgeter(
+        budgeter=budgeter,
+        control_socket=context.control_socket,
+        read_state=read_state,
+        publish_budgets=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

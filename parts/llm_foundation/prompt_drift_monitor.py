@@ -240,3 +240,36 @@ def run_prompt_drift_monitor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A score names no model, and this part consumes nothing that does, so
+    drift is measured on the score alone; a model change is reported the
+    day a score carries its model.
+    """
+    from runtime.input_assembly import Batch
+
+    scores = Batch(read=context.bus.reader("prompt-score"))
+    publish_alerts = context.bus.publisher_for("alert")
+    monitor = PromptDriftMonitor(
+        baseline_window=int(context.number("prompt_drift_baseline_window")),
+        deviation_threshold=context.number("prompt_drift_deviation_threshold"),
+        minimum_baseline=int(context.number("prompt_drift_minimum_baseline")),
+    )
+
+    def publish(alert) -> None:
+        if alert is not None and alert.is_an_alert:
+            publish_alerts((alert,))
+
+    return run_prompt_drift_monitor(
+        monitor=monitor,
+        control_socket=context.control_socket,
+        read_scores=lambda: tuple((score, None) for score in scores.payloads()),
+        publish_alerts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

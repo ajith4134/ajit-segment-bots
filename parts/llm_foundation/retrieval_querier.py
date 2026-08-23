@@ -218,3 +218,33 @@ def run_retrieval_querier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every request is planned against the three corpora the embedder
+    indexes: source documents, journal entries and skills.
+    """
+    from runtime.input_assembly import Batch
+
+    requests = Batch(read=context.bus.reader("llm-request"))
+    publish_queries = context.bus.publisher_for("retrieval-query")
+    querier = RetrievalQuerier(
+        maximum_hits=int(context.number("retrieval_maximum_hits")),
+        minimum_similarity=context.number("retrieval_minimum_similarity"),
+        facts_that_make_retrieval_unnecessary=int(context.number("retrieval_facts_that_make_it_unnecessary")),
+        minimum_subject_terms=int(context.number("retrieval_minimum_subject_terms")),
+    )
+    corpora = ("source-document", "journal-entry", "skill")
+
+    return run_retrieval_querier(
+        querier=querier,
+        control_socket=context.control_socket,
+        read_requests=lambda: tuple((request, corpora) for request in requests.payloads()),
+        publish_queries=lambda query: publish_queries((query,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -268,3 +268,50 @@ def run_knowledge_embedder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No embedding model is installed on this box, so every text is answered
+    NO_MODEL by name and no vector is published. Documents, journal entries
+    with text in their payload, and skills are the texts offered;
+    `install_model` is the one way a model gets in.
+    """
+    from runtime.input_assembly import Batch
+
+    documents = Batch(read=context.bus.reader("source-document"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    skills = Batch(read=context.bus.reader("skill"))
+    publish_embeddings = context.bus.publisher_for("embedding")
+    embedder = KnowledgeEmbedder(
+        chunk_characters=int(context.number("embedding_chunk_characters")),
+        overlap_characters=int(context.number("embedding_overlap_characters")),
+        minimum_characters=int(context.number("embedding_minimum_characters")),
+        dimensions=int(context.number("embedding_vector_dimensions")),
+    )
+
+    def read_texts():
+        texts = []
+        for document in documents.payloads():
+            texts.append(("source-document", document.source_reference, f"{document.title}\n{document.content}"))
+        for entry in entries.payloads():
+            payload = entry.payload if isinstance(entry.payload, dict) else {}
+            text = payload.get("narrative") or payload.get("text")
+            if text:
+                texts.append(("journal-entry", f"journal:{getattr(entry, 'sequence', getattr(entry, 'entry_id', ''))}", str(text)))
+        for skill in skills.payloads():
+            body = "\n".join(str(section) for section in skill.sections)
+            texts.append(("skill", skill.source_reference or skill.skill_id, f"{skill.title}\n{body}"))
+        return tuple(texts)
+
+    return run_knowledge_embedder(
+        embedder=embedder,
+        control_socket=context.control_socket,
+        read_texts=read_texts,
+        publish_embeddings=lambda embeddings: publish_embeddings(tuple(embeddings)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

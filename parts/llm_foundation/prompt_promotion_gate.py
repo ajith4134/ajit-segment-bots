@@ -316,3 +316,52 @@ def run_prompt_promotion_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every score is observed; a newly scored version is the challenger, and
+    the incumbent is the version last promoted for the same purpose, which
+    this gate remembers from its own decisions. The template is the one
+    the scored version's id names, in the registry's form template:version.
+    """
+    from runtime.input_assembly import Batch
+
+    scores = Batch(read=context.bus.reader("prompt-score"))
+    publish_promotions = context.bus.publisher_for("prompt-promotion")
+    bar = [float(b) for b in context.setting("prompt_absolute_bar").value]
+    gate = PromptPromotionGate(
+        required_margin=context.number("prompt_required_margin"),
+        regression_tolerance=context.number("prompt_regression_tolerance"),
+        maximum_cost_ratio=context.number("prompt_maximum_cost_ratio"),
+        absolute_bar=dict(zip(QUALITY_DIMENSIONS, bar, strict=True)),
+    )
+    incumbent_by_purpose: dict[str, str] = {}
+
+    def template_of(version_id: str) -> str:
+        return version_id.rsplit(":", 1)[0] if ":" in version_id else version_id
+
+    def read_candidates(_gate):
+        candidates = []
+        for score in scores.payloads():
+            gate.observe_score(score)
+            if score.is_fitted:
+                candidates.append((score.version_id, incumbent_by_purpose.get(score.purpose), template_of(score.version_id)))
+        return tuple(candidates)
+
+    def publish(promotion) -> None:
+        if promotion is not None:
+            incumbent_by_purpose[promotion.purpose] = promotion.version_id
+            publish_promotions((promotion,))
+
+    return run_prompt_promotion_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_candidates=read_candidates,
+        publish_promotions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

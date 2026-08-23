@@ -317,3 +317,55 @@ def run_structured_output_enforcer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A response is enforced against the version that rendered it and the
+    facts the response's rendered request carried. The rendered request is
+    not on this part's inputs, so the facts it is checked against are the
+    ones the version's purpose was last rendered with -- none, until a
+    response arrives whose version this part has seen. A response whose
+    version is unknown here cannot be enforced and is held until the
+    version arrives.
+    """
+    from runtime.input_assembly import Batch
+
+    responses = Batch(read=context.bus.reader("llm-response"))
+    versions = Batch(read=context.bus.reader("prompt-version"))
+    publish_outputs = context.bus.publisher_for("validated-llm-output")
+    publish_retries = context.bus.publisher_for("llm-request")
+    enforcer = StructuredOutputEnforcer(
+        maximum_repairs=int(context.number("llm_maximum_repairs")),
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        require_a_citation=True,
+    )
+    version_by_id: dict[str, object] = {}
+    held: list = []
+
+    def read_responses():
+        for version in versions.payloads():
+            version_by_id[version.version_id] = version
+        held.extend(responses.payloads())
+        jobs, still_held = [], []
+        for response in held:
+            version = version_by_id.get(response.version_id)
+            if version is None:
+                still_held.append(response)
+                continue
+            jobs.append((response, version, {}))
+        held[:] = still_held
+        return tuple(jobs)
+
+    return run_structured_output_enforcer(
+        enforcer=enforcer,
+        control_socket=context.control_socket,
+        read_responses=read_responses,
+        publish_outputs=lambda output: publish_outputs((output,)),
+        publish_retries=lambda request: publish_retries((request,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

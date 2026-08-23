@@ -235,3 +235,47 @@ def run_prompt_renderer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A request is rendered with the active version for its purpose and the
+    context assembled for it; with no active version it is refused by name
+    inside the renderer, and with no context yet it is rendered with none,
+    which the version's own declaration then judges.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    requests = Batch(read=context.bus.reader("llm-request"))
+    versions = Batch(read=context.bus.reader("prompt-version"))
+    contexts = LatestByKey(read=context.bus.reader("prompt-context"), key_of=lambda c: c.request_id)
+    publish_rendered = context.bus.publisher_for("rendered-llm-request")
+    renderer = PromptRenderer()
+    active_by_purpose: dict[str, object] = {}
+
+    def request_id_of(request) -> str:
+        return f"{request.purpose}:{request.venue_id}:{request.symbol}:{request.requested_at_ns}"
+
+    def read_jobs():
+        for version in versions.payloads():
+            if version.is_active:
+                active_by_purpose[version.purpose] = version
+            elif active_by_purpose.get(version.purpose) is not None and active_by_purpose[version.purpose].version_id == version.version_id:
+                del active_by_purpose[version.purpose]
+        by_request = contexts.mapping()
+        return tuple(
+            (request, active_by_purpose.get(request.purpose), by_request.get(request_id_of(request)))
+            for request in requests.payloads()
+        )
+
+    return run_prompt_renderer(
+        renderer=renderer,
+        control_socket=context.control_socket,
+        read_jobs=read_jobs,
+        publish_rendered=lambda rendered: publish_rendered((rendered,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

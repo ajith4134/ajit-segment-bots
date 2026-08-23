@@ -286,3 +286,57 @@ def run_retrieval_quality_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A hit is observed under the query it answered; a prompt score grades
+    every answer whose query served that version's purpose, good when the
+    answer agreed with the outcome. Sources are scored once per health
+    interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    hits = Batch(read=context.bus.reader("retrieval-hit"))
+    scores = Batch(read=context.bus.reader("prompt-score"))
+    publish_scores = context.bus.publisher_for("retrieval-score")
+    scorer = RetrievalQualityScorer(
+        minimum_answers=int(context.number("decoding_minimum_trades")),
+        useful_margin=context.number("retrieval_useful_margin"),
+        prior_quality=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    answers_by_purpose: dict[str, list[str]] = {}
+    last_scored = [float("-inf")]
+
+    def read_answers(_scorer):
+        for hit in hits.payloads():
+            scorer.observe_hit(hit.query_id, hit, True)
+            purpose = hit.query_id.split(":", 1)[0]
+            answers_by_purpose.setdefault(purpose, []).append(hit.query_id)
+        for score in scores.payloads():
+            if score.agreement_with_outcome is None:
+                continue
+            was_good = float(score.agreement_with_outcome) > context.number("learning_prior_hit_rate")
+            for answer_id in answers_by_purpose.pop(score.purpose, []):
+                scorer.observe_answer(answer_id, was_good)
+        now = _time.monotonic()
+        if now - last_scored[0] < context.health_interval_seconds:
+            return ()
+        last_scored[0] = now
+        return scorer.sources_seen()
+
+    return run_retrieval_quality_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_answers=read_answers,
+        publish_scores=lambda score: publish_scores((score,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

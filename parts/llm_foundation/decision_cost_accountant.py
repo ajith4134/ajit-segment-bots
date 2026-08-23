@@ -243,3 +243,54 @@ def run_decision_cost_accountant(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A decision is one venue and symbol's intent. The calls charged to it
+    are the records that arrived since the last intent there for the same
+    purpose family -- a call record names no venue, so the link is time
+    and purpose, which this part states rather than hides. A PnL statement
+    for the venue and symbol settles the decision, and settled decisions
+    are accounted.
+    """
+    from runtime.input_assembly import Batch
+
+    records = Batch(read=context.bus.reader("llm-call-record"))
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    publish_costs = context.bus.publisher_for("decision-cost")
+    accountant = DecisionCostAccountant()
+    open_decision: dict[tuple[str, str], str] = {}
+    unassigned: list = []
+
+    def read_decisions(_accountant):
+        unassigned.extend(records.payloads())
+        settled = []
+        for intent in intents.payloads():
+            key = (intent.venue_id, intent.symbol)
+            decision_id = f"{intent.venue_id}:{intent.symbol}:{intent.formed_at_ns}"
+            open_decision[key] = decision_id
+            for record in unassigned:
+                accountant.observe_call(decision_id, record)
+            unassigned.clear()
+            accountant.observe_intent(decision_id, str(intent.action) != "stand-aside")
+        for statement in statements.payloads():
+            decision_id = open_decision.pop((statement.venue_id, statement.symbol), None)
+            if decision_id is None:
+                continue
+            accountant.observe_realised(decision_id, float(statement.net_pnl_usdt))
+            settled.append(decision_id)
+        return tuple(settled)
+
+    return run_decision_cost_accountant(
+        accountant=accountant,
+        control_socket=context.control_socket,
+        read_decisions=read_decisions,
+        publish_costs=lambda cost: publish_costs((cost,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
