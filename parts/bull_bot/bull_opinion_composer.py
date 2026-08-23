@@ -29,6 +29,7 @@ from runtime.bot_opinion import (
     CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, LONG, NO_EXIT_PLAN,
     STAND_DOWN, TIMING_REFUSED, WAIT_FOR_TRIGGER, DirectionalOpinion, stand_down,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -56,6 +57,9 @@ class ComposerStanding:
     stood_down: int = 0
     by_refusal: dict = field(default_factory=dict)
     strongest_conviction_acted_on: float = 0.0
+    # The floor the last judged plan had to clear, so the board can show what the
+    # bot is measuring its conviction against rather than a number it once read.
+    last_floor: float | None = None
 
 
 class BullOpinionComposer:
@@ -63,16 +67,17 @@ class BullOpinionComposer:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         maximum_missing_features: int,
         require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         if maximum_missing_features < 0:
             raise ValueError("a negative allowance for missing features means nothing")
-        self._minimum_conviction = minimum_conviction
+        # The floor is the plan's own break-even plus the operator's margin, not a
+        # literal: 0.55 refused 325 of 327 intents on 2026-08-23 against a model
+        # whose measured output never left 0.44-0.50 (runtime/edge_arithmetic.py).
+        self._floor = conviction_floor
         self._maximum_missing = maximum_missing_features
         self._require_trained_model = require_trained_model
         self._now_ns = now_ns
@@ -91,11 +96,25 @@ class BullOpinionComposer:
                 conviction.calibrated,
             )
 
-        if conviction.probability < self._minimum_conviction:
+        # The floor needs the plan, so a missing plan is refused here rather than
+        # after the conviction check: an entry with no exit is not a trade, it is
+        # an exposure, and there is no break-even for an exposure.
+        if exit_plan is None or not exit_plan.is_complete:
+            return self._stand_down(
+                venue_id, symbol, NO_EXIT_PLAN,
+                f"conviction {conviction.probability:.1%}, but no exit plan could be built, so "
+                f"there is nowhere this trade is wrong, nowhere it is finished, and no "
+                f"break-even it has to clear",
+                conviction.calibrated,
+            )
+
+        floor, floor_reason = self._floor.for_plan(exit_plan.reward_to_risk, exit_plan.risk_fraction)
+        self.standing.last_floor = floor
+        if conviction.probability < floor:
             return self._stand_down(
                 venue_id, symbol, CONVICTION_TOO_LOW,
                 f"conviction is {conviction.probability:.1%} against a floor of "
-                f"{self._minimum_conviction:.1%}",
+                f"{floor:.1%} ({floor_reason})",
                 conviction.calibrated,
             )
 
@@ -113,16 +132,6 @@ class BullOpinionComposer:
                 venue_id, symbol, TIMING_REFUSED,
                 f"the setup is believed at {conviction.probability:.1%} but the moment is not: "
                 + (timing.reason if timing is not None else "no timing was produced"),
-                conviction.calibrated,
-            )
-
-        if exit_plan is None or not exit_plan.is_complete:
-            # An entry with no exit is not a trade, it is an exposure.
-            return self._stand_down(
-                venue_id, symbol, NO_EXIT_PLAN,
-                f"conviction {conviction.probability:.1%} and the moment is right, but no exit "
-                f"plan could be built, so there is nowhere this trade is wrong and nowhere it "
-                f"is finished",
                 conviction.calibrated,
             )
 
@@ -177,6 +186,7 @@ def describe_opinions(composer: BullOpinionComposer) -> dict:
         "stood_down": composer.standing.stood_down,
         "stood_down_by_reason": dict(composer.standing.by_refusal),
         "strongest_conviction_acted_on": composer.standing.strongest_conviction_acted_on,
+        "last_floor": composer.standing.last_floor,
     }
 
 
@@ -250,7 +260,11 @@ def start_part(context) -> int:
 
     return run_bull_opinion_composer(
         composer=BullOpinionComposer(
-            minimum_conviction=context.number("bull_opinion_minimum_conviction"),
+            conviction_floor=ConvictionFloor(
+                fee_rate=context.number("taker_fee_rate"),
+                margin=context.number("bull_conviction_margin_over_break_even"),
+                fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+            ),
             maximum_missing_features=int(context.number("bull_opinion_maximum_missing_features")),
             require_trained_model=bool(
                 context.setting("bull_opinion_require_trained_model").value

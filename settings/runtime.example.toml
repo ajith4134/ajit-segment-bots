@@ -358,10 +358,10 @@ value = 1000.0
 unit  = "observations"
 note  = "operator, 2026-08-22: how quickly the calibrator forgets old outcomes. A model that has been retrained is a different model, and its old calibration describes a predictor that no longer exists."
 
-[bull_entry_minimum_conviction]
-value = 0.55
-unit  = "calibrated probability"
-note  = "operator, 2026-08-22: the conviction below which the entry timer does not look for a trigger. Just above the coin flip, because the calibrated conviction is a probability and a trade at 0.5 has no edge to time. Deliberately close to it for a first run: a high floor would refuse every trade before the model has ever been trained, and the size the trade is given is where a weak edge is expressed."
+[bull_conviction_margin_over_break_even]
+value = 0.0
+unit  = "probability"
+note  = "operator, 2026-08-23: how far above its plan's break-even probability the bull bot's conviction must be before the bot will time an entry or form an opinion. The break-even itself is arithmetic from the plan -- (1 + fees in units of risk) / (1 + reward to risk), runtime/edge_arithmetic.py -- and replaces the 0.55 literal that stood in bull_entry_minimum_conviction and bull_opinion_minimum_conviction. That literal was set before the model had seen an outcome; measured on the live run of 2026-08-23 the model's output never left 0.44-0.50, so it refused 325 of 327 intents, and the learning loop behind a closed trade never ran. Zero margin on paper, by RL-005: paper is the unrestricted experiment, a trade worth exactly nothing on average is the boundary of what is worth learning from, and the size expresses how much edge there is. What would settle a non-zero margin is realised expectancy per conviction bucket, which needs closed trades."
 
 [bull_entry_window_length]
 value = 256
@@ -423,11 +423,6 @@ value = 2.0
 unit  = "multiples of the candidate horizon"
 note  = "operator, 2026-08-22: how much longer than the detector's own horizon a high-conviction position is given to work. The detector says the move should happen within its horizon; conviction is a statement about whether it will, not about when, so a strong opinion earns patience rather than a wider stop."
 
-[bull_opinion_minimum_conviction]
-value = 0.55
-unit  = "calibrated probability"
-note  = "operator, 2026-08-22: the conviction below which the composer forms no opinion at all. The same floor as the entry timer's, deliberately: two different floors would mean a conviction that was worth timing an entry for but not worth having an opinion about."
-
 [bull_opinion_maximum_missing_features]
 value = 7
 unit  = "features"
@@ -483,10 +478,10 @@ value = 0.001
 unit  = "base units"
 note  = "operator, 2026-08-22: the quantity step an order is snapped to. **This is the coarsest number in the system and it is temporary.** Every venue publishes a per-symbol lot size, and nothing in the blueprint consumes it yet -- symbol-catalogue-reader reads price increments and not quantity ones. A single global step is wrong for a symbol priced at 78000 and a symbol priced at 0.0001; it is here so the first paper order can be placed at all, and the honest fix is a per-symbol venue fact carried on instrument-choice."
 
-[arbiter_minimum_conviction]
-value = 0.55
-unit  = "calibrated probability"
-note  = "operator, 2026-08-22: below this the arbiter forms no intent from an opinion. The same floor the bull bot uses to have the opinion at all, deliberately: two different floors would mean a conviction worth an opinion but not worth acting on, which is a distinction nobody has evidence for yet."
+[arbiter_conviction_margin_over_break_even]
+value = 0.0
+unit  = "probability"
+note  = "operator, 2026-08-23: how far above the most demanding acting plan's break-even the brain's weighted conviction must be before it forms an intent. Replaces the 0.55 literal in arbiter_minimum_conviction, for the reason given at bull_conviction_margin_over_break_even: the floor is the plan's own arithmetic, the margin is the operator's. Zero on paper (RL-005). Kept as a separate number from the bull bot's because the brain weighs three bots and a margin here is a statement about the composition, not about one bot."
 
 [arbiter_agreement_bonus]
 value = 0.05

@@ -53,6 +53,7 @@ from runtime.bot_opinion import (
 from runtime.claim_verification import (
     make_request, numbers_in, split_sentences, verify_against_facts, written_without_a_model,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trade_intent import (
@@ -382,12 +383,18 @@ def test_a_ruling_is_recorded_even_when_it_is_to_do_nothing():
 
 # ---- opinion-arbiter --------------------------------------------------------
 
+def a_floor(margin=0.0):
+    # The plan every test opinion carries pays 2.0 to 1 with a 5% stop: fee-free
+    # break-even one third, 0.022 of the risk in fees, so the floor is 34.1%.
+    return ConvictionFloor(fee_rate=0.00055, margin=margin, fallback_reward_to_risk=1.5)
+
+
 def an_arbiter(
-    minimum=0.55, agreement_bonus=0.05, sole_penalty=0.2, shade=0.05,
+    margin=0.0, agreement_bonus=0.05, sole_penalty=0.2, shade=0.05,
     minimum_competence=0.3, minimum_coverage=0.3,
 ):
     return OpinionArbiter(
-        minimum_conviction=minimum, agreement_bonus=agreement_bonus,
+        conviction_floor=a_floor(margin), agreement_bonus=agreement_bonus,
         sole_opinion_penalty=sole_penalty, maximum_forecast_shade=shade,
         minimum_competence=minimum_competence, minimum_coverage=minimum_coverage,
     )
@@ -452,7 +459,7 @@ def test_a_broken_regime_stops_every_opinion_formed_in_it():
 
 
 def test_the_forecast_can_shade_a_decision_and_never_make_one():
-    subject = an_arbiter(minimum=0.55, shade=0.05, agreement_bonus=0.0)
+    subject = an_arbiter(margin=0.2, shade=0.05, agreement_bonus=0.0)
     subject.observe_forecast_bias(Bias(0.5))
     intent = subject.arbitrate([an_opinion(BULL, conviction=0.4)], Regime())
     assert intent.action == STAND_ASIDE, "a 40% conviction cannot be carried by a forecast"
@@ -464,7 +471,7 @@ def test_the_forecast_can_shade_a_decision_and_never_make_one():
 def test_a_shade_of_half_the_range_is_refused_at_construction():
     with pytest.raises(ValueError):
         OpinionArbiter(
-            minimum_conviction=0.55, agreement_bonus=0.05, sole_opinion_penalty=0.2,
+            conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
             maximum_forecast_shade=0.5, minimum_competence=0.3, minimum_coverage=0.3,
         )
 
@@ -528,9 +535,37 @@ def test_a_close_opinion_becomes_a_close_intent():
 
 
 def test_a_weak_blended_conviction_stands_aside():
-    subject = an_arbiter(minimum=0.8, agreement_bonus=0.0)
+    subject = an_arbiter(margin=0.45, agreement_bonus=0.0)
     subject.arbitrate([an_opinion(BULL, conviction=0.6), an_opinion(TAIL, conviction=0.6)], Regime())
     assert subject.standing.by_refusal[CONVICTION_TOO_LOW] == 1
+
+
+def test_the_brain_clears_the_most_demanding_plan_behind_the_intent():
+    """Two bots, two plans; the intent acts on both, so it must be worth taking
+    against the one with the tighter stop and the thinner reward."""
+    from runtime.edge_arithmetic import break_even_probability, round_trip_cost_in_risk_units
+
+    generous = a_plan()  # 2.0 to 1, 5% stop
+    thin = ExitPlan(
+        bot=TAIL, venue_id=VENUE, symbol=SYMBOL, side=LONG, stop_price=99.0,
+        targets=(ExitTarget(price=101.2, fraction=1.0, reason="target"),),
+        invalidation_reason="below the stop", horizon_seconds=600.0,
+        risk_fraction=0.01, reward_to_risk=1.2, reason="planned", planned_at_ns=Clock()(),
+    )
+    demanding = break_even_probability(1.2, round_trip_cost_in_risk_units(0.00055, 0.01))
+    subject = an_arbiter(agreement_bonus=0.0, sole_penalty=0.0)
+    subject.arbitrate(
+        [an_opinion(BULL, conviction=demanding - 0.01, plan=generous),
+         an_opinion(TAIL, conviction=demanding - 0.01, plan=thin)],
+        Regime(),
+    )
+    assert subject.standing.by_refusal[CONVICTION_TOO_LOW] == 1
+    acted = subject.arbitrate(
+        [an_opinion(BULL, conviction=demanding + 0.02, plan=generous),
+         an_opinion(TAIL, conviction=demanding + 0.02, plan=thin)],
+        Regime(),
+    )
+    assert acted.is_actionable
 
 
 # ---- exploration-pair-opener ------------------------------------------------

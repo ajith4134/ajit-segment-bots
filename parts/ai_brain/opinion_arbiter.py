@@ -39,6 +39,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import CLOSE_POSITION, LONG, REDUCE_POSITION, SHORT
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -87,7 +88,7 @@ class OpinionArbiter:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         agreement_bonus: float,
         sole_opinion_penalty: float,
         maximum_forecast_shade: float,
@@ -95,8 +96,6 @@ class OpinionArbiter:
         minimum_coverage: float,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         if not 0.0 <= maximum_forecast_shade < 0.5:
             raise ValueError(
                 "the forecast may shade the decision, never make it; a shade of half the "
@@ -104,7 +103,10 @@ class OpinionArbiter:
             )
         if not 0.0 <= sole_opinion_penalty < 1.0:
             raise ValueError("the penalty scales conviction and must be inside [0, 1)")
-        self._minimum_conviction = minimum_conviction
+        # The floor is each acting opinion's own break-even, and the brain clears
+        # the highest of them: an intent acts on every plan behind it, so it must
+        # be worth taking against the most demanding one (runtime/edge_arithmetic.py).
+        self._floor = conviction_floor
         self._agreement_bonus = agreement_bonus
         self._sole_penalty = sole_opinion_penalty
         self._maximum_shade = maximum_forecast_shade
@@ -230,12 +232,13 @@ class OpinionArbiter:
                 COUNTER_ARGUMENT_STANDS,
             )
 
-        if conviction < self._minimum_conviction:
+        floor, floor_reason = self._floor_for(acting)
+        if conviction < floor:
             return self._stand_aside(
                 venue_id, symbol, agreement,
                 f"weighted conviction is {conviction:.1%} across "
                 f"{len(acting)} bot(s) ({agreement}), below the "
-                f"{self._minimum_conviction:.1%} this brain acts on",
+                f"{floor:.1%} this brain acts on ({floor_reason})",
                 CONVICTION_TOO_LOW,
             )
 
@@ -262,7 +265,7 @@ class OpinionArbiter:
                 value=conviction,
                 is_fitted=all(opinion.conviction.is_fitted for opinion in acting),
                 observations=sum(opinion.conviction.observations for opinion in acting),
-                prior=self._minimum_conviction,
+                prior=floor,
                 was_clamped=False,
                 bound_low=None,
                 bound_high=None,
@@ -306,6 +309,17 @@ class OpinionArbiter:
             return [], RULED
         kept = [opinion for opinion in acting if opinion.bot == ruling.favoured_bot]
         return kept, RULED
+
+    def _floor_for(self, acting) -> tuple[float, str]:
+        """The highest break-even among the acting opinions' plans, with its reason."""
+        floors = []
+        for opinion in acting:
+            plan = opinion.exit_plan
+            if plan is None:
+                floors.append(self._floor.before_any_plan())
+            else:
+                floors.append(self._floor.for_plan(plan.reward_to_risk, plan.risk_fraction))
+        return max(floors, key=lambda pair: pair[0])
 
     def _weighted_conviction(self, acting, weights: dict, agreement: str) -> float:
         """Weighted mean conviction, adjusted for what the ensemble itself says.
@@ -470,7 +484,11 @@ def start_part(context) -> int:
 
     return run_opinion_arbiter(
         arbiter=OpinionArbiter(
-            minimum_conviction=context.number("arbiter_minimum_conviction"),
+            conviction_floor=ConvictionFloor(
+                fee_rate=context.number("taker_fee_rate"),
+                margin=context.number("arbiter_conviction_margin_over_break_even"),
+                fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+            ),
             agreement_bonus=context.number("arbiter_agreement_bonus"),
             sole_opinion_penalty=context.number("arbiter_sole_opinion_penalty"),
             maximum_forecast_shade=context.number("arbiter_maximum_forecast_shade"),

@@ -52,6 +52,7 @@ from runtime.bot_opinion import (
     NO_EXIT_PLAN, REDUCE_POSITION, SHORT, STAND_DOWN, TIMING_REFUSED,
     WAIT_FOR_TRIGGER, BotScorecard, FeatureVector, SideCandidate,
 )
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.market_signal import CONTINUATION, REVERSION, make_candidate
 from runtime.online_learner import (
@@ -655,9 +656,22 @@ def test_a_restarted_calibrator_adopts_the_scorecard_rather_than_relearning():
 
 # ---- bull-entry-timer -------------------------------------------------------
 
-def a_timer(minimum_conviction=0.55, clock=None, cap=0.01):
+# The fee and the least reward-to-risk the live settings carry, so the floors
+# these tests exercise are the ones the bot runs with: fee-free break-even at
+# 1.5 is 40%; with fees 0.073 of a 1.5% stop it is 42.9%.
+FEE_RATE = 0.00055
+LEAST_REWARD_TO_RISK = 1.5
+
+
+def a_floor(margin=0.0):
+    return ConvictionFloor(
+        fee_rate=FEE_RATE, margin=margin, fallback_reward_to_risk=LEAST_REWARD_TO_RISK,
+    )
+
+
+def a_timer(margin=0.0, clock=None, cap=0.01):
     return BullEntryTimer(
-        minimum_conviction=minimum_conviction, window_length=50, minimum_observations=10,
+        conviction_floor=a_floor(margin), window_length=50, minimum_observations=10,
         trigger_validity_seconds=60.0, maximum_extension_quantile=0.8,
         entry_quality_window=200, prior_extension_cap=cap,
         prior_entry_cost_fraction=0.0005, now_ns=clock or Clock(),
@@ -671,7 +685,9 @@ class ConvictionStub:
 
 
 def test_a_setup_the_bot_does_not_believe_is_not_timed():
-    subject = a_timer(minimum_conviction=0.6)
+    """The timer's floor is the fee-free break-even at the least reward-to-risk
+    any plan is accepted with -- 40% at 1.5 -- plus the margin."""
+    subject = a_timer(margin=0.2)
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.5))
     assert timing.action == STAND_DOWN
     assert subject.standing.by_refusal[TIMER_CONVICTION_TOO_LOW] == 1
@@ -993,9 +1009,9 @@ def test_targets_that_do_not_close_the_position_are_refused_at_construction():
 
 # ---- bull-opinion-composer --------------------------------------------------
 
-def a_composer(minimum=0.55, missing=1, require_measured=False):
+def a_composer(margin=0.0, missing=1, require_measured=False):
     return BullOpinionComposer(
-        minimum_conviction=minimum, maximum_missing_features=missing,
+        conviction_floor=a_floor(margin), maximum_missing_features=missing,
         require_trained_model=require_measured,
     )
 
@@ -1065,8 +1081,27 @@ def test_too_many_missing_features_stops_the_opinion():
 
 
 def test_a_conviction_below_the_floor_stands_down():
-    opinion = a_composer(minimum=0.7).compose(a_vector(), CalibratedStub(0.6), a_timing(), a_plan())
+    opinion = a_composer(margin=0.5).compose(a_vector(), CalibratedStub(0.6), a_timing(), a_plan())
     assert opinion.refusal == CONVICTION_TOO_LOW
+    assert "break-even" in opinion.reason
+
+
+def test_the_floor_is_the_plans_own_break_even_not_a_literal():
+    """0.55 refused 325 of 327 intents on 2026-08-23 against a model whose output
+    never left 0.44-0.50. The floor is now what the plan has to clear: at the
+    plan's reward-to-risk and stop distance, with two taker fees, (1 + c)/(1 + R)."""
+    from runtime.edge_arithmetic import break_even_probability, round_trip_cost_in_risk_units
+
+    plan = a_plan()
+    expected = break_even_probability(
+        plan.reward_to_risk, round_trip_cost_in_risk_units(FEE_RATE, plan.risk_fraction)
+    )
+    subject = a_composer()
+    just_below = subject.compose(a_vector(), CalibratedStub(expected - 0.001), a_timing(), plan)
+    just_above = subject.compose(a_vector(), CalibratedStub(expected + 0.001), a_timing(), plan)
+    assert just_below.refusal == CONVICTION_TOO_LOW
+    assert just_above.is_a_call_to_act
+    assert subject.standing.last_floor == pytest.approx(expected)
 
 
 def test_a_bot_can_be_told_to_act_only_on_a_trained_model():

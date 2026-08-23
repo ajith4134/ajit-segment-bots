@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import ENTER_NOW, LONG, STAND_DOWN, WAIT_FOR_TRIGGER, EntryTiming
+from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -86,7 +87,7 @@ class BullEntryTimer:
 
     def __init__(
         self,
-        minimum_conviction: float,
+        conviction_floor: ConvictionFloor,
         window_length: int,
         minimum_observations: int,
         trigger_validity_seconds: float,
@@ -96,13 +97,15 @@ class BullEntryTimer:
         prior_entry_cost_fraction: float,
         now_ns=time.time_ns,
     ) -> None:
-        if not 0.0 < minimum_conviction < 1.0:
-            raise ValueError("a conviction floor outside (0, 1) either takes everything or nothing")
         if trigger_validity_seconds <= 0:
             raise ValueError(
                 "a trigger with no life is a trade taken later by reasoning that has aged out"
             )
-        self._minimum_conviction = minimum_conviction
+        # The timer decides the moment while the exit plan is still being built,
+        # so it applies the lowest floor any plan could later demand -- fee-free
+        # break-even at the least reward-to-risk a plan is accepted with. The
+        # composer applies the plan's own floor once it exists.
+        self._floor, self._floor_reason = conviction_floor.before_any_plan()
         self._window_length = window_length
         self._minimum = minimum_observations
         self._validity_seconds = trigger_validity_seconds
@@ -142,12 +145,12 @@ class BullEntryTimer:
     def decide(self, candidate, conviction) -> EntryTiming:
         self.standing.decisions += 1
 
-        if conviction.probability < self._minimum_conviction:
+        if conviction.probability < self._floor:
             return self._stand_down(
                 candidate, CONVICTION_TOO_LOW,
                 f"conviction is {conviction.probability:.1%}, below the "
-                f"{self._minimum_conviction:.1%} this bot acts on "
-                f"({'measured' if conviction.is_measured else 'and not yet a measured frequency'})",
+                f"{self._floor:.1%} this bot acts on ({self._floor_reason}; "
+                f"{'measured' if conviction.is_measured else 'not yet a measured frequency'})",
             )
 
         window = self._prices.get((candidate.venue_id, candidate.symbol))
@@ -347,7 +350,11 @@ def start_part(context) -> int:
 
     return run_bull_entry_timer(
         timer=BullEntryTimer(
-            minimum_conviction=context.number("bull_entry_minimum_conviction"),
+            conviction_floor=ConvictionFloor(
+                fee_rate=context.number("taker_fee_rate"),
+                margin=context.number("bull_conviction_margin_over_break_even"),
+                fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+            ),
             window_length=int(context.number("bull_entry_window_length")),
             minimum_observations=int(context.number("bull_entry_minimum_observations")),
             trigger_validity_seconds=context.number("bull_entry_trigger_validity"),
