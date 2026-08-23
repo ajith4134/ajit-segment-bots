@@ -253,3 +253,66 @@ def run_allocation_rebalance_proposer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A segment's performance is the sum of its USDT statements, its closed
+    trade count from its bots' scorecards, and its utilisation from the
+    meter. Proposals go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    utilisations = LatestByKey(read=context.bus.reader("capital-utilisation"), key_of=lambda u: u.segment)
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    publish_proposals = context.bus.publisher_for("allocation-proposal")
+    proposer = AllocationRebalanceProposer(
+        minimum_closed_trades=int(context.number("rebalance_minimum_closed_trades")),
+        maximum_move_fraction=context.number("rebalance_maximum_move_fraction"),
+        utilisation_floor=context.number("rebalance_utilisation_floor"),
+    )
+    segment = str(context.setting("segment_id").value)
+    realised = [0.0]
+    capital = [0.0]
+    trades = [0]
+    last_publish = [float("-inf")]
+
+    def read_performance(_proposer) -> None:
+        for statement in statements.payloads():
+            realised[0] += statement.net_pnl_usdt
+            capital[0] = max(capital[0], statement.capital_used_usdt or 0.0)
+        for scorecard in scorecards.payloads():
+            trades[0] = max(trades[0], scorecard.describe().get("trades", 0))
+        utilisation = utilisations.mapping().get(segment)
+        if utilisation is not None:
+            proposer.set_allocation(segment, utilisation.allotted)
+            proposer.observe_performance(
+                SegmentPerformance(
+                    segment=segment, realised_usdt=realised[0], capital_used=capital[0],
+                    closed_trades=trades[0], utilisation=utilisation.utilisation,
+                )
+            )
+
+    def tick() -> None:
+        read_performance(proposer)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        proposals = proposer.propose()
+        if proposals:
+            publish_proposals(tuple(proposals))
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

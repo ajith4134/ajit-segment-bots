@@ -219,3 +219,39 @@ def run_allocation_conservation_checker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    mains = Batch(read=context.bus.reader("main-account-setting"))
+    allotments = Batch(read=context.bus.reader("capital-allotment"))
+    publish_headroom = context.bus.publisher_for("allocation-headroom")
+    publish_alerts = context.bus.publisher_for("alert")
+    checker = AllocationConservationChecker(
+        under_allocation_alert_fraction=context.number("under_allocation_alert_fraction"),
+    )
+
+    def read_allocations(_checker) -> None:
+        for main in mains.payloads():
+            checker.observe_main_balance(main.balance)
+        for allotment in allotments.payloads():
+            checker.observe_segment_allocation(allotment.segment, allotment.allotted)
+
+    def publish(headroom, alerts) -> None:
+        if headroom is not None:
+            publish_headroom((headroom,))
+        if alerts:
+            publish_alerts(tuple(alerts))
+
+    return run_allocation_conservation_checker(
+        checker=checker,
+        control_socket=context.control_socket,
+        read_allocations=read_allocations,
+        publish=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

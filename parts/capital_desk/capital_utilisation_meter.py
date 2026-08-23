@@ -190,3 +190,55 @@ def run_capital_utilisation_meter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The allotment from the capital desk, locks from the fund-lock ledger, and
+    the capital in positions from the segment's balance -- its equity less
+    its cash is what is in positions. Measured once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
+    locks = Batch(read=context.bus.reader("locked-allocation"))
+    allotments = Batch(read=context.bus.reader("capital-allotment"))
+    publish_utilisation = context.bus.publisher_for("capital-utilisation")
+    meter = CapitalUtilisationMeter()
+    segment = str(context.setting("segment_id").value)
+    last_measure = [float("-inf")]
+
+    def read_capital(_meter) -> None:
+        for allotment in allotments.payloads():
+            meter.set_allotment(allotment.segment, allotment.allotted)
+        for lock in locks.payloads():
+            if lock.state == "locked":
+                meter.observe_lock(segment, lock.order_id, lock.amount)
+            elif lock.state == "released":
+                meter.release_lock(segment, lock.order_id)
+        balance = balances.mapping().get(segment)
+        if balance is not None:
+            meter.observe_position_capital(segment, "all", max(0.0, balance.equity - balance.cash))
+
+    def tick() -> None:
+        read_capital(meter)
+        now = _time.monotonic()
+        if now - last_measure[0] < context.health_interval_seconds:
+            return
+        measured = meter.measure_all()
+        if measured:
+            publish_utilisation(measured)
+        last_measure[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

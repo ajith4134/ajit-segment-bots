@@ -203,3 +203,61 @@ def run_capital_settings_change_recorder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every reading of the capital settings is observed under its scope; the
+    recorder journals only what changed, in its own journal file.
+    """
+    from dataclasses import asdict, is_dataclass
+
+    from runtime.input_assembly import Batch
+    import pathlib as _pathlib
+
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
+
+    journal_path = journal_path_for(
+        _pathlib.Path(str(context.setting("journal_path").value)).expanduser(), PART_ID
+    )
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
+
+    sources = {
+        "main-account": Batch(read=context.bus.reader("main-account-setting")),
+        "capital-allotment": Batch(read=context.bus.reader("capital-allotment")),
+        "trade-capital-bounds": Batch(read=context.bus.reader("trade-capital-bounds")),
+        "leverage-ceiling": Batch(read=context.bus.reader("leverage-ceiling")),
+    }
+    publish_entries = context.bus.publisher_for("journal-entry")
+
+    def as_settings(item) -> dict:
+        fields = asdict(item) if is_dataclass(item) else {"value": repr(item)}
+        return {name: value for name, value in fields.items() if not name.endswith("_at_ns") and name != "bounds"}
+
+    def read_settings():
+        return tuple(
+            (scope, as_settings(item)) for scope, source in sources.items() for item in source.payloads()
+        )
+
+    def publish(entries) -> None:
+        if entries:
+            publish_entries(entries)
+
+    return run_capital_settings_change_recorder(
+        recorder=CapitalSettingsChangeRecorder(journal=journal),
+        control_socket=context.control_socket,
+        read_settings=read_settings,
+        publish_entries=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

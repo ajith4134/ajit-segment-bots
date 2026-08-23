@@ -248,3 +248,45 @@ def run_live_balance_divergence_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    balances = Batch(read=context.bus.reader("account-balance"))
+    allotments = Batch(read=context.bus.reader("capital-allotment"))
+    modes = Batch(read=context.bus.reader("money-mode"))
+    publish_alerts = context.bus.publisher_for("alert")
+    watch = LiveBalanceDivergenceWatch(tolerance_fraction=context.number("live_balance_tolerance_fraction"))
+
+    def read_balances(_watch):
+        touched = set()
+        for mode in modes.payloads():
+            watch.set_money_mode(mode.segment, mode.mode)
+            touched.add(mode.segment)
+        for allotment in allotments.payloads():
+            watch.set_allocation(allotment.segment, allotment.allotted)
+            touched.add(allotment.segment)
+        for balance in balances.payloads():
+            segment = getattr(balance, "segment", None)
+            if segment is None:
+                continue  # a venue balance names a venue, not a segment; the keeper's carries one
+            watch.observe_venue_balance(segment, getattr(balance, "equity", None))
+            touched.add(segment)
+        return tuple(sorted(touched))
+
+    def publish(verdict, alerts) -> None:
+        if alerts:
+            publish_alerts(tuple(alerts))
+
+    return run_live_balance_divergence_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_balances=read_balances,
+        publish=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

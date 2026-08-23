@@ -216,3 +216,72 @@ def run_paper_currency_converter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The rate between the main account's currency and USDT is read off the
+    live trade stream of the pair that prices it -- a trade in XXXUSDT is a
+    rate from XXX to USDT -- and a conversion is published for the main
+    balance whenever the main setting or the rate changes. Journalled under
+    this part's own file.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+    from runtime.venues.venue_adapter import NormalisedTrade
+    import pathlib as _pathlib
+
+    from runtime.journal import Journal, journal_path_for, read_journal_tail
+
+    journal_path = journal_path_for(
+        _pathlib.Path(str(context.setting("journal_path").value)).expanduser(), PART_ID
+    )
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append_line(line: str) -> None:
+        with open(journal_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+
+    journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
+
+    mains = LatestValue(read=context.bus.reader("main-account-setting"))
+    trades = Batch(read=context.bus.reader("market-data"))
+    publish_conversions = context.bus.publisher_for("paper-currency-rate")
+    converter = PaperCurrencyConverter(
+        journal=journal, maximum_rate_age_seconds=context.number("paper_currency_rate_maximum_age")
+    )
+    quote = "USDT"
+
+    def read_rates_and_requests():
+        rates = []
+        main = mains.value()
+        wanted = None if main is None else main.currency
+        for trade in trades.payloads():
+            if not isinstance(trade, NormalisedTrade) or not trade.symbol.endswith(quote):
+                continue
+            base = trade.symbol[: -len(quote)]
+            if wanted is not None and base == wanted:
+                rates.append({
+                    "from_currency": base, "to_currency": quote, "rate": trade.price,
+                    "source": f"{trade.venue_id}:{trade.symbol}",
+                })
+        requests = []
+        if main is not None and main.currency != quote and rates:
+            requests.append({"amount": main.balance, "from_currency": main.currency, "to_currency": quote})
+        return tuple(rates), tuple(requests)
+
+    def publish(conversions) -> None:
+        if conversions:
+            publish_conversions(conversions)
+
+    return run_paper_currency_converter(
+        converter=converter,
+        control_socket=context.control_socket,
+        read_rates_and_requests=read_rates_and_requests,
+        publish_conversions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

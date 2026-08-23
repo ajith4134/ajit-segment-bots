@@ -1817,3 +1817,33 @@ note  = "operator, 2026-08-23: the share of the move a short was expected to mak
 value = 0.0001
 unit  = "penalty coefficient"
 note  = "operator, 2026-08-23, mirrored for the short side from bull_l2_regularisation (2026-08-22): how strongly the model is pulled back towards small weights. Nonzero so that a feature which happens to line up with a handful of early outcomes cannot dominate; small enough that it does not erase a real relationship. Judgement, to be replaced by a value chosen on held-out data once there is held-out data."
+
+[under_allocation_alert_fraction]
+value = 0.5
+unit  = "fraction of the main balance"
+note  = "operator, 2026-08-23: the share of the main account left unallocated to any segment below which allocation-conservation-checker raises an alert. Half: capital sitting in the main account is capital no segment can learn with, and half of it idle is a settings file nobody finished rather than a reserve somebody chose. Over-allocation -- segments summing past the balance -- is an alert at any amount."
+
+[rebalance_minimum_closed_trades]
+value = 30
+unit  = "closed trades"
+note  = "operator, 2026-08-23: how many closed trades a segment needs before allocation-rebalance-proposer will propose moving capital towards or away from it. Thirty, at which a realised return separates from noise at about one standard error; a proposal on fewer would move money on luck."
+
+[rebalance_maximum_move_fraction]
+value = 0.2
+unit  = "fraction of a segment's allotment"
+note  = "operator, 2026-08-23: the most one proposal may move in or out of a segment. A fifth, so a run of good trades cannot concentrate the account in one segment in one step; the proposal is the operator's to accept."
+
+[rebalance_utilisation_floor]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: the utilisation below which a segment is proposed to give capital up rather than receive it -- a segment using a tenth of what it holds is not short of capital whatever its return."
+
+[live_balance_tolerance_fraction]
+value = 0.02
+unit  = "fraction of the allocation"
+note  = "operator, 2026-08-23: how far a live venue balance may differ from the segment's allocation before live-balance-divergence-watch alerts. Two percent, about a day of funding and fees on a fully deployed allocation; beyond it money has moved that the settings do not know about. Paper segments are not checked: their balance is the keeper's."
+
+[paper_currency_rate_maximum_age]
+value = 300.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how old a conversion rate may be before paper-currency-converter refuses to convert with it. Five minutes; the rate comes from the live trade stream of the conversion pair, which prints many times a minute, so a rate older than that is a pair that stopped trading."
