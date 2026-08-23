@@ -159,6 +159,21 @@ class StopTargetPlacer:
         distance = min(estimate.value, self._maximum_stop)
         stop = entry_price * (1 - distance) if side == BUY else entry_price * (1 + distance)
 
+        if stop <= 0 or (side == BUY and stop >= entry_price) or (
+            side != BUY and stop <= entry_price
+        ):
+            # A stop that does not sit beyond the entry is not a stop, whatever
+            # produced the distance. Refused here rather than passed on, because
+            # the sizer downstream can only report it as an untradeable order and
+            # by then the decision has already been made.
+            self.standing.refused_no_distance += 1
+            return self._plan(
+                venue_id, symbol, side, entry_price, None, None, REFUSED_NO_DISTANCE,
+                None, None, None, estimate,
+                f"the distance measured for {symbol} puts the stop at {stop:.8g} against an "
+                f"entry of {entry_price:.8g}, which is not beyond it",
+            )
+
         moved, nearest = self._clear_of_clusters(key, side, entry_price, stop)
         outcome = PLACED
         if moved != stop:
@@ -390,6 +405,16 @@ def start_part(context) -> int:
                 cluster_map.venue_id, cluster_map.symbol, cluster_map.cluster_prices
             )
         for profile in excursions.payloads():
+            # Only a fitted profile carries a number. An unfitted one reports
+            # `adverse_excursion = 0.0` because it has nothing to report -- and
+            # feeding those zeros into the quantile estimator taught it that this
+            # symbol never moves against a winner, which put the stop on the entry
+            # price and made every order untradeable. Measured on the live run of
+            # 2026-08-23 08:34: the bull bot's first real decision to open a trade
+            # died here, with "a buy stop at 0.065531 is on the wrong side of an
+            # entry at 0.065531".
+            if not profile.is_fitted:
+                continue
             placer.observe_adverse_excursion(
                 profile.venue_id, profile.symbol, profile.adverse_excursion
             )

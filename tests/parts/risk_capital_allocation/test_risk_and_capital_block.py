@@ -949,3 +949,57 @@ def test_the_gate_reads_the_verdict_the_validator_actually_publishes():
 
     refused = gate.bound(sized_for_gate(5.0), bounds(), does_verdict_permit_trading(None))
     assert refused.outcome == REFUSED_SETTINGS_INVALID
+
+
+# ---- a stop that is not beyond the entry is not a stop -------------------------
+
+def test_a_zero_distance_never_becomes_a_placed_plan():
+    """The defect that killed the bull bot's first real decision to open a trade.
+
+    On the live run of 2026-08-23 08:34 the arbiter formed `action: open` on
+    TUTUSDT at a weighted 55.8% -- the first time the system had ever decided to
+    trade -- and the sizer refused it with "a buy stop at 0.065531 is on the wrong
+    side of an entry at 0.065531". The distance had come out zero, so the stop sat
+    exactly on the entry.
+
+    Refused here rather than passed downstream: the sizer can only report it as an
+    untradeable order, and by then the decision has already been made.
+    """
+    subject = StopTargetPlacer(
+        minimum_reward_to_risk=1.0, cluster_clearance_fraction=0.002,
+        maximum_stop_fraction=0.05, minimum_observations=2, window=200,
+    )
+    # Two recorded excursions of exactly zero: a claim that resolved before the
+    # market moved against it at all. Real, and not a statement that the symbol
+    # cannot move against a trade.
+    subject.observe_adverse_excursion(VENUE, SYMBOL, 0.0)
+    subject.observe_adverse_excursion(VENUE, SYMBOL, 0.0)
+
+    plan = subject.place(
+        venue_id=VENUE, symbol=SYMBOL, side=BUY, entry_price=100.0,
+        volatility_forecast=None, target_price=110.0,
+    )
+    assert plan.is_placeable is False
+    assert plan.stop_price is None
+    assert "not beyond it" in plan.reason or plan.outcome == REFUSED_NO_DISTANCE
+
+
+def test_an_unfitted_excursion_profile_is_not_evidence_of_no_risk():
+    """An unfitted profile reports 0.0 because it has nothing to report.
+
+    Feeding those zeros to the quantile estimator taught it that the symbol never
+    moves against a winner. The guard lives in the part's `start_part`, so this
+    pins the property the guard exists for: a zero adverse excursion must never
+    become a placeable stop.
+    """
+    from runtime.trade_profiles import ExcursionProfile
+
+    unfitted = ExcursionProfile(
+        venue_id=VENUE, symbol=SYMBOL, side=BUY, adverse_excursion=0.0,
+        favourable_quantiles={}, trades_observed=3, is_fitted=False,
+    )
+    assert unfitted.adverse_excursion == 0.0
+    assert unfitted.is_fitted is False, (
+        "a profile that reports itself unfitted is the only signal a reader has "
+        "that its zero is an absence rather than a measurement"
+    )
