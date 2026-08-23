@@ -277,3 +277,28 @@ def run_whale_transfer_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This part consumes nothing: chain transfers reach it through no
+    declared input, so no row is read and nothing is published. It ticks
+    on its health interval and reports that state.
+    """
+    publish_transfers = context.bus.publisher_for("whale-transfer")
+    reader = WhaleTransferReader(
+        minimum_quote_value=context.number("whale_minimum_quote_value"),
+        confirmations_required=int(context.number("onchain_confirmations_required")),
+    )
+
+    return run_whale_transfer_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_rows=lambda: (),
+        publish_transfers=lambda transfer: publish_transfers((transfer,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -222,3 +222,28 @@ def run_onchain_flow_aggregator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    This part consumes nothing: transfers reach it through no declared
+    input, so no asset is measured and nothing is published. It ticks on
+    its health interval and reports that state.
+    """
+    publish_flow = context.bus.publisher_for("onchain-flow")
+    aggregator = OnchainFlowAggregator(
+        window_seconds=context.number("onchain_flow_window_seconds"),
+        minimum_coverage_fraction=context.number("onchain_minimum_coverage_fraction"),
+    )
+
+    return run_onchain_flow_aggregator(
+        aggregator=aggregator,
+        control_socket=context.control_socket,
+        read_assets=lambda: (),
+        publish_flow=lambda flow: publish_flow((flow,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -399,3 +399,52 @@ def run_strategy_decoder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every external position is observed under its trader, and each trader
+    with new positions is decoded. The phrasing arrives as a validated
+    output for this part's purpose naming the trader; none is configured
+    in phase 1, so the regularities are measured and await phrasing.
+    """
+    from runtime.input_assembly import Batch
+
+    positions = Batch(read=context.bus.reader("external-position"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    publish_findings = context.bus.publisher_for("research-finding")
+    publish_requests = context.bus.publisher_for("llm-request")
+    decoder = StrategyDecoder(
+        minimum_positions=int(context.number("copy_minimum_positions")),
+        strength_threshold=context.number("strategy_strength_threshold"),
+        relative_tolerance=context.number("llm_claim_relative_tolerance"),
+        maximum_sentences=int(context.number("llm_maximum_sentences")),
+    )
+
+    def read_traders(_decoder):
+        phrased: dict[str, str] = {}
+        for output in outputs.payloads():
+            if output.purpose != "describe-a-traders-behaviour":
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            if value.get("trader_id"):
+                phrased[str(value["trader_id"])] = output.text
+        touched: set[str] = set()
+        for read in positions.payloads():
+            for position in getattr(read, "positions", (read,)):
+                decoder.observe_position(position)
+                touched.add(position.trader_id)
+        return tuple((trader_id, phrased.get(trader_id)) for trader_id in sorted(touched | set(phrased)))
+
+    return run_strategy_decoder(
+        decoder=decoder,
+        control_socket=context.control_socket,
+        read_traders=read_traders,
+        publish_findings=lambda finding: publish_findings((finding,)),
+        publish_requests=lambda request: publish_requests((request,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

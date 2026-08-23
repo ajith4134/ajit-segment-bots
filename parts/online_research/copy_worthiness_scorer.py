@@ -270,3 +270,54 @@ def run_copy_worthiness_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Verified records, latencies and positions are observed as they arrive;
+    every trader with a new position is scored. Tracked traders and this
+    system's own episodes are read and drained: the score is of their
+    record against the copying delay, and our episodes do not enter it.
+    """
+    from runtime.input_assembly import Batch
+
+    positions = Batch(read=context.bus.reader("external-position"))
+    traders = Batch(read=context.bus.reader("tracked-trader"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    records = Batch(read=context.bus.reader("verified-record"))
+    latencies = Batch(read=context.bus.reader("copy-latency"))
+    publish_scores = context.bus.publisher_for("copy-score")
+    scorer = CopyWorthinessScorer(
+        minimum_positions=int(context.number("copy_minimum_positions")),
+        worth_copying_threshold=context.number("copy_worth_copying_threshold"),
+        prior_follow_success=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+        minimum_follow_observations=int(context.number("decoding_minimum_trades")),
+    )
+
+    def read_candidates(_scorer):
+        traders.payloads()
+        episodes.payloads()
+        for record in records.payloads():
+            scorer.observe_verified_record(record)
+        for latency in latencies.payloads():
+            scorer.observe_latency(latency)
+        candidates: set[tuple[str, str]] = set()
+        for read in positions.payloads():
+            for position in getattr(read, "positions", (read,)):
+                scorer.observe_position(position)
+                candidates.add((position.trader_id, position.symbol))
+        return tuple(sorted(candidates))
+
+    return run_copy_worthiness_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_candidates=read_candidates,
+        publish_scores=lambda score: publish_scores((score,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -3257,3 +3257,138 @@ note  = "operator, 2026-08-23: how many times structured-output-enforcer asks th
 value = 3
 unit  = "findings or skills"
 note  = "operator, 2026-08-23: how many findings or skill sections prompt-template-author needs on a purpose before it writes a template from them. Three."
+
+[research_fetches_per_window]
+value = 10
+unit  = "fetches"
+note  = "operator, 2026-08-23: how many external reads the research readers -- arxiv, leaderboards -- may make per window. Ten."
+
+[research_fetch_window_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window the research fetch budget is counted over. An hour."
+
+[arxiv_minimum_word_overlap]
+value = 2
+unit  = "words"
+note  = "operator, 2026-08-23: how many words a paper's title must share with a gap's query before it is fetched for that gap. Two."
+
+[copy_latency_prior_delay_seconds]
+value = 30.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the delay copy-latency-estimator assumes between a tracked trader's entry and this system seeing it, before it has measured one. Thirty seconds, a block time and a poll."
+
+[copy_latency_prior_adverse_move_fraction]
+value = 0.001
+unit  = "fraction of price"
+note  = "operator, 2026-08-23: the adverse move the estimator assumes over that delay before measuring one. A tenth of a percent."
+
+[copy_latency_adverse_quantile]
+value = 0.75
+unit  = "quantile"
+note  = "operator, 2026-08-23: which quantile of adverse moves the estimator reports as the cost of copying. The upper quartile: the median understates what a copier pays."
+
+[copy_minimum_positions]
+value = 10
+unit  = "positions"
+note  = "operator, 2026-08-23: how many of a trader's positions copy-worthiness-scorer needs before it scores them. Ten."
+
+[copy_worth_copying_threshold]
+value = 0.5
+unit  = "fraction of their return"
+note  = "operator, 2026-08-23: the share of a trader's return that must survive the copying delay for the trader to be worth copying. Half."
+
+[edge_minimum_overlapping_days]
+value = 7.0
+unit  = "days"
+note  = "operator, 2026-08-23: how many days two records must overlap before edge-comparator compares them. A week."
+
+[edge_material_difference]
+value = 0.002
+unit  = "fraction per trade"
+note  = "operator, 2026-08-23: the per-trade difference in edge below which no gap is raised. A fifth of a percent, about the round-trip cost."
+
+[github_minimum_conditions]
+value = 1
+unit  = "conditions"
+note  = "operator, 2026-08-23: how many conditions a mined mechanism must state to be specified. One."
+
+[onchain_flow_window_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window onchain-flow-aggregator nets transfers over. An hour."
+
+[onchain_minimum_coverage_fraction]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of known exchange clusters that must be covered before a net flow's sign is trusted. Half."
+
+[onchain_confirmations_required]
+value = 6
+unit  = "blocks"
+note  = "operator, 2026-08-23: how deep a transfer or position must be settled before it has happened. Six, the long-standing convention."
+
+[onchain_maximum_blocks_behind]
+value = 3
+unit  = "blocks"
+note  = "operator, 2026-08-23: how far behind the chain tip a node's answer may be before onchain-position-reader calls it stale. Three."
+
+[options_minimum_premium]
+value = 10000.0
+unit  = "USDT"
+note  = "operator, 2026-08-23: the premium below which an options trade is not flow worth recording. Ten thousand."
+
+[options_at_the_money_band]
+value = 0.02
+unit  = "fraction of spot"
+note  = "operator, 2026-08-23: how close to spot a strike sits to be at the money. Two percent."
+
+[options_far_out_band]
+value = 0.15
+unit  = "fraction of spot"
+note  = "operator, 2026-08-23: how far from spot a strike sits to be far out of the money. Fifteen percent."
+
+[sentiment_minimum_posts]
+value = 30
+unit  = "posts"
+note  = "operator, 2026-08-23: how many posts a window needs to be a crowd rather than a few voices. Thirty."
+
+[sentiment_minimum_distinct_accounts]
+value = 10
+unit  = "accounts"
+note  = "operator, 2026-08-23: how many distinct accounts must have posted. Ten."
+
+[sentiment_baseline_window]
+value = 24
+unit  = "readings"
+note  = "operator, 2026-08-23: how many past readings a symbol's sentiment change is measured against. Twenty-four, a day of hourly windows."
+
+[sentiment_concentration_threshold]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of posts a few accounts may produce before the reading looks coordinated. Half."
+
+[sentiment_window_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: the window one sentiment reading covers. An hour."
+
+[strategy_strength_threshold]
+value = 0.6
+unit  = "strength"
+note  = "operator, 2026-08-23: how strong a regularity in a trader's positions must be before strategy-decoder reports it. Three fifths."
+
+[verifier_minimum_days]
+value = 30.0
+unit  = "days"
+note  = "operator, 2026-08-23: how long a trader's record must run before trader-record-verifier will verify it. Thirty days."
+
+[verifier_single_trade_share]
+value = 0.5
+unit  = "fraction"
+note  = "operator, 2026-08-23: the share of a record one position may account for before the record is one trade. Half."
+
+[whale_minimum_quote_value]
+value = 1000000.0
+unit  = "USDT"
+note  = "operator, 2026-08-23: the value below which a transfer is not a whale's. A million."

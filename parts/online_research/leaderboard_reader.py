@@ -272,3 +272,33 @@ def run_leaderboard_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No board reader is installed on this box, so no board is read and
+    nothing is published; `install_reader` is the one way one gets in, and
+    the read budget applies from then. This part consumes nothing, so it
+    ticks on its health interval alone.
+    """
+    publish_traders = context.bus.publisher_for("tracked-trader")
+    reader = LeaderboardReader(
+        reads_per_window=int(context.number("research_fetches_per_window")),
+        window_seconds=context.number("research_fetch_window_seconds"),
+    )
+
+    def publish(result) -> None:
+        if result is not None and result.traders:
+            publish_traders(tuple(result.traders))
+
+    return run_leaderboard_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        boards_to_read=lambda: (),
+        publish_traders=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

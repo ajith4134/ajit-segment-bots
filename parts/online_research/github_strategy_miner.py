@@ -288,3 +288,53 @@ def run_github_strategy_miner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A web idea whose source is a repository is mined for the mechanisms
+    and defects its content names. The mechanisms are read from the idea's
+    content as condition lines; the defects are the six named failure
+    modes found by their names. A repository naming neither is mined to
+    NOTHING_FOUND by name. Skill gaps are read and drained: the reader
+    that answers a gap is upstream of this part.
+    """
+    from runtime.input_assembly import Batch
+
+    gaps = Batch(read=context.bus.reader("skill-gap"))
+    ideas = Batch(read=context.bus.reader("web-idea"))
+    publish_findings = context.bus.publisher_for("research-finding")
+    miner = GithubStrategyMiner(
+        available_data_kinds=("market-data", "kline-window", "consolidated-price", "funding-forecast"),
+        minimum_conditions=int(context.number("github_minimum_conditions")),
+    )
+    defect_names = (LOOKAHEAD, NO_COST_MODEL, FITTED_ON_ITS_OWN_TEST_DATA, SURVIVORSHIP, UNFILLABLE, NO_OUT_OF_SAMPLE)
+
+    def read_ideas():
+        gaps.payloads()
+        jobs = []
+        for idea in ideas.payloads():
+            if "github.com" not in str(idea.source_url):
+                continue
+            content = str(idea.content)
+            lowered = content.lower()
+            conditions = tuple(line.strip() for line in content.splitlines() if " if " in line or line.strip().lower().startswith("when "))
+            mechanisms = (
+                (Mechanism(name=idea.title, conditions=conditions, action="trade", instruments=(), needs_data=("market-data",)),)
+                if conditions else ()
+            )
+            defects = tuple(name for name in defect_names if name.replace("-", " ") in lowered)
+            jobs.append((idea, mechanisms, defects, None))
+        return tuple(jobs)
+
+    return run_github_strategy_miner(
+        miner=miner,
+        control_socket=context.control_socket,
+        read_ideas=read_ideas,
+        publish_findings=lambda finding: publish_findings((finding,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -280,3 +280,38 @@ def run_exchange_announcement_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The universe is observed so an announcement's symbols can be matched.
+    No announcement feed is connected on this box -- the venues' notice
+    pages are on no input this part declares -- so no row arrives and
+    nothing is published; the reader reports health and waits.
+    """
+    from runtime.input_assembly import Batch
+
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    publish_announcements = context.bus.publisher_for("venue-announcement")
+    reader = ExchangeAnnouncementReader()
+
+    def read_rows():
+        for selection in universe.payloads():
+            by_venue: dict[str, list] = {}
+            for entry in selection if isinstance(selection, (tuple, list)) else (selection,):
+                by_venue.setdefault(entry.venue_id, []).append(entry.symbol)
+            for venue_id, symbols in by_venue.items():
+                reader.observe_universe(venue_id, tuple(symbols))
+        return ()
+
+    return run_exchange_announcement_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_rows=read_rows,
+        publish_announcements=lambda announcement: publish_announcements((announcement,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -242,3 +242,41 @@ def run_social_sentiment_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No forum reader is installed on this box, so every symbol in the
+    universe is answered READ_FAILED by name and nothing is published;
+    `install_reader` is the one way one gets in.
+    """
+    from runtime.input_assembly import Batch
+
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    publish_readings = context.bus.publisher_for("sentiment-reading")
+    reader = SocialSentimentReader(
+        minimum_posts=int(context.number("sentiment_minimum_posts")),
+        minimum_distinct_accounts=int(context.number("sentiment_minimum_distinct_accounts")),
+        baseline_window=int(context.number("sentiment_baseline_window")),
+        concentration_threshold=context.number("sentiment_concentration_threshold"),
+        window_seconds=context.number("sentiment_window_seconds"),
+    )
+
+    def read_universe():
+        symbols: set[str] = set()
+        for selection in universe.payloads():
+            for entry in selection if isinstance(selection, (tuple, list)) else (selection,):
+                symbols.add(entry.symbol)
+        return tuple(sorted(symbols))
+
+    return run_social_sentiment_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_universe=read_universe,
+        publish_readings=lambda reading: publish_readings((reading,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

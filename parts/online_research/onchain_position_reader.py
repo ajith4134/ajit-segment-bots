@@ -262,3 +262,31 @@ def run_onchain_position_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No chain reader is installed on this box, so every tracked trader is
+    answered READ_FAILED by name and no position is published;
+    `install_reader` is the one way one gets in.
+    """
+    from runtime.input_assembly import Batch
+
+    traders = Batch(read=context.bus.reader("tracked-trader"))
+    publish_positions = context.bus.publisher_for("external-position")
+    reader = OnchainPositionReader(
+        confirmations_required=int(context.number("onchain_confirmations_required")),
+        maximum_blocks_behind=int(context.number("onchain_maximum_blocks_behind")),
+    )
+
+    return run_onchain_position_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_tracked_traders=lambda: traders.payloads(),
+        publish_positions=lambda result: publish_positions((result,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

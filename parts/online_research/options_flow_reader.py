@@ -278,3 +278,43 @@ def run_options_flow_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The universe is observed so a strike can be placed against an
+    underlying this system trades. No options flow feed is connected on
+    this box -- it is on no input this part declares -- so no row arrives
+    and nothing is published.
+    """
+    from runtime.input_assembly import Batch
+
+    universe = Batch(read=context.bus.reader("symbol-universe"))
+    publish_flow = context.bus.publisher_for("options-flow")
+    settlement = str(context.setting("settlement_currency").value)
+    reader = OptionsFlowReader(
+        minimum_premium=context.number("options_minimum_premium"),
+        at_the_money_band=context.number("options_at_the_money_band"),
+        far_out_band=context.number("options_far_out_band"),
+    )
+
+    def underlying_of(symbol: str) -> str:
+        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+
+    def read_rows():
+        for selection in universe.payloads():
+            entries = selection if isinstance(selection, (tuple, list)) else (selection,)
+            reader.observe_universe(tuple(sorted({underlying_of(entry.symbol) for entry in entries})))
+        return ()
+
+    return run_options_flow_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_rows=read_rows,
+        publish_flow=lambda flow: publish_flow((flow,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

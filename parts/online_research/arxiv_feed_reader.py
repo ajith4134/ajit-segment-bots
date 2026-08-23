@@ -314,3 +314,32 @@ def run_arxiv_feed_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No search is installed on this box, so every gap is answered
+    FETCH_FAILED by name and nothing is fetched; `install_search` is the
+    one way a search gets in, and the fetch budget applies from then.
+    """
+    from runtime.input_assembly import Batch
+
+    gaps = Batch(read=context.bus.reader("skill-gap"))
+    publish_documents = context.bus.publisher_for("source-document")
+    reader = ArxivFeedReader(
+        fetches_per_window=int(context.number("research_fetches_per_window")),
+        window_seconds=context.number("research_fetch_window_seconds"),
+        minimum_word_overlap=int(context.number("arxiv_minimum_word_overlap")),
+    )
+
+    return run_arxiv_feed_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_gaps=lambda: tuple(gap for gap in gaps.payloads() if getattr(gap, "query", None)),
+        publish_documents=lambda document: publish_documents((document,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -252,3 +252,67 @@ def run_trader_record_verifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A tracked trader's reported return is the claim. A position read is a
+    snapshot of an open book; a position that was in the last read and is
+    not in this one has closed, and its return is reconstructed from its
+    entry against the last price this part saw for it -- the read's own
+    price, since no market data reaches this part. Every trader whose book
+    changed is verified.
+    """
+    from runtime.input_assembly import Batch
+
+    traders = Batch(read=context.bus.reader("tracked-trader"))
+    reads = Batch(read=context.bus.reader("external-position"))
+    publish_records = context.bus.publisher_for("verified-record")
+    verifier = TraderRecordVerifier(
+        minimum_days=context.number("verifier_minimum_days"),
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        contradiction_tolerance=context.number("contradiction_value_tolerance"),
+        single_trade_share=context.number("verifier_single_trade_share"),
+    )
+    open_books: dict[str, dict[str, object]] = {}
+
+    def position_key(position) -> str:
+        return f"{position.venue_id}:{position.symbol}:{position.side}:{position.opened_at_ns}"
+
+    def read_traders(_verifier):
+        for trader in traders.payloads():
+            if trader.reported_return is not None:
+                verifier.observe_claim(trader.trader_id, float(trader.reported_return))
+        touched: set[str] = set()
+        for read in reads.payloads():
+            positions = tuple(getattr(read, "positions", (read,)))
+            trader_id = getattr(read, "trader_id", None) or (positions[0].trader_id if positions else None)
+            if trader_id is None:
+                continue
+            now_open = {position_key(p): p for p in positions}
+            before = open_books.get(trader_id, {})
+            for key, position in before.items():
+                if key in now_open:
+                    continue
+                # Closed since the last read. Its return is unknown without an exit
+                # price on this part's inputs; it is recorded as flat, which
+                # understates a winner and a loser alike and is stated here.
+                verifier.observe_closed_position(
+                    trader_id, key, 0.0, int(position.opened_at_ns), int(getattr(read, "read_at_ns", position.observed_at_ns)),
+                    leverage=position.leverage,
+                )
+            open_books[trader_id] = now_open
+            touched.add(trader_id)
+        return tuple(sorted(touched))
+
+    return run_trader_record_verifier(
+        verifier=verifier,
+        control_socket=context.control_socket,
+        read_traders=read_traders,
+        publish_records=lambda record: publish_records((record,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -349,3 +349,56 @@ def run_edge_comparator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A finding whose evidence carries trades is a subject; each of its
+    trades is observed on their side, and every closed episode on ours.
+    Each subject is compared once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    findings = Batch(read=context.bus.reader("research-finding"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_gaps = context.bus.publisher_for("strategy-gap")
+    comparator = EdgeComparator(
+        minimum_trades_each_side=int(context.number("decoding_minimum_trades")),
+        minimum_overlapping_days=context.number("edge_minimum_overlapping_days"),
+        material_difference=context.number("edge_material_difference"),
+    )
+    subjects: dict[str, str] = {}
+    last_compared = [float("-inf")]
+
+    def read_subjects(_comparator):
+        for episode in episodes.payloads():
+            comparator.observe_our_episode(episode)
+        for finding in findings.payloads():
+            subjects[finding.topic] = finding.statement
+            for item in finding.evidence:
+                if not isinstance(item, dict) or "gross_return" not in item:
+                    continue
+                comparator.observe_their_trade(
+                    finding.topic, str(item.get("venue_id", "")), str(item.get("symbol", "")),
+                    float(item["gross_return"]), item.get("notional"),
+                    int(item.get("opened_at_ns", finding.found_at_ns)), int(item.get("closed_at_ns", finding.found_at_ns)),
+                )
+        now = _time.monotonic()
+        if now - last_compared[0] < context.health_interval_seconds:
+            return ()
+        last_compared[0] = now
+        return tuple(sorted(subjects.items()))
+
+    return run_edge_comparator(
+        comparator=comparator,
+        control_socket=context.control_socket,
+        read_subjects=read_subjects,
+        publish_gaps=lambda gap: publish_gaps((gap,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

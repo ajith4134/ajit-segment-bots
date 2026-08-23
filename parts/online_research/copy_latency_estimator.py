@@ -218,3 +218,50 @@ def run_copy_latency_estimator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An external position is observed against this system's latest print on
+    the same venue and symbol: their entry, our price now, and the delay
+    between when they opened and when it was seen here.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    positions = Batch(read=context.bus.reader("external-position"))
+    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    publish_latency = context.bus.publisher_for("copy-latency")
+    estimator = CopyLatencyEstimator(
+        window=int(context.number("learning_window")),
+        prior_delay_seconds=context.number("copy_latency_prior_delay_seconds"),
+        prior_adverse_move_fraction=context.number("copy_latency_prior_adverse_move_fraction"),
+        adverse_quantile=context.number("copy_latency_adverse_quantile"),
+        minimum_observations=int(context.number("decoding_minimum_trades")),
+    )
+
+    def read_pairs(_estimator):
+        latest = trades.mapping()
+        touched: set[tuple[str, str]] = set()
+        for read in positions.payloads():
+            for position in getattr(read, "positions", (read,)):
+                key = (position.venue_id, position.symbol)
+                trade = latest.get(key)
+                if not isinstance(trade, NormalisedTrade) or position.entry_price is None:
+                    continue
+                delay = max(0.0, (position.observed_at_ns - position.opened_at_ns) / 1e9)
+                estimator.observe(position.venue_id, position.symbol, str(position.side), float(position.entry_price), trade.price, delay)
+                touched.add(key)
+        return tuple(sorted(touched))
+
+    return run_copy_latency_estimator(
+        estimator=estimator,
+        control_socket=context.control_socket,
+        read_pairs=read_pairs,
+        publish_latency=lambda latency: publish_latency((latency,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
