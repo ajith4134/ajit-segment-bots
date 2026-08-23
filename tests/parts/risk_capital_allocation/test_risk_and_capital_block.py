@@ -468,6 +468,19 @@ def a_size(**overrides):
     return request
 
 
+def test_a_sized_order_carries_the_decision_it_serves():
+    """Only refusals carried the intent id until 2026-08-23. A sized order
+    without it reaches the stamper as an order with no decision behind it, the
+    id falls back to quantity and price, and one standing decision becomes a
+    new order on every tick the market moves."""
+    subject = sizer(fee=0.0)
+    order = subject.size(**a_size(), intent_id="binance-usdm|BTCUSDT|buy|open")
+    assert order.quantity > 0, order.reason
+    assert order.intent_id == "binance-usdm|BTCUSDT|buy|open"
+    refused = subject.size(**a_size(risk_limit_fraction=0.0), intent_id="the-decision")
+    assert refused.intent_id == "the-decision"
+
+
 def test_size_comes_from_the_stop_distance_not_a_fixed_fraction():
     """Risking 1% means 1%, whatever the stop distance is."""
     subject = sizer(fee=0.0)

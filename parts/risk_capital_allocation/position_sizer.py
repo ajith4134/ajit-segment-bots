@@ -215,6 +215,12 @@ class PositionSizer:
             fees_charged=self._fees_for(snapped, entry, stop),
             notional=snapped * entry,
             leverage=leverage,
+            # The decision this order serves. Only refusals carried it until
+            # 2026-08-23: every sized order reached the stamper with an empty
+            # intent id, the stamper fell back to hashing quantity and price, both
+            # drift with the market, and one standing AAVEUSDT decision became
+            # seven orders and seven fills on the run of 12:08.
+            intent_id=intent_id,
             reason=(
                 f"{snapped:g} risks {risk_at_stop:,.2f} of {risk_allowed:,.2f} allowed, "
                 f"stopping {abs(entry - stop):g} away"
