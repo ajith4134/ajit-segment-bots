@@ -112,13 +112,54 @@ def bus_root():
 
 
 @pytest.fixture
-def launcher(bus_root):
+def isolated_settings(durable_tmp_path):
+    """The operator's settings, copied, with the learned state pointed at this run.
+
+    `bull-conviction-model` checkpoints what it has learned, and left alone this
+    test writes its checkpoint over the operator's -- a model trained on a few
+    seconds of replayed candidates replacing one trained on a running day, and
+    the trade board reading the test's count as the bot's progress. That happened
+    once, on 2026-08-23, which is why this fixture exists.
+
+    Everything else is the operator's file byte for byte: the thresholds and the
+    learning rates are what this test is meant to run against.
+    """
+    from runtime.settings_reader import settings_directory
+
+    settings_root = durable_tmp_path / "config" / "ajit-segment-bots" / "settings"
+    shutil.copytree(settings_directory(), settings_root)
+
+    learned_root = durable_tmp_path / "learned"
+    learned_root.mkdir(parents=True, exist_ok=True)
+    runtime_settings = settings_root / "runtime.toml"
+    lines = runtime_settings.read_text().splitlines()
+    in_setting = False
+    rewritten = 0
+    for index, line in enumerate(lines):
+        if line.strip() == "[learned_state_root]":
+            in_setting = True
+        elif line.startswith("["):
+            in_setting = False
+        elif in_setting and line.startswith("value"):
+            lines[index] = f'value = "{learned_root}"'
+            rewritten += 1
+    assert rewritten == 1, (
+        f"learned_state_root was rewritten {rewritten} times in the copied settings; this "
+        f"test must not be able to write over what the running bot has learned"
+    )
+    runtime_settings.write_text("\n".join(lines) + "\n")
+    return settings_root
+
+
+@pytest.fixture
+def launcher(bus_root, isolated_settings):
     started = PartLauncher(
         place_in_scope=False,
         thread_ceiling=THREAD_CEILING,
         placement_confirmation_deadline_seconds=PLACEMENT_DEADLINE_SECONDS,
         placement_confirmation_poll_interval_seconds=PLACEMENT_POLL_SECONDS,
         runtime_directory=bus_root,
+        settings_directory=isolated_settings,
     )
     yield started
     started.stop_all(STOP_DEADLINE_SECONDS)

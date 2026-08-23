@@ -1,0 +1,397 @@
+"""Nine processes, a paper fill, and a position that closes across the bus.
+
+`test_a_paper_position_opens_and_closes` proves the decisions are right by wiring
+the engines together in one process. This proves the **wiring** is right: the same
+chain, each part forked by the launcher exactly as the live spine forks it, every
+message crossing a real process boundary, and nothing reaching across.
+
+It exists because the failure it catches is invisible to the other test. Ten parts
+had correct code and no `start_part`, and each `start_part` binds a part's inputs by
+the types it declares -- a binding that reads the wrong field, unpacks a payload the
+wrong way, or publishes a shape the next part cannot read produces silence, and
+silence looks exactly like a market that has not moved.
+
+**The prices are today's tape** (RL-063), replayed here rather than taken live so
+that a venue outage fails as a venue outage rather than as this code being wrong.
+The run being tested is the live one.
+
+**The operator's own state is not touched.** The settings are copied and both the
+journal and the learned-state directory are pointed at this run's own files: a test
+that appended to the real ledger would put test decisions inside the record of what
+the system actually decided.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import pathlib
+import shutil
+import time
+
+import pytest
+
+from runtime.bus import Inbox, Publisher
+from runtime.part_launcher import PartLauncher
+from runtime.tape import read_payload, read_tape_index
+from runtime.trading_types import (
+    BUY,
+    MARKET,
+    PAPER_BOOK,
+    ROUTED,
+    SELL,
+    Fill,
+    OrderRequest,
+)
+from runtime.venues.adapter_registry import load_venue_adapter
+from runtime.wiring_plan import derive_wiring
+
+TAPE_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
+THREAD_CEILING = 1
+PLACEMENT_DEADLINE_SECONDS = 0.5
+PLACEMENT_POLL_SECONDS = 0.002
+STOP_DEADLINE_SECONDS = 10.0
+RECEIVE_BUFFER_BYTES = 212_992
+MAXIMUM_MESSAGE_BYTES = 131_072
+PATIENCE_SECONDS = 180.0
+REPLAY_BATCH = 12
+REPLAY_PAUSE_SECONDS = 0.02
+TRADES_PER_SYMBOL = 4_000
+
+# The chain that closes a position, in the order the live spine starts it.
+CLOSING_CHAIN = (
+    "money-mode-reader",
+    "paper-fill-simulator",
+    "fill-reconciler",
+    "cost-basis-tracker",
+    "peak-excursion-tracker",
+    "exit-order-chainer",
+    "stop-order-manager",
+    "position-close-detector",
+    "usdt-pnl-accountant",
+)
+
+# How much of the symbol's own movement the exits are placed inside. Not a round
+# fraction: the exits must sit within the range the replayed run actually covers,
+# or the test proves only that nothing happened. Halved so both sit inside it.
+EXIT_INSIDE_THE_RUN_S_RANGE = 0.5
+
+
+def busiest_symbol_today(venue_id: str) -> tuple[str, str] | None:
+    """The symbol with most of today on the tape, and today's date."""
+    day = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    venue_root = TAPE_ROOT / venue_id
+    if not venue_root.is_dir():
+        return None
+    sized = []
+    for symbol_directory in venue_root.iterdir():
+        index_path = symbol_directory / f"{day}.index"
+        if index_path.exists() and index_path.stat().st_size > 0:
+            sized.append((index_path.stat().st_size, symbol_directory.name))
+    if not sized:
+        return None
+    sized.sort(reverse=True)
+    return sized[0][1], day
+
+
+@pytest.fixture(scope="module")
+def real_trades_of_one_symbol():
+    """Today's trades in one symbol, in order, from the tape this machine records."""
+    venue_id = "binance-usdm"
+    busiest = busiest_symbol_today(venue_id)
+    assert busiest is not None, (
+        f"no tape for {venue_id} today. This test replays what the venue actually sent, so "
+        f"there is no fixture to fall back on (RL-063) -- start the capture and try again."
+    )
+    symbol, day = busiest
+    adapter = load_venue_adapter(venue_id)
+    index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
+    blob_path = TAPE_ROOT / venue_id / symbol / f"{day}.blob"
+    trades = []
+    for record in read_tape_index(index_path):
+        trades.extend(adapter.read_trades(read_payload(blob_path, record)))
+        if len(trades) >= TRADES_PER_SYMBOL:
+            break
+    assert len(trades) >= 500, f"{symbol} has only {len(trades)} trades on today's tape"
+    return trades
+
+
+@pytest.fixture
+def bus_root():
+    root = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "closing-chain-test"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    root.chmod(0o700)
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def isolated_settings(durable_tmp_path):
+    """The operator's settings, copied, with everything this run writes redirected."""
+    from runtime.settings_reader import settings_directory
+
+    settings_root = durable_tmp_path / "config" / "ajit-segment-bots" / "settings"
+    shutil.copytree(settings_directory(), settings_root)
+
+    redirected = {
+        "journal_path": durable_tmp_path / "journal.jsonl",
+        "learned_state_root": durable_tmp_path / "learned",
+    }
+    (durable_tmp_path / "learned").mkdir(parents=True, exist_ok=True)
+
+    runtime_settings = settings_root / "runtime.toml"
+    lines = runtime_settings.read_text().splitlines()
+    inside = None
+    rewritten = {name: 0 for name in redirected}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            inside = stripped[1:-1]
+        elif inside in redirected and line.startswith("value"):
+            lines[index] = f'value = "{redirected[inside]}"'
+            rewritten[inside] += 1
+    assert all(count == 1 for count in rewritten.values()), (
+        f"{rewritten} -- this test must not be able to write into the operator's own ledger "
+        f"or over what the running bot has learned"
+    )
+    runtime_settings.write_text("\n".join(lines) + "\n")
+    return settings_root
+
+
+@pytest.fixture
+def launcher(bus_root, isolated_settings):
+    started = PartLauncher(
+        place_in_scope=False,
+        thread_ceiling=THREAD_CEILING,
+        placement_confirmation_deadline_seconds=PLACEMENT_DEADLINE_SECONDS,
+        placement_confirmation_poll_interval_seconds=PLACEMENT_POLL_SECONDS,
+        runtime_directory=bus_root,
+        settings_directory=isolated_settings,
+    )
+    yield started
+    started.stop_all(STOP_DEADLINE_SECONDS)
+    started.close()
+
+
+def wait_for_address(address: pathlib.Path, patience_seconds: float = 30.0) -> bool:
+    deadline = time.monotonic() + patience_seconds
+    while time.monotonic() < deadline:
+        if address.exists():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def watch_at(wiring, owner: str, data_type: str) -> Inbox:
+    """Read a type at a part that is deliberately not started in this run.
+
+    An observer on a running part's inbox would take its input away, so every
+    watcher here sits on a part that is off.
+    """
+    return Inbox(
+        part_id=owner,
+        data_type=data_type,
+        address=wiring[owner].inboxes[data_type],
+        receive_buffer_bytes=RECEIVE_BUFFER_BYTES,
+    )
+
+
+def an_entry_order(venue_id: str, symbol: str, price: float, quantity: float) -> OrderRequest:
+    """The market order the router sends to open a position (operator, 2026-08-23)."""
+    return OrderRequest(
+        client_order_id="closing-chain-entry",
+        destination=PAPER_BOOK,
+        venue_id=venue_id,
+        symbol=symbol,
+        side=BUY,
+        quantity=quantity,
+        limit_price=0.0,
+        stop_price=0.0,
+        order_type=MARKET,
+        slice_sequence=1,
+        slice_count=1,
+        at_second=0.0,
+        outcome=ROUTED,
+        reason="this test stands in for the decision half, which is proven separately",
+        routed_at_ns=time.time_ns(),
+    )
+
+
+class StopTargetPlanForThisRun:
+    """What `stop-target-placer` publishes, at prices this replay actually reaches."""
+
+    def __init__(self, venue_id, symbol, side, entry_price, stop_price, target_price):
+        self.venue_id = venue_id
+        self.symbol = symbol
+        self.side = side
+        self.entry_price = entry_price
+        self.stop_price = stop_price
+        self.target_price = target_price
+        self.outcome = "placed"
+        self.stop_distance_fraction = abs(entry_price - stop_price) / entry_price
+        self.reward_to_risk = None
+        self.nearest_cluster_price = None
+        self.distance_estimate = None
+        self.reason = "placed by the integration test at prices inside the replayed range"
+        self.planned_at_ns = time.time_ns()
+
+    @property
+    def is_placeable(self) -> bool:
+        return True
+
+
+@pytest.mark.slow
+def test_a_position_opens_and_closes_across_nine_processes(
+    launcher, bus_root, real_trades_of_one_symbol, isolated_settings
+):
+    # The entry is filled against the first trade of the run, and the exits are
+    # placed before the rest of it is replayed. Splitting the series is what makes
+    # this deterministic: a target computed over the whole run can sit at a high
+    # the market reached before the exits were ever on the book, and the test would
+    # then fail for a reason that has nothing to do with the code.
+    trades = real_trades_of_one_symbol
+    opening, replayed = trades[:1], trades[1:]
+    venue_id, symbol = trades[0].venue_id, trades[0].symbol
+    entry_price = opening[0].price
+    prices = [trade.price for trade in replayed]
+    highest, lowest = max(prices), min(prices)
+    assert highest > entry_price, (
+        f"{symbol} never rose above its first trade of the day ({entry_price} to {highest}) "
+        f"in the {len(replayed)} trades that follow it; a target on this replay would never "
+        f"be reached and this test would assert nothing"
+    )
+    target_price = entry_price + (highest - entry_price) * EXIT_INSIDE_THE_RUN_S_RANGE
+    # Below anything this replay reaches, so the position closes on its target and
+    # the stop is the exit that must be withdrawn.
+    stop_price = lowest * 0.9
+
+    wiring = derive_wiring(runtime_directory=bus_root)
+    watched = {
+        "position": watch_at(wiring, "exposure-limiter", "position"),
+        "closed-trade": watch_at(wiring, "position-recorder", "closed-trade"),
+        "usdt-pnl-statement": watch_at(wiring, "board-snapshot-builder", "usdt-pnl-statement"),
+        # `stop-adjustment` has exactly one consumer in the blueprint and it is
+        # running, so watching it would take the manager's input away. What the
+        # chainer did is visible in what the manager published, which is the next
+        # thing along and the thing that matters: the exits actually being sent.
+        "order-request": watch_at(wiring, "order-state-poller", "order-request"),
+    }
+    seen = {data_type: [] for data_type in watched}
+
+    feed = Publisher(
+        part_id="venue-trade-stream-reader",
+        outbound=wiring["venue-trade-stream-reader"].outbound,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
+    router = Publisher(
+        part_id="order-destination-router",
+        outbound=wiring["order-destination-router"].outbound,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
+    placer = Publisher(
+        part_id="stop-target-placer",
+        outbound=wiring["stop-target-placer"].outbound,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
+
+    try:
+        for part_id in CLOSING_CHAIN:
+            launcher.start(part_id)
+        for part_id in CLOSING_CHAIN:
+            inboxes = wiring[part_id].inboxes
+            if inboxes:
+                assert wait_for_address(next(iter(inboxes.values()))), f"{part_id} never bound"
+
+        # The plan is published before the entry is sent, which is what the chainer
+        # is for: a plan that arrived after the fill would be a plan made while the
+        # position was already naked. It is republished with the feed because each
+        # part reads its inbox on its own clock and a message published into a cold
+        # circuit is consumed once by whoever happened to be ready.
+        plan = StopTargetPlanForThisRun(
+            venue_id, symbol, BUY, entry_price, stop_price, target_price
+        )
+        entry = an_entry_order(venue_id, symbol, entry_price, quantity=0.01)
+
+        # Only the opening price is fed while the position is opened, so the
+        # market cannot run past the exits before they exist.
+        warm_up_ends = time.monotonic() + 4.0
+        while time.monotonic() < warm_up_ends:
+            placer.publish("stop-target-plan", [plan])
+            feed.publish("market-data", opening)
+            time.sleep(REPLAY_PAUSE_SECONDS)
+
+        router.publish("order-request", [entry])
+
+        # Both exits must be resting before the market is allowed to move. Until
+        # then the run keeps feeding the opening price, which no exit reacts to.
+        exits_placed_by = time.monotonic() + 60.0
+        while time.monotonic() < exits_placed_by and len(seen["order-request"]) < 3:
+            placer.publish("stop-target-plan", [plan])
+            feed.publish("market-data", opening)
+            time.sleep(REPLAY_PAUSE_SECONDS)
+            for data_type, inbox in watched.items():
+                seen[data_type].extend(inbox.drain())
+        assert len(seen["order-request"]) >= 3, (
+            f"the entry and both exits should have crossed the bus; saw "
+            f"{len(seen['order-request'])} order-request(s), so the position is naked and "
+            f"nothing further this test asserts would mean anything"
+        )
+
+        deadline = time.monotonic() + PATIENCE_SECONDS
+        position = 0
+        while position < len(replayed) and time.monotonic() < deadline:
+            feed.publish("market-data", replayed[position : position + REPLAY_BATCH])
+            position += REPLAY_BATCH
+            time.sleep(REPLAY_PAUSE_SECONDS)
+            for data_type, inbox in watched.items():
+                seen[data_type].extend(inbox.drain())
+            if seen["closed-trade"]:
+                break
+
+        settle = time.monotonic() + 8.0
+        while time.monotonic() < settle:
+            feed.publish("market-data", replayed[max(0, position - REPLAY_BATCH):position])
+            for data_type, inbox in watched.items():
+                seen[data_type].extend(inbox.drain())
+            time.sleep(0.05)
+
+        still_running = [part_id for part_id in CLOSING_CHAIN if launcher.is_running(part_id)]
+    finally:
+        for inbox in watched.values():
+            inbox.close()
+        feed.close()
+        router.close()
+        placer.close()
+
+    counted = {data_type: len(messages) for data_type, messages in seen.items()}
+
+    assert still_running == list(CLOSING_CHAIN), (
+        f"parts died: {sorted(set(CLOSING_CHAIN) - set(still_running))}"
+    )
+    assert counted["position"] > 0, (
+        f"the fill never became a position, so nothing downstream had anything to read: {counted}"
+    )
+    assert counted["order-request"] > 0, (
+        f"no exit order was ever sent, which leaves the position naked: {counted}"
+    )
+    assert counted["closed-trade"] > 0, (
+        f"{symbol} rose from {entry_price} to {highest} against a target at {target_price} "
+        f"and nothing closed: {counted}"
+    )
+
+    closed = seen["closed-trade"][0].payload
+    assert closed.symbol == symbol
+    assert closed.exit_price >= target_price, (
+        "a take-profit fills at the price the trigger found, at or beyond the target"
+    )
+    assert closed.fees_paid > 0, "a round trip pays the venue twice, and paper must too"
+
+    assert counted["usdt-pnl-statement"] > 0, (
+        f"a closed trade with no statement is a trade nobody can add up: {counted}"
+    )
+    statement = seen["usdt-pnl-statement"][0].payload
+    assert statement.net_pnl_usdt == pytest.approx(
+        statement.gross_pnl_usdt - statement.fees_usdt + statement.funding_usdt
+    )

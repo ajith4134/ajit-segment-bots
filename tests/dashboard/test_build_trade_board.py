@@ -205,10 +205,35 @@ def test_how_far_a_part_is_built_tells_running_from_startable_from_absent(board)
     assert board.how_far_a_part_is_built("a-part-nobody-wrote", {}) == "no module"
 
 
-def test_learning_progress_is_unmeasured_and_says_what_would_measure_it(board):
+def test_learning_progress_is_read_from_the_model_s_own_checkpoint(board, durable_tmp_path):
+    """The number on the board is the number the model restores from.
+
+    A second count kept for the board would be free to disagree with the one the
+    bot actually acts on -- and the tile would be reporting something no decision
+    was made from.
+    """
     result = board.probe_learning()
-    assert result.state == board.UNMEASURED
+    assert result.state in (board.UNMEASURED, board.WAITING, board.OK)
     assert "bull-conviction-model" in result.proof
+
+
+def test_a_bot_that_has_never_checkpointed_reads_as_unmeasured_not_as_untrained(board):
+    """Rule 8: no file is a different fact from a file saying zero.
+
+    A model that has not run since checkpointing existed and one that has run and
+    learned nothing are different states, and neither of them is healthy.
+    """
+    result = board.probe_learning()
+    checkpoint = board.pathlib.Path(
+        str(board.load_settings_document(
+            board.settings_directory() / "runtime.toml", "runtime"
+        ).read_value("learned_state_root"))
+    ).expanduser() / "bull-conviction-model.conviction.json"
+    if checkpoint.exists():
+        assert result.state in (board.WAITING, board.OK)
+    else:
+        assert result.state == board.UNMEASURED
+        assert "has not checkpointed" in result.value
 
 
 def test_the_table_carries_the_numbers_an_open_position_is_judged_by(board, durable_tmp_path):

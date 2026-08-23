@@ -178,12 +178,28 @@ def run_fill_reconciler(
     health_interval_seconds: float, emit_health,
 ) -> int:
     def tick() -> None:
+        """Reconcile, then publish the positions -- not the reconciliations.
+
+        This part declares that it produces `position`, and a `Reconciliation` is
+        not one: it is a position plus a verdict about whether the venue agrees.
+        Publishing the wrapper put a shape on the bus that no consumer of
+        `position` could read, and every part downstream of a fill failed on the
+        first one that arrived (found 2026-08-23 by running the chain as
+        processes; the single-process test could not see it, because there the
+        objects were passed by hand).
+
+        The verdict is not lost. It is what `describe_reconciliation` reports and
+        what `standing.divergences` counts, which is where a judgement about the
+        data belongs -- on the part's own health, not inside the data.
+        """
         fills, reports = read_fills_and_reports()
         for fill in fills:
             reconciler.observe_fill(fill)
         for venue_id, symbol, quantity in reports:
             reconciler.observe_venue_report(venue_id, symbol, quantity)
-        publish_positions(reconciler.reconcile_all())
+        publish_positions(tuple(
+            reconciliation.position for reconciliation in reconciler.reconcile_all()
+        ))
 
     return run_part(
         declaration=PART_DECLARATION,

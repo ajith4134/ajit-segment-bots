@@ -132,13 +132,21 @@ def run_peak_excursion_tracker(
     health_interval_seconds: float, emit_health,
 ) -> int:
     def tick() -> None:
+        """One batch of excursions per tick, not one call per price.
+
+        A publisher takes an iterable of payloads; handed a single frozen
+        dataclass it raises rather than publishing, which killed this part on the
+        first price that arrived for an open position.
+        """
         positions, prices = read_positions_and_prices()
         for position in positions:
             tracker.observe_position(position)
+        excursions = []
         for venue_id, symbol, price in prices:
             excursion = tracker.observe_price(venue_id, symbol, price)
             if excursion is not None:
-                publish_excursion(excursion)
+                excursions.append(excursion)
+        publish_excursion(tuple(excursions))
 
     return run_part(
         declaration=PART_DECLARATION,

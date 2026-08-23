@@ -143,10 +143,16 @@ def run_position_close_detector(
     health_interval_seconds: float, emit_health,
 ) -> int:
     def tick() -> None:
+        """One batch of closed trades per tick, for the same reason.
+
+        A publisher takes an iterable; a single ClosedTrade is not one.
+        """
+        closed = []
         for fill in read_fills():
             trade = detector.observe_fill(fill)
             if trade is not None:
-                publish_closed_trade(trade)
+                closed.append(trade)
+        publish_closed_trade(tuple(closed))
 
     return run_part(
         declaration=PART_DECLARATION,

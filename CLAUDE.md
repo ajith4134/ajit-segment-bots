@@ -211,14 +211,25 @@ screenshot catches and an assertion does not.
 Regenerates `dashboard/trade-board.html`: every trade the system has recorded,
 and the probes that say whether it can make another one. Each tile reads a file
 on this machine — the journal the settings name, the live spine's supervisor log
-joined to `/proc`, the tape's last write, the segment's money mode.
+joined to `/proc`, the tape's last write, the segment's money mode, and the
+conviction model's own checkpoint.
 
-Three states it must be able to reach, because they are the true ones today:
-`NOTHING YET` when no trade has opened on a live run, `NOT BUILT` for closing
-(six parts unwritten) and for tamper evidence (the journal starts a new chain
-every time the recorder starts), and `NOT MEASURED` for how far the bull bot is
-from its first decision — nothing writes the conviction model's training count
-anywhere, so the board says so instead of implying the wait is short.
+Two tables. **Open positions** carries the capital in USDT that went into each
+one (2026-08-23), the entry, the price now with its age, the stop, the peak and
+the worst it went through. **Closed trades** carries entry, exit, capital in, how
+long it was held, peak, worst, fees and net. An exit fill reduces a position
+rather than adding to it, so a position sold back reads as closed.
+
+The states it must be able to reach, because they are the true ones:
+`NOTHING YET` when no trade has opened on a live run and when nothing has closed
+yet, `NOT BUILT` for tamper evidence (the journal starts a new chain every time a
+recorder starts), and `NOT MEASURED` when the bull bot has never checkpointed —
+which is a different fact from a checkpoint saying zero, and neither is healthy.
+
+**Learning progress is measured, since 2026-08-23.** The number on the board is
+read from `bull-conviction-model`'s own checkpoint under `learned_state_root`,
+which is the same file the model restores from — not a second count kept for the
+board, which would be free to disagree with the one the bot acts on.
 
 **A journal entry recorded before the trading half was first started live is
 marked as a test's.** The integration test runs the same fourteen parts, and the

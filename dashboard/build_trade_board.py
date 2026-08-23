@@ -744,20 +744,54 @@ def probe_chain_continuity(entries: list[dict]) -> ProbeResult:
 
 
 def probe_learning() -> ProbeResult:
-    """The one thing this board cannot see, said as plainly as the rest.
+    """How far the bull bot is from its first decision, read from its checkpoint.
 
-    The bull bot forms no opinion until its conviction model has trained on
-    labels, and nothing writes that count anywhere: it lives in the model's own
-    process. So "how far from the first decision" is unmeasured, and the board
-    says so rather than implying the wait is short or long.
+    Unmeasurable until 2026-08-23: the model held its training count in its own
+    process and wrote it nowhere, so this tile could only say so. It now
+    checkpoints what it has learned to the learned-state directory, and this reads
+    that file -- which means the number here is the same number the model will
+    restore from, not a second count kept for the board.
+
+    Absence is still its own state. No file means the model has not run since
+    checkpointing existed, which is different from a model that has run and
+    learned nothing, and both are different from a trained one.
     """
+    document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    root = pathlib.Path(str(document.read_value("learned_state_root"))).expanduser()
+    needed = int(load_settings_document(
+        settings_directory() / "runtime.toml", "runtime"
+    ).read_value("bull_minimum_training_observations"))
+    path = root / "bull-conviction-model.conviction.json"
+    if not path.exists():
+        return ProbeResult(
+            "Learning progress",
+            UNMEASURED,
+            "the model has not checkpointed",
+            f"nothing at {path}; bull-conviction-model writes its first checkpoint on its "
+            f"first tick, so this means the part has not run since checkpointing existed",
+        )
+    try:
+        checkpoint = json.loads(path.read_text())
+        state = checkpoint["state"]
+        model = state["models"][state["live"]]
+    except (OSError, ValueError, KeyError) as unreadable:
+        return ProbeResult(
+            "Learning progress", FAILING, "the checkpoint could not be read", f"{path}: {unreadable}"
+        )
+
+    trained = int(model["observations"])
+    positives = int(model["positives"])
+    losses = trained - positives
+    saved_at = as_time(checkpoint.get("saved_at_ns"))
+    proof = (
+        f"{path}, saved {saved_at} UTC: {trained} labelled outcome(s), {positives} where the "
+        f"setup was right and {losses} where it was not; {needed} of each class are needed "
+        f"before the conviction is a measurement rather than a starting point"
+    )
+    if trained >= needed and positives > 0 and losses > 0:
+        return ProbeResult("Learning progress", OK, f"trained on {trained}", proof)
     return ProbeResult(
-        "Learning progress",
-        UNMEASURED,
-        "no probe exists",
-        "bull-conviction-model holds its training count in memory and publishes it nowhere; "
-        "measuring it needs the learned parts to write their state where a probe can read it, "
-        "which would also make it survive a restart",
+        "Learning progress", WAITING, f"{trained} of {needed} labelled outcomes", proof
     )
 
 
