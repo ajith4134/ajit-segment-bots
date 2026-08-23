@@ -141,6 +141,8 @@ def describe_closes(detector: PositionCloseDetector) -> dict:
 def run_position_close_detector(
     detector: PositionCloseDetector, control_socket, read_fills, publish_closed_trade,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         """One batch of closed trades per tick, for the same reason.
@@ -160,6 +162,8 @@ def run_position_close_detector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -205,5 +209,7 @@ def start_part(context) -> int:
         read_fills=read_fills,
         publish_closed_trade=publish_closed_trade,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

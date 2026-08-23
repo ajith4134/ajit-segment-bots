@@ -226,6 +226,8 @@ def describe_heartbeats(collector: HeartbeatCollector) -> dict:
 def run_heartbeat_collector(
     collector: HeartbeatCollector, control_socket, read_health, publish_table,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for health in read_health():
@@ -238,6 +240,8 @@ def run_heartbeat_collector(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -360,5 +364,7 @@ def start_part(context) -> int:
         read_health=health_reports.payloads,
         publish_table=publish_and_write,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

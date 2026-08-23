@@ -150,6 +150,8 @@ def describe_verification(verifier: OffStateVerifier) -> dict:
 def run_off_state_verifier(
     verifier: OffStateVerifier, control_socket, read_records_and_usage, publish_faults,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         records, usages = read_records_and_usage()
@@ -163,6 +165,8 @@ def run_off_state_verifier(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -200,5 +204,7 @@ def start_part(context) -> int:
         read_records_and_usage=read_records_and_usage,
         publish_faults=publish_faults,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

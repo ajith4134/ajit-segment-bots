@@ -238,6 +238,8 @@ def does_verdict_permit_trading(verdict) -> bool | None:
 def run_trade_capital_bounds_gate(
     gate: TradeCapitalBoundsGate, control_socket, read_sized_orders, publish_bounded_orders,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_bounded_orders(
@@ -253,6 +255,8 @@ def run_trade_capital_bounds_gate(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -289,5 +293,7 @@ def start_part(context) -> int:
         read_sized_orders=read_sized_orders,
         publish_bounded_orders=publish_bounded_orders,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

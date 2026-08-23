@@ -232,6 +232,8 @@ def describe_paper_account(keeper: PaperAccountKeeper) -> dict:
 def run_paper_account_keeper(
     keeper: PaperAccountKeeper, control_socket, read_fills, publish_balance,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for fill in read_fills(keeper):
@@ -244,6 +246,8 @@ def run_paper_account_keeper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -292,5 +296,7 @@ def start_part(context) -> int:
         read_fills=read_fills,
         publish_balance=lambda balance: publish_balance([balance]),
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

@@ -173,6 +173,8 @@ def describe_stamping(stamper: OrderIdempotencyStamper) -> dict:
 def run_order_idempotency_stamper(
     stamper: OrderIdempotencyStamper, control_socket, read_bounded_orders, publish_stamped,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_stamped(
@@ -188,6 +190,8 @@ def run_order_idempotency_stamper(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -221,5 +225,7 @@ def start_part(context) -> int:
         read_bounded_orders=read_bounded_orders,
         publish_stamped=publish_stamped,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

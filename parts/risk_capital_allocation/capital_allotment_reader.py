@@ -169,6 +169,8 @@ def describe_allotment(reader: CapitalAllotmentReader) -> dict:
 def run_capital_allotment_reader(
     reader: CapitalAllotmentReader, control_socket, publish_allotment,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         try:
@@ -184,6 +186,8 @@ def run_capital_allotment_reader(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -211,5 +215,7 @@ def start_part(context) -> int:
         control_socket=context.control_socket,
         publish_allotment=publish_allotment,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

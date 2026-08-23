@@ -104,6 +104,8 @@ def describe_priorities(reader: PartPriorityReader) -> dict:
 def run_part_priority_reader(
     reader: PartPriorityReader, control_socket, publish_priorities,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     return run_part(
         declaration=PART_DECLARATION,
@@ -111,6 +113,8 @@ def run_part_priority_reader(
         do_one_tick=lambda: publish_priorities(reader.read()),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -134,5 +138,7 @@ def start_part(context) -> int:
         control_socket=context.control_socket,
         publish_priorities=publish_ranking,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

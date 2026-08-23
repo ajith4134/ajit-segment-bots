@@ -162,6 +162,8 @@ def describe_filtering(filter_: BullSetupFilter) -> dict:
 def run_bull_setup_filter(
     setup_filter: BullSetupFilter, control_socket, read_candidates_and_weights,
     publish_side_candidates, health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         candidates = read_candidates_and_weights(setup_filter)
@@ -173,6 +175,8 @@ def run_bull_setup_filter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -205,5 +209,7 @@ def start_part(context) -> int:
         read_candidates_and_weights=read_candidates_and_weights,
         publish_side_candidates=publish_side_candidates,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

@@ -130,6 +130,8 @@ def describe_excursions(tracker: PeakExcursionTracker) -> dict:
 def run_peak_excursion_tracker(
     tracker: PeakExcursionTracker, control_socket, read_positions_and_prices, publish_excursion,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         """One batch of excursions per tick, not one call per price.
@@ -154,6 +156,8 @@ def run_peak_excursion_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -192,5 +196,7 @@ def start_part(context) -> int:
         read_positions_and_prices=read_positions_and_prices,
         publish_excursion=publish_excursion,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

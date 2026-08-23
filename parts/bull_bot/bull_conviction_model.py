@@ -430,6 +430,8 @@ def run_bull_conviction_model(
     model: BullConvictionModel, control_socket, read_vectors_flags_and_labels,
     publish_convictions, health_interval_seconds: float, emit_health,
     checkpoint=None,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     """`checkpoint` is called with the model whenever it may be worth storing.
 
@@ -455,6 +457,8 @@ def run_bull_conviction_model(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -603,6 +607,8 @@ def start_part(context) -> int:
         read_vectors_flags_and_labels=read_vectors_flags_and_labels,
         publish_convictions=publish_convictions,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
         checkpoint=checkpoint,
     )

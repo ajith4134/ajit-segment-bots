@@ -36,6 +36,7 @@ RUNTIME_SCOPE = "runtime"
 # The settings the substrate itself reads for every part. A part's own numbers are
 # its own business; these are the ones the runtime needs to start it at all.
 INBOX_RECEIVE_BUFFER_SETTING = "inbox_receive_buffer_bytes"
+PUBLISHER_SEND_BUFFER_SETTING = "publisher_send_buffer_bytes"
 MAXIMUM_MESSAGE_SETTING = "maximum_message_bytes"
 ABSENT_RECHECK_SETTING = "publisher_absent_recheck_interval"
 HEALTH_INTERVAL_SETTING = "part_health_interval"
@@ -201,6 +202,7 @@ def open_part_context(
         inbox_receive_buffer_bytes=int(required(INBOX_RECEIVE_BUFFER_SETTING)),
         maximum_message_bytes=int(required(MAXIMUM_MESSAGE_SETTING)),
         absent_recheck_interval_seconds=float(required(ABSENT_RECHECK_SETTING)),
+        publisher_send_buffer_bytes=int(required(PUBLISHER_SEND_BUFFER_SETTING)),
     )
     return PartContext(
         part_id=part_id,

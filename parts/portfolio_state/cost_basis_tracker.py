@@ -123,6 +123,8 @@ def describe_cost_basis(tracker: CostBasisTracker) -> dict:
 def run_cost_basis_tracker(
     tracker: CostBasisTracker, control_socket, read_fills, publish_cost_basis,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for fill in read_fills():
@@ -135,6 +137,8 @@ def run_cost_basis_tracker(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -157,5 +161,7 @@ def start_part(context) -> int:
         read_fills=fills.payloads,
         publish_cost_basis=publish_cost_basis,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

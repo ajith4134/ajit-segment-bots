@@ -247,6 +247,8 @@ def describe_chaining(chainer: ExitOrderChainer) -> dict:
 def run_exit_order_chainer(
     chainer: ExitOrderChainer, control_socket, read_plans_and_fills, publish_exits,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         plans, fills = read_plans_and_fills()
@@ -261,6 +263,8 @@ def run_exit_order_chainer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -320,5 +324,7 @@ def start_part(context) -> int:
         read_plans_and_fills=read_plans_and_fills,
         publish_exits=publish_exits,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

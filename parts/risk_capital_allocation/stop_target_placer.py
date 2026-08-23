@@ -319,6 +319,8 @@ def describe_placement(placer: StopTargetPlacer) -> dict:
 def run_stop_target_placer(
     placer: StopTargetPlacer, control_socket, read_intents, publish_plans,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_plans(tuple(placer.place(**intent) for intent in read_intents()))
@@ -329,6 +331,8 @@ def run_stop_target_placer(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -464,5 +468,7 @@ def start_part(context) -> int:
         read_intents=read_intents,
         publish_plans=publish_plans,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

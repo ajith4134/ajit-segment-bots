@@ -642,3 +642,8 @@ note  = "operator, 2026-08-23: how old a part's last health report may be before
 value = 10.0
 unit  = "seconds"
 note  = "operator, 2026-08-23: how old a part's last health report may be before the collector calls it silent and the boards stop showing its last word as current. Ten seconds is five supervision intervals of the live spine (2 s), so a part that died is silent here before the supervisor has restarted it -- the board sees the death, not only the restart record."
+
+[publisher_send_buffer_bytes]
+value = 4194304
+unit  = "bytes"
+note  = "operator, 2026-08-23: SO_SNDBUF on a part's one publishing socket. Every datagram in flight to every consumer is charged to this buffer until that consumer reads it, so at the kernel default of 212992 one consumer 250 messages behind silenced the sends to all thirteen market-data readers: measured on the live spine, each lost the same 250 messages a second. 4194304 is net.core.wmem_max on this box, the most the kernel grants without CAP_NET_ADMIN -- a larger request is clamped to it silently, and the bus reads back what it was given. Twenty times the default, so thirteen consumers each a full inbox behind still leave headroom; a buffer large enough that nothing is ever lost does not exist, because loss is how RL-066 answers a consumer that is slower than its producer."

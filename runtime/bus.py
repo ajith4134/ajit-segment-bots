@@ -209,6 +209,7 @@ class Publisher:
         absent_recheck_interval_seconds: float = DEFAULT_ABSENT_RECHECK_SECONDS,
         now_ns: Callable[[], int] = time.time_ns,
         monotonic: Callable[[], float] = time.monotonic,
+        send_buffer_bytes: int | None = None,
     ) -> None:
         self._part_id = part_id
         self._outbound = {data_type: tuple(str(a) for a in addresses) for data_type, addresses in outbound.items()}
@@ -225,6 +226,19 @@ class Publisher:
         self._retry_absent_at: dict[str, float] = {}
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         self._socket.setblocking(False)
+        # One socket fans out to every consumer, and every datagram in flight is
+        # charged to this socket's send buffer until its consumer reads it. At the
+        # kernel default (212992 bytes, about 250 datagrams) one consumer that is
+        # 250 messages behind fills the buffer for all of them, and every further
+        # send returns EAGAIN whichever consumer it was for. Measured on the live
+        # spine of 2026-08-23: thirteen market-data consumers each lost the same
+        # 250 messages a second, which is the signature of the sender's buffer,
+        # not of thirteen equally slow readers. The kernel caps this at
+        # net.core.wmem_max without CAP_NET_ADMIN; a larger request is clamped
+        # silently, so the size actually granted is read back and kept.
+        if send_buffer_bytes is not None:
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, int(send_buffer_bytes))
+        self.send_buffer_bytes = self._socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
         self._next_sequence: dict[str, int] = {data_type: 0 for data_type in self._outbound}
         self.standing: dict[str, PublishStanding] = {
             data_type: PublishStanding() for data_type in self._outbound
@@ -404,6 +418,7 @@ class PartBus:
         maximum_message_bytes: int,
         absent_recheck_interval_seconds: float = DEFAULT_ABSENT_RECHECK_SECONDS,
         now_ns: Callable[[], int] = time.time_ns,
+        publisher_send_buffer_bytes: int | None = None,
     ) -> None:
         self.part_id = wiring.part_id
         self._declaration = wiring.declaration
@@ -422,6 +437,7 @@ class PartBus:
                 maximum_message_bytes=maximum_message_bytes,
                 absent_recheck_interval_seconds=absent_recheck_interval_seconds,
                 now_ns=now_ns,
+                send_buffer_bytes=publisher_send_buffer_bytes,
             )
         except Exception:
             # A part that fails half-way through binding must not leave sockets open:

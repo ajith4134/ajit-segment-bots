@@ -258,6 +258,8 @@ def restore_or_start_cold(profiler, store, part_id: str) -> None:
 def run_signal_horizon_profiler(
     profiler: SignalHorizonProfiler, control_socket, read_labels, publish_profiles,
     health_interval_seconds: float, emit_health, checkpoint=None,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for label in read_labels():
@@ -272,6 +274,8 @@ def run_signal_horizon_profiler(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -308,6 +312,8 @@ def start_part(context) -> int:
         read_labels=labels.payloads,
         publish_profiles=publish_profiles,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
         checkpoint=checkpoint,
     )

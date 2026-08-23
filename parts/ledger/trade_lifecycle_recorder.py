@@ -135,6 +135,8 @@ def describe_lifecycle(recorder: TradeLifecycleRecorder) -> dict:
 def run_trade_lifecycle_recorder(
     recorder: TradeLifecycleRecorder, control_socket, read_stages, publish_entries,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         entries = [
@@ -150,6 +152,8 @@ def run_trade_lifecycle_recorder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -234,5 +238,7 @@ def start_part(context) -> int:
         read_stages=read_stages,
         publish_entries=publish_entries,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

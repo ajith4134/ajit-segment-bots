@@ -372,6 +372,8 @@ def describe_arbitration(arbiter: OpinionArbiter) -> dict:
 def run_opinion_arbiter(
     arbiter: OpinionArbiter, control_socket, read_opinions_and_context, publish_intents,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         publish_intents(
@@ -387,6 +389,8 @@ def run_opinion_arbiter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -477,5 +481,7 @@ def start_part(context) -> int:
         read_opinions_and_context=read_opinions_and_context,
         publish_intents=publish_intents,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

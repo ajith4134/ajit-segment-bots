@@ -137,6 +137,8 @@ def describe_increments(resolver: TickSizeResolver) -> dict:
 def run_tick_size_resolver(
     resolver: TickSizeResolver, control_socket, read_books, publish_increments,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, bids, asks in read_books():
@@ -149,6 +151,8 @@ def run_tick_size_resolver(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -186,5 +190,7 @@ def start_part(context) -> int:
         read_books=read_books,
         publish_increments=publish_increments,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

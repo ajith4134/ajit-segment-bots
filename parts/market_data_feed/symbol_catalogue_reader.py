@@ -331,6 +331,8 @@ def run_symbol_catalogue_reader(
     health_interval_seconds: float,
     emit_health,
     publish_universe=None,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     """Run this part until the governor turns it off, re-reading on its interval.
 
@@ -367,6 +369,8 @@ def run_symbol_catalogue_reader(
         do_one_tick=read_if_due,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -462,4 +466,6 @@ def start_part(context) -> int:
         do_one_tick=read_if_due,
         emit_health=context.emit_health,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
     )

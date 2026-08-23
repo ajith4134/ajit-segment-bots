@@ -228,6 +228,8 @@ def describe_planning(planner: SwitchingPlanner) -> dict:
 def run_switching_planner(
     planner: SwitchingPlanner, control_socket, read_inputs, publish_plan,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     return run_part(
         declaration=PART_DECLARATION,
@@ -235,6 +237,8 @@ def run_switching_planner(
         do_one_tick=lambda: publish_plan(planner.plan(read_inputs())),
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -309,5 +313,7 @@ def start_part(context) -> int:
         read_inputs=read_inputs,
         publish_plan=lambda plan: publish_plan([plan]),
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

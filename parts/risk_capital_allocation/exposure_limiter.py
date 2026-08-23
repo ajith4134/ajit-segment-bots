@@ -169,6 +169,8 @@ def describe_exposure(limiter: ExposureLimiter) -> dict:
 def run_exposure_limiter(
     limiter: ExposureLimiter, control_socket, read_exposure, publish_limit,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_exposure(limiter)
@@ -180,6 +182,8 @@ def run_exposure_limiter(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -222,5 +226,7 @@ def start_part(context) -> int:
         read_exposure=read_exposure,
         publish_limit=lambda limit: publish_limit([limit]),
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )

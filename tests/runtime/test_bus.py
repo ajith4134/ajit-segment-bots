@@ -520,3 +520,42 @@ def test_an_address_that_was_off_is_probed_again_and_picked_up(bus_root, real_tr
         producer.close()
 
     assert len(received) == 2, "a part that came on was never probed again"
+
+
+def test_one_slow_consumer_does_not_silence_the_sends_to_the_others(bus_root, real_trades):
+    """The live-spine signature of 2026-08-23: thirteen consumers each losing the
+    same 250 messages a second. Every datagram in flight is charged to the
+    producer's one send buffer, so at the kernel default a single consumer a
+    buffer behind refuses sends meant for everyone. With the send buffer raised
+    the fast consumer must keep receiving while the slow one is full."""
+    slow = open_bus(
+        wiring_for(bus_root, "feed-gap-detector", consumes=("market-data",)),
+        receive_buffer_bytes=SMALL_RECEIVE_BUFFER_BYTES,
+    )
+    fast = open_bus(wiring_for(bus_root, "feed-jump-detector", consumes=("market-data",)))
+    producer_wiring = wiring_for(
+        bus_root,
+        "venue-trade-stream-reader",
+        produces=("market-data",),
+        sends_to={"market-data": ("feed-gap-detector", "feed-jump-detector")},
+    )
+    producer = PartBus(
+        wiring=producer_wiring,
+        inbox_receive_buffer_bytes=DEFAULT_RECEIVE_BUFFER_BYTES,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+        publisher_send_buffer_bytes=4_194_304,
+    )
+    try:
+        if producer._publisher.send_buffer_bytes < 2 * 212_992:
+            pytest.skip("net.core.wmem_max on this box is too low to raise the send buffer")
+        flood = (real_trades * 200)[:600]
+        producer.publish("market-data", flood)
+        fast_received = fast.reader("market-data")()
+    finally:
+        producer.close()
+        slow.close()
+        fast.close()
+    # The slow consumer's 4 KiB inbox holds a handful; the fast one's default inbox
+    # holds a couple of hundred. What matters is that the fast one was not
+    # starved by the slow one's full queue.
+    assert len(fast_received) >= 150, len(fast_received)

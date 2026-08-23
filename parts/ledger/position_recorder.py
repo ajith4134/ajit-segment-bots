@@ -157,6 +157,8 @@ def describe_positions(recorder: PositionRecorder) -> dict:
 def run_position_recorder(
     recorder: PositionRecorder, control_socket, read_events, publish_entries,
     health_interval_seconds: float, emit_health,
+    input_descriptors: tuple[int, ...] = (),
+    tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         positions, closed_trades, excursions = read_events()
@@ -173,6 +175,8 @@ def run_position_recorder(
         do_one_tick=tick,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
+        input_descriptors=input_descriptors,
+        tick_floor_seconds=tick_floor_seconds,
     )
 
 
@@ -234,5 +238,7 @@ def start_part(context) -> int:
         read_events=read_events,
         publish_entries=publish_entries,
         health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
     )
