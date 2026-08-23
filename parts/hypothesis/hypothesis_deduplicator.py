@@ -263,3 +263,67 @@ def run_hypothesis_deduplicator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+def _shape_of(item):
+    """A hypothesis's comparable shape, from whichever type carries it."""
+    context = getattr(item, "context", None) or {}
+    if not isinstance(context, dict):
+        context = {}
+    measurement = getattr(item, "measurement", None) or context.get("measurement")
+    if measurement is None:
+        return None
+    return HypothesisShape(
+        measurement=str(measurement),
+        comparison=str(getattr(item, "comparison", None) or context.get("comparison", "")),
+        threshold=float(getattr(item, "threshold", None) or context.get("threshold", 0.0) or 0.0),
+        direction=str(getattr(item, "direction", None) or context.get("direction", "")),
+        regime=getattr(item, "regime_tag", None) or context.get("regime"),
+    )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every instruction the archive holds is remembered as a shape; every new
+    candidate or mutation is scored for novelty against them.
+    """
+    from runtime.input_assembly import Batch
+
+    formulas = Batch(read=context.bus.reader("candidate-formula"))
+    mutations = Batch(read=context.bus.reader("mutated-hypothesis"))
+    histories = Batch(read=context.bus.reader("instruction-history"))
+    publish_scores = context.bus.publisher_for("novelty-score")
+    deduplicator = HypothesisDeduplicator(
+        threshold_tolerance=context.number("hypothesis_threshold_tolerance"),
+        overlap_tolerance=context.number("hypothesis_overlap_tolerance"),
+    )
+
+    def read_candidates(_deduplicator):
+        for history in histories.payloads():
+            shape = _shape_of(history)
+            if shape is not None:
+                deduplicator.remember(history.instruction_id, shape, ())
+        jobs = []
+        for source in (formulas, mutations):
+            for item in source.payloads():
+                shape = _shape_of(item)
+                hypothesis_id = getattr(item, "hypothesis_id", None) or getattr(item, "formula_id", None)
+                if shape is not None and hypothesis_id:
+                    jobs.append((hypothesis_id, shape, ()))
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_scores(kept)
+
+    return run_hypothesis_deduplicator(
+        deduplicator=deduplicator,
+        control_socket=context.control_socket,
+        read_candidates=read_candidates,
+        publish_scores=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

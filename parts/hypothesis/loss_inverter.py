@@ -246,3 +246,119 @@ def run_loss_inverter(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The classifier speaks per trade -- "the setup never had an edge" -- and the
+    inverter speaks per instruction. The bridge is the instruction's own
+    `derived_from`: every trade it was decoded from is observed as wrong or
+    not-wrong on direction for that instruction, and a classified loss is
+    handed over under the inverter's vocabulary, where only a systematically
+    wrong direction inverts and every other cause is counted with what would
+    fix it instead.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.trade_decoding_types import (
+        COSTS_ATE_IT, IT_WAS_JUST_VARIANCE, THE_ENTRY_WAS_EARLY, THE_ENTRY_WAS_LATE,
+        THE_EXIT_WAS_LATE, THE_REGIME_TURNED, THE_SETUP_WAS_WRONG,
+        THE_STOP_WAS_INSIDE_THE_NOISE, THE_STOP_WAS_TOO_WIDE,
+    )
+
+    # The classifier's per-trade cause, read as the inverter's per-strategy one.
+    cause_as_the_inverter_sees_it = {
+        THE_SETUP_WAS_WRONG: WRONG_ON_DIRECTION,
+        COSTS_ATE_IT: LOST_TO_COSTS,
+        IT_WAS_JUST_VARIANCE: LOST_TO_NOISE,
+        THE_EXIT_WAS_LATE: LOST_TO_EXECUTION,
+        THE_ENTRY_WAS_EARLY: LOST_TO_TIMING,
+        THE_ENTRY_WAS_LATE: LOST_TO_TIMING,
+        THE_REGIME_TURNED: LOST_TO_TIMING,
+        THE_STOP_WAS_INSIDE_THE_NOISE: LOST_TO_SIZING,
+        THE_STOP_WAS_TOO_WIDE: LOST_TO_SIZING,
+    }
+
+    instructions = Batch(read=context.bus.reader("decoded-trade-instruction"))
+    causes = Batch(read=context.bus.reader("loss-cause"))
+    publish_hypotheses = context.bus.publisher_for("inverted-hypothesis")
+    inverter = LossInverter(
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        minimum_wrong_rate=context.number("loss_inverter_minimum_wrong_rate"),
+        base_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    instruction_of_trade: dict[str, object] = {}
+    trades_seen: dict[str, int] = {}
+    losses_seen: dict[str, int] = {}
+    causes_seen: dict[str, dict] = {}
+    handed_over_already: set[str] = set()
+
+    def detector_of(instruction) -> str:
+        change = str(instruction.change)
+        return change.split(":", 1)[1] if ":" in change else change
+
+    def regime_of(instruction) -> str:
+        applies_when = instruction.applies_when if isinstance(instruction.applies_when, dict) else {}
+        return str(applies_when.get("regime", "any"))
+
+    def dominant_cause(identity: str) -> str:
+        counts = causes_seen[identity]
+        return max(sorted(counts), key=counts.__getitem__)
+
+    def read_loss_causes(_inverter):
+        for instruction in instructions.payloads():
+            for trade_id in instruction.derived_from:
+                instruction_of_trade[str(trade_id)] = instruction
+        touched: dict[str, object] = {}
+        for loss in causes.payloads():
+            instruction = instruction_of_trade.get(str(loss.trade_id))
+            if instruction is None:
+                # A loss no instruction was decoded from belongs to no strategy,
+                # and a strategy is what an inversion is of.
+                continue
+            identity = instruction.instruction_id
+            trades_seen[identity] = trades_seen.get(identity, 0) + 1
+            losses_seen[identity] = losses_seen.get(identity, 0) + 1
+            counts = causes_seen.setdefault(identity, {})
+            counts[loss.cause] = counts.get(loss.cause, 0) + 1
+            inverter.observe_trade(identity, loss.cause == THE_SETUP_WAS_WRONG)
+            touched[identity] = (instruction, loss)
+        # One summary per strategy, not one per losing trade: the inverter reads a
+        # cause as a strategy's record, and a strategy is handed over once -- a
+        # second hand-over would be a second hypothesis from the same evidence.
+        handed_over = []
+        for identity, (instruction, loss) in touched.items():
+            if identity in handed_over_already:
+                continue
+            summary = LossCause(
+                instruction_id=identity,
+                detector=detector_of(instruction),
+                regime=regime_of(instruction),
+                cause=cause_as_the_inverter_sees_it.get(dominant_cause(identity), dominant_cause(identity)),
+                trades=trades_seen[identity],
+                losses=losses_seen[identity],
+                average_loss=float(instruction.expected_effect) if instruction.expected_effect is not None else float("nan"),
+                evidence={"classifier_confidence": loss.confidence, "was_avoidable": loss.was_avoidable, "causes": dict(causes_seen[identity])},
+            )
+            if summary.cause == WRONG_ON_DIRECTION and inverter.wrong_rate(identity).is_fitted:
+                handed_over_already.add(identity)
+            handed_over.append(summary)
+        return tuple(handed_over)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_hypotheses(kept)
+
+    return run_loss_inverter(
+        inverter=inverter,
+        control_socket=context.control_socket,
+        read_loss_causes=read_loss_causes,
+        publish_hypotheses=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

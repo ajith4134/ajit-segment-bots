@@ -264,3 +264,52 @@ def run_hypothesis_falsifier(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A criterion is written for every hypothesis the moment it arrives,
+    before any trade: the measure it claims, the comparison, the threshold
+    it must clear and the trades it needs. An idea with no measurable claim
+    is passed over, which the falsifier counts.
+    """
+    from runtime.input_assembly import Batch
+
+    formulas = Batch(read=context.bus.reader("candidate-formula"))
+    inverted = Batch(read=context.bus.reader("inverted-hypothesis"))
+    ideas = Batch(read=context.bus.reader("novel-idea"))
+    publish_criteria = context.bus.publisher_for("falsification-criterion")
+    falsifier = HypothesisFalsifier(maximum_reachable_trades=int(context.number("hypothesis_maximum_reachable_trades")))
+
+    def read_hypotheses(_falsifier):
+        requests = []
+        for source in (formulas, inverted, ideas):
+            for item in source.payloads():
+                hypothesis_id = getattr(item, "hypothesis_id", None) or getattr(item, "formula_id", None) or getattr(item, "idea_id", None)
+                claimed = getattr(item, "fitted_hit_rate", None)
+                context_of = getattr(item, "context", None) or {}
+                if claimed is None and isinstance(context_of, dict):
+                    claimed = context_of.get("claimed_hit_rate")
+                base = getattr(item, "base_rate", None) or (context_of.get("base_rate") if isinstance(context_of, dict) else None)
+                required = getattr(item, "required_sample_size", None) or (context_of.get("required_trades") if isinstance(context_of, dict) else None)
+                if hypothesis_id is None or claimed is None or base is None:
+                    continue
+                requests.append((hypothesis_id, "hit-rate", "above", float(base), int(required or context.number("decoding_minimum_trades")), 0))
+        return tuple(requests)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_criteria(kept)
+
+    return run_hypothesis_falsifier(
+        falsifier=falsifier,
+        control_socket=context.control_socket,
+        read_hypotheses=read_hypotheses,
+        publish_criteria=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

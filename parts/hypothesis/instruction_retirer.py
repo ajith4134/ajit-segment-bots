@@ -294,3 +294,92 @@ def run_instruction_retirer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every scorecard is a check. Before it, the conditions are refreshed from
+    what arrived: a regime-break alert, a live-versus-replay gap, an edge
+    half-life, a regime tag. The falsification criterion fires here, from the
+    scorecard itself -- it names a measure, a comparison, a threshold and the
+    trades it needs, and a scorecard that has those trades and sits on the
+    wrong side of the threshold is the promise coming due. The gap that
+    retires is the one the reconciler already calls inconsistent, at the same
+    tolerance it uses.
+    """
+    from runtime.input_assembly import Batch
+
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    alerts = Batch(read=context.bus.reader("regime-break-alert"))
+    gaps = Batch(read=context.bus.reader("live-vs-replay-gap"))
+    half_lives = Batch(read=context.bus.reader("edge-half-life"))
+    tags = Batch(read=context.bus.reader("hypothesis-regime-tag"))
+    criteria_in = Batch(read=context.bus.reader("falsification-criterion"))
+    publish_retirements = context.bus.publisher_for("retired-instruction")
+    retirer = InstructionRetirer(replay_gap_threshold=context.number("reconcile_consistency_tolerance"))
+    criteria: dict[str, object] = {}
+
+    def measured(card, measure: str) -> float | None:
+        if measure == "hit-rate":
+            return card.hit_rate.value if card.hit_rate.is_fitted else None
+        if measure == "expectancy":
+            return card.expectancy
+        if measure == "realised":
+            return card.realised
+        return None
+
+    def criterion_fires(card) -> bool:
+        criterion = criteria.get(card.instruction_id)
+        if criterion is None or card.trades < criterion.required_trades:
+            return False
+        value = measured(card, criterion.measure)
+        if value is None:
+            return False
+        if criterion.comparison == "above":
+            return value <= criterion.threshold
+        if criterion.comparison == "below":
+            return value >= criterion.threshold
+        return False
+
+    def read_scorecards(_retirer):
+        for criterion in criteria_in.payloads():
+            if criterion.required_trades is not None:
+                criteria[criterion.hypothesis_id] = criterion
+        for alert in alerts.payloads():
+            retirer.observe_regime_break(alert.regime, bool(alert.has_broken))
+        for gap in gaps.payloads():
+            if gap.gap is not None:
+                retirer.observe_live_versus_replay_gap(gap.instruction_id, float(gap.gap))
+        for tag in tags.payloads():
+            fires_in = tuple(tag.regimes_it_may_fire_in)
+            retirer.observe_regime_tag(tag.hypothesis_id, fires_in[0] if len(fires_in) == 1 else None)
+        checks = []
+        for card in scorecards.payloads():
+            if not card.is_measured:
+                continue
+            if criterion_fires(card):
+                retirer.observe_criterion_fired(card.instruction_id)
+            checks.append((card.instruction_id, int(card.trades), float(card.realised)))
+        for half_life in half_lives.payloads():
+            if half_life.half_life_trades is not None:
+                retirer.observe_edge_half_life(
+                    half_life.instruction_id, float(half_life.half_life_trades), int(half_life.trades_behind_it)
+                )
+        return tuple(checks)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_retirements(kept)
+
+    return run_instruction_retirer(
+        retirer=retirer,
+        control_socket=context.control_socket,
+        read_scorecards=read_scorecards,
+        publish_retirements=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

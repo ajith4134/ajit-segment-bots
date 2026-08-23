@@ -332,3 +332,148 @@ def run_symbolic_hypothesis_miner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Examples are labelled trades: a training label's features with its
+    "the setup was right" label, and a trade episode's conditions with whether
+    it made money. The thresholds are estimated, never typed: once enough
+    examples have arrived, every numeric feature is read as its percentile
+    among the values this system has actually seen, and the terms are placed
+    at the operator's quantiles -- so "imbalance above 0.75" means the top
+    quarter for every feature alike. The declared space is walked in order, a
+    bounded number of formulas per tick, so the trial count is the count of
+    formulas actually evaluated and no tick runs long.
+
+    Feature reliability and kline windows are consumed and drained: the
+    miner's examples are labelled trades, and those two carry no label.
+    """
+    import bisect
+    import itertools
+
+    from runtime.input_assembly import Batch
+    from runtime.learning_types import THE_SETUP_WAS_RIGHT
+
+    labels = Batch(read=context.bus.reader("training-label"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    drained = (Batch(read=context.bus.reader("feature-reliability")), Batch(read=context.bus.reader("kline-window")))
+    publish_formulas = context.bus.publisher_for("candidate-formula")
+
+    quantiles = tuple(float(q) for q in context.setting("miner_threshold_quantiles").value)
+    maximum_terms = int(context.number("miner_maximum_terms"))
+    minimum_examples = int(context.number("miner_minimum_examples"))
+    minimum_held_out = int(context.number("decoding_minimum_trades"))
+    held_out_fraction = context.number("miner_held_out_fraction")
+    penalty_per_term = context.number("miner_complexity_penalty_per_term")
+    perfect_fit = context.number("miner_perfect_fit_threshold")
+    formulas_per_tick = int(context.number("miner_formulas_per_tick"))
+
+    raw_examples: list = []
+    sorted_values: dict[str, list] = {}
+    holder: dict = {"miner": None, "space": None}
+
+    def numeric(features) -> dict:
+        if not isinstance(features, dict):
+            return {}
+        return {
+            str(name): float(value)
+            for name, value in features.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+
+    def as_percentiles(features: dict) -> dict:
+        out = {}
+        for name, value in features.items():
+            seen = sorted_values.get(name)
+            if seen:
+                out[name] = bisect.bisect_right(seen, value) / len(seen)
+        return out
+
+    def build_miner_from_what_was_seen() -> None:
+        by_feature: dict[str, list] = {}
+        for features, _, _ in raw_examples:
+            for name, value in features.items():
+                by_feature.setdefault(name, []).append(value)
+        # A feature present in every example has a distribution worth a threshold.
+        measurements = tuple(sorted(name for name, values in by_feature.items() if len(values) == len(raw_examples)))
+        if not measurements:
+            return
+        for name in measurements:
+            sorted_values[name] = sorted(by_feature[name])
+        miner = SymbolicHypothesisMiner(
+            measurements=measurements, thresholds_per_measurement=quantiles,
+            maximum_terms=maximum_terms, minimum_examples=minimum_examples,
+            minimum_held_out_examples=minimum_held_out, held_out_fraction=held_out_fraction,
+            complexity_penalty_per_term=penalty_per_term, perfect_fit_threshold=perfect_fit,
+        )
+        for features, label, at_ns in raw_examples:
+            miner.observe_example(as_percentiles(features), label, at_ns)
+        single_terms = [
+            Term(measurement=name, comparison=comparison, threshold=threshold)
+            for name in measurements for threshold in quantiles for comparison in (ABOVE, BELOW)
+        ]
+
+        def walk_the_space():
+            for size in range(1, maximum_terms + 1):
+                for terms in itertools.combinations(single_terms, size):
+                    if len({term.measurement for term in terms}) < size:
+                        continue  # two thresholds on one feature is one term written twice
+                    yield "+".join(sorted({term.measurement for term in terms})), terms
+
+        holder["miner"] = miner
+        holder["space"] = walk_the_space()
+
+    def take_examples() -> None:
+        for label in labels.payloads():
+            verdict = label.labels.get(THE_SETUP_WAS_RIGHT) if isinstance(label.labels, dict) else None
+            features = numeric(label.features)
+            if verdict is None or not features:
+                continue
+            raw_examples.append((features, bool(verdict), int(label.built_at_ns)))
+            if holder["miner"] is not None:
+                holder["miner"].observe_example(as_percentiles(features), bool(verdict), int(label.built_at_ns))
+        for episode in episodes.payloads():
+            features = numeric(episode.conditions)
+            if not features:
+                continue
+            made_money = float(episode.realised) > 0.0
+            raw_examples.append((features, made_money, int(episode.opened_at_ns)))
+            if holder["miner"] is not None:
+                holder["miner"].observe_example(as_percentiles(features), made_money, int(episode.opened_at_ns))
+
+    def tick() -> None:
+        for source in drained:
+            source.payloads()
+        take_examples()
+        if holder["miner"] is None:
+            if len(raw_examples) < minimum_examples:
+                return
+            build_miner_from_what_was_seen()
+            if holder["miner"] is None:
+                return
+        miner = holder["miner"]
+        formulas = []
+        for _ in range(formulas_per_tick):
+            candidate = next(holder["space"], None)
+            if candidate is None:
+                break
+            family, terms = candidate
+            if miner.already_tried(terms):
+                continue
+            formula, _ = miner.mine(family, terms)
+            if formula is not None:
+                formulas.append(formula)
+        if formulas:
+            publish_formulas(tuple(formulas))
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

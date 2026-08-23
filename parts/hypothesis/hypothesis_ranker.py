@@ -276,3 +276,66 @@ def run_hypothesis_ranker(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    breakdowns = Batch(read=context.bus.reader("expectancy-breakdown"))
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    qualities = Batch(read=context.bus.reader("exit-quality"))
+    half_lives = Batch(read=context.bus.reader("edge-half-life"))
+    novelties = Batch(read=context.bus.reader("novelty-score"))
+    samples = Batch(read=context.bus.reader("required-sample-size"))
+    publish_priorities = context.bus.publisher_for("hypothesis-priority")
+    ranker = HypothesisRanker(
+        maximum_reachable_trades=int(context.number("hypothesis_maximum_reachable_trades")),
+        minimum_half_life_trades=context.number("hypothesis_minimum_half_life_trades"),
+    )
+    known: set[str] = set()
+    last_rank = [float("-inf")]
+
+    def read_inputs(_ranker):
+        qualities.payloads()
+        for breakdown in breakdowns.payloads():
+            ranker.observe_expected_edge(breakdown.detector, breakdown.total_expectancy, breakdown.decomposed_at_ns)
+            known.add(breakdown.detector)
+        for card in scorecards.payloads():
+            if card.expectancy is not None:
+                ranker.observe_expected_edge(card.instruction_id, card.expectancy, card.scored_at_ns)
+                known.add(card.instruction_id)
+        for half_life in half_lives.payloads():
+            if half_life.half_life_trades is not None:
+                ranker.observe_edge_half_life(half_life.instruction_id, half_life.half_life_trades)
+                known.add(half_life.instruction_id)
+        for novelty in novelties.payloads():
+            ranker.observe_novelty(novelty.hypothesis_id, novelty.novelty)
+            known.add(novelty.hypothesis_id)
+        for sample in samples.payloads():
+            if sample.trades_required is not None:
+                ranker.observe_required_sample(sample.hypothesis_id, sample.trades_required)
+                known.add(sample.hypothesis_id)
+        now = _time.monotonic()
+        if now - last_rank[0] < context.health_interval_seconds:
+            return ()
+        last_rank[0] = now
+        return tuple(sorted(known))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_priorities(kept)
+
+    return run_hypothesis_ranker(
+        ranker=ranker,
+        control_socket=context.control_socket,
+        read_inputs=read_inputs,
+        publish_priorities=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

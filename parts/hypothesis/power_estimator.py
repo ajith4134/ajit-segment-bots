@@ -266,3 +266,54 @@ def run_power_estimator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A mined formula carries the claim and the trial count that found it; a
+    breakdown carries a strategy's measured win rate and how many trades made
+    it. Each is sized at the significance its own search implies -- the
+    operator's level divided by the trials in the family, rounded toward the
+    stricter tabulated quantile -- and a breakdown is sized only once it is a
+    measurement, since a prior is not a claim.
+    """
+    from runtime.input_assembly import Batch
+
+    formulas = Batch(read=context.bus.reader("candidate-formula"))
+    breakdowns = Batch(read=context.bus.reader("expectancy-breakdown"))
+    publish_sample_sizes = context.bus.publisher_for("required-sample-size")
+    estimator = PowerEstimator(
+        power=context.number("power_target"),
+        maximum_testable_trades=int(context.number("hypothesis_maximum_reachable_trades")),
+    )
+    significance = context.number("power_significance")
+    base_rate = context.number("learning_prior_hit_rate")
+
+    def read_hypotheses(_estimator):
+        requests = []
+        for formula in formulas.payloads():
+            claimed = formula.held_out_hit_rate if formula.held_out_hit_rate is not None else formula.fitted_hit_rate
+            trials = max(1, int(formula.trials_in_family))
+            requests.append((formula.formula_id, float(claimed), float(formula.base_rate), significance / trials, trials))
+        for breakdown in breakdowns.payloads():
+            if not breakdown.is_measured or not breakdown.win_rate.is_fitted:
+                continue
+            requests.append((f"{breakdown.detector}:{breakdown.regime}", float(breakdown.win_rate.value), base_rate, significance, 1))
+        return tuple(requests)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_sample_sizes(kept)
+
+    return run_power_estimator(
+        estimator=estimator,
+        control_socket=context.control_socket,
+        read_hypotheses=read_hypotheses,
+        publish_sample_sizes=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -271,3 +271,71 @@ def run_hypothesis_mutator(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A retired instruction whose archive history is known is a parent; the
+    mutation tried is the first the family has not exhausted. Scorecards say
+    whether an earlier mutation worked; near misses say where a threshold
+    would have.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    retired = Batch(read=context.bus.reader("retired-instruction"))
+    histories = LatestByKey(read=context.bus.reader("instruction-history"), key_of=lambda h: h.instruction_id)
+    near_misses = Batch(read=context.bus.reader("near-miss-episode"))
+    publish_hypotheses = context.bus.publisher_for("mutated-hypothesis")
+    mutator = HypothesisMutator(
+        threshold_step_fraction=context.number("hypothesis_threshold_step_fraction"),
+        horizon_step_fraction=context.number("hypothesis_horizon_step_fraction"),
+        consecutive_failures_before_stopping=int(context.number("hypothesis_failures_before_stopping")),
+    )
+    mutations = (MOVE_THE_THRESHOLD, CHANGE_THE_HORIZON, ADD_A_REGIME_CONDITION, REMOVE_A_REGIME_CONDITION)
+
+    def read_parents(_mutator):
+        for card in scorecards.payloads():
+            if card.is_measured:
+                mutator.observe_outcome(card.instruction_id.split("@")[0], card.expectancy is not None and card.expectancy > 0)
+        for miss in near_misses.payloads():
+            value = getattr(miss, "reference_price", None)
+            if value is not None:
+                mutator.observe_near_miss(getattr(miss, "why_not_taken", ""), float(value), getattr(miss, "would_have_worked", False))
+        by_id = histories.mapping()
+        jobs = []
+        for item in retired.payloads():
+            if not item.may_be_mutated:
+                continue
+            history = by_id.get(item.instruction_id)
+            if history is None:
+                continue
+            parent = ParentInstruction(
+                instruction_id=item.instruction_id, family=history.family, measurement=history.measurement,
+                comparison=history.comparison, threshold=history.threshold,
+                horizon_seconds=float(getattr(history, "horizon_seconds", 0.0) or context.number("mean_reversion_horizon")),
+                regime_tag=history.regime_tag, trades=item.trades_at_retirement,
+                hit_rate=(history.realised > 0) * 1.0 if history.trades else 0.0, was_retired=True,
+            )
+            for mutation in mutations:
+                if not mutator.family_is_exhausted(history.family):
+                    jobs.append((parent, mutation))
+                    break
+        return tuple(jobs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_hypotheses(kept)
+
+    return run_hypothesis_mutator(
+        mutator=mutator,
+        control_socket=context.control_socket,
+        read_parents=read_parents,
+        publish_hypotheses=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

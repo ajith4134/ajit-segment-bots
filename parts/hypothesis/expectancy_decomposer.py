@@ -242,3 +242,66 @@ def run_expectancy_decomposer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A trade's contribution is its realised result decomposed by the
+    attribution that arrives for the same trade; the episode names the
+    detector and regime. Breakdowns go out once per health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    accuracies = Batch(read=context.bus.reader("forecast-accuracy"))
+    attributions = LatestByKey(read=context.bus.reader("pnl-attribution"), key_of=lambda a: a.trade_id)
+    profiles = Batch(read=context.bus.reader("horizon-profile"))
+    publish_breakdowns = context.bus.publisher_for("expectancy-breakdown")
+    decomposer = ExpectancyDecomposer(
+        minimum_trades=int(context.number("decoding_minimum_trades")),
+        prior_win_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    last_publish = [float("-inf")]
+
+    def read_episodes(_decomposer) -> None:
+        accuracies.payloads()
+        profiles.payloads()
+        by_trade = attributions.mapping()
+        for episode in episodes.payloads():
+            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            attribution = by_trade.get(trade_id)
+            components = attribution.components if attribution is not None and isinstance(attribution.components, dict) else {}
+            decomposer.observe_trade(
+                TradeContribution(
+                    detector=episode.detector, regime=episode.regime, realised=episode.realised,
+                    peak_favourable=float(components.get("peak", 0.0) or 0.0),
+                    entry_slippage=float(components.get("entry_slippage", 0.0) or 0.0),
+                    costs=float(components.get("fees", 0.0) or 0.0),
+                    market_drift=float(components.get("drift", 0.0) or 0.0),
+                )
+            )
+
+    def tick() -> None:
+        read_episodes(decomposer)
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        breakdowns = decomposer.decompose_all()
+        if breakdowns:
+            publish_breakdowns(breakdowns)
+        last_publish[0] = now
+
+    return run_part(
+        declaration=PART_DECLARATION,
+        control_socket=context.control_socket,
+        do_one_tick=tick,
+        emit_health=context.emit_health,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+    )

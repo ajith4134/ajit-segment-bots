@@ -283,3 +283,137 @@ def run_instruction_writer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Hypotheses arrive on four of the twenty inputs -- mutated, inverted, a
+    novel idea, a mined formula -- and are kept until every condition agrees
+    or the system moves on. The conditions are refreshed from the others: the
+    ranker's priority carries novelty, the trades required and the edge
+    half-life; the falsifier's criterion is the retirement condition; a mined
+    formula's held-out excess is whether it cleared the bar its search
+    implies; the regime tag is the hypothesis's own. A regime-break alert
+    retires every live instruction tagged for the regime that broke.
+
+    Nothing this part consumes carries a refutation verdict: by the blueprint
+    the battery runs on scorecards, after an instruction has traded. A
+    hypothesis that has never traded therefore fails NOT_REFUTATION_TESTED
+    here by construction, and that refusal is published by name rather than
+    a verdict invented to get past it. See docs/proposals for the change.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.learning_types import Hypothesis
+    from runtime.sweep_measurements import KNOWN_MEASUREMENTS
+
+    hypothesis_sources = {
+        name: Batch(read=context.bus.reader(name))
+        for name in ("mutated-hypothesis", "inverted-hypothesis", "novel-idea", "candidate-formula")
+    }
+    priorities = Batch(read=context.bus.reader("hypothesis-priority"))
+    criteria = Batch(read=context.bus.reader("falsification-criterion"))
+    alerts = Batch(read=context.bus.reader("regime-break-alert"))
+    evidence_only = tuple(
+        Batch(read=context.bus.reader(name))
+        for name in (
+            "decoded-trade-instruction", "expectancy-breakdown", "recalled-episode", "semantic-fact",
+            "loaded-skill-section", "strategy-gap", "feature-reliability", "cross-segment-lesson",
+            "winner-pattern", "reflection-note", "knowledge-link", "regime-memory", "horizon-profile",
+        )
+    )
+    publish_instructions = context.bus.publisher_for("opportunity-instruction")
+    writer = InstructionWriter(
+        minimum_novelty=context.number("hypothesis_minimum_novelty"),
+        maximum_reachable_trades=int(context.number("hypothesis_maximum_reachable_trades")),
+        known_measurements=KNOWN_MEASUREMENTS,
+    )
+    pending: dict[str, Hypothesis] = {}
+    changed: set[str] = set()
+
+    def as_hypothesis(item) -> Hypothesis | None:
+        if isinstance(item, Hypothesis):
+            return item
+        idea_id = getattr(item, "idea_id", None)
+        if idea_id is not None:
+            context_of = dict(item.context) if isinstance(item.context, dict) else {}
+            return Hypothesis(
+                hypothesis_id=idea_id, statement=item.statement,
+                what_would_refute_it=item.what_would_refute_it, family=item.source,
+                trials_in_family=int(item.trials_in_this_family), source=item.source,
+                context=context_of, required_sample_size=None,
+                regime_tag=context_of.get("regime"), novelty=None,
+                evidence=dict(item.evidence), proposed_at_ns=item.proposed_at_ns,
+            )
+        formula_id = getattr(item, "formula_id", None)
+        if formula_id is not None:
+            terms = tuple(item.terms)
+            # One term is one watch condition; a conjunction is not something the
+            # scanner can watch, and the writer refuses it as NO_MEASUREMENT.
+            context_of = (
+                {"measurement": terms[0].measurement, "comparison": terms[0].comparison, "threshold": terms[0].threshold}
+                if len(terms) == 1 else {"measurement": None, "terms": tuple(str(term) for term in terms)}
+            )
+            excess = item.held_out_excess
+            writer.observe_trial_verdict(formula_id, bool(item.is_usable and excess is not None and excess > 0))
+            return Hypothesis(
+                hypothesis_id=formula_id, statement=str(item),
+                what_would_refute_it=f"a held-out hit rate at or below {item.base_rate:.1%}",
+                family=item.family, trials_in_family=int(item.trials_in_family), source="candidate-formula",
+                context=context_of, required_sample_size=None, regime_tag=None, novelty=None,
+                evidence={"fitted_hit_rate": item.fitted_hit_rate, "held_out_hit_rate": item.held_out_hit_rate,
+                          "held_out_trades": item.held_out_trades, "base_rate": item.base_rate,
+                          "complexity_penalty": item.complexity_penalty},
+                proposed_at_ns=item.mined_at_ns,
+            )
+        return None
+
+    def read_hypotheses(_writer):
+        for source in evidence_only:
+            source.payloads()
+        for source in hypothesis_sources.values():
+            for item in source.payloads():
+                hypothesis = as_hypothesis(item)
+                if hypothesis is None:
+                    continue
+                pending[hypothesis.hypothesis_id] = hypothesis
+                writer.observe_regime_tag(hypothesis.hypothesis_id, hypothesis.regime_tag)
+                changed.add(hypothesis.hypothesis_id)
+        for priority in priorities.payloads():
+            if priority.novelty is not None:
+                writer.observe_novelty(priority.hypothesis_id, float(priority.novelty))
+            if priority.trades_required is not None:
+                writer.observe_required_sample(priority.hypothesis_id, int(priority.trades_required))
+            if priority.half_life_trades is not None:
+                writer.observe_edge_half_life(priority.hypothesis_id, float(priority.half_life_trades))
+            changed.add(priority.hypothesis_id)
+        for criterion in criteria.payloads():
+            if criterion.required_trades is not None:
+                writer.observe_falsification_criterion(criterion.hypothesis_id, criterion)
+                changed.add(criterion.hypothesis_id)
+        for alert in alerts.payloads():
+            if alert.has_broken:
+                for instruction in writer.live_instructions():
+                    if instruction.regime_tag == alert.regime:
+                        writer.retire(instruction.instruction_id)
+        due = tuple(pending[identity] for identity in sorted(changed) if identity in pending)
+        changed.clear()
+        return due
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        for instruction in kept:
+            pending.pop(instruction.hypothesis_id, None)
+        if kept:
+            publish_instructions(kept)
+
+    return run_instruction_writer(
+        writer=writer,
+        control_socket=context.control_socket,
+        read_hypotheses=read_hypotheses,
+        publish_instructions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

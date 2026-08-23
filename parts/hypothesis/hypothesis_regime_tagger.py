@@ -248,3 +248,57 @@ def run_hypothesis_regime_tagger(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A formula's held-out record is read as outcomes in the regime current
+    on the symbols it was fitted on; the tag is re-made for every formula
+    that received evidence this wake.
+    """
+    from runtime.input_assembly import Batch, LatestByKey
+
+    formulas = Batch(read=context.bus.reader("candidate-formula"))
+    regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
+    publish_tags = context.bus.publisher_for("hypothesis-regime-tag")
+    tagger = HypothesisRegimeTagger(
+        minimum_trades_per_regime=int(context.number("decoding_minimum_trades")),
+        working_threshold=context.number("hypothesis_working_threshold"),
+        prior_hit_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    counted: dict[str, int] = {}
+
+    def read_outcomes(_tagger):
+        current = {r.regime for r in regimes.mapping().values() if r.is_classified} or {"unclassified"}
+        touched = set()
+        for formula in formulas.payloads():
+            seen = counted.get(formula.formula_id, 0)
+            new = max(0, formula.held_out_trades - seen)
+            if new == 0 or formula.held_out_hit_rate is None:
+                continue
+            right = int(round(formula.held_out_hit_rate * new))
+            for regime in sorted(current):
+                for index in range(new):
+                    tagger.observe_outcome(formula.formula_id, regime, index < right)
+            counted[formula.formula_id] = formula.held_out_trades
+            touched.add(formula.formula_id)
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_tags(kept)
+
+    return run_hypothesis_regime_tagger(
+        tagger=tagger,
+        control_socket=context.control_socket,
+        read_outcomes=read_outcomes,
+        publish_tags=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
