@@ -117,6 +117,17 @@ Phase 1 started capture on the day it became possible. Both venues, the 30
 highest-volume symbols on each, trades to disk at
 `~/.local/share/ajit-segment-bots/tape/{venue}/{symbol}/{day}.{index,blob}`.
 
+**Since 2026-08-23 the tape is written by the live spine**, not by the capture
+script: `operate/run_live_spine.py` starts 47 parts (the feed, the bull bot,
+the trading half, and the governor observing without `gate-actuator`), and
+`venue-trade-stream-reader` writes the tape. Check it is alive with
+`pgrep -f run_live_spine.py` and the *Parts alive* tile; restart with
+`kill -TERM <pid>` (flushes the tape and journals) then
+`setsid nohup .venv/bin/python operate/run_live_spine.py > ~/.local/share/ajit-segment-bots/live-spine.out 2>&1 &`.
+The spine refuses to start while `start_trade_capture.py` runs, and vice
+versa — two writers on one tape make a duplicate indistinguishable from a real
+second print.
+
 **Do not stop it without a reason, and never leave it stopped.** History accrues
 only in real time: every other part can be built against a tape that exists, and
 an hour not captured is gone permanently.
@@ -177,9 +188,14 @@ file named for the part exists), `TESTED` (a test file names it), `RUNNING` (it
 reports a heartbeat). `FAILING` is wired to the contract checker, so a part it
 names goes red.
 
-Today every part is `DECLARED`, which is the correct board for a system that is
-entirely unbuilt. Cells climb as code lands — nothing is ever inferred upward,
-and a failing part never counts as progress.
+Where it stands on 2026-08-23: 324 parts `TESTED`, 47 of them `RUNNING` on the
+live spine. `TESTED` means a source file and a test file exist, nothing more;
+**277 parts carry no `start_part` and cannot be launched at all.** `RUNNING` is
+read from the table `heartbeat-collector` writes at `heartbeat_table_path` —
+the same file the trade board's *Parts alive* tile reads — and a table older
+than `heartbeat_silent_after_seconds` proves nothing about any part. Cells
+climb as code lands and as parts run — nothing is ever inferred upward, and a
+failing part never counts as progress.
 
 ## Part board (the live one)
 
