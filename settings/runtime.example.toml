@@ -577,3 +577,28 @@ note  = "operator, 2026-08-23: how many recorded adverse excursions a symbol nee
 value = 200
 unit  = "closed trades"
 note  = "operator, 2026-08-23: how many recent excursions the quantile is estimated over. Two hundred keeps roughly a season of a symbol's behaviour rather than all of its history: a stop distance learned across a regime that has ended is a stop placed for a market that no longer exists."
+
+[signal_excursion_window]
+value = 300
+unit  = "settled claims"
+note  = "operator, 2026-08-23: how many recent settled claims per symbol and side the excursion quantiles are estimated over. Three hundred keeps roughly a season of a symbol's behaviour rather than all of it: a stop distance learned in a regime that has ended is a stop placed for a market that no longer exists. Larger than stop_excursion_window's two hundred because a claim is cheaper evidence than a closed trade and there are far more of them -- the live run of 2026-08-23 raised 9 900 candidates in 27 minutes."
+
+[signal_excursion_minimum_claims]
+value = 30
+unit  = "settled claims"
+note  = "operator, 2026-08-23: how many claims a symbol and side need before the profile reports itself fitted. Thirty, matching stop_excursion_minimum_observations, because the quantile taken is high and a high quantile estimated from fewer is decided by one or two observations. Below it the profile is still published, with is_fitted false, and bull-exit-plan-proposer refuses it -- which is the correct state for a symbol nobody has watched long enough."
+
+[signal_excursion_adverse_quantile]
+value = 0.85
+unit  = "quantile"
+note  = "operator, 2026-08-23: which adverse excursion a stop must sit beyond. The 85th percentile of what a claim that came right had to survive, the same quantile stop-target-placer uses for the same reason: a stop inside the ordinary noise of a winning trade converts winners into losers, and that failure is invisible in the equity curve because it reads as a bad strategy rather than a bad stop. Not the maximum -- a stop beyond the worst excursion ever seen makes every loss as large as the worst one."
+
+[signal_horizon_window]
+value = 300
+unit  = "settled claims"
+note  = "operator, 2026-08-23: how many recent settled claims per detector the median time-to-resolve is taken over. Three hundred, matching signal_excursion_window, because both describe the same claims and a horizon estimated over a different span than the excursions would describe a different market."
+
+[signal_horizon_minimum_claims]
+value = 30
+unit  = "settled claims"
+note  = "operator, 2026-08-23: how many settled claims a detector needs before its horizon reports itself fitted. Thirty, matching the excursion minimum: the two profiles gate the same exit plan, and a lower bar on one would let a plan be built on half a measurement."

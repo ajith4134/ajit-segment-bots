@@ -32,6 +32,10 @@ from dataclasses import dataclass, field
 
 from runtime.bot_opinion import LONG, ExitPlan, ExitTarget
 from runtime.part_declaration import PartDeclaration
+# Defined once, in the substrate. They were defined here and again in the
+# peer bot's proposer, and the bus pickles -- so a profile produced against
+# one definition arrived at the other as a class it did not recognise.
+from runtime.trade_profiles import ExcursionProfile, HorizonProfile
 from runtime.part_process import run_part
 
 PART_ID = "bull-exit-plan-proposer"
@@ -53,34 +57,6 @@ NO_EXCURSION_PROFILE = "no-excursion-record-for-this-symbol"
 NO_PRICE = "no-price-for-this-symbol"
 NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
 REWARD_BELOW_RISK = "reward-to-risk-below-floor"
-
-
-@dataclass(frozen=True)
-class ExcursionProfile:
-    """How far this symbol's trades have gone against and in favour of a winner.
-
-    Fractions of entry price, from closed trades. `adverse_quantile` is the
-    excursion a winning trade normally survives; `favourable_quantiles` maps a
-    quantile to the move reached, which is where scaling out belongs.
-    """
-
-    venue_id: str
-    symbol: str
-    side: str
-    adverse_excursion: float
-    favourable_quantiles: dict
-    trades_observed: int
-    is_fitted: bool
-
-
-@dataclass(frozen=True)
-class HorizonProfile:
-    """How long this kind of trade has taken to resolve, in seconds."""
-
-    detector: str
-    median_seconds: float
-    trades_observed: int
-    is_fitted: bool
 
 
 @dataclass(frozen=True)

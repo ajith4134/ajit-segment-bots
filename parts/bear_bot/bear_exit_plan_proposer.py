@@ -30,6 +30,10 @@ from dataclasses import dataclass, field
 
 from runtime.bot_opinion import SHORT, ExitPlan, ExitTarget
 from runtime.part_declaration import PartDeclaration
+# Defined once, in the substrate. They were defined here and again in the
+# peer bot's proposer, and the bus pickles -- so a profile produced against
+# one definition arrived at the other as a class it did not recognise.
+from runtime.trade_profiles import ExcursionProfile, HorizonProfile
 from runtime.part_process import run_part
 
 PART_ID = "bear-exit-plan-proposer"
@@ -56,27 +60,6 @@ NO_PRICE = "no-price-for-this-symbol"
 NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
 REWARD_BELOW_RISK = "reward-to-risk-below-floor"
 STOP_WOULD_BE_UNBOUNDED = "the-stop-this-symbol-needs-is-wider-than-a-short-can-carry"
-
-
-@dataclass(frozen=True)
-class ExcursionProfile:
-    """How far this symbol's shorts have gone against and in favour of a winner."""
-
-    venue_id: str
-    symbol: str
-    side: str
-    adverse_excursion: float
-    favourable_quantiles: dict
-    trades_observed: int
-    is_fitted: bool
-
-
-@dataclass(frozen=True)
-class HorizonProfile:
-    detector: str
-    median_seconds: float
-    trades_observed: int
-    is_fitted: bool
 
 
 @dataclass(frozen=True)

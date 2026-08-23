@@ -279,6 +279,12 @@ class SignalOutcomeLabeller:
             features=dict(claim.evidence),
             built_at_ns=now_ns,
             claimed_at_ns=claim.claimed_at_ns,
+            # What the claim measured while it was open. Reported rather than
+            # dropped: these two numbers are the whole reason the system can
+            # place a stop before it has ever closed a trade.
+            direction=claim.direction,
+            best_favourable_fraction=claim.best_favourable_fraction,
+            worst_adverse_fraction=claim.worst_adverse_fraction,
         )
 
     def _refuse(self, reason: str) -> str:

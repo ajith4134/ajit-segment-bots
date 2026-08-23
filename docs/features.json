@@ -11837,6 +11837,54 @@
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "signal-excursion-profiler",
+      "name": "Signal excursion profiler",
+      "role": "profile how far price travels around a detector's claim before the market settles it",
+      "category": "learning-loop",
+      "consumes": [
+        "training-label"
+      ],
+      "produces": [
+        "excursion-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/live-excursion-and-horizon-profiling.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "signal-horizon-profiler",
+      "name": "Signal horizon profiler",
+      "role": "measure how long each detector's claims take the market to settle",
+      "category": "learning-loop",
+      "consumes": [
+        "training-label"
+      ],
+      "produces": [
+        "horizon-profile",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/live-excursion-and-horizon-profiling.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {

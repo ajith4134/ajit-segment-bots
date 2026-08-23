@@ -64,6 +64,22 @@ class TrainingLabel:
     # when the detector spoke rather than the one current when the label arrived --
     # and by then the market has moved on, which is the whole point of the horizon.
     claimed_at_ns: int = 0
+    # How far price actually travelled while this claim was open, as fractions of
+    # the price at the moment it was made, signed towards what the claim said:
+    # favourable is positive, adverse is negative.
+    #
+    # Carried rather than discarded because the claim already measured them on
+    # every tick, and throwing them away was what left the system unable to place
+    # a stop before its first trade had closed. `signal-excursion-profiler` turns
+    # them into the distribution a stop and a target are set from
+    # (docs/proposals/live-excursion-and-horizon-profiling.md).
+    #
+    # `direction` is here for the same reason: an excursion means the opposite
+    # thing for a long and a short, so a profile keyed without it would average
+    # the two into a number that describes neither.
+    direction: str = ""
+    best_favourable_fraction: float = 0.0
+    worst_adverse_fraction: float = 0.0
 
     def label_for(self, component: str) -> bool | None:
         return self.labels.get(component)

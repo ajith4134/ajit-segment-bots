@@ -97,6 +97,15 @@ LIVE_SPINE = (
     # a detector's claim plus the prices that follow into a training-label, with no
     # trade required (docs/proposals/signal-outcome-labelling.md).
     "signal-outcome-labeller",
+    # What the labeller measured on the way, turned into the two profiles an exit
+    # plan cannot be built without. They exist because the closed-trade profilers
+    # cannot run until a trade has closed, and a trade cannot be opened without a
+    # stop (docs/proposals/live-excursion-and-horizon-profiling.md). They read the
+    # labeller's own labels rather than the feed: tracking claims is the labeller's
+    # hot loop and doing it three times would be three times the cost for the same
+    # numbers.
+    "signal-excursion-profiler",
+    "signal-horizon-profiler",
     # The bull bot. Forms no opinion at all until the conviction model is trained,
     # which is correct and is why the labeller runs beside it.
     "bull-setup-filter",
