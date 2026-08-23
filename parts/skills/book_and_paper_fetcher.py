@@ -248,3 +248,42 @@ def run_book_and_paper_fetcher(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No fetcher is installed on this box, so every gap worth fetching
+    against is answered NO_FETCHER by name and no document is published;
+    `install_fetcher` is the one way one gets in. Web ideas are read and
+    drained: a fetch is for a gap, and an idea is upstream of one.
+    """
+    from runtime.input_assembly import Batch
+
+    ideas = Batch(read=context.bus.reader("web-idea"))
+    gaps = Batch(read=context.bus.reader("skill-gap"))
+    publish_documents = context.bus.publisher_for("source-document")
+    fetcher = BookAndPaperFetcher(
+        fetches_per_host_per_window=int(context.number("research_fetches_per_window")),
+        window_seconds=context.number("research_fetch_window_seconds"),
+    )
+
+    def read_gaps(_fetcher):
+        ideas.payloads()
+        return tuple(gap for gap in gaps.payloads() if getattr(gap, "is_worth_fetching_against", False))
+
+    def publish(results) -> None:
+        documents = tuple(result for result in results if result is not None and result.is_a_document)
+        if documents:
+            publish_documents(documents)
+
+    return run_book_and_paper_fetcher(
+        fetcher=fetcher,
+        control_socket=context.control_socket,
+        read_gaps=read_gaps,
+        publish_documents=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

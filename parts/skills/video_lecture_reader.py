@@ -277,3 +277,43 @@ def run_video_lecture_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A web idea whose source is a video is a lecture to read. No reader is
+    installed on this box, so each is answered NO_READER by name and no
+    document is published; `install_reader` is the one way one gets in.
+    """
+    from runtime.input_assembly import Batch
+
+    ideas = Batch(read=context.bus.reader("web-idea"))
+    publish_documents = context.bus.publisher_for("source-document")
+    reader = VideoLectureReader(
+        maximum_frames=int(context.number("video_maximum_frames")),
+        frame_change_threshold=context.number("video_frame_change_threshold"),
+    )
+    video_hosts = ("youtube.com", "youtu.be", "vimeo.com")
+
+    def read_references(_reader):
+        return tuple(
+            str(idea.source_url) for idea in ideas.payloads()
+            if idea.source_kind == "video" or any(host in str(idea.source_url) for host in video_hosts)
+        )
+
+    def publish(readings) -> None:
+        documents = tuple(reading for reading in readings if reading is not None and reading.is_a_document)
+        if documents:
+            publish_documents(documents)
+
+    return run_video_lecture_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_references=read_references,
+        publish_documents=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -288,3 +288,43 @@ def run_skill_loader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Available skills are observed with their section names; the index
+    carries names, not content, so a section's content here is its name
+    until content reaches this part. No question reaches it either --
+    `available-skill` is its only input -- so nothing is loaded and the
+    loader reports health and waits. Both are stated, not worked around.
+    """
+    from runtime.input_assembly import Batch
+
+    available = Batch(read=context.bus.reader("available-skill"))
+    publish_sections = context.bus.publisher_for("loaded-skill-section")
+    loader = SkillLoader(
+        character_budget=int(context.number("skill_loader_character_budget")),
+        minimum_fit=context.number("skill_loader_minimum_fit"),
+    )
+
+    def read_questions(_loader):
+        for entry in available.payloads():
+            loader.observe_available_skill(entry, {str(name): str(name) for name in entry.sections})
+        return ()
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_sections(kept)
+
+    return run_skill_loader(
+        loader=loader,
+        control_socket=context.control_socket,
+        read_questions=read_questions,
+        publish_sections=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

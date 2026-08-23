@@ -264,3 +264,62 @@ def run_skill_index(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every input is observed as it arrives; a stale-knowledge judgement
+    names a skill when its kind says so. Available skills go out once per
+    health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    conflicts = Batch(read=context.bus.reader("skill-conflict"))
+    stale = Batch(read=context.bus.reader("stale-knowledge"))
+    backtests = Batch(read=context.bus.reader("skill-backtest"))
+    provenance = Batch(read=context.bus.reader("skill-provenance"))
+    versions = Batch(read=context.bus.reader("skill-version"))
+    publish_available = context.bus.publisher_for("available-skill")
+    index = SkillIndex(minimum_backtest_score=context.number("skill_minimum_backtest_score"))
+    last_publish = [float("-inf")]
+
+    def read_skills(_index) -> None:
+        versions.payloads()
+        for skill in skills.payloads():
+            index.observe_skill(skill)
+        for conflict in conflicts.payloads():
+            if not conflict.is_agreement:
+                index.observe_conflict(conflict.left.skill_id, conflict.right.skill_id)
+        for judgement in stale.payloads():
+            if judgement.kind == "skill":
+                index.observe_stale(judgement.knowledge_key, judgement.was_pruned)
+        for backtest in backtests.payloads():
+            if backtest.score is not None:
+                index.observe_backtest(backtest.skill_id, float(backtest.score))
+        for record in provenance.payloads():
+            if record.source_reference:
+                index.observe_provenance(record.skill_id, record.source_reference)
+
+    def publish(items) -> None:
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_available(kept)
+            last_publish[0] = now
+
+    return run_skill_index(
+        index=index,
+        control_socket=context.control_socket,
+        read_skills=read_skills,
+        publish_available=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

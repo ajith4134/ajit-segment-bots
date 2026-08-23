@@ -262,3 +262,28 @@ def run_skill_version_keeper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    publish_versions = context.bus.publisher_for("skill-version")
+    keeper = SkillVersionKeeper()
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_versions(kept)
+
+    return run_skill_version_keeper(
+        keeper=keeper,
+        control_socket=context.control_socket,
+        read_skills=lambda _keeper: skills.payloads(),
+        publish_versions=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

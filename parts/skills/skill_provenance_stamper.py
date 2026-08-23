@@ -245,3 +245,34 @@ def run_skill_provenance_stamper(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1)."""
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    documents = Batch(read=context.bus.reader("source-document"))
+    publish_provenance = context.bus.publisher_for("skill-provenance")
+    stamper = SkillProvenanceStamper(minimum_matching_words=int(context.number("skill_provenance_minimum_matching_words")))
+
+    def read_skills(_stamper):
+        for document in documents.payloads():
+            stamper.observe_document(document.source_reference, str(document.content))
+        return tuple((skill, ()) for skill in skills.payloads())
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_provenance(kept)
+
+    return run_skill_provenance_stamper(
+        stamper=stamper,
+        control_socket=context.control_socket,
+        read_skills=read_skills,
+        publish_provenance=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

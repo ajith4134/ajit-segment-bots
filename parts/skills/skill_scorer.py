@@ -258,3 +258,64 @@ def run_skill_scorer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A load is observed under the question it answered as the decision it
+    went into; a version names the sections it recorded. A closed episode
+    is a decision's outcome, and nothing on this part's inputs ties an
+    episode to the question a load answered, so outcomes are read and
+    drained and every loaded section is scored on its loads alone --
+    stated here rather than joined by guesswork. Scores go out once per
+    health interval.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    loads = Batch(read=context.bus.reader("loaded-skill-section"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    versions = Batch(read=context.bus.reader("skill-version"))
+    publish_usefulness = context.bus.publisher_for("skill-usefulness")
+    scorer = SkillScorer(
+        minimum_decisions=int(context.number("decoding_minimum_trades")),
+        usefulness_threshold=context.number("skill_useful_threshold"),
+        base_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    current_version: dict[str, str] = {}
+    last_publish = [float("-inf")]
+
+    def read_loads_and_outcomes(_scorer) -> None:
+        episodes.payloads()
+        for version in versions.payloads():
+            if version.is_current:
+                current_version[version.skill_id] = version.version
+        for load in loads.payloads():
+            for section in load.sections:
+                version = current_version.get(section.skill_id, "1")
+                scorer.observe_section_exists(section.skill_id, section.section, version)
+                scorer.observe_load(load.question, section.skill_id, section.section, version, int(section.characters))
+
+    def publish(items) -> None:
+        now = _time.monotonic()
+        if now - last_publish[0] < context.health_interval_seconds:
+            return
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_usefulness(kept)
+            last_publish[0] = now
+
+    return run_skill_scorer(
+        scorer=scorer,
+        control_socket=context.control_socket,
+        read_loads_and_outcomes=read_loads_and_outcomes,
+        publish_usefulness=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

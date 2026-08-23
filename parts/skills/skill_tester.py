@@ -320,3 +320,80 @@ def run_skill_tester(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every closed episode, and every episode the store recalls, is a real
+    trade the skill is replayed over. A skill's rule is read as the
+    detector reads it -- a measurement, above or below, a number -- and
+    applies to an episode when its conditions carry that measurement on
+    that side; a skill with no rule of that shape never fires, which the
+    tester reports by name.
+    """
+    import re
+
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    recalls = Batch(read=context.bus.reader("recalled-episode"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
+    publish_backtests = context.bus.publisher_for("skill-backtest")
+    tester = SkillTester(
+        minimum_episodes=int(context.number("decoding_minimum_trades")),
+        minimum_firings=int(context.number("skill_minimum_firings")),
+        help_threshold=context.number("hypothesis_working_threshold"),
+        prior_help_rate=context.number("learning_prior_hit_rate"),
+        prior_weight=context.number("learning_prior_weight"),
+        half_life_observations=context.number("learning_half_life_observations"),
+    )
+    rule_shape = re.compile(r"^(?P<measurement>.+?)\s+(?P<comparison>above|below)\s+(?P<threshold>-?\d+(?:\.\d+)?)", re.IGNORECASE)
+    seen_episodes: set[str] = set()
+
+    def rule_of(skill):
+        parsed = []
+        for text in skill.decision_rules:
+            match = rule_shape.match(str(text).strip())
+            if match is not None:
+                parsed.append((match.group("measurement").strip().lower().replace(" ", "_"), match.group("comparison").lower(), float(match.group("threshold"))))
+
+        def applies_to(episode):
+            conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+            verdicts = []
+            for measurement, comparison, threshold in parsed:
+                value = conditions.get(measurement)
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                verdicts.append(value > threshold if comparison == "above" else value < threshold)
+            return any(verdicts) if verdicts else None
+
+        return applies_to
+
+    def read_skills_and_episodes(_tester):
+        for episode in episodes.payloads():
+            if episode.episode_id not in seen_episodes:
+                seen_episodes.add(episode.episode_id)
+                tester.observe_episode(episode)
+        for recall in recalls.payloads():
+            for recalled in recall.episodes:
+                if recalled.episode.episode_id not in seen_episodes:
+                    seen_episodes.add(recalled.episode.episode_id)
+                    tester.observe_episode(recalled.episode)
+        return tuple((skill, rule_of(skill), int(skill.distilled_at_ns)) for skill in skills.payloads())
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_backtests(kept)
+
+    return run_skill_tester(
+        tester=tester,
+        control_socket=context.control_socket,
+        read_skills_and_episodes=read_skills_and_episodes,
+        publish_backtests=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

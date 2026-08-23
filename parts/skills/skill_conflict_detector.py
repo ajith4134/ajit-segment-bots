@@ -233,3 +233,66 @@ def run_skill_conflict_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A skill's decision rules are read for the shape the detector compares:
+    a measurement, above or below, a number, and an action -- the words
+    before the comparison, the comparison, the first number after it, and
+    the words after that. A rule that does not state a comparison and a
+    number is not one the detector can check, and is passed over.
+    """
+    import re
+
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    publish_conflicts = context.bus.publisher_for("skill-conflict")
+    detector = SkillConflictDetector(threshold_tolerance=context.number("contradiction_value_tolerance"))
+    rule_shape = re.compile(r"^(?P<measurement>.+?)\s+(?P<comparison>above|below)\s+(?P<threshold>-?\d+(?:\.\d+)?)\s*%?\s*(?P<action>.*)$", re.IGNORECASE)
+    seen: set[tuple[str, str]] = set()
+
+    def rule_from(skill, section: str, text: str) -> SkillRule | None:
+        match = rule_shape.match(text.strip())
+        if match is None:
+            return None
+        regime = None
+        action = match.group("action").strip() or "act"
+        if " in the " in action and action.endswith(" regime"):
+            action, _, regime = action.partition(" in the ")
+            regime = regime[: -len(" regime")]
+        return SkillRule(
+            skill_id=skill.skill_id, section=section, measurement=match.group("measurement").strip().lower(),
+            comparison=match.group("comparison").lower(), threshold=float(match.group("threshold")),
+            action=action.strip().lower(), regime=regime, text=text,
+        )
+
+    def read_skills(_detector) -> None:
+        for skill in skills.payloads():
+            for text in skill.decision_rules:
+                key = (skill.skill_id, str(text))
+                if key in seen:
+                    continue
+                seen.add(key)
+                section = next((name for name, content in skill.sections.items() if str(text) in str(content)), "rules")
+                rule = rule_from(skill, section, str(text))
+                if rule is not None:
+                    detector.observe_rule(rule)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_conflicts(kept)
+
+    return run_skill_conflict_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_skills=read_skills,
+        publish_conflicts=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

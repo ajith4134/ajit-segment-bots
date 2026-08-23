@@ -256,3 +256,49 @@ def run_skill_refresher(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Usefulness and staleness are observed as they arrive, and every skill
+    touched in a tick is considered. No source reference reaches this
+    part, so a skill's source is unknown here until one does.
+    """
+    from runtime.input_assembly import Batch
+
+    usefulness = Batch(read=context.bus.reader("skill-usefulness"))
+    stale = Batch(read=context.bus.reader("stale-knowledge"))
+    publish_requests = context.bus.publisher_for("skill-refresh-request")
+    refresher = SkillRefresher(
+        useful_threshold=context.number("skill_useful_threshold"),
+        settled_after_unchanged=int(context.number("skill_settled_after_unchanged")),
+    )
+
+    def read_skills(_refresher):
+        touched: set[str] = set()
+        for score in usefulness.payloads():
+            if score.usefulness is not None:
+                refresher.observe_usefulness(score.skill_id, float(score.usefulness))
+                touched.add(score.skill_id)
+        for judgement in stale.payloads():
+            if judgement.kind == "skill":
+                refresher.observe_stale(judgement.knowledge_key, judgement.was_pruned)
+                touched.add(judgement.knowledge_key)
+        return tuple(sorted(touched))
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None and item.should_be_refreshed)
+        if kept:
+            publish_requests(kept)
+
+    return run_skill_refresher(
+        refresher=refresher,
+        control_socket=context.control_socket,
+        read_skills=read_skills,
+        publish_requests=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

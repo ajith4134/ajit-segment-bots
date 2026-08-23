@@ -263,3 +263,49 @@ def run_skill_composer(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every new skill is offered for composition with every skill already
+    held that shares a rule with it; a knowledge link of the contradicting
+    kind between two skills is a conflict the composer refuses across. A
+    composed skill comes back on the same channel and is held like any
+    other, which the composer's own already-composed record bounds.
+    """
+    from runtime.input_assembly import Batch
+
+    skills = Batch(read=context.bus.reader("skill"))
+    links = Batch(read=context.bus.reader("knowledge-link"))
+    publish_skills = context.bus.publisher_for("skill")
+    composer = SkillComposer(minimum_agreed_rules=int(context.number("skill_minimum_agreed_rules")))
+    held: dict[str, object] = {}
+
+    def read_skills(_composer):
+        for link in links.payloads():
+            if link.kind == "contradicts":
+                composer.observe_conflict(str(link.left), str(link.right), link.reason)
+        pairs = []
+        for skill in skills.payloads():
+            for other in held.values():
+                if other.skill_id != skill.skill_id and composer.agreed_rules(other, skill):
+                    pairs.append((other, skill))
+            held[skill.skill_id] = skill
+        return tuple(pairs)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_skills(kept)
+
+    return run_skill_composer(
+        composer=composer,
+        control_socket=context.control_socket,
+        read_skills=read_skills,
+        publish_skills=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

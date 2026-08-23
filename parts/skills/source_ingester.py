@@ -221,3 +221,53 @@ def run_source_ingester(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A research finding is ingested as a paper-kind source under its first
+    reference: its statement and its evidence are the content. A refresh
+    request names a source to go back to, and no fetcher reaches this
+    part, so requests are read and drained -- the fetchers upstream answer
+    them.
+    """
+    from runtime.input_assembly import Batch
+
+    findings = Batch(read=context.bus.reader("research-finding"))
+    refreshes = Batch(read=context.bus.reader("skill-refresh-request"))
+    publish_documents = context.bus.publisher_for("source-document")
+    ingester = SourceIngester(
+        minimum_characters=int(context.number("embedding_minimum_characters")),
+        maximum_characters=int(context.number("source_maximum_characters")),
+    )
+
+    def read_findings(_ingester):
+        refreshes.payloads()
+        offers = []
+        for finding in findings.payloads():
+            references = tuple(str(r) for r in finding.source_references)
+            if not references:
+                continue
+            evidence = "\n".join(str(item) for item in finding.evidence)
+            offers.append({
+                "title": finding.topic, "content": f"{finding.statement}\n{evidence}", "kind": PAPER,
+                "source_reference": references[0], "published_at_ns": int(finding.found_at_ns),
+            })
+        return tuple(offers)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_documents(kept)
+
+    return run_source_ingester(
+        ingester=ingester,
+        control_socket=context.control_socket,
+        read_findings=read_findings,
+        publish_documents=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

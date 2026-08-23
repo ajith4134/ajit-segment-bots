@@ -278,3 +278,34 @@ def run_community_chat_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    No chat reader is installed on this box and this part consumes
+    nothing, so no channel is read and nothing is published; it ticks on
+    its health interval and reports that state.
+    """
+    publish_documents = context.bus.publisher_for("source-document")
+    reader = CommunityChatReader(
+        minimum_message_characters=int(context.number("chat_minimum_message_characters")),
+        reads_per_window=int(context.number("research_fetches_per_window")),
+        window_seconds=context.number("research_fetch_window_seconds"),
+    )
+
+    def publish(readings) -> None:
+        documents = tuple(reading for reading in readings if reading is not None and reading.is_a_document)
+        if documents:
+            publish_documents(documents)
+
+    return run_community_chat_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        read_channels=lambda: (),
+        publish_documents=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

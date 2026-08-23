@@ -3392,3 +3392,83 @@ note  = "operator, 2026-08-23: the share of a record one position may account fo
 value = 1000000.0
 unit  = "USDT"
 note  = "operator, 2026-08-23: the value below which a transfer is not a whale's. A million."
+
+[chat_minimum_message_characters]
+value = 40
+unit  = "characters"
+note  = "operator, 2026-08-23: the shortest chat message community-chat-reader keeps. Forty: below it there is nothing to distil."
+
+[skill_minimum_agreed_rules]
+value = 1
+unit  = "rules"
+note  = "operator, 2026-08-23: how many rules two skills must share before skill-composer composes them. One."
+
+[skill_minimum_distilled_items]
+value = 1
+unit  = "items"
+note  = "operator, 2026-08-23: how many traceable frameworks, rules or anti-patterns a distillation must yield to be a skill. One."
+
+[skill_asks_before_a_gap]
+value = 2
+unit  = "asks"
+note  = "operator, 2026-08-23: how many times a question must go unanswered before skill-gap-finder calls it a gap. Two: asked once is a question."
+
+[skill_gap_expire_after_seconds]
+value = 604800.0
+unit  = "seconds"
+note  = "operator, 2026-08-23: how long a gap nobody asks about stays open. A week."
+
+[skill_fetches_before_unanswerable]
+value = 3
+unit  = "fetches"
+note  = "operator, 2026-08-23: how many fetches against a gap may fail before it is unanswerable. Three."
+
+[skill_minimum_backtest_score]
+value = 0.5
+unit  = "score"
+note  = "operator, 2026-08-23: the backtest score below which skill-index does not offer a skill as usable. A half."
+
+[skill_loader_character_budget]
+value = 4000
+unit  = "characters"
+note  = "operator, 2026-08-23: how many characters of skill sections skill-loader may load into one decision. Four thousand, about a thousand tokens."
+
+[skill_loader_minimum_fit]
+value = 0.2
+unit  = "fit"
+note  = "operator, 2026-08-23: the fit below which a section does not answer a question. A fifth."
+
+[skill_provenance_minimum_matching_words]
+value = 3
+unit  = "words"
+note  = "operator, 2026-08-23: how many consecutive words a rule must share with a source span to be traced to it. Three."
+
+[skill_useful_threshold]
+value = 0.5
+unit  = "usefulness"
+note  = "operator, 2026-08-23: the usefulness below which a skill is not worth refreshing and above which it earns its space. A half."
+
+[skill_settled_after_unchanged]
+value = 3
+unit  = "refreshes"
+note  = "operator, 2026-08-23: how many refreshes without change settle a skill. Three."
+
+[skill_minimum_firings]
+value = 5
+unit  = "firings"
+note  = "operator, 2026-08-23: how many episodes a skill's rule must have fired on before skill-tester scores it. Five."
+
+[source_maximum_characters]
+value = 2000000
+unit  = "characters"
+note  = "operator, 2026-08-23: the largest source source-ingester holds. Two million, a long book."
+
+[video_maximum_frames]
+value = 40
+unit  = "frames"
+note  = "operator, 2026-08-23: how many frames video-lecture-reader keeps from a lecture. Forty."
+
+[video_frame_change_threshold]
+value = 0.1
+unit  = "fraction"
+note  = "operator, 2026-08-23: how much a frame's text must differ from the last kept one to be kept. A tenth."

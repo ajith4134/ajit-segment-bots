@@ -227,3 +227,61 @@ def run_skill_distiller(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A document is held and a request for its distillation goes out; the
+    items come back as a validated output for this part's purpose whose
+    value names the document and lists items. No model is configured in
+    phase 1, so every document waits.
+    """
+    from runtime.input_assembly import Batch
+
+    documents = Batch(read=context.bus.reader("source-document"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    publish_skills = context.bus.publisher_for("skill")
+    publish_requests = context.bus.publisher_for("llm-request")
+    distiller = SkillDistiller(minimum_items=int(context.number("skill_minimum_distilled_items")))
+    waiting: dict[str, object] = {}
+
+    def items_from(value: dict) -> tuple:
+        items = []
+        for raw in value.get("items", ()) or ():
+            if not isinstance(raw, dict):
+                continue
+            items.append(DistilledItem(
+                kind=str(raw.get("kind", DECISION_RULE)), text=str(raw.get("text", "")),
+                source_span=str(raw.get("source_span", "")), section=str(raw.get("section", "rules")),
+            ))
+        return tuple(items)
+
+    def read_documents(_distiller):
+        jobs = []
+        for document in documents.payloads():
+            waiting[document.document_id] = document
+            jobs.append((document, None))
+        for output in outputs.payloads():
+            if output.purpose != PURPOSE:
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            document = waiting.pop(str(value.get("document_id", "")), None)
+            if document is not None:
+                jobs.append((document, items_from(value)))
+        return tuple(jobs)
+
+    def publish_some(publish):
+        return lambda items: publish(tuple(items)) if items else None
+
+    return run_skill_distiller(
+        distiller=distiller,
+        control_socket=context.control_socket,
+        read_documents=read_documents,
+        publish_skills=publish_some(publish_skills),
+        publish_requests=publish_some(publish_requests),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

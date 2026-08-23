@@ -291,3 +291,52 @@ def run_skill_gap_finder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A load that answered its question closes the gap; a load that found
+    nothing, nothing usable, or nothing that fit opens or widens one. An
+    LLM request is a question asked, counted as unanswered until a load
+    for it says otherwise.
+    """
+    from runtime.input_assembly import Batch
+
+    loads = Batch(read=context.bus.reader("loaded-skill-section"))
+    requests = Batch(read=context.bus.reader("llm-request"))
+    publish_gaps = context.bus.publisher_for("skill-gap")
+    finder = SkillGapFinder(
+        asks_before_a_gap=int(context.number("skill_asks_before_a_gap")),
+        expire_after_seconds=context.number("skill_gap_expire_after_seconds"),
+        fetches_before_unanswerable=int(context.number("skill_fetches_before_unanswerable")),
+    )
+    because_of_state = {"no-section-answers-this-question": NOTHING_HELD,
+                        "every-skill-that-might-help-is-untested-or-contradicted": ONLY_UNUSABLE,
+                        "the-budget-was-spent-before-everything-that-fit-was-loaded": DID_NOT_FIT}
+
+    def read_questions(_finder) -> None:
+        for request in requests.payloads():
+            finder.observe_unanswered(str(request.instruction), NOTHING_HELD)
+        for load in loads.payloads():
+            if load.loaded_anything:
+                finder.observe_answered(load.question)
+            else:
+                excluded = tuple(load.skills_excluded) if isinstance(load.skills_excluded, dict) else ()
+                finder.observe_unanswered(load.question, because_of_state.get(load.state, NOTHING_HELD), excluded)
+
+    def publish(items) -> None:
+        kept = tuple(item for item in items if item is not None)
+        if kept:
+            publish_gaps(kept)
+
+    return run_skill_gap_finder(
+        finder=finder,
+        control_socket=context.control_socket,
+        read_questions=read_questions,
+        publish_gaps=publish,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
