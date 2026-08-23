@@ -69,6 +69,10 @@ class BoundedOrder:
     risk_allowed: float
     reason: str
     bounded_at_ns: int
+    # The decision this order serves. Carried so the stamper can give every
+    # order for one decision the same id, which is what makes a republished
+    # intent one order rather than one order per tick.
+    intent_id: str = ""
 
     @property
     def may_be_sent(self) -> bool:
@@ -189,6 +193,10 @@ class TradeCapitalBoundsGate:
             risk_allowed=sized_order.risk_allowed,
             reason=reason,
             bounded_at_ns=self._now_ns(),
+            # Straight through: bounding an order does not make it a different
+            # decision, and the id has to survive every step between the intent
+            # and the venue or it stops being an identity.
+            intent_id=getattr(sized_order, "intent_id", ""),
         )
 
     def _refusal(self, sized_order, bounds, outcome, reason) -> BoundedOrder:

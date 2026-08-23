@@ -68,6 +68,10 @@ class StamperStanding:
     already_stamped: int = 0
     collisions_seen: int = 0
     distinct_ids: int = 0
+    # Orders stamped from their own numbers because no decision id travelled with
+    # them. Counted because that id is what makes a republished intent one order
+    # rather than one per tick, and its absence is not visible any other way.
+    stamped_without_a_decision: int = 0
 
 
 class OrderIdempotencyStamper:
@@ -82,8 +86,26 @@ class OrderIdempotencyStamper:
         self, venue_id: str, symbol: str, side: str, quantity: float,
         entry_price: float, intent_id: str,
     ) -> str:
-        """The id for one order, computed the same way every time it is asked."""
-        body = f"{venue_id}|{symbol}|{side}|{quantity!r}|{entry_price!r}|{intent_id}"
+        """The id for one order, computed the same way every time it is asked.
+
+        **From the decision, never from the market.** Quantity and entry price
+        were part of this hash until 2026-08-23, and both move on every print --
+        so a standing intent, republished tick after tick as the arbiter is
+        designed to republish it, produced a different id every second and the
+        book filled each one as a new order. Measured on the live run at 09:01: a
+        single ENAUSDT long became 13 orders and 13 fills, 12,982 USDT of notional
+        against a 1,000 per-trade cap. The venue would have done exactly the same.
+
+        Where no decision id is supplied the order's own numbers are still used,
+        because an id derived from a partial key would collide across genuinely
+        different orders -- but a caller in that position is asking for a
+        best-effort id, and the standing counts it.
+        """
+        if intent_id:
+            body = f"{intent_id}"
+        else:
+            self.standing.stamped_without_a_decision += 1
+            body = f"{venue_id}|{symbol}|{side}|{quantity!r}|{entry_price!r}"
         return hashlib.sha256(body.encode("utf-8")).hexdigest()[:CLIENT_ID_LENGTH]
 
     def stamp(self, bounded_order, intent_id: str, existing_id: str | None = None) -> StampedOrder:
@@ -183,11 +205,13 @@ def start_part(context) -> int:
     publish_stamped = context.bus.publisher_for("stamped-order")
 
     def read_bounded_orders():
-        # The intent id and any existing id travel with the order itself. Nothing
-        # upstream in this run assigns either, so both are None and the stamper
-        # derives an id from the order's own fields, which is its documented path.
+        # The intent id and any existing id travel with the order itself. The
+        # decision id is set by position-sizer from the intent and carried through
+        # the bounds gate, so an order for a standing intent keeps one identity
+        # however many times that intent is republished.
         return tuple(
-            (order, getattr(order, "intent_id", None), getattr(order, "client_order_id", None))
+            (order, getattr(order, "intent_id", "") or None,
+             getattr(order, "client_order_id", None))
             for order in bounded.payloads()
         )
 

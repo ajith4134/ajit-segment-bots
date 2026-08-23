@@ -399,3 +399,98 @@ def test_the_sizer_skips_a_stand_aside_intent_and_counts_it():
     assert "intents_that_stood_aside" in sizer_part.describe_sizing(
         sizer_part.PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0005)
     )
+
+
+# ---- one decision is one order, however often it is republished ----------------
+
+def test_a_standing_intent_republished_as_the_market_moves_is_one_order(real_trades):
+    """The defect that turned one decision into thirteen positions.
+
+    The arbiter publishes a standing opinion tick after tick -- an opinion still
+    held is still published -- so every part downstream sees the same decision many
+    times. `order-idempotency-stamper` derived the client id from the order's
+    quantity and entry price, and both move on every print, so each republish got a
+    fresh id and the paper book filled it as a new order.
+
+    Measured on the live run of 2026-08-23 09:01: one ENAUSDT long produced 13
+    orders and 13 fills -- 12,982 USDT of notional against a 1,000 per-trade cap.
+    A real venue would have done exactly the same, because a venue also
+    deduplicates on the client id it is given.
+
+    The prices here are real consecutive BTCUSDT trades (RL-063): the drift that
+    breaks the old id is the market's own, not a number chosen to break it.
+    """
+    from parts.paper_live_trading.order_idempotency_stamper import OrderIdempotencyStamper
+    from runtime.trade_intent import OPEN, TradeIntent
+    from runtime.learned_estimator import Estimate
+
+    intent = TradeIntent(
+        venue_id=VENUE, symbol=SYMBOL, side="long", action=OPEN,
+        conviction=Estimate(
+            value=0.58, is_fitted=True, observations=1408, prior=0.5,
+            was_clamped=False, bound_low=None, bound_high=None, reason="measured",
+        ),
+        horizon_seconds=60.0, stop_price=0.0, agreement="only-one-bot-had-a-view",
+        contributing_bots=("bull-bot",), dissenting_bots=(), opinion_weights={},
+        evidence={}, reason="", formed_at_ns=1,
+    )
+
+    stamper = OrderIdempotencyStamper()
+    book = PaperFillSimulator(taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE)
+
+    class BoundedForThisTick:
+        """What the gate publishes: the same decision, priced at this tick."""
+
+        def __init__(self, price, quantity, intent_id):
+            self.venue_id, self.symbol, self.side = VENUE, SYMBOL, BUY
+            self.entry_price, self.quantity = price, quantity
+            self.stop_price = price * 0.99
+            self.intent_id = intent_id
+            self.client_order_id = None
+
+    filled = 0
+    ids = set()
+    for trade in real_trades[:25]:
+        # The size drifts with the price exactly as the sizer's does: a fixed risk
+        # budget over a stop distance that moves.
+        quantity = round(1_000.0 / trade.price, 6)
+        order = BoundedForThisTick(trade.price, quantity, intent.decision_id)
+        stamped = stamper.stamp(order, order.intent_id)
+        ids.add(stamped.client_order_id)
+        result = book.simulate(
+            client_order_id=stamped.client_order_id, venue_id=VENUE, symbol=SYMBOL,
+            side=BUY, quantity=quantity, order_type=MARKET, limit_price=None,
+            money_mode="paper", is_in_flight=False, fill_price_estimate=None,
+            market_price=trade.price, stop_price=None,
+        )
+        if result.did_fill:
+            filled += 1
+
+    assert len(ids) == 1, (
+        f"one standing decision produced {len(ids)} order ids as the price moved; that is "
+        f"the defect, and the venue would open a position for each of them"
+    )
+    assert filled == 1, (
+        f"the book filled {filled} times for one decision; a venue holding one client id "
+        f"rejects the duplicates instead of opening more positions"
+    )
+
+
+def test_an_order_with_no_decision_id_is_still_stamped_and_counted():
+    """The fallback stays, because an id derived from a partial key would collide.
+
+    But its use is counted: the decision id is what makes a republished intent one
+    order, and its absence is not visible any other way.
+    """
+    from parts.paper_live_trading.order_idempotency_stamper import OrderIdempotencyStamper
+
+    stamper = OrderIdempotencyStamper()
+
+    class Anonymous:
+        venue_id, symbol, side = VENUE, SYMBOL, BUY
+        quantity, entry_price, stop_price = 1.0, 100.0, 99.0
+        intent_id, client_order_id = "", None
+
+    stamped = stamper.stamp(Anonymous(), None)
+    assert stamped.client_order_id
+    assert stamper.standing.stamped_without_a_decision == 1

@@ -91,6 +91,25 @@ class TradeIntent:
         return self.side in (SHORT, SELL)
 
     @property
+    def decision_id(self) -> str:
+        """What makes two republished intents the same decision.
+
+        The arbiter publishes a standing opinion tick after tick -- an opinion
+        still held is still published -- so every part downstream sees the same
+        decision many times. Identity therefore cannot come from anything that
+        moves with the market, and until 2026-08-23 the order id was derived from
+        the order's quantity and entry price. Both drift on every tick, so one
+        decision became a new order every second: on the live run at 09:01 a
+        single ENAUSDT long produced 13 orders and 13 fills, 12,982 USDT of
+        notional against a 1,000 per-trade cap.
+
+        Venue, symbol, side and action: the decision itself, with nothing in it
+        that the next print can change. A bot that changes its mind changes one of
+        these, and a bot that does not is still asking for the same trade.
+        """
+        return f"{self.venue_id}|{self.symbol}|{self.side}|{self.action}"
+
+    @property
     def is_actionable(self) -> bool:
         return self.action != STAND_ASIDE
 

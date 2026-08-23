@@ -80,6 +80,10 @@ class SizedOrder:
     leverage: float
     reason: str
     sized_at_ns: int
+    # The decision this order serves. Carried so the stamper can give every
+    # order for one decision the same id, which is what makes a republished
+    # intent one order rather than one order per tick.
+    intent_id: str = ""
 
     @property
     def is_tradeable(self) -> bool:
@@ -127,12 +131,13 @@ class PositionSizer:
         minimum_quantity: float,
         maximum_quantity: float | None = None,
         size_hint: float | None = None,
+        intent_id: str = "",
     ) -> SizedOrder:
         if risk_limit_fraction <= NO_RISK_ALLOWED:
             self.standing.refused_no_limit += 1
             return self._refusal(
                 venue_id, symbol, side, entry_price, stop_price, REFUSED_NO_LIMIT, leverage,
-                "the binding risk limit allows nothing to be risked",
+                "the binding risk limit allows nothing to be risked", intent_id,
             )
 
         if price_increment is None or price_increment <= 0:
@@ -142,7 +147,7 @@ class PositionSizer:
             self.standing.refused_no_increment += 1
             return self._refusal(
                 venue_id, symbol, side, entry_price, stop_price, REFUSED_NO_INCREMENT, leverage,
-                "no price increment is known for this symbol",
+                "no price increment is known for this symbol", intent_id,
             )
 
         entry = self._snap_price(entry_price, price_increment, side)
@@ -151,7 +156,7 @@ class PositionSizer:
             self.standing.refused_stop_invalid += 1
             return self._refusal(
                 venue_id, symbol, side, entry, stop, REFUSED_STOP_INVALID, leverage,
-                f"a {side} stop at {stop} is on the wrong side of an entry at {entry}",
+                f"a {side} stop at {stop} is on the wrong side of an entry at {entry}", intent_id,
             )
 
         # The loss per unit if the stop is hit, including the slippage past it
@@ -236,12 +241,15 @@ class PositionSizer:
             return quantity
         return round(math.floor(quantity / increment) * increment, 12)
 
-    def _refusal(self, venue_id, symbol, side, entry, stop, outcome, leverage, reason) -> SizedOrder:
+    def _refusal(
+        self, venue_id, symbol, side, entry, stop, outcome, leverage, reason, intent_id=""
+    ) -> SizedOrder:
         return SizedOrder(
             venue_id=venue_id, symbol=symbol, side=side, quantity=0.0,
             entry_price=entry, stop_price=stop, outcome=outcome,
             risk_allowed=0.0, risk_at_stop=0.0, fees_charged=0.0, notional=0.0,
             leverage=leverage, reason=reason, sized_at_ns=self._now_ns(),
+            intent_id=intent_id,
         )
 
 
@@ -385,6 +393,9 @@ def start_part(context) -> int:
                 {
                     "venue_id": intent.venue_id,
                     "symbol": intent.symbol,
+                    # The decision this order serves, so every order for one
+                    # standing intent carries one id all the way to the venue.
+                    "intent_id": intent.decision_id,
                     # Translated once, here, where the brain's vocabulary meets the
                     # venue's: the sizer reasons about an order, and an untranslated
                     # "long" would read as not-a-buy and put the stop on the wrong
