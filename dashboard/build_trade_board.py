@@ -756,25 +756,22 @@ def probe_learning() -> ProbeResult:
     checkpointing existed, which is different from a model that has run and
     learned nothing, and both are different from a trained one.
     """
-    document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
-    root = pathlib.Path(str(document.read_value("learned_state_root"))).expanduser()
     needed = int(load_settings_document(
         settings_directory() / "runtime.toml", "runtime"
     ).read_value("bull_minimum_training_observations"))
-    path = root / "bull-conviction-model.conviction.json"
-    if not path.exists():
+    checkpoint, path = read_learned_checkpoint("bull-conviction-model.conviction")
+    if checkpoint is None:
         return ProbeResult(
             "Learning progress",
             UNMEASURED,
             "the model has not checkpointed",
-            f"nothing at {path}; bull-conviction-model writes its first checkpoint on its "
-            f"first tick, so this means the part has not run since checkpointing existed",
+            f"nothing readable at {path}; bull-conviction-model writes its first checkpoint "
+            f"on its first tick, so this means the part has not run since checkpointing existed",
         )
     try:
-        checkpoint = json.loads(path.read_text())
         state = checkpoint["state"]
         model = state["models"][state["live"]]
-    except (OSError, ValueError, KeyError) as unreadable:
+    except (KeyError, TypeError) as unreadable:
         return ProbeResult(
             "Learning progress", FAILING, "the checkpoint could not be read", f"{path}: {unreadable}"
         )
@@ -792,6 +789,81 @@ def probe_learning() -> ProbeResult:
         return ProbeResult("Learning progress", OK, f"trained on {trained}", proof)
     return ProbeResult(
         "Learning progress", WAITING, f"{trained} of {needed} labelled outcomes", proof
+    )
+
+
+def read_learned_checkpoint(name: str) -> tuple[dict | None, str]:
+    """One learned part's checkpoint, or why there is nothing to read.
+
+    Every learned part in this system writes the same kind of document to the same
+    directory, so one reader serves them all -- and the number a tile shows is the
+    number the part itself restores from, never a second count kept for the board.
+    """
+    document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    root = pathlib.Path(str(document.read_value("learned_state_root"))).expanduser()
+    path = root / f"{name}.json"
+    if not path.exists():
+        return None, str(path)
+    try:
+        return json.loads(path.read_text()), str(path)
+    except (OSError, ValueError) as unreadable:
+        return None, f"{path}: {unreadable}"
+
+
+def probe_exit_plans() -> ProbeResult:
+    """How far the bot is from the first exit plan it has ever been able to build.
+
+    The binding constraint after the conviction model becomes trained, and it was
+    invisible until 2026-08-23: `bull-exit-plan-proposer` refuses without a fitted
+    excursion profile, the gate is **per symbol and per side**, and a healthy
+    total can be thirty symbols with four claims each. So this reports the symbol
+    closest to the bar rather than the total, because the total is the number that
+    reads as nearly-there when the wait has barely started (Rule 8).
+    """
+    needed = int(load_settings_document(
+        settings_directory() / "runtime.toml", "runtime"
+    ).read_value("signal_excursion_minimum_claims"))
+    checkpoint, where = read_learned_checkpoint("signal-excursion-profiler.excursions")
+    if checkpoint is None:
+        return ProbeResult(
+            "Exit plans",
+            UNMEASURED,
+            "the profiler has not checkpointed",
+            f"nothing readable at {where}; signal-excursion-profiler writes its first "
+            f"checkpoint on its first tick, so this means the part has not run",
+        )
+
+    adverse = (checkpoint.get("state") or {}).get("adverse") or {}
+    counts = {key: len(values) for key, values in adverse.items()}
+    fitted = sorted(key for key, count in counts.items() if count >= needed)
+    saved_at = as_time(checkpoint.get("saved_at_ns"))
+    closest = max(counts.items(), key=lambda item: item[1], default=None)
+
+    if fitted:
+        return ProbeResult(
+            "Exit plans",
+            OK,
+            f"{len(fitted)} symbol/side(s) can be planned",
+            f"{where}, saved {saved_at} UTC: {', '.join(fitted[:6])} each have {needed}+ "
+            f"settled claims that came right, which is what a stop distance is measured from",
+        )
+    if closest is None:
+        return ProbeResult(
+            "Exit plans",
+            WAITING,
+            "no claim has come right yet",
+            f"{where}, saved {saved_at} UTC: the profiler has recorded no settled claim that "
+            f"came right, and only those are measured -- how far price runs when a call was "
+            f"wrong is unbounded and would place every stop too far away",
+        )
+    key, count = closest
+    return ProbeResult(
+        "Exit plans",
+        WAITING,
+        f"{count} of {needed} on the closest symbol",
+        f"{where}, saved {saved_at} UTC: {key} is nearest, with {count} settled claim(s) that "
+        f"came right of the {needed} needed; {len(counts)} symbol/side(s) are accumulating. "
+        f"The gate is per symbol, so the total across all of them is not the wait",
     )
 
 
@@ -818,6 +890,7 @@ def run_all_probes():
         probe_journal_chain(entries, unreadable, journal_path),
         probe_chain_continuity(entries),
         probe_learning(),
+        probe_exit_plans(),
     ]
     return results, trades, journal_path, live_from_ns, closed
 

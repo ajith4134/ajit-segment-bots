@@ -488,3 +488,65 @@ def test_an_open_position_says_what_capital_went_into_it(board):
     assert trade.is_open is True
     assert trade.capital_in_quote == pytest.approx(774.192)
     assert "capital in (usdt)" in board.render_trades([trade], pathlib.Path("/tmp/journal.jsonl"))
+
+
+# ---- the wait that used to be invisible --------------------------------------
+
+def test_the_exit_plan_tile_reports_the_closest_symbol_not_the_total(board, monkeypatch):
+    """The gate is per symbol and per side, so the total is not the wait.
+
+    Thirty symbols with four settled claims each is a total of a hundred and
+    twenty and an exit plan for nobody. A tile showing the total would read as
+    nearly-there while the wait had barely started (Rule 8).
+    """
+    monkeypatch.setattr(board, "read_learned_checkpoint", lambda name: (
+        {
+            "saved_at_ns": 1_787_460_000_000_000_000,
+            "state": {"adverse": {f"binance-usdm|SYM{index}|long": [0.001] * 4 for index in range(30)}},
+        },
+        "/tmp/checkpoint.json",
+    ))
+    result = board.probe_exit_plans()
+    assert result.state == board.WAITING
+    assert "4 of" in result.value
+    assert "the total across all of them is not the wait" in result.proof
+
+
+def test_the_exit_plan_tile_turns_green_only_when_a_symbol_can_actually_be_planned(
+    board, monkeypatch
+):
+    needed = int(board.load_settings_document(
+        board.settings_directory() / "runtime.toml", "runtime"
+    ).read_value("signal_excursion_minimum_claims"))
+    monkeypatch.setattr(board, "read_learned_checkpoint", lambda name: (
+        {
+            "saved_at_ns": 1_787_460_000_000_000_000,
+            "state": {"adverse": {"binance-usdm|BTCUSDT|long": [0.001] * needed}},
+        },
+        "/tmp/checkpoint.json",
+    ))
+    result = board.probe_exit_plans()
+    assert result.state == board.OK
+    assert "binance-usdm|BTCUSDT|long" in result.proof
+
+
+def test_a_profiler_that_has_never_run_reads_as_unmeasured(board, monkeypatch):
+    monkeypatch.setattr(board, "read_learned_checkpoint", lambda name: (None, "/tmp/missing.json"))
+    result = board.probe_exit_plans()
+    assert result.state == board.UNMEASURED
+    assert "has not checkpointed" in result.value
+
+
+def test_no_claim_having_come_right_is_its_own_state(board, monkeypatch):
+    """Only claims that came right are measured, so an empty profile is expected.
+
+    It must not read as a broken part: how far price runs when a call was wrong is
+    unbounded, and a stop placed beyond it would make every loss the worst one.
+    """
+    monkeypatch.setattr(board, "read_learned_checkpoint", lambda name: (
+        {"saved_at_ns": 1_787_460_000_000_000_000, "state": {"adverse": {}}},
+        "/tmp/checkpoint.json",
+    ))
+    result = board.probe_exit_plans()
+    assert result.state == board.WAITING
+    assert "no claim has come right yet" in result.value

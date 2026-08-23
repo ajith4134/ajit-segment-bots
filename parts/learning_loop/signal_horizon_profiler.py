@@ -25,16 +25,25 @@ wrong, not of how long a position must be held to find out.
 
 from __future__ import annotations
 
+import pathlib
 import time
 from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.part_declaration import PartDeclaration
+from runtime.learned_state import (
+    STARTED_COLD_UNREADABLE,
+    CheckpointSchedule,
+    LearnedStateStore,
+)
 from runtime.part_process import run_part
 from runtime.trade_profiles import FROM_SETTLED_CLAIMS, HorizonProfile, quantile_of
 
 PART_ID = "signal-horizon-profiler"
+
+# What this part stores under its own name in the learned-state directory.
+COMPONENT = "horizons"
 
 PART_DECLARATION = PartDeclaration(
     part_id="signal-horizon-profiler",
@@ -67,6 +76,14 @@ class HorizonStanding:
     detectors_tracked: int = 0
     slowest_median_seconds: float = 0.0
     by_refusal: dict = field(default_factory=dict)
+    # Where this process's measurements came from, and what it has written
+    # since. On the standing rather than kept privately because "it started
+    # cold again" is exactly the fact an operator needs and the one a
+    # restart hides.
+    checkpoint_verdict: str | None = None
+    checkpoint_detail: str | None = None
+    checkpoint_saved_at_ns: int | None = None
+    checkpoints_written: int = 0
 
 
 class SignalHorizonProfiler:
@@ -154,6 +171,46 @@ class SignalHorizonProfiler:
         self.standing.by_refusal[reason] = self.standing.by_refusal.get(reason, 0) + 1
         return reason
 
+    # -- carrying what was measured across the off switch --------------------
+
+    @property
+    def claims_recorded(self) -> int:
+        return self.standing.claims_recorded
+
+    @property
+    def closest_to_fitted(self) -> tuple[str, int] | None:
+        """The detector nearest to having a usable horizon, and how many it has."""
+        if not self._durations:
+            return None
+        detector = max(self._durations, key=lambda name: len(self._durations[name]))
+        return detector, len(self._durations[detector])
+
+    @property
+    def detectors_fitted(self) -> int:
+        return sum(
+            1 for durations in self._durations.values()
+            if len(durations) >= self._minimum_claims
+        )
+
+    def learned_settings(self) -> dict:
+        return {"window": self._window, "minimum_claims": self._minimum_claims}
+
+    def state(self) -> dict:
+        return {
+            "durations": {
+                detector: list(values) for detector, values in sorted(self._durations.items())
+            },
+            "claims_recorded": self.standing.claims_recorded,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        self._durations = {
+            detector: deque(values, maxlen=self._window)
+            for detector, values in state["durations"].items()
+        }
+        self.standing.claims_recorded = int(state["claims_recorded"])
+        self.standing.detectors_tracked = len(self._durations)
+
 
 def describe_horizon_profiling(profiler: SignalHorizonProfiler) -> dict:
     return {
@@ -166,17 +223,48 @@ def describe_horizon_profiling(profiler: SignalHorizonProfiler) -> dict:
         "slowest_median_seconds": profiler.standing.slowest_median_seconds,
         "refused": profiler.standing.refused,
         "by_refusal": dict(profiler.standing.by_refusal),
+        "detectors_fitted": profiler.detectors_fitted,
+        "closest_to_fitted": profiler.closest_to_fitted,
     }
 
 
+
+def restore_or_start_cold(profiler, store, part_id: str) -> None:
+    """Adopt the previous process's measurements, or record why this one starts cold.
+
+    Never raises past a part's start: a checkpoint that cannot be adopted is a
+    reason to begin measuring again, not a reason to refuse to run. What it costs
+    is real -- the gate is per key and a restart that lost the counts would put
+    every symbol back to nothing -- so the reason is put on the standing rather
+    than swallowed.
+    """
+    restoration = store.restore(part_id, COMPONENT, profiler.learned_settings())
+    profiler.standing.checkpoint_saved_at_ns = restoration.saved_at_ns
+    if not restoration.was_restored:
+        profiler.standing.checkpoint_verdict = restoration.verdict
+        profiler.standing.checkpoint_detail = restoration.detail
+        return
+    try:
+        profiler.restore_state(restoration.state)
+    except (KeyError, TypeError, ValueError) as refusal:
+        profiler.standing.checkpoint_verdict = STARTED_COLD_UNREADABLE
+        profiler.standing.checkpoint_detail = (
+            f"{restoration.detail}, but it could not be adopted: {refusal}"
+        )
+        return
+    profiler.standing.checkpoint_verdict = restoration.verdict
+    profiler.standing.checkpoint_detail = restoration.detail
+
 def run_signal_horizon_profiler(
     profiler: SignalHorizonProfiler, control_socket, read_labels, publish_profiles,
-    health_interval_seconds: float, emit_health,
+    health_interval_seconds: float, emit_health, checkpoint=None,
 ) -> int:
     def tick() -> None:
         for label in read_labels():
             profiler.observe_label(label)
         publish_profiles(profiler.profile_all())
+        if checkpoint is not None:
+            checkpoint(profiler)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -194,14 +282,32 @@ def start_part(context) -> int:
     labels = Batch(read=context.bus.reader("training-label"))
     publish_profiles = context.bus.publisher_for("horizon-profile")
 
+    profiler = SignalHorizonProfiler(
+        window=int(context.number("signal_horizon_window")),
+        minimum_claims=int(context.number("signal_horizon_minimum_claims")),
+    )
+
+    store = LearnedStateStore(
+        pathlib.Path(str(context.setting("learned_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    restore_or_start_cold(profiler, store, PART_ID)
+    schedule = CheckpointSchedule(int(context.number("learned_state_checkpoint_interval")))
+
+    def checkpoint(profiler: SignalHorizonProfiler) -> None:
+        recorded = profiler.claims_recorded
+        if not schedule.is_due(recorded):
+            return
+        store.save(PART_ID, COMPONENT, profiler.state(), profiler.learned_settings())
+        schedule.record_written(recorded)
+        profiler.standing.checkpoints_written += 1
+
     return run_signal_horizon_profiler(
-        profiler=SignalHorizonProfiler(
-            window=int(context.number("signal_horizon_window")),
-            minimum_claims=int(context.number("signal_horizon_minimum_claims")),
-        ),
+        profiler=profiler,
         control_socket=context.control_socket,
         read_labels=labels.payloads,
         publish_profiles=publish_profiles,
         health_interval_seconds=context.health_interval_seconds,
         emit_health=context.emit_health,
+        checkpoint=checkpoint,
     )
