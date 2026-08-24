@@ -3130,6 +3130,20 @@
       "description": "Every symbol's latest price on one venue, each with the moment it printed, published on a fixed cadence rather than per trade.",
       "origin": "proposed",
       "added": "2026-08-24"
+    },
+    {
+      "id": "market-quote",
+      "name": "market quote",
+      "description": "One symbol's best bid and ask on one venue, with the size at each and the moment the venue stamped it. A quote exists whether or not the symbol traded, which is what separates it from a print.",
+      "origin": "proposed",
+      "added": "2026-08-24"
+    },
+    {
+      "id": "symbol-quote-frame",
+      "name": "symbol quote frame",
+      "description": "Every symbol's latest best bid and ask on one venue, each with the moment the venue stamped it, published on a fixed cadence rather than per quote.",
+      "origin": "proposed",
+      "added": "2026-08-24"
     }
   ],
   "features": [
@@ -5655,7 +5669,8 @@
         "implied-vol-surface",
         "liquidity-grade",
         "timed-intent",
-        "symbol-universe"
+        "symbol-universe",
+        "symbol-quote-frame"
       ],
       "produces": [
         "instrument-choice",
@@ -11914,6 +11929,55 @@
       "origin": "proposed",
       "evidence": "docs/proposals/sampled-price-levels-and-a-governor-that-acts.md",
       "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "venue-quote-stream-reader",
+      "name": "Venue quote stream reader",
+      "role": "read every symbol's live quote from one venue",
+      "category": "market-data-feed",
+      "consumes": [
+        "stream-plan",
+        "venue-standing"
+      ],
+      "produces": [
+        "market-quote",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "quote-level-sampler",
+      "name": "Quote level sampler",
+      "role": "publish every symbol's latest quote for one venue on a fixed cadence",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-quote"
+      ],
+      "produces": [
+        "symbol-quote-frame",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md",
+      "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
     }

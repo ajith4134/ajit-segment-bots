@@ -1,0 +1,7 @@
+833 trading linear symbols; args array is 17006 chars vs the 21,000 cap
+  subscribe ack: success=True 
+window 100s: 833 of 833 symbols quoted, 119076 updates
+  worst per-symbol gaps: [('BIIBUSDT', 83.5), ('USDEUSDT', 74.3), ('POPMARTUSDT', 65.2), ('AALUSDT', 58.9), ('ATUSDT', 55.9)]
+  never quoted in the window: 0  e.g. []
+
+[exited with code 0]

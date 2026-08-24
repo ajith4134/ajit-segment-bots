@@ -1,0 +1,15 @@
+window 99s, 768 symbols quoted, 10577 updates
+worst per-symbol quote gap:
+   GDXUSDT            62.2s   (3 updates)
+   NAVERUSDT          59.9s   (5 updates)
+   SAMSUNGEMUSDT      58.2s   (3 updates)
+   SNOWUSDT           48.9s   (4 updates)
+   LGELECTRONICSUSDT   48.2s   (5 updates)
+   BITOUSDT           43.5s   (3 updates)
+   CTKUSDT            42.9s   (5 updates)
+   TMFUSDT            42.6s   (3 updates)
+median symbol's worst gap 8.3s
+p95 of worst gaps 26.7s
+symbols that quoted exactly once in the window: 6
+
+[exited with code 0]

@@ -1,0 +1,11 @@
+!miniTicker@arr    /ws          ->    0 symbols       0 msgs
+!miniTicker@arr    /market/ws   ->  608 symbols      10 msgs
+!miniTicker@arr    /public/ws   ->    0 symbols       0 msgs
+!ticker@arr        /ws          ->    0 symbols       0 msgs
+!ticker@arr        /market/ws   ->  547 symbols      10 msgs
+!ticker@arr        /public/ws   ->    0 symbols       0 msgs
+!bookTicker        /ws          ->  693 symbols    1054 msgs
+!bookTicker        /market/ws   ->    0 symbols       0 msgs
+!bookTicker        /public/ws   ->  706 symbols    1130 msgs
+
+[exited with code 0]
