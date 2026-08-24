@@ -44,7 +44,9 @@ from runtime.venues.venue_adapter import (
     HeartbeatDiscipline,
     MessageFacts,
     NormalisedTrade,
+    QuoteChange,
     SequenceContinuity,
+    EVERY_SYMBOL,
     StreamRequest,
     SymbolListing,
     VenueAdapter,
@@ -58,6 +60,13 @@ VENUE_ID = "binance-usdm"
 STREAM_HOST = "wss://fstream.binance.com"
 MARKET_ROUTE = f"{STREAM_HOST}/market/ws"
 PUBLIC_ROUTE = f"{STREAM_HOST}/public/ws"
+# The quote stream answers on the bare path and is silent on both routed ones.
+# Measured 2026-08-24 across all three (measurements/2026-08-24-all-market-quotes/):
+# `!bookTicker` returned 693 symbols on /ws and nothing at all on /market/ws,
+# while `!miniTicker@arr` and `!ticker@arr` are the exact opposite. The routing
+# notice names the streams it moved and this is not among them, so the bare path
+# is the route rather than the absence of one.
+QUOTE_ROUTE = f"{STREAM_HOST}/ws"
 REST_HOST = "https://fapi.binance.com"
 CATALOGUE_URL = f"{REST_HOST}/fapi/v1/exchangeInfo"
 # Every symbol's rolling 24-hour statistics in one call. Weight 40 for the whole
@@ -85,6 +94,13 @@ _LIVE_CAPTURE = "live capture 2026-08-22, tests/captured/binance-usdm/"
 AGGREGATED_TRADE_STREAM = "aggTrade"
 CANDLE_STREAM_PREFIX = "kline"
 PARTIAL_BOOK_STREAM_PREFIX = "depth"
+QUOTE_STREAM = "bookTicker"
+# One subscription for the whole market, present and future. Measured 2026-08-24:
+# 693 symbols in ten seconds and 768 in ninety-nine, against a universe this venue
+# lists at 872. A symbol listed tomorrow arrives on it without a resubscribe,
+# which is the difference that matters -- naming symbols means a new listing is
+# invisible until the catalogue is re-read.
+EVERY_SYMBOL_QUOTE_STREAM = "!bookTicker"
 SUBSCRIBE_METHOD = "SUBSCRIBE"
 UNSUBSCRIBE_METHOD = "UNSUBSCRIBE"
 
@@ -92,6 +108,7 @@ UNSUBSCRIBE_METHOD = "UNSUBSCRIBE"
 TRADE_EVENT = "aggTrade"
 CANDLE_EVENT = "kline"
 BOOK_EVENT = "depthUpdate"
+QUOTE_EVENT = "bookTicker"
 
 # Binance's own error code for a rate-limit breach, and the shape its ban message
 # takes: "Way too many requests; IP banned until %s." -- the %s is an epoch in
@@ -216,6 +233,8 @@ class BinanceUsdmAdapter(VenueAdapter):
             return MARKET_ROUTE
         if stream_kind is StreamKind.BOOK:
             return PUBLIC_ROUTE
+        if stream_kind is StreamKind.QUOTE:
+            return QUOTE_ROUTE
         raise VenueMessageNotRecognised(
             f"{VENUE_ID} has no endpoint for stream kind {stream_kind!r}"
         )
@@ -236,6 +255,10 @@ class BinanceUsdmAdapter(VenueAdapter):
             levels = self.resolve_book_depth_levels(request.book_depth_levels)
             speed = self.slowest_partial_book_update_speed_ms()
             return f"{symbol}@{PARTIAL_BOOK_STREAM_PREFIX}{levels}@{speed}ms"
+        if request.stream_kind is StreamKind.QUOTE:
+            if request.symbol == EVERY_SYMBOL:
+                return EVERY_SYMBOL_QUOTE_STREAM
+            return f"{symbol}@{QUOTE_STREAM}"
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no stream for {request.stream_kind!r}")
 
     def resolve_book_depth_levels(self, requested_levels: int | None) -> int:
@@ -387,6 +410,18 @@ class BinanceUsdmAdapter(VenueAdapter):
                 sequence=int(message["u"]),
             )
 
+        if event == QUOTE_EVENT:
+            return MessageFacts(
+                stream_kind=StreamKind.QUOTE,
+                symbol=message["s"],
+                # `T` is when the venue's matching engine stamped the book state
+                # this quote describes; `E` is when it pushed the frame. The age
+                # of a quote is the whole reason to hold one, so it is measured
+                # from the market's moment rather than from the push.
+                venue_time_ns=int(message["T"]) * MILLISECONDS_TO_NANOSECONDS,
+                sequence=int(message["u"]),
+            )
+
         raise VenueMessageNotRecognised(
             f"{VENUE_ID} sent event {event!r}, which this adapter has no reading for. "
             f"That is this adapter being out of date, not a message to drop quietly."
@@ -421,6 +456,15 @@ class BinanceUsdmAdapter(VenueAdapter):
             return SequenceContinuity.CHAINED_TO_PREVIOUS
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.INCREMENTS_BY_ONE
+        if stream_kind is StreamKind.QUOTE:
+            # `u` on a bookTicker frame is the order book update id, which counts
+            # book events rather than quote events: it rises with every depth
+            # change and only some of those move the best level, so consecutive
+            # quotes for one symbol jump by however many updates happened in
+            # between. Non-decreasing is the honest promise. Declaring it
+            # increments-by-one would report a gap on nearly every message, which
+            # is the fastest way to hide a real one.
+            return SequenceContinuity.NON_DECREASING
         return SequenceContinuity.NOT_NUMBERED
 
     def read_candles(self, payload: bytes) -> tuple[NormalisedCandle, ...]:
@@ -467,6 +511,43 @@ class BinanceUsdmAdapter(VenueAdapter):
             sequence=int(message["u"]),
             venue_time_ns=int(message["T"]) * MILLISECONDS_TO_NANOSECONDS,
         )
+
+    def read_quote_changes(self, payload: bytes) -> tuple[QuoteChange, ...]:
+        """One best bid and ask per frame; this venue restates both sides every time.
+
+        `!bookTicker` sends one symbol per frame rather than an array, so a whole
+        market arrives as a stream of single-symbol frames. Every change it
+        produces is complete and flagged a snapshot, so a merge downstream has
+        nothing to remember for this venue -- which is a fact about Binance, not
+        an assumption the merge is allowed to make.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict) or message.get("e") != QUOTE_EVENT:
+            return ()
+        return (
+            QuoteChange(
+                venue_id=VENUE_ID,
+                symbol=message["s"],
+                bid_price=float(message["b"]),
+                bid_quantity=float(message["B"]),
+                ask_price=float(message["a"]),
+                ask_quantity=float(message["A"]),
+                venue_time_ns=int(message["T"]) * MILLISECONDS_TO_NANOSECONDS,
+                is_snapshot=True,
+            ),
+        )
+
+    def quote_stream_amends_rather_than_restates(self) -> bool:
+        """False: every frame carries both sides in full.
+
+        Measured 2026-08-24 -- every `!bookTicker` frame captured held b, B, a and
+        A, so nothing has to be remembered between messages to know the quote.
+        """
+        return False
+
+    def every_symbol_quote_topic(self) -> str | None:
+        """`!bookTicker`: one subscription, the whole market, no per-symbol cost."""
+        return EVERY_SYMBOL_QUOTE_STREAM
 
     def read_trades(self, payload: bytes) -> tuple[NormalisedTrade, ...]:
         """One aggregate trade per message, or none if this is not a trade message.

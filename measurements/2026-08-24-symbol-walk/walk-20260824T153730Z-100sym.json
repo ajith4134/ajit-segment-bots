@@ -1,0 +1,114 @@
+{
+ "measured_at_utc": "2026-08-24T15:37:30+00:00",
+ "captured_symbol_count": 100,
+ "tape": {
+  "binance-usdm": {
+   "symbols_written_in_window": 101,
+   "records_in_window": 421186,
+   "records_per_second": 701.98,
+   "newest_record_age_seconds": -4.0
+  },
+  "bybit-linear": {
+   "symbols_written_in_window": 101,
+   "records_in_window": 134219,
+   "records_per_second": 223.7,
+   "newest_record_age_seconds": -4.6
+  }
+ },
+ "heartbeats": {
+  "parts_reporting": 57,
+  "table_age_seconds": 0.0,
+  "input_loss": [],
+  "worst_staleness": [
+   [
+    "venue-trade-stream-reader",
+    1.2
+   ],
+   [
+    "part-appetite-meter",
+    1.01
+   ],
+   [
+    "signal-excursion-profiler",
+    1.01
+   ],
+   [
+    "capital-allotment-reader",
+    1.0
+   ],
+   [
+    "capital-settings-validator",
+    1.0
+   ]
+  ],
+  "sampler": {
+   "frames_published": 5090.0,
+   "frames_split": 0.0,
+   "largest_frame_symbols": 101.0,
+   "symbols_tracked": 202.0,
+   "trades_observed": 2012799.0,
+   "venues_tracked": 2.0
+  },
+  "planner": {
+   "held": 0.0,
+   "plans": 1472.0,
+   "refusals": 0.0,
+   "switched_off": 0.0,
+   "switched_on": 0.0
+  },
+  "actuator": {
+   "failed": 0.0,
+   "flipped": 0.0,
+   "plans_refused": 0.0
+  },
+  "hogs": {
+   "parts_seen": 56.0,
+   "reports": 0.0,
+   "uncontended_skips": 8745.0,
+   "unmeasured_parts": 0.0
+  },
+  "forecaster": {
+   "forecasts": 1467.0,
+   "growth_seen": 1235.0,
+   "last_seconds_to_exhaustion": 73575.23058156032
+  }
+ },
+ "scopes": {
+  "scopes": 57,
+  "total_memory_bytes": 1205911552,
+  "top_memory": [
+   {
+    "part_id": "venue-trade-stream-reader",
+    "memory_mb": 194.4
+   },
+   {
+    "part_id": "bull-exit-plan-proposer",
+    "memory_mb": 85.6
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "memory_mb": 85.3
+   },
+   {
+    "part_id": "regime-classifier",
+    "memory_mb": 23.4
+   },
+   {
+    "part_id": "trade-lifecycle-recorder",
+    "memory_mb": 21.5
+   },
+   {
+    "part_id": "symbol-catalogue-reader",
+    "memory_mb": 21.5
+   },
+   {
+    "part_id": "bull-feature-builder",
+    "memory_mb": 19.9
+   },
+   {
+    "part_id": "bull-conviction-model",
+    "memory_mb": 19.5
+   }
+  ]
+ }
+}

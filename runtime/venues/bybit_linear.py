@@ -42,7 +42,9 @@ from runtime.venues.venue_adapter import (
     MessageFacts,
     BookUpdate,
     NormalisedCandle,
+    EVERY_SYMBOL,
     NormalisedTrade,
+    QuoteChange,
     SequenceContinuity,
     StreamRequest,
     SymbolListing,
@@ -81,6 +83,7 @@ _LIVE_CAPTURE = "live capture 2026-08-22, tests/captured/bybit-linear/"
 TRADE_TOPIC_PREFIX = "publicTrade"
 CANDLE_TOPIC_PREFIX = "kline"
 BOOK_TOPIC_PREFIX = "orderbook"
+QUOTE_TOPIC_PREFIX = "tickers"
 SUBSCRIBE_OPERATION = "subscribe"
 UNSUBSCRIBE_OPERATION = "unsubscribe"
 PING_OPERATION = "ping"
@@ -234,7 +237,7 @@ class BybitLinearAdapter(VenueAdapter):
         venue (T-1) and because the venue that does split its endpoints is the
         one where forgetting costs a silent, healthy-looking connection.
         """
-        if stream_kind in (StreamKind.TRADE, StreamKind.CANDLE, StreamKind.BOOK):
+        if stream_kind in (StreamKind.TRADE, StreamKind.CANDLE, StreamKind.BOOK, StreamKind.QUOTE):
             return LINEAR_PUBLIC_STREAM
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no endpoint for {stream_kind!r}")
 
@@ -246,6 +249,16 @@ class BybitLinearAdapter(VenueAdapter):
             return f"{CANDLE_TOPIC_PREFIX}.{self.resolve_candle_interval(request.candle_interval)}.{symbol}"
         if request.stream_kind is StreamKind.BOOK:
             return f"{BOOK_TOPIC_PREFIX}.{self.resolve_book_depth_levels(request.book_depth_levels)}.{symbol}"
+        if request.stream_kind is StreamKind.QUOTE:
+            if request.symbol == EVERY_SYMBOL:
+                raise VenueMessageNotRecognised(
+                    f"{VENUE_ID} has no all-market quote topic, so every symbol is named. "
+                    f"A caller reaching here asked for one anyway -- ask "
+                    f"every_symbol_quote_topic() first, which answers None for this venue. "
+                    f"Subscribing to a symbol called '*' would look subscribed and deliver "
+                    f"nothing, which is the failure this refusal exists to prevent."
+                )
+            return f"{QUOTE_TOPIC_PREFIX}.{symbol}"
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no stream for {request.stream_kind!r}")
 
     def resolve_candle_interval(self, canonical_interval: str | None) -> str:
@@ -379,7 +392,86 @@ class BybitLinearAdapter(VenueAdapter):
             return SequenceContinuity.INCREMENTS_BY_ONE
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.NON_DECREASING
+        if stream_kind is StreamKind.QUOTE:
+            # `cs` on a tickers message is a cross sequence, the same counter the
+            # trade stream carries, and the venue promises no step size for it.
+            # Measured 2026-08-24 across 1 178 consecutive quotes on BTCUSDT and
+            # ETHUSDT: it never went backwards, and not one step was 1 -- the
+            # median step was 2 518 and the largest 11 876, because it counts
+            # matching-engine events rather than quote events. Declaring this
+            # increments-by-one would have reported a gap on every message.
+            return SequenceContinuity.NON_DECREASING
         return SequenceContinuity.NOT_NUMBERED
+
+    def read_quote_changes(self, payload: bytes) -> tuple[QuoteChange, ...]:
+        """What one tickers message says, which on a delta may be one side only.
+
+        Measured 2026-08-24, a real delta from this venue:
+
+            {"topic":"tickers.BTCUSDT","type":"delta",
+             "data":{"symbol":"BTCUSDT","bid1Price":"79114.50","bid1Size":"1.496"},
+             "cs":793092205004,"ts":1787590405983}
+
+        A bid, no ask. The absent side is reported as None -- not zero, which
+        would be a market nobody quoted, and not the last value seen, which this
+        adapter does not keep. Whoever assembles quotes merges; that is why
+        `quote_stream_amends_rather_than_restates` says so out loud.
+
+        A snapshot names both sides, but that is a property of the message rather
+        than of the type, so it is read the same way and reports itself complete.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict):
+            return ()
+        topic = message.get("topic")
+        if not topic or not topic.startswith(f"{QUOTE_TOPIC_PREFIX}."):
+            return ()
+        quote = message.get("data")
+        if not isinstance(quote, dict):
+            return ()
+
+        def number(field: str) -> float | None:
+            """The venue's number, or None when this message did not carry the field.
+
+            An empty string is treated as absent too: Bybit sends "" for a field it
+            has no value for, and float("") raises rather than meaning zero.
+            """
+            raw = quote.get(field)
+            if raw is None or raw == "":
+                return None
+            return float(raw)
+
+        return (
+            QuoteChange(
+                venue_id=VENUE_ID,
+                symbol=quote.get("symbol", topic.split(".")[-1]),
+                bid_price=number("bid1Price"),
+                bid_quantity=number("bid1Size"),
+                ask_price=number("ask1Price"),
+                ask_quantity=number("ask1Size"),
+                venue_time_ns=int(message["ts"]) * MILLISECONDS_TO_NANOSECONDS,
+                is_snapshot=message.get("type") == SNAPSHOT_MESSAGE_TYPE,
+            ),
+        )
+
+    def quote_stream_amends_rather_than_restates(self) -> bool:
+        """True: one snapshot, then deltas carrying only what moved.
+
+        Measured 2026-08-24. A reader that assumed otherwise would see a complete
+        quote once per subscription and nothing usable afterwards.
+        """
+        return True
+
+    def every_symbol_quote_topic(self) -> str | None:
+        """None: this venue has no wildcard, so every symbol is named.
+
+        Measured 2026-08-24: all 833 trading linear symbols named at once
+        serialise to 17 006 characters against this venue's 21 000-character cap,
+        and all 833 quoted within 100 seconds with none silent. That is 81% of the
+        cap and a fact about today's symbol names -- `does_topic_fit_connection`
+        is what a caller asks, never this measurement.
+        """
+        return None
 
     def read_candles(self, payload: bytes) -> tuple[NormalisedCandle, ...]:
         """Every kline entry in the batch; `confirm` is the closed flag.
@@ -531,6 +623,19 @@ class BybitLinearAdapter(VenueAdapter):
                 symbol=book.get("s", symbol),
                 venue_time_ns=venue_time_ns,
                 sequence=int(book["u"]),
+                resets_sequence=message.get("type") == SNAPSHOT_MESSAGE_TYPE,
+            )
+
+        if kind == QUOTE_TOPIC_PREFIX:
+            quote = message["data"]
+            return MessageFacts(
+                stream_kind=StreamKind.QUOTE,
+                symbol=quote.get("symbol", symbol),
+                venue_time_ns=venue_time_ns,
+                sequence=int(message["cs"]),
+                # The first message of a subscription restates everything; the rest
+                # amend. Marked rather than inferred, for the same reason the book
+                # marks it: a resnapshot is not a discontinuity to puzzle over.
                 resets_sequence=message.get("type") == SNAPSHOT_MESSAGE_TYPE,
             )
 

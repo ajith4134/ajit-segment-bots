@@ -445,6 +445,35 @@ def capture_binance_usdm(day: str) -> None:
         }
     )
 
+    # The all-market quote topic rather than one symbol's, because that is what
+    # the reader subscribes: `!bookTicker` covers every symbol listed now and
+    # every symbol listed later, and a fixture of one symbol would not show that
+    # the frames arrive one symbol at a time rather than as an array.
+    quote_url = adapter.stream_endpoint_url(StreamKind.QUOTE)
+    quote_topics = [adapter.every_symbol_quote_topic()]
+    quote_path = venue_directory / f"{day}-ws-bookticker-all-symbols.jsonl"
+    write_payload_lines(
+        quote_path,
+        asyncio.run(
+            capture_stream_payloads(
+                quote_url, adapter.subscribe_frame(quote_topics), STREAM_MESSAGE_COUNT
+            )
+        ),
+    )
+    record_in_manifest(
+        {
+            "path": str(quote_path.relative_to(HERE)),
+            "venue": venue,
+            "source": quote_url,
+            "subscribed": quote_topics,
+            "captured_on": day,
+            "how": "connect with the adapter's own url and subscribe frame, keep every frame "
+            "received including the acknowledgement. The bare route is deliberate and is "
+            "the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is "
+            "silent on /market/ws, which is the opposite of this venue's ticker streams",
+        }
+    )
+
     capture_catalogue_and_tickers(venue, day)
 
 
@@ -495,6 +524,20 @@ def capture_bybit_linear(day: str) -> None:
             None,
             "connect with the adapter's own url and subscribe frame, keep every frame "
             "received including the acknowledgement and the opening snapshot",
+        ),
+        (
+            # Captured until a delta arrives carrying a bid and no ask. That case
+            # is the entire reason the quote reader holds state, and a fixture
+            # sized by message count could contain forty deltas that all happen to
+            # carry both sides -- proving nothing about the one that does not.
+            "quote",
+            [topic(StreamKind.QUOTE)],
+            f"{day}-public-linear-tickers-through-one-sided-delta.jsonl",
+            lambda text: '"type":"delta"' in text.replace(" ", "") and '"ask1Price"' not in text,
+            "connect with the adapter's own url and subscribe frame, keep every frame until "
+            "one is a delta naming a bid and no ask, then four more -- so the fixture holds "
+            "the opening snapshot, ordinary deltas, and the one-sided delta the merge exists "
+            "for",
         ),
     ]
 

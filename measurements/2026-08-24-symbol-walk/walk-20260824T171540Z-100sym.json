@@ -1,0 +1,133 @@
+{
+ "measured_at_utc": "2026-08-24T17:15:40+00:00",
+ "captured_symbol_count": 100,
+ "tape": {
+  "binance-usdm": {
+   "symbols_written_in_window": 103,
+   "records_in_window": 377190,
+   "records_per_second": 628.65,
+   "newest_record_age_seconds": -12.8
+  },
+  "bybit-linear": {
+   "symbols_written_in_window": 102,
+   "records_in_window": 115167,
+   "records_per_second": 191.94,
+   "newest_record_age_seconds": -16.7
+  }
+ },
+ "heartbeats": {
+  "parts_reporting": 57,
+  "table_age_seconds": 0.1,
+  "input_loss": [
+   {
+    "part_id": "peak-excursion-tracker",
+    "loss": [
+     [
+      "market-data",
+      121
+     ]
+    ]
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "loss": [
+     [
+      "cointegrated-pair",
+      332858
+     ]
+    ]
+   }
+  ],
+  "worst_staleness": [
+   [
+    "spread-reversion-detector",
+    1.45
+   ],
+   [
+    "venue-trade-stream-reader",
+    1.17
+   ],
+   [
+    "fill-reconciler",
+    1.01
+   ],
+   [
+    "part-appetite-meter",
+    1.01
+   ],
+   [
+    "signal-excursion-profiler",
+    1.01
+   ]
+  ],
+  "sampler": {
+   "frames_published": 25798.0,
+   "frames_split": 0.0,
+   "largest_frame_symbols": 103.0,
+   "symbols_tracked": 205.0,
+   "trades_observed": 10244807.0,
+   "venues_tracked": 2.0
+  },
+  "planner": {
+   "held": 0.0,
+   "plans": 7361.0,
+   "refusals": 0.0,
+   "switched_off": 0.0,
+   "switched_on": 0.0
+  },
+  "actuator": {
+   "failed": 0.0,
+   "flipped": 0.0,
+   "plans_refused": 0.0
+  },
+  "hogs": {
+   "parts_seen": 56.0,
+   "reports": 0.0,
+   "uncontended_skips": 43749.0,
+   "unmeasured_parts": 0.0
+  },
+  "forecaster": {
+   "forecasts": 7341.0,
+   "growth_seen": 6244.0,
+   "last_seconds_to_exhaustion": 1057293.067853835
+  }
+ },
+ "scopes": {
+  "scopes": 57,
+  "total_memory_bytes": 1934839808,
+  "top_memory": [
+   {
+    "part_id": "venue-trade-stream-reader",
+    "memory_mb": 511.3
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "memory_mb": 348.2
+   },
+   {
+    "part_id": "bull-exit-plan-proposer",
+    "memory_mb": 131.1
+   },
+   {
+    "part_id": "instrument-selector",
+    "memory_mb": 36.0
+   },
+   {
+    "part_id": "trade-lifecycle-recorder",
+    "memory_mb": 35.7
+   },
+   {
+    "part_id": "signal-outcome-labeller",
+    "memory_mb": 35.4
+   },
+   {
+    "part_id": "bull-conviction-model",
+    "memory_mb": 29.7
+   },
+   {
+    "part_id": "regime-classifier",
+    "memory_mb": 28.4
+   }
+  ]
+ }
+}

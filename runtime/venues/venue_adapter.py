@@ -120,6 +120,18 @@ class SequenceContinuity(enum.StrEnum):
     CHAINED_TO_PREVIOUS = "chained-to-previous"
 
 
+# A request for every symbol at once rather than for one. Only meaningful on a
+# stream kind whose venue offers an all-market topic -- `every_symbol_quote_topic`
+# is how a caller finds out, and asking for this where the venue has no such topic
+# is refused rather than silently turned into one symbol named "*".
+#
+# It exists so a plan says what will really be opened. Binance quotes the whole
+# market on one topic; planning 872 per-symbol topics and then opening one would
+# make the plan's own connection count fiction, and that count is what the open
+# file ceiling is checked against.
+EVERY_SYMBOL = "*"
+
+
 @dataclass(frozen=True)
 class StreamRequest:
     """One thing we want a venue to stream: a kind, a symbol, and its parameters.
@@ -313,6 +325,81 @@ class BookUpdate:
 
 
 @dataclass(frozen=True)
+class QuoteChange:
+    """What one message said about a symbol's best bid and ask -- possibly one side.
+
+    Not every venue restates a whole quote. Bybit's `tickers` stream sends one
+    snapshot and then deltas carrying only what moved, and a real one measured
+    2026-08-24 was exactly this:
+
+        {"topic":"tickers.BTCUSDT","type":"delta",
+         "data":{"symbol":"BTCUSDT","bid1Price":"79114.50","bid1Size":"1.496"},
+         "cs":793092205004,"ts":1787590405983}
+
+    A bid, no ask. An adapter that filled the ask with zero would be inventing a
+    market; one that filled it from the last message it saw would be holding
+    state, and an adapter is a reader of bytes rather than a keeper of books. So
+    the adapter reports the absence as `None` and whoever is assembling quotes
+    merges -- which is why this type exists separately from NormalisedQuote.
+
+    `None` therefore means "this message did not say", never "zero" and never
+    "unchanged as far as we know". The difference is the whole point.
+    """
+
+    venue_id: str
+    symbol: str
+    bid_price: float | None
+    bid_quantity: float | None
+    ask_price: float | None
+    ask_quantity: float | None
+    venue_time_ns: int
+    # True when the message restates the symbol's whole state rather than amending
+    # it -- Bybit's first `tickers` message per subscription, and every Binance
+    # `!bookTicker` frame. A merge may drop what it held on a snapshot; on a delta
+    # it must not.
+    is_snapshot: bool
+
+    def is_complete(self) -> bool:
+        """Whether this message alone names both sides, so nothing has to be remembered."""
+        return None not in (self.bid_price, self.bid_quantity, self.ask_price, self.ask_quantity)
+
+
+@dataclass(frozen=True)
+class NormalisedQuote:
+    """One symbol's resting best bid and ask on one venue, at the venue's own moment.
+
+    The fact a print is not. A symbol that has not traded for ten minutes has no
+    recent trade and still has a quote, which is why this exists: measured on the
+    live run of 2026-08-24, instrument-selector refused 525 of 9 945 intents for a
+    price too old and none at all for never having seen a price. Those symbols
+    were captured; nobody had traded them.
+
+    Sizes travel with the prices because a quote with no size behind it is a
+    number rather than a market, and a caller deciding whether to believe the mid
+    needs both. `venue_time_ns` is the venue's stamp, never our arrival time --
+    the whole value of a quote is its age, and an age measured from when we
+    happened to read the socket is our latency, not the market's.
+    """
+
+    venue_id: str
+    symbol: str
+    bid_price: float
+    bid_quantity: float
+    ask_price: float
+    ask_quantity: float
+    venue_time_ns: int
+
+    @property
+    def mid_price(self) -> float:
+        """Halfway between the two, which is the price to size against."""
+        return (self.bid_price + self.ask_price) / 2.0
+
+    @property
+    def spread(self) -> float:
+        return self.ask_price - self.bid_price
+
+
+@dataclass(frozen=True)
 class BanSignal:
     """The venue telling us to stop, in whatever form that venue tells us.
 
@@ -497,6 +584,48 @@ class VenueAdapter(abc.ABC):
         carries no book -- a trade, a candle, a control frame."""
 
     @abc.abstractmethod
+    def read_quote_changes(self, payload: bytes) -> tuple[QuoteChange, ...]:
+        """What one stream message says about best bids and asks, in this project's terms.
+
+        Empty for a message carrying no quote, for the same reason read_trades is.
+
+        A tuple because a venue decides how many it packs into a frame: Binance's
+        `!bookTicker` sends one symbol per frame while a venue that batched would
+        send many.
+
+        Changes rather than quotes, because a venue that amends rather than
+        restates can name one side and no other -- see QuoteChange. A venue that
+        always restates returns changes that are all complete, so a caller written
+        for the general case is correct for both, and a caller that assumed
+        completeness would drop Bybit's entire stream but its rare snapshots.
+        """
+
+    @abc.abstractmethod
+    def quote_stream_amends_rather_than_restates(self) -> bool:
+        """Whether this venue's quote stream sends changes rather than whole quotes.
+
+        True means a reader must hold the last complete quote per symbol and
+        merge, because a message can carry one side. False means every message
+        stands alone. Measured rather than assumed: Binance `!bookTicker` restates
+        both sides every frame; Bybit `tickers` snapshots once and then amends.
+        """
+
+    @abc.abstractmethod
+    def every_symbol_quote_topic(self) -> str | None:
+        """The one topic that quotes the whole market, or None if there is no such thing.
+
+        Binance has `!bookTicker`, so one subscription covers every symbol listed
+        and every symbol listed later, at no cost per symbol. Bybit has no
+        wildcard: each symbol is named, and whether they fit one connection is a
+        question for `does_topic_fit_connection` -- measured 2026-08-24, all 833
+        linear symbols serialise to 17 006 characters against a 21 000 cap, which
+        is 81% of it and not a guarantee about tomorrow's symbol names.
+
+        None is therefore not a failure. It is the venue saying "name them", and
+        a reader that treated it as one would drop Bybit entirely.
+        """
+
+    @abc.abstractmethod
     def read_previous_sequence(self, payload: bytes) -> int | None:
         """The sequence this message says its predecessor had, or None.
 
@@ -621,6 +750,8 @@ QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA = (
     "funding_request_urls",
     "book_stream_delivers_full_depth",
     "sequence_continuity",
+    "quote_stream_amends_rather_than_restates",
+    "every_symbol_quote_topic",
 )
 
 # The questions that need a real message or a real catalogue response to ask.
@@ -632,6 +763,7 @@ QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_trades",
     "read_candles",
     "read_book_update",
+    "read_quote_changes",
     "read_previous_sequence",
     "read_catalogue_cursor",
     "read_quote_volumes",

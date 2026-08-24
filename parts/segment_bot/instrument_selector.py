@@ -38,6 +38,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
+from runtime.quote_frames import quote_levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
@@ -49,7 +50,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="instrument-selector",
     consumes=(
         "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
-        "symbol-universe",
+        "symbol-universe", "symbol-quote-frame",
     ),
     produces=("instrument-choice", "part-health"),
     resource_class="compute-bound",
@@ -76,6 +77,11 @@ NONE_LIQUID_ENOUGH = "no-instrument-is-liquid-enough-at-this-size"
 NONE_FAST_ENOUGH = "no-instrument-can-be-filled-inside-the-intent's-window"
 NO_REFERENCE_PRICE_HAS_EVER_ARRIVED = "this-symbol-has-never-printed-a-trade-here"
 REFERENCE_PRICE_IS_TOO_OLD = "this-symbol's-last-price-is-too-old-to-size-against"
+# Both facts were too old at once: nobody has traded it recently and nobody is
+# quoting it recently either. That is a different state from a stale trade with a
+# live quote beside it, and collapsing the two would hide the moment the quote
+# feed stopped -- which would look exactly like a market nobody wanted to trade.
+NEITHER_A_TRADE_NOR_A_QUOTE_IS_RECENT = "this-symbol-has-no-recent-trade-and-no-recent-quote"
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,11 @@ class SelectorStanding:
     # difference is the whole diagnosis (Rule 8).
     listings_registered: int = 0
     listings_skipped: Counter = field(default_factory=Counter)
+    # How often the number handed downstream came from a resting quote rather than
+    # from a trade. Counted because it is the measure of whether the quote feed is
+    # doing the job it was added for: refusals falling while this stays zero would
+    # mean they fell for some other reason entirely.
+    priced_from_a_quote: int = 0
 
 
 class InstrumentSelector:
@@ -186,6 +197,11 @@ class InstrumentSelector:
         self._price_staleness = price_staleness
         # Price and the moment it printed, together, because they are one fact.
         self._prices: dict[tuple[str, str], ObservedPrice] = {}
+        # The resting mid, kept the same way and read only when the traded price
+        # is too old. A quote is what a symbol is worth when nobody is trading it;
+        # a trade is what someone actually paid. The trade wins whenever it is
+        # fresh enough, because an executed price is the better fact.
+        self._quotes: dict[tuple[str, str], ObservedPrice] = {}
         self._now_ns = now_ns
         # The moment and the symbol the choice being built is about, so the price
         # handed out is judged against the same instant, and the same symbol, the
@@ -252,6 +268,23 @@ class InstrumentSelector:
         self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=observed_at_ns)
         if self._price_staleness is not None:
             self._price_staleness.observe_price(venue_id, symbol, price, observed_at_ns)
+
+    def observe_quote(self, venue_id: str, symbol: str, mid_price: float, observed_at_ns: int) -> None:
+        """The symbol's resting mid, kept so a stale trade is not the end of the story.
+
+        `observed_at_ns` is the venue's own stamp for the quote, and where the
+        quote was merged out of one-sided deltas it is the stamp of its **stalest**
+        side. That is decided upstream in `runtime.quote_assembly`, and it matters
+        here: this is the number the staleness bound is applied to.
+
+        It feeds the staleness estimator nothing. That estimator learns how far a
+        symbol moves per second from the prices it has traded at, and folding mid
+        prices into it would mix a series of executions with a series of offers --
+        two different things, one of which moves when nobody trades at all.
+        """
+        self._quotes[(venue_id, symbol)] = ObservedPrice(
+            price=mid_price, observed_at_ns=observed_at_ns
+        )
 
     def observe_listed_symbol(self, listed) -> None:
         """One entry of `symbol-universe`: a contract the venue lists, on its terms.
@@ -445,19 +478,51 @@ class InstrumentSelector:
             + unbuilt_note,
         )
 
-    def _believable_price(self, observed: "ObservedPrice | None") -> float | None:
-        """The price to hand downstream, or None where it is too old to hand over.
+    def _believable_price(self, key: tuple[str, str]) -> float | None:
+        """The price to hand downstream, or None where nothing recent enough exists.
 
-        The time it printed still travels with the choice either way: a reader that
-        can see when the last price was is being told why there is no number, which
-        is a different thing from being told nothing.
+        Two facts are tried, in this order: the last trade, then the resting mid.
+        The trade wins whenever it is fresh enough because it is what somebody
+        actually paid; the quote is what the symbol is worth when nobody has been
+        trading it, which is the case this fallback exists for and the case that
+        refused 525 of 9,945 intents on 2026-08-24.
+
+        Keyed by symbol rather than handed a price, because the choice between the
+        two facts is the whole job: an earlier draft took whichever was fresher
+        and then asked separately whether to fall back, which counted the fallback
+        only on one of the two paths that reached it.
+
+        The time still travels with the choice either way, and
+        `priced_from_a_quote` says how often the second fact was the one used: a
+        number that came from an offer rather than an execution is a different
+        number, and one nobody can see is one nobody can judge.
         """
-        if observed is None or self._price_staleness is None:
-            return None if observed is None else observed.price
-        bound = self._price_staleness.believable_age_seconds(*self._deciding_about)
-        if observed.age_seconds(self._deciding_at_ns) > bound.value:
-            return None
-        return observed.price
+        traded = self._prices.get(key)
+        if self._price_staleness is None:
+            return None if traded is None else traded.price
+        bound = self._price_staleness.believable_age_seconds(*key)
+        if traded is not None and traded.age_seconds(self._deciding_at_ns) <= bound.value:
+            return traded.price
+        quoted = self._quotes.get(key)
+        if quoted is not None and quoted.age_seconds(self._deciding_at_ns) <= bound.value:
+            self.standing.priced_from_a_quote += 1
+            return quoted.price
+        return None
+
+    def _fresher_reference(self, key: tuple[str, str]) -> "ObservedPrice | None":
+        """Whichever of the trade and the quote the venue said more recently.
+
+        Used for what a choice reports about its price's age. Reporting the trade's
+        age beside a number that came from the quote would describe the wrong
+        fact, and the age is the field every downstream staleness check reads.
+        """
+        traded = self._prices.get(key)
+        quoted = self._quotes.get(key)
+        if traded is None:
+            return quoted
+        if quoted is None:
+            return traded
+        return traded if traded.observed_at_ns >= quoted.observed_at_ns else quoted
 
     def _price_refusal(self, key: tuple[str, str], at_ns: int) -> tuple[str, str] | None:
         """Why this symbol cannot be priced right now, or None if it can.
@@ -477,15 +542,29 @@ class InstrumentSelector:
             )
         age = observed.age_seconds(at_ns)
         bound = self._price_staleness.believable_age_seconds(*key)
-        if age > bound.value:
+        if age <= bound.value:
+            return None
+
+        # The trade is too old. A resting quote is a live fact for a symbol nobody
+        # is trading, so it is asked before anything is refused.
+        quoted = self._quotes.get(key)
+        if quoted is not None and quoted.age_seconds(at_ns) <= bound.value:
+            return None
+        if quoted is None:
             return (
                 REFERENCE_PRICE_IS_TOO_OLD,
                 f"the last trade this part saw for the symbol printed {age:.0f}s ago, past the "
                 f"{bound.value:.2f}s this symbol's own moves say a price may be believed "
-                f"({bound.reason}). Sizing against it would put the risk a fixed distance from "
-                f"a price the market has left",
+                f"({bound.reason}), and no quote has ever arrived for it. Sizing against it "
+                f"would put the risk a fixed distance from a price the market has left",
             )
-        return None
+        return (
+            NEITHER_A_TRADE_NOR_A_QUOTE_IS_RECENT,
+            f"the last trade printed {age:.0f}s ago and the last quote was "
+            f"{quoted.age_seconds(at_ns):.0f}s ago, both past the {bound.value:.2f}s this "
+            f"symbol's own moves say a price may be believed ({bound.reason}). Nobody is "
+            f"trading it and nobody is quoting it",
+        )
 
     def _cannot_carry(self, instrument: ListedInstrument, intent) -> str | None:
         """Why this instrument cannot express this intent, or None if it can."""
@@ -527,7 +606,7 @@ class InstrumentSelector:
     ) -> InstrumentChoice:
         if state != CHOSEN:
             self.standing.by_refusal[state] = self.standing.by_refusal.get(state, 0) + 1
-        observed = self._prices.get((intent.venue_id, intent.symbol))
+        observed = self._fresher_reference((intent.venue_id, intent.symbol))
         return InstrumentChoice(
             venue_id=intent.venue_id,
             symbol=intent.symbol,
@@ -540,7 +619,7 @@ class InstrumentSelector:
             state=state,
             reason=reason,
             chosen_at_ns=self._now_ns(),
-            reference_price=self._believable_price(observed),
+            reference_price=self._believable_price((intent.venue_id, intent.symbol)),
             reference_price_observed_at_ns=None if observed is None else observed.observed_at_ns,
         )
 
@@ -569,6 +648,14 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "refused_for_no_price_ever": selector.standing.by_refusal.get(
             NO_REFERENCE_PRICE_HAS_EVER_ARRIVED, 0
         ),
+        "refused_with_no_recent_trade_or_quote": selector.standing.by_refusal.get(
+            NEITHER_A_TRADE_NOR_A_QUOTE_IS_RECENT, 0
+        ),
+        # The pair that judges the quote feed. Refusals falling to zero would not
+        # be success: it would mean the bound had stopped refusing anything, which
+        # is the guard being off rather than the prices being good.
+        "priced_from_a_quote": selector.standing.priced_from_a_quote,
+        "symbols_with_a_quote": len(selector._quotes),
         "intents_refused": sum(selector.standing.by_refusal.values()),
         # What this part currently believes about how long each symbol's price is
         # worth acting on. Reported because a refusal that cannot be seen from
@@ -619,6 +706,7 @@ def start_part(context) -> int:
     grades = Batch(read=context.bus.reader("liquidity-grade"))
     timed = Batch(read=context.bus.reader("timed-intent"))
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
+    quotes = Batch(read=context.bus.reader("symbol-quote-frame"))
     universe = Batch(read=context.bus.reader("symbol-universe"))
     publish_choices = context.bus.publisher_for("instrument-choice")
 
@@ -639,6 +727,14 @@ def start_part(context) -> int:
             # price is has to be measured from when the market made it.
             selector.observe_price(
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
+            )
+        for quote in quote_levels_in(quotes.payloads()):
+            # The venue's own stamp, and for a quote merged out of one-sided
+            # deltas that is its stalest side's stamp. The mid is what a position
+            # is sized against; the two sides stay on the level for anyone who
+            # wants to know how thin the market is.
+            selector.observe_quote(
+                quote.venue_id, quote.symbol, quote.mid_price, quote.observed_at_ns
             )
         timed.payloads()
         return intents.payloads()

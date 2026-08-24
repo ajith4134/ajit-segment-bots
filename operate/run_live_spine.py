@@ -109,6 +109,18 @@ LIVE_SPINE = (
     "symbol-catalogue-reader",
     "stream-budget-planner",
     "venue-trade-stream-reader",
+    # The quote half of the feed, added 2026-08-24. A trade is what the venue
+    # printed and is what the tape keeps; a quote is what a symbol is worth right
+    # now, and a symbol nobody has traded has only the second. Measured that day,
+    # instrument-selector refused 525 of 9,945 intents for a price too old and
+    # zero for never having seen a price -- so the refusals were symbols already
+    # captured whose last trade was simply old.
+    #
+    # It writes no tape: this stream is priced against rather than learned from,
+    # and on Bybit alone it carries 1,190 updates a second, more than every trade
+    # this system records
+    # (docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md).
+    "venue-quote-stream-reader",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and
@@ -134,6 +146,12 @@ LIVE_SPINE = (
     # there looking perfectly healthy, which is the failure this whole phase is
     # about (docs/proposals/sampled-price-levels-and-a-governor-that-acts.md).
     "price-level-sampler",
+    # The same argument on a louder feed: quotes arrive five times faster than
+    # trades, so publishing per update would re-create the fan-out that sampling
+    # the trade feed removed. Started beside the price sampler and on the same
+    # cadence -- a reader comparing a price against a quote must not be handed one
+    # of them sampled more often than the other.
+    "quote-level-sampler",
     # Noticing. The only path in the blueprint from market-data to an
     # entry-candidate without a playbook-rule, which the learning loop cannot build
     # until trades have happened.

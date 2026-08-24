@@ -25,6 +25,17 @@
 #   stream-budget-planner      decides the feed's connections; the reader keeps
 #                              its last plan, so it ranks below the reader itself.
 #   symbol-catalogue-reader    the universe the feed captures.
+#
+#   venue-quote-stream-reader  and quote-level-sampler rank 11 and 12 -- just
+#   quote-level-sampler        below the reservation ceiling, deliberately. They
+#                              matter: without them instrument-selector falls back
+#                              to a traded price and refuses the symbols nobody is
+#                              trading, which is what they were added to stop
+#                              (2026-08-24). But a missed quote is not history
+#                              lost the way a missed trade is, and displacing any
+#                              of the ten above to reserve them would trade
+#                              something irreplaceable for something that
+#                              reappears on the next message.
 
 [priority]
 "venue-trade-stream-reader" = 1
@@ -37,3 +48,5 @@
 "bull-conviction-model" = 8
 "stream-budget-planner" = 9
 "symbol-catalogue-reader" = 10
+"venue-quote-stream-reader" = 11
+"quote-level-sampler" = 12

@@ -42,7 +42,7 @@ from runtime.part_process import run_part
 from runtime.stream_plan import ConnectionAssignment, StreamPlan
 from runtime.symbol_universe import CapturableSymbol
 from runtime.tape import StreamKind
-from runtime.venues.venue_adapter import StreamRequest, VenueAdapter
+from runtime.venues.venue_adapter import EVERY_SYMBOL, StreamRequest, VenueAdapter
 
 PART_ID = "stream-budget-planner"
 
@@ -155,6 +155,47 @@ def pack_requests_onto_connections(
     return tuple(assignments)
 
 
+def _requests_for_kind(
+    adapter: VenueAdapter,
+    stream_kind: StreamKind,
+    symbols: Sequence[CapturableSymbol],
+    candle_interval: str,
+    book_depth_levels: int,
+) -> tuple[StreamRequest, ...]:
+    """One request per symbol, unless the venue quotes the whole market on one topic.
+
+    Binance does: `!bookTicker` covers every symbol listed now and every symbol
+    listed later, so planning one request per symbol would make this plan claim
+    connections that will never be opened -- and that count is exactly what the
+    open-file ceiling below is checked against. Bybit has no such topic and
+    answers None, so its symbols are named one by one as before.
+
+    Asked of the adapter rather than decided here (T-4): which venue has a
+    wildcard is venue knowledge, and a planner that knew it would be a second
+    place to update when a third venue lands.
+    """
+    if not symbols:
+        return ()
+    if stream_kind is StreamKind.QUOTE and adapter.every_symbol_quote_topic() is not None:
+        return (
+            StreamRequest(
+                stream_kind=stream_kind,
+                symbol=EVERY_SYMBOL,
+                candle_interval=candle_interval,
+                book_depth_levels=book_depth_levels,
+            ),
+        )
+    return tuple(
+        StreamRequest(
+            stream_kind=stream_kind,
+            symbol=entry.symbol,
+            candle_interval=candle_interval,
+            book_depth_levels=book_depth_levels,
+        )
+        for entry in symbols
+    )
+
+
 def plan_stream_budget(
     adapters: Mapping[str, VenueAdapter],
     symbol_universe: Mapping[str, Sequence[CapturableSymbol]],
@@ -190,14 +231,15 @@ def plan_stream_budget(
         adapter = adapters[venue_id]
         symbols = symbol_universe.get(venue_id, ())
         requests = [
-            StreamRequest(
+            request
+            for stream_kind in stream_kinds
+            for request in _requests_for_kind(
+                adapter=adapter,
                 stream_kind=stream_kind,
-                symbol=entry.symbol,
+                symbols=symbols,
                 candle_interval=candle_interval,
                 book_depth_levels=book_depth_levels,
             )
-            for entry in symbols
-            for stream_kind in stream_kinds
         ]
         venue_assignments = pack_requests_onto_connections(adapter, requests) if requests else ()
         _refuse_if_over_concurrent_limit(adapter, len(venue_assignments))
@@ -207,6 +249,9 @@ def plan_stream_budget(
         subscriptions_by_venue[venue_id] = len(requests)
         symbols_open += len(symbols)
 
+    # Quote connections are counted as sockets and not as tape files: this stream
+    # is priced against, never recorded, so it opens no {index, blob} pair per
+    # symbol the way a trade capture does.
     open_files_required = symbols_open * TAPE_FILES_PER_SYMBOL + len(assignments)
     if open_files_required > limit - open_file_headroom:
         raise PlanRefused(
@@ -443,7 +488,11 @@ def start_part(context) -> int:
         control_socket=context.control_socket,
         read_symbol_universe=read_symbol_universe,
         read_venues_withheld=read_venues_withheld,
-        stream_kinds=(StreamKind.TRADE,),
+        # Quotes alongside trades. A trade is what the venue printed and is what
+        # the tape keeps; a quote is what the symbol is worth right now and is
+        # what a decision is sized against. A symbol that has not traded has only
+        # the second, which is the whole reason this kind was added.
+        stream_kinds=(StreamKind.TRADE, StreamKind.QUOTE),
         open_file_headroom=int(context.number("open_file_headroom")),
         candle_interval=settings.entries["candle_interval"].value,
         book_depth_levels=int(context.number("book_depth_levels")),

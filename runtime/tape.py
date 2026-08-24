@@ -56,6 +56,11 @@ class StreamKind(enum.IntEnum):
     TRADE = 1
     CANDLE = 2
     BOOK = 3
+    # A resting best bid and ask, which a symbol has whether or not it trades.
+    # Added 2026-08-24: a print is the only price this system had, so a symbol
+    # nobody traded had no fresh price and could not be sized against. Stored as
+    # one byte like the others, so files written before it read back unchanged.
+    QUOTE = 4
 
 
 class TradeFidelity(enum.StrEnum):
