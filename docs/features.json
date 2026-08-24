@@ -127,7 +127,7 @@
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots — bull, bear and profit tailgating — each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
+      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots \u2014 bull, bear and profit tailgating \u2014 each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -569,7 +569,7 @@
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
-      "planned_extension": "Becomes a thinker in its own right once the rest is running — reasoning about the market rather than only answering other blocks' questions.",
+      "planned_extension": "Becomes a thinker in its own right once the rest is running \u2014 reasoning about the market rather than only answering other blocks' questions.",
       "contract_recomputed": {
         "on": "2026-08-20",
         "from": "its parts",
@@ -987,7 +987,7 @@
     {
       "id": "closed-trade-decoding",
       "name": "Closed trade decoding",
-      "summary": "Decodes finished trades — winners and losers both — into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
+      "summary": "Decodes finished trades \u2014 winners and losers both \u2014 into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1423,7 +1423,7 @@
     {
       "id": "capital-desk",
       "name": "Capital desk",
-      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes — never applies — a rebalance.",
+      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes \u2014 never applies \u2014 a rebalance.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1561,7 +1561,7 @@
     {
       "id": "sized-order",
       "name": "sized order",
-      "description": "A trade intent with size, leverage and stops applied — or a refusal, which is also an answer."
+      "description": "A trade intent with size, leverage and stops applied \u2014 or a refusal, which is also an answer."
     },
     {
       "id": "order-request",
@@ -2448,7 +2448,7 @@
     {
       "id": "turbulence-index",
       "name": "turbulence index",
-      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance — is everything moving together abnormally."
+      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance \u2014 is everything moving together abnormally."
     },
     {
       "id": "verified-snapshot",
@@ -3123,6 +3123,13 @@
       "description": "How useful retrieved passages proved, measured against the prompt score they fed.",
       "origin": "proposed",
       "added": "2026-08-20"
+    },
+    {
+      "id": "symbol-price-frame",
+      "name": "symbol price frame",
+      "description": "Every symbol's latest price on one venue, each with the moment it printed, published on a fixed cadence rather than per trade.",
+      "origin": "proposed",
+      "added": "2026-08-24"
     }
   ],
   "features": [
@@ -3221,7 +3228,7 @@
       "category": "prediction",
       "consumes": [
         "price-forecast",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "forecast-accuracy",
@@ -3341,7 +3348,7 @@
       "role": "classify the current regime with a Hurst proxy",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "market-regime",
@@ -3365,9 +3372,9 @@
       "role": "flag a symbol whose price has deviated far enough from its mean",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data",
         "market-regime",
-        "playbook-rule"
+        "playbook-rule",
+        "symbol-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -4030,9 +4037,9 @@
       "role": "raise the stop as an open position gains so a pullback keeps some profit",
       "category": "risk-capital-allocation",
       "consumes": [
+        "excursion-profile",
         "position",
-        "market-data",
-        "excursion-profile"
+        "symbol-price-frame"
       ],
       "produces": [
         "stop-adjustment",
@@ -4213,9 +4220,9 @@
       "role": "detect when the market has changed enough that what was learned no longer applies",
       "category": "intelligence",
       "consumes": [
-        "market-data",
         "journal-entry",
-        "market-event"
+        "market-event",
+        "symbol-price-frame"
       ],
       "produces": [
         "regime-break-alert",
@@ -4536,9 +4543,9 @@
       "role": "carry the bot through an exchange outage without human help",
       "category": "autonomous",
       "consumes": [
-        "market-data",
+        "feed-gap",
         "part-health",
-        "feed-gap"
+        "symbol-price-frame"
       ],
       "produces": [
         "outage-state",
@@ -5031,8 +5038,8 @@
       "role": "find pairs of symbols whose spread has held together",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data",
-        "market-regime"
+        "market-regime",
+        "symbol-price-frame"
       ],
       "produces": [
         "cointegrated-pair",
@@ -5057,7 +5064,7 @@
       "category": "opportunity-scanner",
       "consumes": [
         "cointegrated-pair",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -5454,14 +5461,14 @@
       "role": "test every symbol in the universe against every watch condition on every tick",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data",
-        "symbol-universe",
-        "watch-condition",
+        "consolidated-price",
+        "cross-segment-signal",
         "liquidity-grade",
         "position",
-        "cross-segment-signal",
+        "symbol-price-frame",
+        "symbol-universe",
         "venue-announcement",
-        "consolidated-price"
+        "watch-condition"
       ],
       "produces": [
         "entry-candidate",
@@ -5514,9 +5521,9 @@
       "role": "spot a sudden jump that the playbook says tends to pull back",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data",
-        "symbol-profile",
-        "playbook-rule"
+        "playbook-rule",
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "entry-candidate",
@@ -5540,9 +5547,9 @@
       "role": "spot a funding rate stretched far enough that the crowded side tends to unwind",
       "category": "opportunity-scanner",
       "consumes": [
-        "market-data",
         "funding-forecast",
-        "playbook-rule"
+        "playbook-rule",
+        "symbol-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -5566,9 +5573,9 @@
       "role": "spot an exchange inflow or outflow large enough to precede a move",
       "category": "opportunity-scanner",
       "consumes": [
-        "whale-transfer",
-        "market-data",
-        "onchain-flow"
+        "onchain-flow",
+        "symbol-price-frame",
+        "whale-transfer"
       ],
       "produces": [
         "entry-candidate",
@@ -5593,7 +5600,7 @@
       "category": "opportunity-scanner",
       "consumes": [
         "liquidation-map",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -5617,9 +5624,9 @@
       "role": "spot crowd sentiment turning faster than price has",
       "category": "opportunity-scanner",
       "consumes": [
+        "playbook-rule",
         "sentiment-reading",
-        "market-data",
-        "playbook-rule"
+        "symbol-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -5643,12 +5650,12 @@
       "role": "choose the contract, strike, expiry or pair that expresses a trade intent in this segment",
       "category": "segment-bot",
       "consumes": [
-        "trade-intent",
-        "market-data",
         "implied-vol-surface",
         "liquidity-grade",
+        "symbol-price-frame",
+        "symbol-universe",
         "timed-intent",
-        "symbol-universe"
+        "trade-intent"
       ],
       "produces": [
         "instrument-choice",
@@ -5697,7 +5704,7 @@
       "role": "group symbols that move together across all segments",
       "category": "intelligence",
       "consumes": [
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "correlation-cluster",
@@ -7780,9 +7787,9 @@
       "role": "compute the price at which this bot's own leveraged position gets force-closed",
       "category": "portfolio-state",
       "consumes": [
-        "position",
         "leverage-choice",
-        "market-data"
+        "position",
+        "symbol-price-frame"
       ],
       "produces": [
         "liquidation-price",
@@ -7856,10 +7863,10 @@
       "role": "zero the limit when balance plus unrealised PnL nears the maintenance margin on a leveraged segment",
       "category": "risk-capital-allocation",
       "consumes": [
-        "position",
         "account-balance",
         "liquidation-price",
-        "market-data"
+        "position",
+        "symbol-price-frame"
       ],
       "produces": [
         "risk-limit",
@@ -8008,7 +8015,7 @@
       "category": "execution-venue-adapter",
       "consumes": [
         "order-request",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "cancel-decision",
@@ -8281,7 +8288,7 @@
       "role": "measure how abnormally every symbol is moving together, as one market-wide distance number",
       "category": "intelligence",
       "consumes": [
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "turbulence-index",
@@ -8359,10 +8366,10 @@
       "category": "bull-bot",
       "consumes": [
         "bull-side-candidate",
-        "market-data",
+        "funding-forecast",
         "order-book-snapshot",
-        "symbol-profile",
-        "funding-forecast"
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "bull-feature-vector",
@@ -8484,11 +8491,11 @@
       "role": "decide now or wait for the pullback, with a give-up time",
       "category": "bull-bot",
       "consumes": [
-        "bull-side-candidate",
-        "market-data",
         "bull-calibrated-conviction",
+        "bull-side-candidate",
+        "entry-quality",
         "playbook-rule",
-        "entry-quality"
+        "symbol-price-frame"
       ],
       "produces": [
         "bull-entry-timing",
@@ -8516,13 +8523,13 @@
       "role": "propose target, stop plus time-stop for a long candidate from ATR plus structure",
       "category": "bull-bot",
       "consumes": [
-        "bull-side-candidate",
-        "market-data",
-        "symbol-profile",
         "bull-calibrated-conviction",
+        "bull-side-candidate",
         "excursion-profile",
         "horizon-profile",
-        "stop-audit"
+        "stop-audit",
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "bull-exit-plan",
@@ -8671,10 +8678,10 @@
       "category": "bear-bot",
       "consumes": [
         "bear-side-candidate",
-        "market-data",
+        "funding-forecast",
         "order-book-snapshot",
-        "symbol-profile",
-        "funding-forecast"
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "bear-feature-vector",
@@ -8796,11 +8803,11 @@
       "role": "decide now or wait for the pullback, with a give-up time",
       "category": "bear-bot",
       "consumes": [
-        "bear-side-candidate",
-        "market-data",
         "bear-calibrated-conviction",
+        "bear-side-candidate",
+        "entry-quality",
         "playbook-rule",
-        "entry-quality"
+        "symbol-price-frame"
       ],
       "produces": [
         "bear-entry-timing",
@@ -8828,13 +8835,13 @@
       "role": "propose target, stop plus time-stop for a short candidate from ATR plus structure",
       "category": "bear-bot",
       "consumes": [
-        "bear-side-candidate",
-        "market-data",
-        "symbol-profile",
         "bear-calibrated-conviction",
+        "bear-side-candidate",
         "excursion-profile",
         "horizon-profile",
-        "stop-audit"
+        "stop-audit",
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "bear-exit-plan",
@@ -8954,7 +8961,7 @@
       "category": "profit-tailgating-bot",
       "consumes": [
         "entry-candidate",
-        "market-data",
+        "symbol-price-frame",
         "symbol-profile",
         "tail-setup-weight"
       ],
@@ -9046,8 +9053,8 @@
       "category": "profit-tailgating-bot",
       "consumes": [
         "follow-candidate",
-        "market-data",
-        "price-forecast"
+        "price-forecast",
+        "symbol-price-frame"
       ],
       "produces": [
         "move-remaining",
@@ -9142,11 +9149,11 @@
       "role": "trail a stop below the last higher low, tightening as the move ages; never a fixed target",
       "category": "profit-tailgating-bot",
       "consumes": [
-        "follow-candidate",
-        "market-data",
-        "symbol-profile",
+        "excursion-profile",
         "exit-counterfactual",
-        "excursion-profile"
+        "follow-candidate",
+        "symbol-price-frame",
+        "symbol-profile"
       ],
       "produces": [
         "tail-exit-plan",
@@ -9338,9 +9345,9 @@
       "category": "intelligence",
       "consumes": [
         "directional-opinion",
-        "trade-intent",
-        "market-data",
-        "trade-episode"
+        "symbol-price-frame",
+        "trade-episode",
+        "trade-intent"
       ],
       "produces": [
         "counterfactual-outcome",
@@ -9364,10 +9371,10 @@
       "role": "restate a reading from one segment for the sweepers of the other two",
       "category": "intelligence",
       "consumes": [
-        "whale-transfer",
-        "market-data",
         "funding-forecast",
-        "position"
+        "position",
+        "symbol-price-frame",
+        "whale-transfer"
       ],
       "produces": [
         "cross-segment-signal",
@@ -10021,7 +10028,7 @@
       "category": "online-research",
       "consumes": [
         "external-position",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "copy-latency",
@@ -10622,10 +10629,10 @@
       "role": "release an intent at the moment its entry timing named, or drop it at the give-up time",
       "category": "ai-brain",
       "consumes": [
-        "trade-intent",
-        "market-data",
+        "bear-entry-timing",
         "bull-entry-timing",
-        "bear-entry-timing"
+        "symbol-price-frame",
+        "trade-intent"
       ],
       "produces": [
         "timed-intent",
@@ -10964,10 +10971,10 @@
       "role": "keep every candidate raised but not traded, with what the market then did",
       "category": "closed-trade-decoding",
       "consumes": [
-        "entry-candidate",
-        "trade-intent",
         "directional-opinion",
-        "market-data"
+        "entry-candidate",
+        "symbol-price-frame",
+        "trade-intent"
       ],
       "produces": [
         "near-miss-episode",
@@ -11017,11 +11024,11 @@
       "role": "split implementation shortfall into delay, spread, impact plus opportunity cost",
       "category": "closed-trade-decoding",
       "consumes": [
+        "bounded-order",
         "closed-trade",
         "fill",
-        "bounded-order",
         "order-book-snapshot",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "shortfall-breakdown",
@@ -11306,7 +11313,7 @@
       "category": "capital-desk",
       "consumes": [
         "main-account-setting",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "paper-currency-rate",
@@ -11820,7 +11827,7 @@
       "category": "learning-loop",
       "consumes": [
         "entry-candidate",
-        "market-data"
+        "symbol-price-frame"
       ],
       "produces": [
         "training-label",
@@ -11885,11 +11892,35 @@
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "price-level-sampler",
+      "name": "Price level sampler",
+      "role": "publish every symbol's latest price for one venue on a fixed cadence",
+      "category": "market-data-feed",
+      "consumes": [
+        "market-data"
+      ],
+      "produces": [
+        "symbol-price-frame",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/sampled-price-levels-and-a-governor-that-acts.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
     "driver": "resource-governor",
-    "note": "T-2 — the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+    "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
   },
   "segments": {
     "note": "Every segment is a bot with all of this inside it. The user's words. The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a put in options is a short in futures.",
@@ -12086,11 +12117,11 @@
       "used_by": [
         "skills"
       ],
-      "verified": "2026-08-20 via gh — the post said 16.3k stars, the repo has 23,262",
+      "verified": "2026-08-20 via gh \u2014 the post said 16.3k stars, the repo has 23,262",
       "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     }
   ],
-  "_dependency_note": "Licence is recorded as a fact, not a constraint — see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
+  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
   "opposing_positions": {
     "given": "2026-08-20",
     "exploration": "While a bot is still in exploration, bull and bear may both open on the same symbol. It is a live test of which one is right on this kind of setup, and the paired outcome is what the scorekeeper learns from.",
