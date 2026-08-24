@@ -1,0 +1,133 @@
+{
+ "measured_at_utc": "2026-08-24T14:35:12+00:00",
+ "captured_symbol_count": 100,
+ "tape": {
+  "binance-usdm": {
+   "symbols_written_in_window": 100,
+   "records_in_window": 558218,
+   "records_per_second": 930.36,
+   "newest_record_age_seconds": -4.3
+  },
+  "bybit-linear": {
+   "symbols_written_in_window": 101,
+   "records_in_window": 166956,
+   "records_per_second": 278.26,
+   "newest_record_age_seconds": -5.0
+  }
+ },
+ "heartbeats": {
+  "parts_reporting": 57,
+  "table_age_seconds": 0.0,
+  "input_loss": [
+   {
+    "part_id": "bull-exit-plan-proposer",
+    "loss": [
+     [
+      "excursion-profile",
+      683
+     ]
+    ]
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "loss": [
+     [
+      "cointegrated-pair",
+      316
+     ]
+    ]
+   }
+  ],
+  "worst_staleness": [
+   [
+    "venue-trade-stream-reader",
+    1.38
+   ],
+   [
+    "fill-reconciler",
+    1.01
+   ],
+   [
+    "part-appetite-meter",
+    1.01
+   ],
+   [
+    "capital-allotment-reader",
+    1.0
+   ],
+   [
+    "capital-settings-validator",
+    1.0
+   ]
+  ],
+  "sampler": {
+   "frames_published": 6197.0,
+   "frames_split": 0.0,
+   "largest_frame_symbols": 101.0,
+   "symbols_tracked": 201.0,
+   "trades_observed": 3441815.0,
+   "venues_tracked": 2.0
+  },
+  "planner": {
+   "held": 0.0,
+   "plans": 1829.0,
+   "refusals": 0.0,
+   "switched_off": 0.0,
+   "switched_on": 0.0
+  },
+  "actuator": {
+   "failed": 0.0,
+   "flipped": 0.0,
+   "plans_refused": 0.0
+  },
+  "hogs": {
+   "parts_seen": 56.0,
+   "reports": 0.0,
+   "uncontended_skips": 10864.0,
+   "unmeasured_parts": 0.0
+  },
+  "forecaster": {
+   "forecasts": 1823.0,
+   "growth_seen": 1663.0,
+   "last_seconds_to_exhaustion": 50823.3619320609
+  }
+ },
+ "scopes": {
+  "scopes": 57,
+  "total_memory_bytes": 1781551104,
+  "top_memory": [
+   {
+    "part_id": "venue-trade-stream-reader",
+    "memory_mb": 345.1
+   },
+   {
+    "part_id": "trade-lifecycle-recorder",
+    "memory_mb": 307.1
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "memory_mb": 120.0
+   },
+   {
+    "part_id": "bull-exit-plan-proposer",
+    "memory_mb": 101.8
+   },
+   {
+    "part_id": "bull-conviction-model",
+    "memory_mb": 33.4
+   },
+   {
+    "part_id": "regime-classifier",
+    "memory_mb": 27.0
+   },
+   {
+    "part_id": "bull-feature-builder",
+    "memory_mb": 22.3
+   },
+   {
+    "part_id": "symbol-catalogue-reader",
+    "memory_mb": 21.6
+   }
+  ]
+ }
+}

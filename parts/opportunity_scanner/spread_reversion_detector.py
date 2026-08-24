@@ -39,6 +39,7 @@ PART_DECLARATION = PartDeclaration(
 
 FIRED = "fired"
 NOT_STRETCHED = "spread-not-stretched-far-enough"
+STILL_STRETCHED = "already-fired-and-the-spread-has-not-come-back"
 PAIR_NOT_COINTEGRATED = "pair-is-not-currently-cointegrated"
 NO_PRICES = "no-current-prices-for-both-legs"
 A_LEG_IS_STALE = "one-leg's-last-price-is-too-old-to-price-the-spread-with"
@@ -59,6 +60,7 @@ class SpreadStanding:
     tests: int = 0
     candidates: int = 0
     not_stretched: int = 0
+    still_stretched: int = 0
     not_cointegrated: int = 0
     no_prices: int = 0
     stale_leg: int = 0
@@ -100,6 +102,14 @@ class SpreadReversionDetector:
         self._now_ns = now_ns
         self._prices: dict[tuple[str, str], float] = {}
         self._spreads: dict[tuple[str, str, str], RollingWindow] = {}
+        # Which pairs are currently past the threshold. A candidate is the
+        # crossing into stretched, not the state of being stretched: a pair
+        # that stays wide is one opportunity, and announcing it on every level
+        # update published 620,000 candidates in thirty-five minutes at 100
+        # symbols per venue (2026-08-24) -- the labeller refused 645,000 of
+        # them and every part of the trading half chewed the duplicates. The
+        # pair re-arms when its spread comes back inside the threshold.
+        self._stretched: set[tuple[str, str, str]] = set()
         self.standing = SpreadStanding()
 
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
@@ -163,9 +173,14 @@ class SpreadReversionDetector:
 
         if abs(z) < self._z_threshold:
             self.standing.not_stretched += 1
+            self._stretched.discard(key)
             return None, NOT_STRETCHED
 
         self.standing.widest_z = max(self.standing.widest_z, abs(z))
+        if key in self._stretched:
+            self.standing.still_stretched += 1
+            return None, STILL_STRETCHED
+        self._stretched.add(key)
         self.standing.candidates += 1
         # A high spread means the left leg is rich against the right: sell the
         # left, buy the right. The candidate names the left leg's direction and
@@ -218,6 +233,7 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
         "tests": detector.standing.tests,
         "candidates": detector.standing.candidates,
         "not_stretched": detector.standing.not_stretched,
+        "still_stretched": detector.standing.still_stretched,
         "pair_not_cointegrated": detector.standing.not_cointegrated,
         "no_prices": detector.standing.no_prices,
         "stale_leg": detector.standing.stale_leg,

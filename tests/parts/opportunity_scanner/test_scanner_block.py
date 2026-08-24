@@ -502,6 +502,39 @@ def test_a_stretched_spread_names_both_legs():
     assert candidate.evidence["both_legs_required"] is True
 
 
+def test_a_spread_that_stays_stretched_is_one_candidate_not_a_stream():
+    """A candidate is the crossing into stretched, not the state: announcing the
+    same wide pair on every level update published 620,000 candidates in
+    thirty-five minutes at 100 symbols per venue (2026-08-24). The pair re-arms
+    only when its spread comes back inside the threshold."""
+    from parts.opportunity_scanner.spread_reversion_detector import (
+        FIRED, NOT_STRETCHED, STILL_STRETCHED,
+    )
+
+    subject = spread_detector(z=2.0, minimum=100)
+    subject.observe_price(VENUE, "AUSDT", 105.0, subject._now_ns())
+    subject.observe_price(VENUE, "BUSDT", 100.0, subject._now_ns())
+    first, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert first is not None and outcome == FIRED
+
+    # Still stretched on the next levels: the same opportunity, not a new one.
+    subject.observe_price(VENUE, "AUSDT", 105.5, subject._now_ns())
+    again, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert again is None and outcome == STILL_STRETCHED
+    assert subject.standing.still_stretched == 1
+
+    # Back inside the threshold re-arms the pair...
+    subject.observe_price(VENUE, "AUSDT", 100.5, subject._now_ns())
+    calm, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert calm is None and outcome == NOT_STRETCHED
+
+    # ...so the next crossing is a new candidate.
+    subject.observe_price(VENUE, "AUSDT", 106.0, subject._now_ns())
+    fresh, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert fresh is not None and outcome == FIRED
+    assert subject.standing.candidates == 2
+
+
 def test_a_retired_pair_produces_nothing_however_stretched():
     subject = spread_detector(z=1.0, minimum=100)
     subject.observe_price(VENUE, "AUSDT", 200.0, subject._now_ns())

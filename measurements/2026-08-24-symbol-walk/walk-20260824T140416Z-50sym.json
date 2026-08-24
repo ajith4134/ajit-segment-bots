@@ -1,0 +1,114 @@
+{
+ "measured_at_utc": "2026-08-24T14:04:16+00:00",
+ "captured_symbol_count": 50,
+ "tape": {
+  "binance-usdm": {
+   "symbols_written_in_window": 51,
+   "records_in_window": 453762,
+   "records_per_second": 756.27,
+   "newest_record_age_seconds": -4.8
+  },
+  "bybit-linear": {
+   "symbols_written_in_window": 53,
+   "records_in_window": 125016,
+   "records_per_second": 208.36,
+   "newest_record_age_seconds": -6.5
+  }
+ },
+ "heartbeats": {
+  "parts_reporting": 57,
+  "table_age_seconds": 0.0,
+  "input_loss": [],
+  "worst_staleness": [
+   [
+    "venue-trade-stream-reader",
+    1.14
+   ],
+   [
+    "signal-excursion-profiler",
+    1.02
+   ],
+   [
+    "part-appetite-meter",
+    1.01
+   ],
+   [
+    "capital-allotment-reader",
+    1.0
+   ],
+   [
+    "capital-settings-validator",
+    1.0
+   ]
+  ],
+  "sampler": {
+   "frames_published": 7178.0,
+   "frames_split": 0.0,
+   "largest_frame_symbols": 53.0,
+   "symbols_tracked": 104.0,
+   "trades_observed": 4232888.0,
+   "venues_tracked": 2.0
+  },
+  "planner": {
+   "held": 0.0,
+   "plans": 2137.0,
+   "refusals": 0.0,
+   "switched_off": 0.0,
+   "switched_on": 0.0
+  },
+  "actuator": {
+   "failed": 0.0,
+   "flipped": 0.0,
+   "plans_refused": 0.0
+  },
+  "hogs": {
+   "parts_seen": 56.0,
+   "reports": 0.0,
+   "uncontended_skips": 12698.0,
+   "unmeasured_parts": 0.0
+  },
+  "forecaster": {
+   "forecasts": 2129.0,
+   "growth_seen": 1626.0,
+   "last_seconds_to_exhaustion": 57481.696738738356
+  }
+ },
+ "scopes": {
+  "scopes": 57,
+  "total_memory_bytes": 1271840768,
+  "top_memory": [
+   {
+    "part_id": "venue-trade-stream-reader",
+    "memory_mb": 150.9
+   },
+   {
+    "part_id": "trade-lifecycle-recorder",
+    "memory_mb": 114.1
+   },
+   {
+    "part_id": "bull-exit-plan-proposer",
+    "memory_mb": 66.1
+   },
+   {
+    "part_id": "spread-reversion-detector",
+    "memory_mb": 57.3
+   },
+   {
+    "part_id": "bull-conviction-model",
+    "memory_mb": 23.7
+   },
+   {
+    "part_id": "symbol-catalogue-reader",
+    "memory_mb": 21.9
+   },
+   {
+    "part_id": "regime-classifier",
+    "memory_mb": 21.2
+   },
+   {
+    "part_id": "bull-feature-builder",
+    "memory_mb": 19.3
+   }
+  ]
+ }
+}
