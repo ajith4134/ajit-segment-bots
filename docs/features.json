@@ -5078,7 +5078,8 @@
       "category": "opportunity-scanner",
       "consumes": [
         "cointegrated-pair",
-        "symbol-price-frame"
+        "symbol-price-frame",
+        "symbol-quote-frame"
       ],
       "produces": [
         "entry-candidate",

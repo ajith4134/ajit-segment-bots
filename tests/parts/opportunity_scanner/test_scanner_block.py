@@ -1077,3 +1077,121 @@ def test_the_detector_still_refuses_an_untradeable_pair_that_reaches_it():
     candidate, reason = detector.detect(retired)
     assert candidate is None
     assert reason == PAIR_NOT_COINTEGRATED
+
+
+# ---- a stale leg asks the quote before refusing ------------------------------
+#
+# Measured live on 2026-08-24: spread-reversion-detector refused 1,438,376 of
+# 4,199,062 tests -- 34% -- because one leg's last *trade* was older than that
+# symbol's own moves say a price may be believed. The symbols were being quoted
+# the whole time. The rule is runtime.reference_price: the trade while it is
+# fresh, the resting mid once it is not, and neither when the market is too wide
+# for its mid to stand in for a trade.
+
+
+def detector_with_quotes(z=2.0, minimum=20, believable_seconds=10.0, materiality=0.001):
+    from runtime.reference_price import ReferencePriceChooser
+
+    class Bound:
+        value = believable_seconds
+        reason = "a bound fixed for this test"
+
+    class Staleness:
+        def believable_age_seconds(self, venue_id, symbol):
+            return Bound()
+
+    clock = {"now": 0}
+    detector = SpreadReversionDetector(
+        z_threshold=z, rearm_z=z / 2, window_length=100, minimum_observations=minimum,
+        horizon_seconds=300.0, calibrator=calibrator(),
+        reference_price=ReferencePriceChooser(Staleness(), materiality_fraction=materiality),
+        now_ns=lambda: clock["now"],
+    )
+    return detector, clock
+
+
+def a_tradeable_pair():
+    finder = pair_finder(minimum=30)
+    cointegrating_series(finder)
+    pair = finder.test_pair_for_publication(VENUE, "AUSDT", "BUSDT")
+    assert pair is not None and pair.is_tradeable
+    return pair
+
+
+def test_a_leg_whose_trade_went_stale_is_priced_from_its_quote():
+    """The 1,438,376. The symbol stopped trading; its market did not go away."""
+    pair = a_tradeable_pair()
+    detector, clock = detector_with_quotes()
+
+    # Both legs traded long ago, past any believable age.
+    detector.observe_price(VENUE, "AUSDT", 100.5, 0)
+    detector.observe_price(VENUE, "BUSDT", 100.0, 0)
+    # Both are still quoted, tightly, right now.
+    clock["now"] = 60 * SECOND_NS
+    detector.observe_quote(VENUE, "AUSDT", 100.49, 100.51, clock["now"])
+    detector.observe_quote(VENUE, "BUSDT", 99.99, 100.01, clock["now"])
+
+    _candidate, reason = detector.detect(pair)
+    assert reason != A_LEG_IS_STALE, "a quoted symbol is not an unpriceable one"
+    assert detector.standing.stale_leg == 0
+    assert detector.standing.leg_priced_from_a_quote == 2
+
+
+def test_a_fresh_trade_is_still_preferred_over_the_quote():
+    """The quote is the fallback, never the replacement."""
+    pair = a_tradeable_pair()
+    detector, clock = detector_with_quotes()
+
+    clock["now"] = 1 * SECOND_NS
+    detector.observe_price(VENUE, "AUSDT", 100.5, clock["now"])
+    detector.observe_price(VENUE, "BUSDT", 100.0, clock["now"])
+    detector.observe_quote(VENUE, "AUSDT", 90.0, 90.02, clock["now"])
+    detector.observe_quote(VENUE, "BUSDT", 90.0, 90.02, clock["now"])
+
+    detector.detect(pair)
+    assert detector.standing.leg_priced_from_a_quote == 0
+
+
+def test_a_leg_quoted_too_wide_is_refused_rather_than_priced_on_its_mid():
+    """A market 5% wide has a mid nobody would trade at, and a spread built on it
+    would carry that noise into a statistic whose job is to notice two sigma."""
+    pair = a_tradeable_pair()
+    detector, clock = detector_with_quotes()
+
+    detector.observe_price(VENUE, "AUSDT", 100.5, 0)
+    detector.observe_price(VENUE, "BUSDT", 100.0, 0)
+    clock["now"] = 60 * SECOND_NS
+    detector.observe_quote(VENUE, "AUSDT", 98.0, 103.0, clock["now"])
+    detector.observe_quote(VENUE, "BUSDT", 99.99, 100.01, clock["now"])
+
+    _candidate, reason = detector.detect(pair)
+    assert reason == A_LEG_IS_STALE
+    assert detector.standing.leg_quote_too_wide == 1
+
+
+def test_a_leg_with_no_quote_at_all_still_refuses_on_age():
+    """The guard the whole design exists for is not weakened by the fallback."""
+    pair = a_tradeable_pair()
+    detector, clock = detector_with_quotes()
+
+    detector.observe_price(VENUE, "AUSDT", 100.5, 0)
+    detector.observe_price(VENUE, "BUSDT", 100.0, 0)
+    clock["now"] = 60 * SECOND_NS
+
+    _candidate, reason = detector.detect(pair)
+    assert reason == A_LEG_IS_STALE
+    assert detector.standing.leg_priced_from_a_quote == 0
+
+
+def test_a_detector_given_no_chooser_behaves_exactly_as_before():
+    """Every test written before the quote feed still describes this part."""
+    pair = a_tradeable_pair()
+    detector = spread_detector()
+    detector.observe_price(VENUE, "AUSDT", 100.5, 0)
+    detector.observe_price(VENUE, "BUSDT", 100.0, 0)
+    _candidate, reason = detector.detect(pair)
+    assert detector.standing.leg_priced_from_a_quote == 0
+    # Whatever it decides, it decides it from the trades alone -- no chooser was
+    # given, so no quote can have reached the decision.
+    assert reason != A_LEG_IS_STALE
+    assert detector.standing.leg_quote_too_wide == 0

@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
+from runtime.quote_frames import quote_levels_in
+from runtime.reference_price import ReferencePriceChooser
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
 from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
@@ -30,7 +32,7 @@ PART_ID = "spread-reversion-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="spread-reversion-detector",
-    consumes=("cointegrated-pair", "symbol-price-frame"),
+    consumes=("cointegrated-pair", "symbol-price-frame", "symbol-quote-frame"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -67,6 +69,8 @@ class SpreadStanding:
     outcomes_learned: int = 0
     widest_z: float = 0.0
     untradeable_pairs_held: int = 0
+    leg_priced_from_a_quote: int = 0
+    leg_quote_too_wide: int = 0
 
 
 class SpreadReversionDetector:
@@ -81,6 +85,7 @@ class SpreadReversionDetector:
         horizon_seconds: float,
         calibrator: SignalCalibrator,
         price_staleness: PriceStalenessEstimator | None = None,
+        reference_price=None,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
@@ -107,6 +112,7 @@ class SpreadReversionDetector:
         # the widest stretch it has ever seen. Both bounds are the caller's to
         # state; this part invents neither (RL-061).
         self._price_staleness = price_staleness
+        self._reference_price = reference_price
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
         self._now_ns = now_ns
@@ -125,6 +131,39 @@ class SpreadReversionDetector:
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         """One leg's print, with the venue's own time for it."""
         self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=at_ns)
+        if self._reference_price is not None:
+            self._reference_price.observe_trade(venue_id, symbol, price, at_ns)
+
+    def observe_quote(
+        self, venue_id: str, symbol: str, bid_price: float, ask_price: float, at_ns: int
+    ) -> None:
+        """One leg's resting market, which exists whether or not the symbol traded.
+
+        This is the fact that was missing. Measured 2026-08-24, 1,438,376 of this
+        part's 4,199,062 tests were refused because a leg's last *trade* was too
+        old -- 34% of its work -- while the symbol was being quoted the whole time.
+        """
+        if self._reference_price is None:
+            return
+        self._reference_price.observe_quote(venue_id, symbol, bid_price, ask_price, at_ns)
+
+    def _leg_price(self, venue_id: str, symbol: str, at_ns: int):
+        """What this leg is worth now: the trade if fresh, else the quote. None if neither.
+
+        Counting happens here rather than in the chooser's own totals because a
+        spread has two legs and a refusal is about the pair -- the chooser counts
+        legs, this counts tests, and conflating them would double every number.
+        """
+        from runtime.reference_price import QUOTE_TOO_WIDE, ChosenPrice
+
+        chosen = self._reference_price.price_for(venue_id, symbol, at_ns)
+        if isinstance(chosen, ChosenPrice):
+            if chosen.came_from_a_quote:
+                self.standing.leg_priced_from_a_quote += 1
+            return chosen
+        if chosen.reason == QUOTE_TOO_WIDE:
+            self.standing.leg_quote_too_wide += 1
+        return None
 
     def tradeable_pairs_among(self, pairs) -> tuple:
         """The pairs worth testing, and a count of the ones being held and skipped.
@@ -161,21 +200,37 @@ class SpreadReversionDetector:
             self.standing.not_cointegrated += 1
             return None, PAIR_NOT_COINTEGRATED
 
-        left = self._prices.get((pair.venue_id, pair.left_symbol))
-        right = self._prices.get((pair.venue_id, pair.right_symbol))
-        if left is None or right is None:
-            self.standing.no_prices += 1
-            return None, NO_PRICES
-
-        if self._price_staleness is not None:
+        if self._reference_price is not None:
+            # Each leg is worth its last trade while that is fresh, and its resting
+            # mid once it is not. A symbol nobody has traded for a minute still has
+            # a market, and refusing the pair over that was 34% of this part's work
+            # on 2026-08-24 -- 1,438,376 tests of 4,199,062, thrown away over
+            # symbols that were being quoted the whole time.
             at = self._now_ns()
-            for symbol, observed in (
-                (pair.left_symbol, left), (pair.right_symbol, right),
-            ):
-                bound = self._price_staleness.believable_age_seconds(pair.venue_id, symbol)
-                if observed.age_seconds(at) > bound.value:
-                    self.standing.stale_leg += 1
-                    return None, A_LEG_IS_STALE
+            left = self._leg_price(pair.venue_id, pair.left_symbol, at)
+            right = self._leg_price(pair.venue_id, pair.right_symbol, at)
+            if left is None or right is None:
+                # Both refusals land here: no price of any kind, and a price too
+                # old on both sides. The chooser has counted which, and this counts
+                # the test that could not be run.
+                self.standing.stale_leg += 1
+                return None, A_LEG_IS_STALE
+        else:
+            left = self._prices.get((pair.venue_id, pair.left_symbol))
+            right = self._prices.get((pair.venue_id, pair.right_symbol))
+            if left is None or right is None:
+                self.standing.no_prices += 1
+                return None, NO_PRICES
+
+            if self._price_staleness is not None:
+                at = self._now_ns()
+                for symbol, observed in (
+                    (pair.left_symbol, left), (pair.right_symbol, right),
+                ):
+                    bound = self._price_staleness.believable_age_seconds(pair.venue_id, symbol)
+                    if observed.age_seconds(at) > bound.value:
+                        self.standing.stale_leg += 1
+                        return None, A_LEG_IS_STALE
 
         spread = left.price - pair.hedge_ratio * right.price
         # The spread is as recent as its older leg, not as its newer one: a
@@ -281,6 +336,12 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
         # they cost memory rather than a test per tick -- which is what they cost
         # before 2026-08-24, at 11,013 wasted tests a second.
         "untradeable_pairs_held": detector.standing.untradeable_pairs_held,
+        # Whether the quote feed is doing the job it was added for. Refusals
+        # falling while this stayed zero would mean they fell for some other
+        # reason, and a wide quote refused is a market too thin to stand in for a
+        # trade rather than a feed that failed.
+        "leg_priced_from_a_quote": detector.standing.leg_priced_from_a_quote,
+        "leg_quote_too_wide": detector.standing.leg_quote_too_wide,
     }
 
 
@@ -324,6 +385,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
+    quotes = Batch(read=context.bus.reader("symbol-quote-frame"))
     pairs = LatestByKey(
         read=context.bus.reader("cointegrated-pair"),
         key_of=lambda pair: (pair.venue_id, pair.left_symbol, pair.right_symbol),
@@ -331,6 +393,14 @@ def start_part(context) -> int:
     publish_candidates = context.bus.publisher_for("entry-candidate")
 
     price_staleness = price_staleness_from(context)
+    # A quote may stand in for a trade only while its own spread is immaterial, and
+    # what counts as material here is what counts as material everywhere in this
+    # system: the round trip cost. One number, applied twice, rather than a second
+    # threshold that could disagree with the first (RL-061).
+    reference_price = ReferencePriceChooser(
+        staleness=price_staleness,
+        materiality_fraction=2 * context.number("taker_fee_rate"),
+    )
     detector = SpreadReversionDetector(
         z_threshold=context.number("spread_reversion_z_threshold"),
         rearm_z=context.number("spread_reversion_rearm_z"),
@@ -344,6 +414,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
         price_staleness=price_staleness,
+        reference_price=reference_price,
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
@@ -365,6 +436,14 @@ def start_part(context) -> int:
         # `detect` keeps its own guard. A pair reaching it untradeable would be a
         # defect in this filter, and a stretched spread on a pair that has parted
         # company looks exactly like the best opportunity there has ever been.
+        for quote in quote_levels_in(quotes.payloads()):
+            # The venue's own stamp, and for a quote merged out of one-sided deltas
+            # that is its stalest side's. Both sides travel so the chooser can see
+            # how wide the market is before believing its mid.
+            detector.observe_quote(
+                quote.venue_id, quote.symbol,
+                quote.bid_price, quote.ask_price, quote.observed_at_ns,
+            )
         return detector.tradeable_pairs_among(pairs.values())
 
     return run_spread_reversion_detector(
