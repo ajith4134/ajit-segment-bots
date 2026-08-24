@@ -97,6 +97,7 @@ class BullEntryTimer:
         prior_extension_cap: float,
         prior_entry_cost_fraction: float,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if trigger_validity_seconds <= 0:
@@ -117,6 +118,7 @@ class BullEntryTimer:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._rules: dict[str, PlaybookRule] = {}
         self._entry_quality = QuantileEstimator(
@@ -139,7 +141,9 @@ class BullEntryTimer:
         window = self._prices.get(key)
         if window is None:
             window = RollingWindow(
-                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[key] = window
         window.observe(price, at_ns)
@@ -379,6 +383,7 @@ def start_part(context) -> int:
             maximum_extension_quantile=context.number("bull_entry_maximum_extension_quantile"),
             entry_quality_window=int(context.number("bull_entry_quality_window")),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
             prior_extension_cap=context.number("bull_entry_prior_extension_cap"),
             prior_entry_cost_fraction=context.number("bull_entry_prior_entry_cost_fraction"),
         ),

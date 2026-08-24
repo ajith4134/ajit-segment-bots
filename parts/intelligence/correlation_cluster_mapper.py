@@ -85,6 +85,7 @@ class CorrelationClusterMapper:
         minimum_shared_observations: int,
         cluster_threshold: float,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < cluster_threshold <= 1.0:
@@ -103,6 +104,7 @@ class CorrelationClusterMapper:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[str, RollingWindow] = {}
         self.standing = MapperStanding()
 
@@ -113,6 +115,7 @@ class CorrelationClusterMapper:
             window = RollingWindow(
                 length=self._window,
                 maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[symbol] = window
         window.observe(price, at_ns)
@@ -298,6 +301,7 @@ def start_part(context) -> int:
         minimum_shared_observations=int(context.number("correlation_minimum_shared_observations")),
         cluster_threshold=context.number("correlation_cluster_threshold"),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
 
     def read_prices(_mapper) -> None:

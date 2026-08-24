@@ -75,7 +75,13 @@ class Clock:
         self.now_ns = now_ns
 
     def __call__(self):
-        return self.now_ns
+        # A real clock read twice never returns the same nanosecond, and since
+        # 2026-08-24 a window drops an observation whose value and moment both
+        # repeat -- so this one ticks a millisecond per read, the venues' own
+        # timestamp precision.
+        now = self.now_ns
+        self.now_ns += 1_000_000
+        return now
 
     def advance_seconds(self, seconds):
         self.now_ns += int(seconds * 1e9)

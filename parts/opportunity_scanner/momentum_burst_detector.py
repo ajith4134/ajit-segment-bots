@@ -73,6 +73,7 @@ class MomentumBurstDetector:
         horizon_seconds: float,
         calibrator: SignalCalibrator,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if burst_z_threshold <= 0:
@@ -87,6 +88,7 @@ class MomentumBurstDetector:
         # hole in it rather than a gap between prints. None means the caller stated
         # no bound, and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._returns: dict[tuple[str, str], RollingWindow] = {}
         self._last_price_at_ns: dict[tuple[str, str], int] = {}
         self._last_price: dict[tuple[str, str], float] = {}
@@ -132,7 +134,9 @@ class MomentumBurstDetector:
         window = self._returns.get(key)
         if window is None:
             window = RollingWindow(
-                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._returns[key] = window
         window.observe((price - previous) / previous, at_ns)
@@ -266,6 +270,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
 
     class _Regime:

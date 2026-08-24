@@ -97,6 +97,7 @@ class BullFeatureBuilder:
         minimum_observations: int,
         reference_order_size_quote: float,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if short_window >= long_window:
@@ -110,6 +111,7 @@ class BullFeatureBuilder:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._short = short_window
         self._long = long_window
         self._minimum = minimum_observations
@@ -246,10 +248,14 @@ class BullFeatureBuilder:
         if observations is None:
             observations = SymbolObservations(
                 short_window=RollingWindow(
-                    length=self._short, maximum_gap_seconds=self._maximum_gap_seconds
+                    length=self._short,
+                    maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
                 ),
                 long_window=RollingWindow(
-                    length=self._long, maximum_gap_seconds=self._maximum_gap_seconds
+                    length=self._long,
+                    maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
                 ),
             )
             self._symbols[key] = observations
@@ -385,6 +391,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("bull_feature_minimum_observations")),
             reference_order_size_quote=context.number("bull_reference_order_size_quote"),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
         ),
         control_socket=context.control_socket,
         read_candidates_and_market=read_candidates_and_market,

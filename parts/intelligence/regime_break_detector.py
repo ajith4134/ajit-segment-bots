@@ -95,6 +95,7 @@ class RegimeBreakDetector:
         correlation_jump: float,
         persistence_observations: int,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if recent_window >= established_window:
@@ -123,6 +124,7 @@ class RegimeBreakDetector:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._returns: dict[str, RollingWindow] = {}
         self._broken: dict[str, RegimeBreakAlert] = {}
         self._elevated_for: dict[str, int] = {}
@@ -135,6 +137,7 @@ class RegimeBreakDetector:
             window = RollingWindow(
                 length=self._established_window,
                 maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._returns[symbol] = window
         window.observe(price, at_ns)
@@ -385,6 +388,7 @@ def start_part(context) -> int:
         correlation_jump=context.number("regime_break_correlation_jump"),
         persistence_observations=int(context.number("regime_break_persistence_observations")),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
     # The market-event data type's own vocabulary for events that change the
     # rules -- named here by value, because a part names data, never another part.

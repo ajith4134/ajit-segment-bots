@@ -99,6 +99,7 @@ class RegimeClassifier:
         trending_above: float,
         reverting_below: float,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not reverting_below < RANDOM_WALK_HURST < trending_above:
@@ -115,6 +116,7 @@ class RegimeClassifier:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = ClassifierStanding()
 
@@ -175,7 +177,9 @@ class RegimeClassifier:
         window = self._prices.get(key)
         if window is None:
             window = RollingWindow(
-                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[key] = window
         return window
@@ -278,6 +282,7 @@ def start_part(context) -> int:
             trending_above=context.number("regime_trending_hurst_above"),
             reverting_below=context.number("regime_reverting_hurst_below"),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
         ),
         control_socket=context.control_socket,
         read_prices=read_prices,

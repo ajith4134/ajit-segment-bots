@@ -46,9 +46,23 @@ class RollingWindow:
 
     length: int
     maximum_gap_seconds: float | None = None
+    # Optional patience for a series that is ordinarily slow. When set alongside
+    # maximum_gap_seconds, the bound a gap is judged against becomes
+    # max(maximum_gap_seconds, gap_patience_multiple x this series' own p99
+    # inter-arrival gap) -- estimated from the gaps this window has itself
+    # observed, never from a table. The floor keeps the proven bound for a
+    # liquid series; the multiple keeps an illiquid one, whose ordinary quiet is
+    # minutes, from clearing its window on every pause and staying blind
+    # forever. The 2026-08-23 measurement behind the floor found ordinary p99
+    # gaps of 3.0s (median symbol) to 42.3s (worst) against a real outage of
+    # ~1031s -- an outage clears any plausible bound either way.
+    gap_patience_multiple: float | None = None
     values: deque = field(default_factory=deque)
     _last_observed_at_ns: int | None = None
+    _last_observed_value: float | None = None
     _series_breaks: int = 0
+    _redelivered_skipped: int = 0
+    _recent_gaps_seconds: deque = field(default_factory=deque)
 
     def __post_init__(self) -> None:
         if self.length < 2:
@@ -58,9 +72,38 @@ class RollingWindow:
                 "the gap bound is a positive number of seconds, or None for a window with no "
                 f"clock; got {self.maximum_gap_seconds!r}"
             )
+        if self.gap_patience_multiple is not None:
+            if self.maximum_gap_seconds is None:
+                raise ValueError(
+                    "gap patience multiplies a gap bound; without maximum_gap_seconds there "
+                    "is nothing for it to be patient about"
+                )
+            if not self.gap_patience_multiple > 0:
+                raise ValueError(
+                    f"the gap patience is a positive multiple of this series' own p99 gap; "
+                    f"got {self.gap_patience_multiple!r}"
+                )
         self.values = deque(self.values, maxlen=self.length)
+        # As many gaps as values: the p99 of the gaps should describe the same
+        # stretch of series the window itself does.
+        self._recent_gaps_seconds = deque(self._recent_gaps_seconds, maxlen=self.length)
 
     def observe(self, value: float, at_ns: int | None = None) -> None:
+        if (
+            at_ns is not None
+            and at_ns == self._last_observed_at_ns
+            and self._last_observed_value == float(value)
+        ):
+            # The same value at the same moment is the same fact re-delivered,
+            # not a new observation. Since 2026-08-24 a price travels in a frame
+            # published four times a second, so a symbol quiet between frames
+            # arrives again with the same print time and price -- appended,
+            # those repeats fill the window with a flat run the market never
+            # traded. The value is part of the test on purpose: venues stamp at
+            # millisecond precision, and two real prints in one millisecond are
+            # two facts, not one.
+            self._redelivered_skipped += 1
+            return
         if self.maximum_gap_seconds is not None:
             if at_ns is None:
                 raise ValueError(
@@ -69,13 +112,38 @@ class RollingWindow:
                 )
             if self._last_observed_at_ns is not None:
                 gap_seconds = (at_ns - self._last_observed_at_ns) / 1e9
-                if gap_seconds > self.maximum_gap_seconds:
+                # The floor first: a gap inside it can never break the series,
+                # and the p99 estimate is only worth computing past it.
+                if gap_seconds > self.maximum_gap_seconds and gap_seconds > self._gap_bound_seconds():
                     self.values.clear()
                     self._series_breaks += 1
+                self._recent_gaps_seconds.append(gap_seconds)
             self._last_observed_at_ns = at_ns
         elif at_ns is not None:
             self._last_observed_at_ns = at_ns
+        self._last_observed_value = float(value)
         self.values.append(float(value))
+
+    def _gap_bound_seconds(self) -> float:
+        """What counts as a hole for this series, right now.
+
+        The stated bound alone until this series has shown enough of its own
+        rhythm to be measured against it -- an estimate from a handful of gaps
+        would let one early pause set the patience.
+        """
+        if self.gap_patience_multiple is None:
+            return self.maximum_gap_seconds
+        gaps = self._recent_gaps_seconds
+        if len(gaps) < max(2, self.length // 2):
+            return self.maximum_gap_seconds
+        ordered = sorted(gaps)
+        p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
+        return max(self.maximum_gap_seconds, self.gap_patience_multiple * p99)
+
+    @property
+    def redelivered_skipped(self) -> int:
+        """Observations carrying the same time as the last, dropped unappended."""
+        return self._redelivered_skipped
 
     @property
     def series_breaks(self) -> int:

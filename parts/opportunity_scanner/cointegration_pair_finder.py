@@ -87,6 +87,7 @@ class CointegrationPairFinder:
         minimum_correlation: float,
         minimum_reversion_strength: float,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_reversion_strength < 1.0:
@@ -100,6 +101,7 @@ class CointegrationPairFinder:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._cointegrated: set[tuple[str, str, str]] = set()
         self.standing = FinderStanding()
@@ -116,7 +118,9 @@ class CointegrationPairFinder:
         window = self._prices.get(key)
         if window is None:
             window = RollingWindow(
-                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[key] = window
         window.observe(price, at_ns)
@@ -291,6 +295,7 @@ def start_part(context) -> int:
         minimum_correlation=context.number("cointegration_minimum_correlation"),
         minimum_reversion_strength=context.number("cointegration_minimum_reversion_strength"),
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
     pairs_per_tick = int(context.number("cointegration_pairs_tested_per_tick"))
     symbols_by_venue: dict[str, set[str]] = {}

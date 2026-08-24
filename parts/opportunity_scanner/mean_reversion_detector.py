@@ -72,6 +72,7 @@ class MeanReversionDetector:
         horizon_seconds: float,
         calibrator: SignalCalibrator,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if z_threshold <= 0:
@@ -87,6 +88,7 @@ class MeanReversionDetector:
         # hole in it rather than a series. None means the caller stated no bound,
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = DetectorStanding()
 
@@ -97,6 +99,7 @@ class MeanReversionDetector:
             window = RollingWindow(
                 length=self._window_length,
                 maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[(venue_id, symbol)] = window
         window.observe(price, at_ns)
@@ -236,6 +239,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
 
     def read_prices_and_regimes(_detector):

@@ -78,6 +78,7 @@ class SpreadReversionDetector:
         calibrator: SignalCalibrator,
         price_staleness: PriceStalenessEstimator | None = None,
         maximum_gap_seconds: float | None = None,
+        gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if z_threshold <= 0:
@@ -95,6 +96,7 @@ class SpreadReversionDetector:
         # state; this part invents neither (RL-061).
         self._price_staleness = price_staleness
         self._maximum_gap_seconds = maximum_gap_seconds
+        self._gap_patience_multiple = gap_patience_multiple
         self._now_ns = now_ns
         self._prices: dict[tuple[str, str], float] = {}
         self._spreads: dict[tuple[str, str, str], RollingWindow] = {}
@@ -142,7 +144,9 @@ class SpreadReversionDetector:
         window = self._spreads.get(key)
         if window is None:
             window = RollingWindow(
-                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+                gap_patience_multiple=self._gap_patience_multiple,
             )
             self._spreads[key] = window
         window.observe(spread, spread_at_ns)
@@ -282,6 +286,7 @@ def start_part(context) -> int:
         ),
         price_staleness=price_staleness,
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+            gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
 
     def read_pairs(_detector):

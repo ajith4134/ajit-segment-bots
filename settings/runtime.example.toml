@@ -3784,3 +3784,8 @@ note  = "operator, 2026-08-24: how often part-appetite-meter walks every part's 
 value = 1.0
 unit  = "seconds between switch plans"
 note  = "operator, 2026-08-24: how often switching-planner weighs its fourteen inputs into a plan. Measured without it: 2,802 plans in under four minutes -- thirteen a second -- of which gate-actuator lost 218 to its own receive buffer, and every plan between two metering sweeps is computed from the same numbers as the last. A plan once a second matches part_usage_cadence_seconds, since a plan more often than the metering it reads cannot say anything new."
+
+[price_gap_patience_multiple]
+value = 2.8
+unit  = "multiple of a symbol's own p99 inter-print gap"
+note  = "operator, 2026-08-24: written before captured_symbol_count was first raised past 30, closing the promise in price_series_maximum_gap_seconds. A window's gap bound becomes max(the 120s floor, this multiple x that symbol's own p99 gap, estimated online from the gaps the window itself has observed) -- so a liquid symbol keeps the proven floor exactly as before, and an illiquid perpetual whose ordinary quiet is minutes stops clearing its window on every pause and staying permanently blind. 2.8 carries the floor's own provenance forward: 120s was set at 2.8x the worst ordinary p99 measured on 2026-08-23 (42.3s, CLUSDT), the ratio that let ordinary quiet through while the real 1031s outage that day still cleared every window by more than a factor of eight. The estimate needs half a window of observed gaps before it takes effect, so one early pause cannot set the patience."
