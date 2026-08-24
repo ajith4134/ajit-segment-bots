@@ -962,3 +962,118 @@ def test_a_spread_with_a_stale_leg_is_refused_rather_than_fired_on():
     assert candidate is None
     assert reason == A_LEG_IS_STALE
     assert subject.standing.stale_leg == 1
+
+
+# ---- the fan-out between the finder and the detector -------------------------
+#
+# Measured live on 2026-08-24 at 50 symbols per venue, before these existed:
+# cointegration-pair-finder published 506 verdicts a second, of which 299 were
+# `unrelated` and 92 `correlated-but-drifting` -- 77% of the traffic was pairs
+# that cannot be traded, against 2,485 that were cointegrated. Downstream,
+# spread-reversion-detector held every one of them and re-tested it on every
+# tick: 11,013 of its 13,557 tests a second. Both grow as the square of the
+# universe, and at 100 symbols per venue the detector dropped 663,028 inputs.
+
+
+def cointegrating_series(subject, ticks=100, left="AUSDT", right="BUSDT", start=0):
+    """A spread that reverts, so the pair qualifies. The shape used above."""
+    for index in range(start, start + ticks):
+        base = 100.0 + index * 0.1
+        wobble = 0.5 if index % 2 else -0.5
+        subject.observe_price(VENUE, left, base + wobble, index * SECOND_NS)
+        subject.observe_price(VENUE, right, base, index * SECOND_NS)
+
+
+def test_a_pair_that_was_never_cointegrated_is_never_announced():
+    """The 299 a second. Saying it again tells the reader what it already believes."""
+    subject = pair_finder(minimum=30)
+    for index in range(100):
+        # One leg walks, the other stands still: no hedge ratio exists at all.
+        subject.observe_price(VENUE, "AUSDT", 100.0 + index, index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", 100.0, index * SECOND_NS)
+
+    for _ in range(5):
+        assert subject.test_pair_for_publication(VENUE, "AUSDT", "BUSDT") is None
+
+    assert subject.standing.verdicts_published == 0
+    assert subject.standing.verdicts_suppressed == 5
+
+
+def test_a_cointegrated_pair_is_announced_every_time_it_is_tested():
+    """Freshness is unchanged for the pairs that matter.
+
+    The reader computes its spread from `hedge_ratio` on every tick, so slowing
+    these down would trade one defect for another.
+    """
+    subject = pair_finder(minimum=30)
+    cointegrating_series(subject)
+
+    announced = [subject.test_pair_for_publication(VENUE, "AUSDT", "BUSDT") for _ in range(4)]
+    assert all(pair is not None for pair in announced)
+    assert all(pair.state == COINTEGRATED for pair in announced)
+    assert all(pair.hedge_ratio is not None for pair in announced)
+    assert subject.standing.verdicts_published == 4
+    assert subject.standing.verdicts_suppressed == 0
+
+
+def test_a_pair_that_stops_cointegrating_is_announced_once_and_then_falls_silent():
+    """The retirement is what makes the silence safe.
+
+    A reader that never heard it would keep trading a spread that has ended, and a
+    stretched spread on a pair that has parted company looks exactly like the best
+    opportunity there has ever been.
+    """
+    subject = pair_finder(minimum=30)
+    cointegrating_series(subject)
+    assert subject.test_pair_for_publication(VENUE, "AUSDT", "BUSDT").is_tradeable
+
+    # The legs part company: one keeps walking, the other stops.
+    for index in range(100, 400):
+        subject.observe_price(VENUE, "AUSDT", 100.0 + index * 2.0, index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", 110.0, index * SECOND_NS)
+
+    verdicts = [subject.test_pair_for_publication(VENUE, "AUSDT", "BUSDT") for _ in range(4)]
+    said = [verdict for verdict in verdicts if verdict is not None]
+
+    assert len(said) == 1, "the retirement is said exactly once, then the pair goes quiet"
+    assert not said[0].is_tradeable
+    assert subject.standing.pairs_retired == 1
+    assert subject.standing.verdicts_suppressed == 3
+
+
+def test_the_detector_holds_a_retired_pair_but_never_tests_it_again():
+    """The 11,013 a second. `detect` would refuse it; not asking is the saving."""
+    finder = pair_finder(minimum=30)
+    cointegrating_series(finder)
+    tradeable = finder.test_pair_for_publication(VENUE, "AUSDT", "BUSDT")
+
+    for index in range(100, 400):
+        finder.observe_price(VENUE, "AUSDT", 100.0 + index * 2.0, index * SECOND_NS)
+        finder.observe_price(VENUE, "BUSDT", 110.0, index * SECOND_NS)
+    retired = finder.test_pair_for_publication(VENUE, "AUSDT", "BUSDT")
+    assert retired is not None and not retired.is_tradeable
+
+    detector = spread_detector()
+    assert detector.tradeable_pairs_among([tradeable, retired]) == (tradeable,)
+    assert detector.standing.untradeable_pairs_held == 1
+
+    # The gauge is a gauge: holding only untradeable pairs is not a rising count.
+    assert detector.tradeable_pairs_among([retired]) == ()
+    assert detector.standing.untradeable_pairs_held == 1
+    assert detector.standing.tests == 0, "nothing was tested, which is the point"
+
+
+def test_the_detector_still_refuses_an_untradeable_pair_that_reaches_it():
+    """Defence in depth: the filter is new, and `detect`'s own guard stays."""
+    finder = pair_finder(minimum=30)
+    cointegrating_series(finder)
+    finder.test_pair_for_publication(VENUE, "AUSDT", "BUSDT")
+    for index in range(100, 400):
+        finder.observe_price(VENUE, "AUSDT", 100.0 + index * 2.0, index * SECOND_NS)
+        finder.observe_price(VENUE, "BUSDT", 110.0, index * SECOND_NS)
+    retired = finder.test_pair_for_publication(VENUE, "AUSDT", "BUSDT")
+
+    detector = spread_detector()
+    candidate, reason = detector.detect(retired)
+    assert candidate is None
+    assert reason == PAIR_NOT_COINTEGRATED

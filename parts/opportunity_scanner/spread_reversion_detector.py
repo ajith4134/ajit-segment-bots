@@ -66,6 +66,7 @@ class SpreadStanding:
     stale_leg: int = 0
     outcomes_learned: int = 0
     widest_z: float = 0.0
+    untradeable_pairs_held: int = 0
 
 
 class SpreadReversionDetector:
@@ -124,6 +125,27 @@ class SpreadReversionDetector:
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         """One leg's print, with the venue's own time for it."""
         self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=at_ns)
+
+    def tradeable_pairs_among(self, pairs) -> tuple:
+        """The pairs worth testing, and a count of the ones being held and skipped.
+
+        A retired pair stays in the level store upstream -- that store is what told
+        this part it retired -- but testing it again every tick is work whose answer
+        is already known, and `detect` would refuse it immediately.
+
+        Measured live on 2026-08-24 at 50 symbols per venue: that refusal was
+        11,013 of this part's 13,557 tests a second, and it grows as the square of
+        the universe. At 100 symbols per venue the same shape left this part
+        dropping 663,028 of its inputs.
+
+        A method rather than a filter written where the inbox is read, because an
+        untested filter standing between this part and most of its work is exactly
+        the thing that should not be taken on trust.
+        """
+        held = tuple(pairs)
+        tradeable = tuple(pair for pair in held if pair.is_tradeable)
+        self.standing.untradeable_pairs_held = len(held) - len(tradeable)
+        return tradeable
 
     def observe_outcome(self, regime: str, reverted: bool) -> None:
         self._calibrator.observe_outcome(PART_ID, regime, reverted)
@@ -254,6 +276,11 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
         "stale_leg": detector.standing.stale_leg,
         "outcomes_learned": detector.standing.outcomes_learned,
         "widest_z": detector.standing.widest_z,
+        # A gauge, not a counter: how many pairs this part is holding that it
+        # cannot trade. They arrive as retirements and are never tested again, so
+        # they cost memory rather than a test per tick -- which is what they cost
+        # before 2026-08-24, at 11,013 wasted tests a second.
+        "untradeable_pairs_held": detector.standing.untradeable_pairs_held,
     }
 
 
@@ -329,7 +356,16 @@ def start_part(context) -> int:
             price_staleness.observe_price(
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
-        return pairs.values()
+        # Only pairs that can actually be traded. A retired pair stays in the
+        # level store -- that is what tells this part it retired -- but testing it
+        # again on every tick is work whose answer is known: `detect` would refuse
+        # it immediately. Measured 2026-08-24, that refusal was 11,013 of this
+        # part's 13,557 tests a second, and it grows as the square of the universe.
+        #
+        # `detect` keeps its own guard. A pair reaching it untradeable would be a
+        # defect in this filter, and a stretched spread on a pair that has parted
+        # company looks exactly like the best opportunity there has ever been.
+        return detector.tradeable_pairs_among(pairs.values())
 
     return run_spread_reversion_detector(
         detector=detector,

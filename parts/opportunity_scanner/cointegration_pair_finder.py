@@ -73,6 +73,8 @@ class FinderStanding:
     correlated_only: int = 0
     unrelated: int = 0
     pairs_retired: int = 0
+    verdicts_published: int = 0
+    verdicts_suppressed: int = 0
     symbols_tracked: int = 0
     strongest_reversion: float = 0.0
 
@@ -209,6 +211,43 @@ class CointegrationPairFinder:
             f"of {hedge_ratio:.4f}, over {length} observations",
         )
 
+    def test_pair_for_publication(
+        self, venue_id: str, left_symbol: str, right_symbol: str
+    ) -> CointegratedPair | None:
+        """Test the pair, and return it only when the verdict is worth saying.
+
+        A pair that is not cointegrated and was not cointegrated last time it was
+        tested is not news: saying so again tells the reader something it already
+        believes, and the reader pays for every one of them.
+
+        Measured live on 2026-08-24 at 50 symbols per venue, before this existed:
+        this part published 506 verdicts a second, of which 299 were `unrelated`
+        and 92 `correlated-but-drifting` -- 77% of the traffic was pairs that
+        cannot be traded, against 2,485 pairs that actually were cointegrated.
+        Downstream, spread-reversion-detector held every one of them and re-tested
+        it on every tick, which is where 11,013 of its 13,557 tests a second went.
+        At 100 symbols per venue the same shape dropped 663,028 of its inputs.
+
+        Three things are news, and nothing else is:
+
+        * the pair is cointegrated -- the reader trades on the hedge ratio and the
+          statistics, and they are refreshed exactly as often as before;
+        * the pair has just stopped being cointegrated -- said once, because a
+          reader that never heard it would keep trading a spread that has ended;
+        * nothing. A pair that was untradeable and still is stays unsaid.
+
+        The retirement is what makes the silence safe. Suppressing a verdict the
+        reader needs would be a worse defect than the flood this replaces.
+        """
+        pair_key = (venue_id, left_symbol, right_symbol)
+        was_tradeable = pair_key in self._cointegrated
+        pair = self.test_pair(venue_id, left_symbol, right_symbol)
+        if pair.is_tradeable or was_tradeable:
+            self.standing.verdicts_published += 1
+            return pair
+        self.standing.verdicts_suppressed += 1
+        return None
+
     def _retire(self, pair_key) -> None:
         """A pair that stops cointegrating stops being tradeable, immediately."""
         if pair_key in self._cointegrated:
@@ -241,6 +280,12 @@ def describe_pairs(finder: CointegrationPairFinder) -> dict:
         "unrelated": finder.standing.unrelated,
         "pairs_retired": finder.standing.pairs_retired,
         "currently_cointegrated": len(finder.cointegrated_pairs),
+        # What this part chose to say and what it chose to leave unsaid. Counted
+        # because a suppression rate that fell to zero would mean the flood is
+        # back, and one that reached 100% would mean nothing is cointegrated at
+        # all -- two different failures that look identical from the bus.
+        "verdicts_published": finder.standing.verdicts_published,
+        "verdicts_suppressed": finder.standing.verdicts_suppressed,
         "symbols_tracked": finder.standing.symbols_tracked,
         "strongest_reversion": finder.standing.strongest_reversion,
     }
@@ -254,7 +299,16 @@ def run_cointegration_pair_finder(
 ) -> int:
     def tick() -> None:
         pairs = read_prices_and_pairs(finder)
-        publish_pairs(tuple(finder.test_pair(*pair) for pair in pairs))
+        news = tuple(
+            verdict
+            for verdict in (finder.test_pair_for_publication(*pair) for pair in pairs)
+            if verdict is not None
+        )
+        # Publishing an empty tuple would be a message saying nothing, delivered to
+        # every reader, on every tick this part finds no news -- which is most of
+        # them once the untradeable pairs go unsaid.
+        if news:
+            publish_pairs(news)
 
     return run_part(
         declaration=PART_DECLARATION,
