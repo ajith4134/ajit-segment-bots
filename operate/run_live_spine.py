@@ -356,6 +356,26 @@ def main(argv: list[str]) -> int:
 
     lock = take_the_lock()
 
+    # A previous run that died without its stop path -- a supervisor killed at
+    # the timeout, a machine that lost power mid-stop -- leaves its parts'
+    # scopes behind, and systemd refuses a second unit by the same name: every
+    # placement would fail and all 57 parts would run unbounded while looking
+    # started. The lock above proves no other spine is alive, so a scope named
+    # for one of this spine's parts is a leftover, and stopping it kills any
+    # orphaned process still inside -- which is the recovery, not a hazard: an
+    # orphan holds inbox sockets the new run needs. The slice is found from this
+    # process's own cgroup, the same way part-appetite-meter finds the scopes.
+    from runtime.hardware_facts import read_own_cgroup_directory
+
+    for leftover in sorted(read_own_cgroup_directory().parent.glob("*.scope")):
+        part_id = leftover.name.removesuffix(".scope")
+        if part_id in spine:
+            subprocess.run(
+                ["systemctl", "--user", "stop", leftover.name],
+                capture_output=True, text=True,
+            )
+            record({"event": "leftover-scope-stopped", "part_id": part_id})
+
     # Every part in its own transient scope, with the same bounds for all --
     # limits are per-part only when a part with a genuinely larger working set
     # earns them (the settings' notes carry the measurements). The scopes are

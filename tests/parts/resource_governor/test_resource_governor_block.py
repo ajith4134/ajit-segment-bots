@@ -388,6 +388,33 @@ def planner():
 
 
 
+def test_a_reservation_never_starts_a_part_the_planner_has_not_seen_run(capacity):
+    """A reservation is a floor, not an ask. Reconciling it against a part the
+    planner has never seen metered would switch "on" whichever reserved part is
+    slowest to its first sweep at every spine boot -- symbol-catalogue-reader,
+    fetching two venues' catalogues, on 2026-08-24."""
+    from parts.resource_governor.resource_reservation_ledger import ResourceReservation
+
+    subject = planner()
+    reservation = ResourceReservation("slow-starter", 1.0, 1, 1, HONOURED, "floor held", 1)
+    inputs = GovernorInputs(
+        capacity=capacity, usages=(usage("hardware-scanner"),),
+        running_parts=("hardware-scanner",), reservations=(reservation,),
+    )
+    for _ in range(4):
+        assert subject.plan(inputs).decisions == ()
+
+    # Once it has been seen running, its later absence is evidence of an off part.
+    seen = GovernorInputs(
+        capacity=capacity, usages=(usage("hardware-scanner"), usage("slow-starter")),
+        running_parts=("hardware-scanner", "slow-starter"), reservations=(reservation,),
+    )
+    subject.plan(seen)
+    subject.plan(inputs)
+    vanished = subject.plan(inputs)
+    assert [(d.part_id, d.action) for d in vanished.decisions] == [("slow-starter", TURN_ON)]
+
+
 def test_a_part_the_metering_has_not_missed_yet_is_held_not_started(capacity):
     """Absent from one sweep may mean unmeasured, not off. The first plans after
     every spine start used to switch "on" whichever reserved parts the first

@@ -253,6 +253,12 @@ def start_part(context) -> int:
         publish_verdicts=publish_verdicts,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
-        tick_floor_seconds=context.tick_floor_seconds,
+        # A verdict is a level, and its readers need it fresh at the cadence the
+        # rest of the system reports at -- not once per message that happens to
+        # wake this part. Woken by every republished allotment, bound and
+        # ceiling, it judged 4.5 times a second and the bounds gate, busy with
+        # its own order stream, dropped 19,435 of the redundant verdicts on
+        # 2026-08-24. The floor holds the cadence; the settings still queue.
+        tick_floor_seconds=max(context.tick_floor_seconds, context.health_interval_seconds),
         emit_health=context.emit_health,
     )

@@ -35,6 +35,14 @@ RestartSec=5
 # but a clean stop costs nothing.
 KillSignal=SIGTERM
 TimeoutStopSec=60
+# Mixed, not control-group, since the parts moved into their own scopes
+# (2026-08-24): control-group TERMs everything in the service's cgroup at
+# once, which killed the forkserver out from under the supervisor mid-stop --
+# every part's exit status came back 255 because the process that would have
+# reaped it was already dead. Mixed TERMs only the supervisor, which stops
+# every part through its control socket and reads the real exit codes; what
+# remains in the cgroup afterwards is killed at the timeout as before.
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

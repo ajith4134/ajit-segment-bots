@@ -124,6 +124,10 @@ class SwitchingPlanner:
         self._now_ns = now_ns
         # Consecutive plans each candidate has been absent from the metering.
         self._plans_absent: dict[str, int] = {}
+        # Every part this planner has itself seen in a metering sweep. A
+        # reservation only reconciles a part that is in here: absent-but-known
+        # is evidence of an off part, never-known is a part still starting.
+        self._ever_seen_running: set[str] = set()
         self.standing = PlannerStanding()
 
     def plan(self, inputs: GovernorInputs) -> SwitchPlan:
@@ -157,6 +161,7 @@ class SwitchingPlanner:
 
         for part_id in inputs.running_parts:
             self._plans_absent.pop(part_id, None)
+            self._ever_seen_running.add(part_id)
             reason = self._off_reason(part_id, inputs, reserved)
             if reason is not None:
                 decisions.append(SwitchDecision(part_id, TURN_OFF, reason, self._priority(part_id, inputs)))
@@ -218,8 +223,25 @@ class SwitchingPlanner:
         return None
 
     def _candidates_to_start(self, inputs) -> tuple[str, ...]:
+        """Who might be switched on: explicit asks, plus reserved parts that vanished.
+
+        The two sources carry different evidence. An admitted part, a restart
+        request, a replacement or a conservation plan is an explicit ask --
+        something decided this part should run. A reservation is not an ask; it
+        is a standing floor, and using it to start a part is reconciliation:
+        "this part should be running and is not". That reading is only sound for
+        a part this planner has itself seen running -- a reserved part it has
+        never seen is indistinguishable from one still starting, and the first
+        plans after every spine boot were switching "on" whichever reserved part
+        was slowest to its first metering sweep (symbol-catalogue-reader,
+        fetching two venues' catalogues, at 13:00:16 on 2026-08-24).
+        """
         candidates = list(inputs.admitted_parts) + list(inputs.restart_requests)
-        candidates += [r.part_id for r in inputs.reservations if r.state == "honoured"]
+        candidates += [
+            r.part_id
+            for r in inputs.reservations
+            if r.state == "honoured" and r.part_id in self._ever_seen_running
+        ]
         candidates += list(inputs.replacement_plan) + list(inputs.conservation_plan)
         seen, ordered = set(), []
         for part_id in candidates:
