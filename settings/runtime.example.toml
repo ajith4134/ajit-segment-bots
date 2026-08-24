@@ -3759,3 +3759,28 @@ note  = "operator, 2026-08-24: how many symbols one frame may carry before it is
 value = 0.002
 unit  = "fraction of the last journalled extreme price"
 note  = "operator, 2026-08-24: how far a position's best or worst price must move past its last journalled value before position-recorder journals the excursion again. The first guard -- skipping exact repeats -- did not hold: an extreme is set by the market's newest best print, so on a trending symbol it moves on nearly every trade, and the journal took 8.59 million peak-excursion entries (4.2 GB, 99.9% of the file, 4.4 GiB of recorder RSS) in two live days. This journal exists so a restarted spine recovers an open position's extremes; recovering a peak at most 0.2% shy of the true one is the same recovery, and the exact extremes still land in the closed-trade entry when the trade ends. 0.2% is the same move signal_label_move_fraction already defines as the smallest the system treats as real, and the per-price path remains on the tape."
+
+[part_scope_memory_max_bytes]
+value = 536870912
+unit  = "bytes of memory.max per part scope"
+note  = "operator, 2026-08-24: the memory ceiling on each part's own cgroup, set when the spine first placed parts in scopes. 512 MiB is roughly ten times the largest healthy part measured live that day (venue-trade-stream-reader at 53.6 MiB RSS across 57 running parts, median 33.4 MiB) and twice the reserved_memory_bytes_per_critical_part floor. Writers do not need more: with the CacheReleasingWriter discipline a 500 MB tape write peaked at 16 MB of cgroup memory (measurements/2026-08-20-part-runtime). What this ceiling is for is the failure that motivated it -- position-recorder leaked to 4.4 GiB over two unmetered days; under this cap the kernel would have killed and the supervisor restarted it within minutes, with a part-fault on the board, instead of the leak compounding silently. Raise it deliberately when a part with a genuinely larger working set (a model, a large index) joins the spine, per part if need be."
+
+[part_scope_cpu_weight]
+value = 100
+unit  = "cpu.weight of each part scope"
+note  = "operator, 2026-08-24: the kernel's own default weight, stated rather than inherited so the choice is on record. cpu.weight only matters under contention, and no CPU contention has yet been measured on this box (busiest steady part 0.22 of a core against twelve). Differentiating weights by part priority is deferred until hog-detector has measured real contention -- a weighting scheme chosen before the phenomenon it shapes has been observed would be a number with no provenance."
+
+[part_scope_pids_max]
+value = 64
+unit  = "tasks allowed in each part scope"
+note  = "operator, 2026-08-24: measured live across 57 running parts the same day: at most 5 threads in any part (median 1), with BLAS thread caps applied at the forkserver. 64 is twelve times the worst observed -- no healthy part can touch it, and a part that spawns threads without bound is stopped by the kernel instead of taking the box down."
+
+[part_usage_cadence_seconds]
+value = 1.0
+unit  = "seconds between part-resource-usage sweeps"
+note  = "operator, 2026-08-24: how often part-appetite-meter walks every part's cgroup and publishes what each costs. Measured without it, the first hour the scopes existed: the meter is woken by part-health from 57 parts and ticked ~340 times a second, publishing a 57-message usage sweep on nearly every tick -- duty-cycle-planner lost 45,079 usage messages to that flood inside four minutes. Once a second matches part_health_interval, which is the cadence everything downstream of the metering actually renders or plans at; the tick floor is how it is enforced, so data queues rather than drops and the part stays switchable while it waits."
+
+[switch_plan_cadence_seconds]
+value = 1.0
+unit  = "seconds between switch plans"
+note  = "operator, 2026-08-24: how often switching-planner weighs its fourteen inputs into a plan. Measured without it: 2,802 plans in under four minutes -- thirteen a second -- of which gate-actuator lost 218 to its own receive buffer, and every plan between two metering sweeps is computed from the same numbers as the last. A plan once a second matches part_usage_cadence_seconds, since a plan more often than the metering it reads cannot say anything new."

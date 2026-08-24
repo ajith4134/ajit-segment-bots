@@ -42,7 +42,13 @@ class MemoryForecast:
 @dataclass
 class ForecasterStanding:
     forecasts: int = 0
-    exhaustion_predicted: int = 0
+    # Forecasts where the machine's memory was growing at all -- on a warming
+    # spine that is nearly every one, and it says nothing about urgency. The
+    # urgency is last_seconds_to_exhaustion, and the planner compares that to
+    # memory_exhaustion_warning; a counter named "exhaustion_predicted" here
+    # once made a board read "128 of 131" on a machine three years from full.
+    growth_seen: int = 0
+    last_seconds_to_exhaustion: float | None = None
     samples_by_part: dict[str, int] = field(default_factory=dict)
 
 
@@ -86,9 +92,11 @@ class MemoryPressureForecaster:
         if not rates:
             return self._forecast(None, 0.0, available, fastest, "not enough samples to fit a rate")
         if total_rate <= 0:
+            self.standing.last_seconds_to_exhaustion = None
             return self._forecast(None, total_rate, available, fastest, "memory is not growing")
         seconds = available / total_rate
-        self.standing.exhaustion_predicted += 1
+        self.standing.growth_seen += 1
+        self.standing.last_seconds_to_exhaustion = seconds
         return self._forecast(
             seconds, total_rate, available, fastest, f"{total_rate / 1e6:.1f} MB/s across {len(rates)} part(s)"
         )
@@ -123,7 +131,8 @@ def describe_forecast(forecaster: MemoryPressureForecaster) -> dict:
     return {
         "part_id": PART_ID,
         "forecasts": forecaster.standing.forecasts,
-        "exhaustion_predicted": forecaster.standing.exhaustion_predicted,
+        "growth_seen": forecaster.standing.growth_seen,
+        "last_seconds_to_exhaustion": forecaster.standing.last_seconds_to_exhaustion,
         "samples_by_part": dict(forecaster.standing.samples_by_part),
     }
 

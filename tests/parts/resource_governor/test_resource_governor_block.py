@@ -387,6 +387,26 @@ def planner():
     return SwitchingPlanner(memory_exhaustion_warning_seconds=120.0, io_stall_fraction=0.5)
 
 
+
+def test_a_part_the_metering_has_not_missed_yet_is_held_not_started(capacity):
+    """Absent from one sweep may mean unmeasured, not off. The first plans after
+    every spine start used to switch "on" whichever reserved parts the first
+    half-drained sweep had not covered (2026-08-24, twice)."""
+    subject = planner()
+    inputs = GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("late",))
+    first = subject.plan(inputs)
+    assert first.decisions == () and first.held == ("late",)
+    second = subject.plan(inputs)
+    assert [(d.part_id, d.action) for d in second.decisions] == [("late", TURN_ON)]
+
+
+def plan_after_a_full_sweep(subject, inputs):
+    """Plan twice with the same inputs: a part absent from the metering is only
+    planned on after a whole sweep has missed it (PLANS_ABSENT_BEFORE_START)."""
+    subject.plan(inputs)
+    return subject.plan(inputs)
+
+
 def test_no_usage_readings_means_no_plan(capacity):
     """Missing is not empty: no part-resource-usage reading means the metering
     is absent, not that nothing is running."""
@@ -464,14 +484,15 @@ def test_a_part_out_of_restart_budget_is_held(capacity):
 def test_offs_are_ordered_before_ons(capacity):
     from parts.resource_governor.hog_detector import HogReport
 
-    plan = planner().plan(
+    plan = plan_after_a_full_sweep(
+        planner(),
         GovernorInputs(
             capacity=capacity,
             running_parts=("greedy",),
             usages=(usage("greedy"),),
             hog_reports=(HogReport("greedy", CPU, 8.0, 1.0, 8.0, True, 1),),
             admitted_parts=("newcomer",),
-        )
+        ),
     )
     assert [d.action for d in plan.decisions] == [TURN_OFF, TURN_ON]
 
@@ -491,7 +512,9 @@ def test_imminent_memory_exhaustion_switches_off_the_fastest_grower(capacity):
 def test_every_decision_is_flipped_and_recorded(capacity):
     flipped = []
     actuator = GateActuator(switch_part=lambda part_id, action: flipped.append((part_id, action)))
-    plan = planner().plan(GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("a", "b")))
+    plan = plan_after_a_full_sweep(
+        planner(), GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("a", "b"))
+    )
     records = actuator.apply(plan)
     assert len(records) == 2 and all(r.outcome == FLIPPED for r in records)
     assert flipped == [(r.part_id, r.action) for r in records]
@@ -503,7 +526,9 @@ def test_a_failed_flip_is_recorded_and_the_rest_still_run(capacity):
             raise OSError("no such cgroup")
 
     actuator = GateActuator(switch_part=switch)
-    plan = planner().plan(GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("broken", "fine")))
+    plan = plan_after_a_full_sweep(
+        planner(), GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("broken", "fine"))
+    )
     records = {r.part_id: r for r in actuator.apply(plan)}
     assert records["broken"].outcome == FAILED
     assert records["fine"].outcome == FLIPPED

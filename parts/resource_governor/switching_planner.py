@@ -33,6 +33,16 @@ PART_DECLARATION = PartDeclaration(
 TURN_ON = "on"
 TURN_OFF = "off"
 
+# How many consecutive plans a part must be absent from the metering before it
+# is planned on. Not tunable and not a threshold: the metering sweeps once per
+# part_usage_cadence_seconds and plans are made at the same cadence, so a part
+# absent from two consecutive plans has been missed by at least one whole sweep
+# -- where a part absent from one may simply not have been measured yet. The
+# first plans after every spine start used to switch "on" whichever reserved
+# parts the first half-drained sweep had not covered, and the actuator recorded
+# the failed flips of parts that were running all along (2026-08-24, twice).
+PLANS_ABSENT_BEFORE_START = 2
+
 # Reasons a part is switched, in the order they beat each other. First match
 # wins, so the list is the policy: a flapping part is held even if capacity
 # would allow it, and a reservation floor beats a hog report.
@@ -112,6 +122,8 @@ class SwitchingPlanner:
         self._memory_warning = memory_exhaustion_warning_seconds
         self._io_stall = io_stall_fraction
         self._now_ns = now_ns
+        # Consecutive plans each candidate has been absent from the metering.
+        self._plans_absent: dict[str, int] = {}
         self.standing = PlannerStanding()
 
     def plan(self, inputs: GovernorInputs) -> SwitchPlan:
@@ -144,12 +156,19 @@ class SwitchingPlanner:
         reserved = {r.part_id for r in inputs.reservations if r.state == "honoured"}
 
         for part_id in inputs.running_parts:
+            self._plans_absent.pop(part_id, None)
             reason = self._off_reason(part_id, inputs, reserved)
             if reason is not None:
                 decisions.append(SwitchDecision(part_id, TURN_OFF, reason, self._priority(part_id, inputs)))
 
         for part_id in self._candidates_to_start(inputs):
             if part_id in inputs.running_parts:
+                continue
+            self._plans_absent[part_id] = self._plans_absent.get(part_id, 0) + 1
+            if self._plans_absent[part_id] < PLANS_ABSENT_BEFORE_START:
+                # Absent from the metering is not yet off: the sweep may simply
+                # not have reached it. Held until a whole sweep has missed it.
+                held.append(part_id)
                 continue
             hold = self._hold_reason(part_id, inputs)
             if hold is not None:
@@ -329,6 +348,14 @@ def start_part(context) -> int:
         publish_plan=lambda plan: publish_plan([plan]),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
-        tick_floor_seconds=context.tick_floor_seconds,
+        # Woken by fourteen input streams, this planned thirteen times a second
+        # while the metering it reads updates once a second -- 2,802 plans in
+        # four minutes, 218 of them lost in gate-actuator's receive buffer
+        # (2026-08-24). A plan between two metering sweeps is computed from the
+        # same numbers as the last, so the cadence is held as a tick floor:
+        # inputs queue, nothing is lost, and the switch stays answerable.
+        tick_floor_seconds=max(
+            context.tick_floor_seconds, context.number("switch_plan_cadence_seconds")
+        ),
         emit_health=context.emit_health,
     )

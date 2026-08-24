@@ -53,6 +53,7 @@ from runtime.forkserver_launcher import apply_blas_thread_caps  # noqa: E402
 apply_blas_thread_caps()
 
 from runtime.part_launcher import PartLauncher  # noqa: E402
+from runtime.scope_placer import ScopeLimits  # noqa: E402
 from runtime.settings_reader import load_settings_document, settings_directory  # noqa: E402
 from runtime.switch_service import ACTION_TURN_OFF, OUTCOME_FLIPPED  # noqa: E402
 from runtime.wiring_plan import derive_wiring  # noqa: E402
@@ -354,8 +355,23 @@ def main(argv: list[str]) -> int:
             )
 
     lock = take_the_lock()
+
+    # Every part in its own transient scope, with the same bounds for all --
+    # limits are per-part only when a part with a genuinely larger working set
+    # earns them (the settings' notes carry the measurements). The scopes are
+    # what part-appetite-meter reads, so without them the metering is absent,
+    # the planner refuses every plan, and the governor cannot act at all: this
+    # line is what turned the governor from refusing to governing on 2026-08-24.
+    # A placement that fails does not kill the part -- it runs unbounded and is
+    # reported as such, which is the status quo before this existed.
+    scope_limits = ScopeLimits(
+        memory_max_bytes=int(settings.read_value("part_scope_memory_max_bytes")),
+        cpu_weight=int(settings.read_value("part_scope_cpu_weight")),
+        pids_max=int(settings.read_value("part_scope_pids_max")),
+    )
     launcher = PartLauncher(
-        place_in_scope=False,
+        place_in_scope=True,
+        limits_for=lambda part_id: scope_limits,
         thread_ceiling=int(settings.read_value("fork_thread_ceiling")),
         placement_confirmation_deadline_seconds=float(
             settings.read_value("placement_confirmation_deadline")
@@ -387,9 +403,10 @@ def main(argv: list[str]) -> int:
             # reading the journal afterwards needs to know.
             "segment": TRADED_SEGMENT,
             "money_mode": money_mode,
-            # Said out loud: nothing is bounding these parts yet, because the
-            # governor that decides what a part may have is not running.
-            "placed_in_scopes": False,
+            # True since 2026-08-24: every part is placed in its own scope with
+            # the bounds the settings state, and a part a placement failed for
+            # runs unbounded and is counted in the launcher's standing.
+            "placed_in_scopes": True,
         }
     )
 

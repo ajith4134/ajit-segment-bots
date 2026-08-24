@@ -200,6 +200,13 @@ def start_part(context) -> int:
         publish_usage=publish_usage,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
-        tick_floor_seconds=context.tick_floor_seconds,
+        # Woken by part-health from every part, this measured ~340 sweeps a
+        # second the first hour the scopes existed and flooded every consumer of
+        # part-resource-usage (45,079 messages lost at duty-cycle-planner alone,
+        # 2026-08-24). The cadence is held as a tick floor, so the health frames
+        # queue rather than drop and the part stays switchable while it waits.
+        tick_floor_seconds=max(
+            context.tick_floor_seconds, context.number("part_usage_cadence_seconds")
+        ),
         emit_health=context.emit_health,
     )
