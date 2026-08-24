@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 
@@ -27,21 +28,45 @@ class JournalTail:
     digest: str
 
 
+# How much of the file's end to pull in per step when walking backwards to the
+# last line. Entries measured about 500 bytes on 2026-08-24, so one block holds
+# a hundred of them; the loop grows the window for the rare longer line.
+TAIL_READ_BLOCK_BYTES = 65536
+
+
 def read_journal_tail(path) -> "JournalTail | None":
     """The sequence and digest of the last entry in a journal file, or None if empty.
 
-    Read by line rather than by parsing the whole file: this runs at the start of
-    every recorder, and what it needs is one number and one digest from the end.
-    A line that will not parse returns None rather than a guess -- continuing a
-    chain from an entry that could not be read would put a digest in the record
-    that nothing can check.
+    Read from the end, backwards in blocks, never the whole file: this runs at
+    the start of every recorder, and what it needs is one number and one digest
+    from the last line. It used to read the entire file into one string --
+    against its own docstring -- which at the 3.6 GB the lifecycle journal had
+    reached (2026-08-24) stalled the part's start for minutes and briefly held
+    the whole file in memory. A line that will not parse returns None rather
+    than a guess -- continuing a chain from an entry that could not be read
+    would put a digest in the record that nothing can check.
     """
     if not path.exists():
         return None
-    last = None
-    for line in path.read_text().splitlines():
-        if line.strip():
-            last = line
+    with open(path, "rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        window = b""
+        position = size
+        last = None
+        while position > 0:
+            take = min(TAIL_READ_BLOCK_BYTES, position)
+            position -= take
+            handle.seek(position)
+            window = handle.read(take) + window
+            lines = [line for line in window.split(b"\n") if line.strip()]
+            if not lines:
+                continue
+            # With the window not yet at the file's start, the earliest line in
+            # it may be a fragment; the last line is whole once at least one
+            # other line bounds it, or the window spans the whole file.
+            if position == 0 or len(lines) >= 2:
+                last = lines[-1]
+                break
     if last is None:
         return None
     try:
