@@ -74,6 +74,7 @@ class SpreadReversionDetector:
     def __init__(
         self,
         z_threshold: float,
+        rearm_z: float,
         window_length: int,
         minimum_observations: int,
         horizon_seconds: float,
@@ -85,7 +86,15 @@ class SpreadReversionDetector:
     ) -> None:
         if z_threshold <= 0:
             raise ValueError("a threshold of zero fires on every observation")
+        if not 0 <= rearm_z < z_threshold:
+            raise ValueError(
+                f"the re-arm level must sit inside the firing threshold -- equal or above it, "
+                f"every wiggle across the threshold is a fresh candidate, which is the flapping "
+                f"this level exists to stop. Got rearm_z={rearm_z!r} against "
+                f"z_threshold={z_threshold!r}"
+            )
         self._z_threshold = z_threshold
+        self._rearm_z = rearm_z
         self._window_length = window_length
         self._minimum = minimum_observations
         self._horizon = horizon_seconds
@@ -108,7 +117,7 @@ class SpreadReversionDetector:
         # update published 620,000 candidates in thirty-five minutes at 100
         # symbols per venue (2026-08-24) -- the labeller refused 645,000 of
         # them and every part of the trading half chewed the duplicates. The
-        # pair re-arms when its spread comes back inside the threshold.
+        # pair re-arms only when its spread has come back inside rearm_z.
         self._stretched: set[tuple[str, str, str]] = set()
         self.standing = SpreadStanding()
 
@@ -173,7 +182,13 @@ class SpreadReversionDetector:
 
         if abs(z) < self._z_threshold:
             self.standing.not_stretched += 1
-            self._stretched.discard(key)
+            # Re-arm only once the reversion the candidate predicted has
+            # substantially happened. A spread that dips just under the
+            # threshold and stretches again is the same episode -- measured
+            # live at 100 symbols per venue, threshold-wiggling re-fired
+            # 25,880 candidates in twenty-five minutes with plain crossing.
+            if abs(z) <= self._rearm_z:
+                self._stretched.discard(key)
             return None, NOT_STRETCHED
 
         self.standing.widest_z = max(self.standing.widest_z, abs(z))
@@ -291,6 +306,7 @@ def start_part(context) -> int:
     price_staleness = price_staleness_from(context)
     detector = SpreadReversionDetector(
         z_threshold=context.number("spread_reversion_z_threshold"),
+        rearm_z=context.number("spread_reversion_rearm_z"),
         window_length=int(context.number("spread_reversion_window_length")),
         minimum_observations=int(context.number("spread_reversion_minimum_observations")),
         horizon_seconds=context.number("spread_reversion_horizon"),

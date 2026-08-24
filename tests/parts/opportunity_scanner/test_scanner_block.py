@@ -483,7 +483,7 @@ class Pair:
 
 def spread_detector(z=2.0, minimum=20, price_staleness=None, clock=None):
     return SpreadReversionDetector(
-        z_threshold=z, window_length=100, minimum_observations=minimum,
+        z_threshold=z, rearm_z=z / 2, window_length=100, minimum_observations=minimum,
         horizon_seconds=300.0, calibrator=calibrator(),
         price_staleness=price_staleness,
         now_ns=clock or time.time_ns,
@@ -523,12 +523,21 @@ def test_a_spread_that_stays_stretched_is_one_candidate_not_a_stream():
     assert again is None and outcome == STILL_STRETCHED
     assert subject.standing.still_stretched == 1
 
-    # Back inside the threshold re-arms the pair...
+    # Dipping under the threshold but not under the re-arm level is the same
+    # episode still: a wiggle across the threshold must not re-fire.
+    subject.observe_price(VENUE, "AUSDT", 101.5, subject._now_ns())
+    wiggle, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert wiggle is None and outcome == NOT_STRETCHED
+    subject.observe_price(VENUE, "AUSDT", 105.5, subject._now_ns())
+    rewiggle, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert rewiggle is None and outcome == STILL_STRETCHED
+
+    # Back inside the re-arm level -- the reversion substantially happened...
     subject.observe_price(VENUE, "AUSDT", 100.5, subject._now_ns())
     calm, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
     assert calm is None and outcome == NOT_STRETCHED
 
-    # ...so the next crossing is a new candidate.
+    # ...so the next crossing is a new opportunity, and a new candidate.
     subject.observe_price(VENUE, "AUSDT", 106.0, subject._now_ns())
     fresh, outcome = subject.detect(Pair(mean=0.0, deviation=1.0))
     assert fresh is not None and outcome == FIRED
