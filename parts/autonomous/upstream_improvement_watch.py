@@ -213,3 +213,76 @@ def run_upstream_improvement_watch(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The routing table is computed from the blueprint's own dependency list:
+    every part in a block a dependency names is declared as depending on it.
+    A research finding becomes a notice when its topic names a declared
+    dependency; its kind is read from the statement's own words -- removed,
+    renamed or broke reads as breaking, deprecat as deprecation, behaviour
+    changed as the silent kind, and anything else as an improvement, because
+    a finding about a dependency that names no breakage is news that it got
+    better, not a guess that it got worse. Part-health is the wake signal.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.wiring_plan import load_blueprint
+
+    findings = Batch(read=context.bus.reader("research-finding"))
+    health = Batch(read=context.bus.reader("part-health"))
+    publish_changes = context.bus.publisher_for("upstream-change")
+
+    watch = UpstreamImprovementWatch()
+    blueprint = load_blueprint()
+    parts_by_block: dict[str, list] = {}
+    for feature in blueprint["features"]:
+        parts_by_block.setdefault(feature["category"], []).append(feature["id"])
+    subjects = set()
+    for dependency in blueprint.get("upstream_dependencies", ()):
+        subjects.add(dependency["id"])
+        for block in dependency.get("used_by", ()):
+            for part_id in parts_by_block.get(block, ()):
+                watch.declare_dependency(part_id, dependency["id"])
+
+    def kind_of(statement: str) -> str:
+        lowered = statement.lower()
+        if any(word in lowered for word in ("removed", "renamed", "broke", "breaking")):
+            return BREAKING
+        if "deprecat" in lowered:
+            return DEPRECATION
+        if "behaviour changed" in lowered or "behavior changed" in lowered:
+            return SILENT_BEHAVIOUR_CHANGE
+        return IMPROVEMENT
+
+    def read_notices():
+        health.payloads()
+        jobs = []
+        for finding in findings.payloads():
+            if finding.topic not in subjects:
+                continue
+            jobs.append(
+                {
+                    "subject": finding.topic,
+                    "kind": kind_of(finding.statement),
+                    "detail": finding.statement,
+                    "source_reference": (
+                        finding.source_references[0]
+                        if finding.source_references
+                        else "unreferenced"
+                    ),
+                }
+            )
+        return tuple(jobs)
+
+    return run_upstream_improvement_watch(
+        watch=watch,
+        control_socket=context.control_socket,
+        read_notices=read_notices,
+        publish_changes=lambda change: publish_changes((change,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

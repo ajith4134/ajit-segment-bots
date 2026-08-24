@@ -265,3 +265,58 @@ def run_conservation_planner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Which parts a cut may reach is computed from the blueprint: each class of
+    work names the blocks whose parts it covers, in a setting the operator
+    owns, and a block named in no class is simply never in a plan -- the tape,
+    the ledger, the risk gates and this block itself are protected by absence
+    as well as by the protected list. Value per resource is unmeasured in
+    phase 1, so within a class the cut order falls back to name order; that is
+    a measurement gap the plan's saving fraction reports as zero rather than
+    a number anyone invented.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.wiring_plan import load_blueprint
+
+    tiers = Batch(read=context.bus.reader("survival-tier"))
+    publish_plans = context.bus.publisher_for("conservation-plan")
+
+    planner = ConservationPlanner(
+        protected_parts=tuple(
+            str(part) for part in context.setting("conservation_protected_parts").value
+        ),
+    )
+    classes = {
+        DISCRETIONARY_RESEARCH: "conservation_discretionary_research_blocks",
+        MODEL_TRAINING: "conservation_model_training_blocks",
+        NARRATIVE_AND_EXPLANATION: "conservation_narrative_blocks",
+        OPPORTUNITY_SCANNING: "conservation_opportunity_scanning_blocks",
+        NEW_POSITION_ENTRY: "conservation_new_position_entry_blocks",
+        POSITION_MANAGEMENT: "conservation_position_management_blocks",
+    }
+    block_class = {}
+    for work_class, setting_name in classes.items():
+        for block in context.setting(setting_name).value:
+            block_class[str(block)] = work_class
+    for feature in load_blueprint()["features"]:
+        work_class = block_class.get(feature["category"])
+        if work_class is not None:
+            planner.declare_part(feature["id"], work_class)
+
+    def read_tier():
+        return tuple(tier.tier for tier in tiers.payloads())
+
+    return run_conservation_planner(
+        planner=planner,
+        control_socket=context.control_socket,
+        read_tier=read_tier,
+        publish_plans=lambda plan: publish_plans((plan,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

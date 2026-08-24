@@ -267,3 +267,53 @@ def run_venue_outage_rider(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A venue's liveness is measured from the prints themselves: every trade is
+    a message with the venue's own timestamp. A feed gap is the detector's
+    word that a stream went quiet, which this rider re-measures from its own
+    clock rather than double-counting, so that input is drained where it
+    arrives. Nothing on this part's inputs carries request failures or open
+    exposure, so venue-down stays dormant behind connection-lost and the
+    unreachable-with-exposure state waits for an input that carries a
+    position -- the halt decider holds that ground meanwhile, halting on a
+    book it cannot see. Part-health is the wake signal.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.venues.venue_adapter import NormalisedTrade
+
+    trades = Batch(read=context.bus.reader("market-data"))
+    health = Batch(read=context.bus.reader("part-health"))
+    gaps = Batch(read=context.bus.reader("feed-gap"))
+    publish_states = context.bus.publisher_for("outage-state")
+
+    rider = VenueOutageRider(
+        silence_seconds=context.number("outage_silence_seconds"),
+        venue_wide_fraction=context.number("outage_venue_wide_fraction"),
+        failures_before_venue_down=int(
+            context.number("outage_failures_before_venue_down")
+        ),
+    )
+
+    def read_messages():
+        health.payloads()
+        gaps.payloads()
+        return tuple(
+            (trade.venue_id, trade.symbol, trade.venue_time_ns)
+            for trade in trades.payloads()
+            if isinstance(trade, NormalisedTrade)
+        )
+
+    return run_venue_outage_rider(
+        rider=rider,
+        control_socket=context.control_socket,
+        read_messages=read_messages,
+        publish_states=lambda outage: publish_states((outage,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

@@ -279,3 +279,61 @@ def run_trading_halt_decider(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Everything here is a level: the envelope's word on whether trading is
+    permitted, whether the exposure view is measured to the pair -- a view
+    with unmeasured pairs is not a known book -- the tier, each venue's
+    outage, each regime break spread over the symbols it names, each anomaly,
+    and the override, where resume is the one instruction that does not stop
+    anything. An input that has never arrived stays unknown, and the engine
+    halts on unknown, which is the direction this part must fail in.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    envelopes = LatestValue(read=context.bus.reader("autonomy-envelope"))
+    exposures = LatestValue(read=context.bus.reader("exposure-view"))
+    outages = Batch(read=context.bus.reader("outage-state"))
+    breaks = Batch(read=context.bus.reader("regime-break-alert"))
+    tiers = LatestValue(read=context.bus.reader("survival-tier"))
+    overrides = Batch(read=context.bus.reader("human-override"))
+    anomalies = Batch(read=context.bus.reader("market-anomaly"))
+    publish_halt = context.bus.publisher_for("trading-halt")
+
+    decider = TradingHaltDecider()
+
+    def read_state(_decider):
+        envelope = envelopes.value()
+        if envelope is not None:
+            decider.observe_envelope(may_trade=envelope.may_trade)
+        view = exposures.value()
+        if view is not None:
+            decider.observe_exposure_view(is_known=not view.unmeasured_pairs)
+        tier = tiers.value()
+        if tier is not None:
+            decider.observe_survival_tier(tier.tier)
+        for outage in outages.payloads():
+            decider.observe_outage(outage.venue_id, outage.is_dangerous)
+        for alert in breaks.payloads():
+            for symbol in alert.symbols_affected:
+                decider.observe_regime_break(symbol, alert.has_broken)
+        for override in overrides.payloads():
+            decider.observe_override(
+                override.is_active and override.instruction != "resume"
+            )
+        for anomaly in anomalies.payloads():
+            decider.observe_anomaly(anomaly.symbol, anomaly.is_anomalous)
+
+    return run_trading_halt_decider(
+        decider=decider,
+        control_socket=context.control_socket,
+        read_state=read_state,
+        publish_halt=lambda halt: publish_halt((halt,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

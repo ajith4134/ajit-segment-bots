@@ -232,3 +232,51 @@ def run_self_modification_journal(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    An allowed admit-a-part ruling is an authorisation, keyed by the part it
+    ruled on; an admitted part is then recorded against that key before
+    anything applies it. A part admitted without a ruling on file is refused
+    as unauthorised, which is the refusal existing -- a change nobody
+    authorised is a defect regardless of what it did. The before state is
+    None: what is being admitted is new, and the record says plainly that it
+    cannot be rolled back to a version that never existed.
+    """
+    from runtime.input_assembly import Batch
+
+    admitted = Batch(read=context.bus.reader("admitted-part"))
+    decisions = Batch(read=context.bus.reader("policy-decision"))
+    publish_records = context.bus.publisher_for("modification-record")
+
+    journal = SelfModificationJournal()
+
+    def read_changes():
+        for decision in decisions.payloads():
+            if decision.action == "admit-a-part" and decision.is_allowed:
+                journal.observe_authorisation(
+                    decision.subject, decision.envelope_level
+                )
+        return tuple(
+            {
+                "part_id": admission.part_id,
+                "change": f"admit {admission.proposal_id}",
+                "before": None,
+                "after": admission.proposal_id,
+                "authorised_by": admission.part_id,
+            }
+            for admission in admitted.payloads()
+        )
+
+    return run_self_modification_journal(
+        journal=journal,
+        control_socket=context.control_socket,
+        read_changes=read_changes,
+        publish_records=lambda record: publish_records((record,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

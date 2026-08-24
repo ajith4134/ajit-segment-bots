@@ -254,3 +254,57 @@ def run_folded_circuit_view(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every part in the blueprint is declared, so a part nobody has started
+    renders as its own state rather than vanishing from the map (Rule 8). What
+    can be measured from here is the health stream: a part that reported is
+    running, and a part that reported once and has now been silent for longer
+    than fold_silent_after_seconds is faulted. Never-started cannot be told
+    apart from not-yet-heard-from on this input, so a part that has never
+    reported stays not-measured rather than being guessed either way.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+    from runtime.wiring_plan import load_blueprint
+
+    health = Batch(read=context.bus.reader("part-health"))
+    publish_map = context.bus.publisher_for("folded-circuit-map")
+
+    view = FoldedCircuitView()
+    for feature in load_blueprint()["features"]:
+        view.declare_part(
+            feature["id"],
+            feature["category"],
+            consumes=tuple(feature.get("consumes", ())),
+            produces=tuple(feature.get("produces", ())),
+        )
+
+    silent_after = context.number("fold_silent_after_seconds")
+    last_heard: dict[str, float] = {}
+
+    def read_states():
+        now = _time.monotonic()
+        states = []
+        for report in health.payloads():
+            last_heard[report.part_id] = now
+            states.append((report.part_id, RUNNING))
+        for part_id, heard_at in last_heard.items():
+            if now - heard_at > silent_after:
+                states.append((part_id, FAULTED))
+        return tuple(states)
+
+    return run_folded_circuit_view(
+        view=view,
+        control_socket=context.control_socket,
+        read_states=read_states,
+        publish_map=lambda circuit_map: publish_map((circuit_map,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

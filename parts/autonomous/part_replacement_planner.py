@@ -237,3 +237,54 @@ def run_part_replacement_planner(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Every part is declared from the blueprint: its skipped-tick effect is the
+    blueprint's own word, which parts hold capital-bearing state is the same
+    operator setting the run warden refuses restarts from, and which parts can
+    hand state over is a setting that is honestly empty until a part actually
+    can. The current source is the module path the launcher would start, so a
+    rollback step names a real file rather than a version nobody recorded.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.part_launcher import resolve_part_module
+    from runtime.wiring_plan import load_blueprint
+
+    faults = Batch(read=context.bus.reader("part-fault"))
+    admitted = Batch(read=context.bus.reader("admitted-part"))
+    publish_plans = context.bus.publisher_for("replacement-plan")
+
+    planner = PartReplacementPlanner()
+    capital_state = {
+        str(part) for part in context.setting("capital_state_parts").value
+    }
+    hands_over = {
+        str(part) for part in context.setting("replacement_handover_parts").value
+    }
+    for feature in load_blueprint()["features"]:
+        planner.declare_part(
+            feature["id"],
+            skipped_tick_effect=feature["skipped_tick_effect"],
+            holds_capital_state=feature["id"] in capital_state,
+            can_hand_over_state=feature["id"] in hands_over,
+            current_source=resolve_part_module(feature["id"]),
+        )
+
+    def read_faults():
+        for admission in admitted.payloads():
+            planner.observe_admitted(admission)
+        return faults.payloads()
+
+    return run_part_replacement_planner(
+        planner=planner,
+        control_socket=context.control_socket,
+        read_faults=read_faults,
+        publish_plans=lambda plan: publish_plans((plan,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

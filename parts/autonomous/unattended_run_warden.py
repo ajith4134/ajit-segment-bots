@@ -264,3 +264,65 @@ def run_unattended_run_warden(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Which parts hold capital-bearing state is the operator's own list, the
+    same one the replacement planner reads. An escalation carries no restart
+    request by construction -- it is the decision that restarting is wrong --
+    and this part produces only restart requests, so an escalation goes out
+    on stderr, which the spine journals; a decision that must reach a human
+    is written where the operator already looks. Part-health is consumed as
+    the wake signal for the faults that follow it.
+    """
+    import json as _json
+    import sys as _sys
+
+    from runtime.input_assembly import Batch
+
+    health = Batch(read=context.bus.reader("part-health"))
+    faults = Batch(read=context.bus.reader("part-fault"))
+    publish_requests = context.bus.publisher_for("restart-request")
+
+    warden = UnattendedRunWarden(
+        maximum_restarts=int(context.number("warden_maximum_restarts")),
+        within_seconds=context.number("warden_restart_window_seconds"),
+        initial_backoff_seconds=context.number("warden_initial_backoff_seconds"),
+        backoff_multiplier=context.number("warden_backoff_multiplier"),
+        system_wide_ceiling=int(context.number("warden_system_wide_ceiling")),
+    )
+    for part in context.setting("capital_state_parts").value:
+        warden.declare_holds_capital_state(str(part))
+
+    def read_faults():
+        health.payloads()
+        return faults.payloads()
+
+    def escalate(decision):
+        print(
+            _json.dumps(
+                {
+                    "part_id": PART_ID,
+                    "event": "escalation",
+                    "faulty_part": decision.part_id,
+                    "state": decision.state,
+                    "reason": decision.reason,
+                }
+            ),
+            file=_sys.stderr,
+            flush=True,
+        )
+
+    return run_unattended_run_warden(
+        warden=warden,
+        control_socket=context.control_socket,
+        read_faults=read_faults,
+        publish_requests=lambda request: publish_requests((request,)),
+        escalate=escalate,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

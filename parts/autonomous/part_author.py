@@ -309,3 +309,83 @@ def run_part_author(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A new actionable gap goes out as one draft request; the request leaves the
+    contract to the draft, because the author cannot know what a part it has
+    not seen should consume. A draft comes back as a validated output for this
+    part's purpose whose value declares the whole part -- contract, source and
+    tests -- and only then is a proposal attempted, against the same checks a
+    hand-written part would face. Existing parts and their produced data come
+    from the blueprint; the folded map is consumed as the evidence a gap rests
+    on and drained here, since the gap finder has already turned it into gaps.
+    """
+    from runtime.input_assembly import Batch
+
+    gaps = Batch(read=context.bus.reader("capability-gap"))
+    outputs = Batch(read=context.bus.reader("validated-llm-output"))
+    maps = Batch(read=context.bus.reader("folded-circuit-map"))
+    publish_proposals = context.bus.publisher_for("proposed-part")
+    publish_requests = context.bus.publisher_for("llm-request")
+
+    from runtime.wiring_plan import load_blueprint
+
+    author = PartAuthor()
+    for feature in load_blueprint()["features"]:
+        author.observe_existing_part(
+            feature["id"], produces=tuple(feature.get("produces", ()))
+        )
+
+    requested: set = set()
+
+    def read_gaps(_author):
+        maps.payloads()
+        for gap in gaps.payloads():
+            author.observe_gap(gap)
+            if (
+                gap.is_actionable
+                and gap.would_be_a_new_part
+                and gap.gap_id not in requested
+            ):
+                requested.add(gap.gap_id)
+                part_id = f"authored-{gap.gap_id.replace(':', '-')}"
+                publish_requests(
+                    (author.ask_for_a_draft(gap, part_id, (), ()),)
+                )
+        jobs = []
+        for output in outputs.payloads():
+            if output.purpose != "draft-a-part":
+                continue
+            value = output.value if isinstance(output.value, dict) else {}
+            jobs.append(
+                {
+                    "gap_id": str(value.get("gap_id", "")),
+                    "part_id": str(value.get("part_id", "")),
+                    "consumes": tuple(value.get("consumes", ()) or ()),
+                    "produces": tuple(value.get("produces", ()) or ()),
+                    "resource_class": str(value.get("resource_class", "")),
+                    "rate_risk": str(value.get("rate_risk", "")),
+                    "skipped_tick_effect": str(value.get("skipped_tick_effect", "")),
+                    "source": str(value.get("source", "")),
+                    "tests": str(value.get("tests", "")),
+                    "declares_new_data": tuple(
+                        value.get("declares_new_data", ()) or ()
+                    ),
+                }
+            )
+        return tuple(jobs)
+
+    return run_part_author(
+        author=author,
+        control_socket=context.control_socket,
+        read_gaps=read_gaps,
+        publish_proposals=lambda proposal: publish_proposals((proposal,)),
+        publish_requests=lambda request: publish_requests((request,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

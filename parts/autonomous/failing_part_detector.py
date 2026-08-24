@@ -292,3 +292,63 @@ def run_failing_part_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A health report carries the part's identity, the seconds since its previous
+    tick, what its inputs lost, and any control frame it refused -- and nothing
+    else. So the mapping states exactly what is measurable from here: the tick
+    gap feeds the slowdown baseline; a refused frame or newly lost input counts
+    as an error; the report itself is the only production visible, so a part
+    that reports at all is producing one thing. That leaves getting-slower and
+    suspiciously-perfect reachable from live wiring, stopped-producing and
+    stuck-on-one-answer dormant until an input carries real output counts, and
+    crashed dormant until something carries a crash -- dormant is a state, not
+    a gap papered over with invented numbers.
+    """
+    from runtime.input_assembly import Batch
+
+    health = Batch(read=context.bus.reader("part-health"))
+    publish_faults = context.bus.publisher_for("part-fault")
+
+    detector = FailingPartDetector(
+        window=int(context.number("detector_window")),
+        minimum_ticks=int(context.number("detector_minimum_ticks")),
+        stuck_answer_ticks=int(context.number("detector_stuck_answer_ticks")),
+        slowdown_ratio=context.number("detector_slowdown_ratio"),
+        perfect_run_ticks=int(context.number("detector_perfect_run_ticks")),
+    )
+    loss_seen: dict[str, int] = {}
+
+    def read_health():
+        reports = []
+        for report in health.payloads():
+            lost_total = sum(count for _kind, count in report.input_loss)
+            newly_lost = max(0, lost_total - loss_seen.get(report.part_id, 0))
+            loss_seen[report.part_id] = max(
+                lost_total, loss_seen.get(report.part_id, 0)
+            )
+            reports.append(
+                {
+                    "part_id": report.part_id,
+                    "tick_seconds": report.staleness_seconds,
+                    "produced": 1,
+                    "errors": newly_lost
+                    + (1 if report.refused_control_frame else 0),
+                    "output_digest": None,
+                }
+            )
+        return tuple(reports)
+
+    return run_failing_part_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_health=read_health,
+        publish_faults=lambda fault: publish_faults((fault,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

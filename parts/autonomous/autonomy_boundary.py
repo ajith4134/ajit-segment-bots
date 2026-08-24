@@ -307,3 +307,66 @@ def run_autonomy_boundary(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Competence is measured as the share of judged (bot, regime) records that are
+    currently mature, from the maturity levels this part consumes -- never from
+    how long the system has been running. A modification record whose change
+    names a rollback counts as one that broke something, because a rollback is
+    the one observable admission that the change before it was wrong; every
+    other applied record counts clean. The blueprint gives this part no fault,
+    override or exposure input, so those three narrowing reasons keep their
+    constructor defaults -- the halt decider, which does consume them, is where
+    they bite.
+    """
+    from runtime.autonomy_types import AUTONOMY_LEVELS
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+
+    maturities = LatestByKey(
+        read=context.bus.reader("bot-maturity"),
+        key_of=lambda maturity: (maturity.bot, maturity.regime),
+    )
+    modifications = Batch(read=context.bus.reader("modification-record"))
+    tiers = LatestValue(read=context.bus.reader("survival-tier"))
+    publish_envelopes = context.bus.publisher_for("autonomy-envelope")
+
+    bars = [float(bar) for bar in context.setting("autonomy_competence_bars").value]
+    ceilings = [float(c) for c in context.setting("autonomy_notional_ceilings").value]
+    if len(bars) != len(AUTONOMY_LEVELS) or len(ceilings) != len(AUTONOMY_LEVELS):
+        raise ValueError(
+            "autonomy_competence_bars and autonomy_notional_ceilings each carry one "
+            "entry per autonomy level, in the order of AUTONOMY_LEVELS"
+        )
+    boundary = AutonomyBoundary(
+        competence_for_level=dict(zip(AUTONOMY_LEVELS, bars)),
+        clean_modifications_required=int(
+            context.number("autonomy_clean_modifications_required")
+        ),
+        readings_before_widening=int(context.number("autonomy_readings_before_widening")),
+        maximum_notional_for_level=dict(zip(AUTONOMY_LEVELS, ceilings)),
+    )
+
+    def read_state(_boundary):
+        judged = maturities.mapping()
+        if judged:
+            mature = sum(1 for maturity in judged.values() if maturity.is_mature)
+            boundary.observe_competence(mature / len(judged))
+        for record in modifications.payloads():
+            boundary.observe_modification(broke_something="rollback" in record.change)
+        tier = tiers.value()
+        if tier is not None:
+            boundary.observe_survival_tier(tier.tier)
+
+    return run_autonomy_boundary(
+        boundary=boundary,
+        control_socket=context.control_socket,
+        read_state=read_state,
+        publish_envelopes=lambda envelope: publish_envelopes((envelope,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

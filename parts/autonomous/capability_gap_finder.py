@@ -253,3 +253,68 @@ def run_capability_gap_finder(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A dark block is read off the folded circuit map, with the block's own part
+    count as the evidence. A losing condition is read off a bot's scorecard,
+    per regime, once the regime has enough closed trades for the win rate to
+    mean anything. A research finding carries whether it is testable here but
+    not which data kind is missing, so an untestable finding cannot yet become
+    a named data gap and is passed over rather than guessed at; part-health is
+    consumed as the wake signal for the fold that follows it.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    findings = Batch(read=context.bus.reader("research-finding"))
+    health = Batch(read=context.bus.reader("part-health"))
+    maps = LatestValue(read=context.bus.reader("folded-circuit-map"))
+    publish_gaps = context.bus.publisher_for("capability-gap")
+
+    finder = CapabilityGapFinder(
+        minimum_evidence=int(context.number("gap_minimum_evidence"))
+    )
+    finder.declare_recorded_data(
+        str(kind) for kind in context.setting("gap_recorded_data_kinds").value
+    )
+    losing_below = context.number("gap_losing_win_rate_below")
+    minimum_trades = int(context.number("gap_losing_minimum_trades"))
+
+    def read_signals(_finder):
+        health.payloads()
+        findings.payloads()
+        jobs = []
+        circuit = maps.value()
+        if circuit is not None:
+            for block in circuit.blocks_entirely_dark:
+                parts_in_block = circuit.blocks.get(block, {}).get("parts", 0)
+                jobs.append(
+                    lambda f, b=block, n=parts_in_block: f.from_a_dark_block(b, n)
+                )
+        for scorecard in scorecards.payloads():
+            for regime, record in scorecard.describe()["by_regime"].items():
+                trades = record["trades"]
+                if trades < minimum_trades:
+                    continue
+                win_rate = record["wins"] / trades
+                if win_rate < losing_below:
+                    jobs.append(
+                        lambda f, bot=scorecard.bot, r=regime, t=trades, w=win_rate: (
+                            f.from_a_losing_condition(bot, r, t, w)
+                        )
+                    )
+        return tuple(jobs)
+
+    return run_capability_gap_finder(
+        finder=finder,
+        control_socket=context.control_socket,
+        read_signals=read_signals,
+        publish_gaps=lambda gap: publish_gaps((gap,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

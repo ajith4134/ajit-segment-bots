@@ -248,3 +248,61 @@ def run_no_progress_detector(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Progress is read off the journal: each entry's kind is a stage of a
+    trade's lifecycle, and the stages setting carries them in the order they
+    must occur. Counts are buffered here and handed to the detector once per
+    progress_period_seconds, because a candidate and the intent it becomes are
+    minutes apart and a tick-sized period would read that latency as a stall.
+    Ticks between flushes hand over nothing, which the detector correctly
+    reports as a quiet period; part-health is consumed as the wake signal.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch
+
+    health = Batch(read=context.bus.reader("part-health"))
+    entries = Batch(read=context.bus.reader("journal-entry"))
+    publish_faults = context.bus.publisher_for("part-fault")
+
+    stages = tuple(str(stage) for stage in context.setting("progress_stages").value)
+    detector = NoProgressDetector(
+        stages=stages,
+        window=int(context.number("progress_window")),
+        minimum_inputs=int(context.number("progress_minimum_inputs")),
+        slowdown_ratio=context.number("progress_slowdown_ratio"),
+    )
+    period_seconds = context.number("progress_period_seconds")
+    buffered = {stage: 0 for stage in stages}
+    period_started = [_time.monotonic()]
+
+    def read_counts():
+        health.payloads()
+        for entry in entries.payloads():
+            if entry.kind in buffered:
+                buffered[entry.kind] += 1
+        now = _time.monotonic()
+        if now - period_started[0] < period_seconds:
+            return ()
+        period_started[0] = now
+        counts = tuple(
+            (stage, count) for stage, count in buffered.items() if count
+        )
+        for stage in buffered:
+            buffered[stage] = 0
+        return counts
+
+    return run_no_progress_detector(
+        detector=detector,
+        control_socket=context.control_socket,
+        read_counts=read_counts,
+        publish_faults=lambda fault: publish_faults((fault,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

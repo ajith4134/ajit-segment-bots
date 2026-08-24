@@ -3472,3 +3472,235 @@ note  = "operator, 2026-08-23: how many frames video-lecture-reader keeps from a
 value = 0.1
 unit  = "fraction"
 note  = "operator, 2026-08-23: how much a frame's text must differ from the last kept one to be kept. A tenth."
+
+# ---- the autonomous block ---------------------------------------------------
+
+[autonomy_competence_bars]
+value = [0.0, 0.3, 0.6, 0.9]
+unit  = "measured competence, one bar per autonomy level in AUTONOMY_LEVELS order"
+note  = "operator, 2026-08-24: the share of judged (bot, regime) records that are mature which each level demands -- observe-only is free, proposing needs a third, acting needs most judgements mature, self-modification needs nearly all. Widening requires the bar, the tier and a clean history together; narrowing needs any one reason."
+
+[autonomy_notional_ceilings]
+value = [0.0, 0.0, 1000.0, 5000.0]
+unit  = "USDT, one ceiling per autonomy level in AUTONOMY_LEVELS order"
+note  = "operator, 2026-08-24: the largest notional the envelope permits at each level. Zero while the system may only observe or propose; paper-scale caps above that, sized to the futures paper allocation rather than to bravado."
+
+[autonomy_clean_modifications_required]
+value = 3
+unit  = "consecutive clean self-modifications"
+note  = "operator, 2026-08-24: how many self-modifications in a row must not have broken anything before the envelope may widen. One clean change is a moment; three is a habit."
+
+[autonomy_readings_before_widening]
+value = 6
+unit  = "consecutive clean envelope readings"
+note  = "operator, 2026-08-24: widening takes sustained evidence -- six clean readings at the part's own cadence -- while narrowing is immediate. The asymmetry is the design, not a tuning."
+
+[policy_earned_size_per_competence]
+value = 1000.0
+unit  = "USDT of earned size per unit of measured competence"
+note  = "operator, 2026-08-24: a subject at competence 0.5 has earned 500 USDT of size. Scaled to the paper allocation; the envelope ceiling still caps it from above."
+
+[policy_minimum_observations]
+value = 30
+unit  = "closed trades on one subject"
+note  = "operator, 2026-08-24: below this a subject is unmeasured and every discretionary action on it is refused. Thirty trades is where a hit rate starts to mean something rather than echo noise."
+
+[gap_minimum_evidence]
+value = 1
+unit  = "pieces of evidence per capability gap"
+note  = "operator, 2026-08-24: a gap with no evidence is an opinion. One named piece is the floor; the sources themselves (a dark block, a losing regime) each carry their own."
+
+[gap_recorded_data_kinds]
+value = ["trade"]
+unit  = "data kinds the tape currently records"
+note  = "operator, 2026-08-24: phase 1 records trades only, on both venues. A finding needing anything else is a data gap. Grows as the feed grows -- candles and books are planned, not recorded."
+
+[gap_losing_win_rate_below]
+value = 0.45
+unit  = "win rate"
+note  = "operator, 2026-08-24: a regime a bot wins less than 45% of closed trades in, with enough trades to mean it, names a losing condition worth a capability gap. Below coin-flip minus noise, not merely below average."
+
+[gap_losing_minimum_trades]
+value = 30
+unit  = "closed trades in one regime"
+note  = "operator, 2026-08-24: fewer trades than this and a bad win rate is variance, not a condition. Matches policy_minimum_observations: the same evidential floor read from the other side."
+
+[conservation_protected_parts]
+value = ["human-override-reader", "trading-halt-decider", "exposure-limiter", "stop-order-manager", "position-recorder", "trade-lifecycle-recorder", "heartbeat-collector", "venue-trade-stream-reader"]
+unit  = "part ids that no conservation plan may stop"
+note  = "operator, 2026-08-24: the override door, the halt, the risk gates, the recorders of what is open and what happened, the heartbeat that proves anything runs, and the tape writer -- history accrues only in real time. A plan naming any of these is refused whole."
+
+[conservation_discretionary_research_blocks]
+value = ["online-research", "knowledge", "skills", "hypothesis", "llm-foundation", "llm-services"]
+unit  = "blueprint categories cut first"
+note  = "operator, 2026-08-24: reading, distilling and asking models is the work that costs the most quota and loses the least when paused. Cut at frugal."
+
+[conservation_model_training_blocks]
+value = ["prediction", "learning-loop", "backtesting"]
+unit  = "blueprint categories cut second"
+note  = "operator, 2026-08-24: refits and replays can wait for runway; the models keep serving their last fit. Cut at frugal."
+
+[conservation_narrative_blocks]
+value = ["closed-trade-decoding"]
+unit  = "blueprint categories cut third"
+note  = "operator, 2026-08-24: explaining finished trades is valuable and deferrable -- the journal keeps the raw material for later. Cut at critical."
+
+[conservation_opportunity_scanning_blocks]
+value = ["opportunity-scanner", "intelligence"]
+unit  = "blueprint categories cut fourth"
+note  = "operator, 2026-08-24: no new opportunities while runway is critical. The halt decider treats the exposure view going quiet as unknown and halts, which is the correct direction."
+
+[conservation_new_position_entry_blocks]
+value = ["ai-brain", "bull-bot", "bear-bot", "profit-tailgating-bot"]
+unit  = "blueprint categories cut fifth"
+note  = "operator, 2026-08-24: trading stops before the machinery that watches trades. At shutdown nothing opens; what is open is still watched."
+
+[conservation_position_management_blocks]
+value = ["paper-live-trading", "execution-venue-adapter", "portfolio-state", "segment-bot"]
+unit  = "blueprint categories never reached by the current cut depths"
+note  = "operator, 2026-08-24: declared so the order is complete and nested, but CUT_DEPTH stops one class short -- position management outlives every tier. Ledger, risk and the feed are in no class at all: absence from this table is the stronger protection."
+
+[detector_window]
+value = 32
+unit  = "health reports per part"
+note  = "operator, 2026-08-24: the rolling history a part is judged against -- about half a minute of its own reports at the 1s health interval. Long enough for a baseline, short enough to notice this hour's slowdown."
+
+[detector_minimum_ticks]
+value = 8
+unit  = "health reports"
+note  = "operator, 2026-08-24: below this a part is not judged at all; a history of a few ticks describes nothing."
+
+[detector_stuck_answer_ticks]
+value = 12
+unit  = "consecutive identical outputs"
+note  = "operator, 2026-08-24: dormant until an input carries real output digests -- health does not -- but the number must exist and be defensible when one does: a dozen identical answers is a stuck part, not a quiet market."
+
+[detector_slowdown_ratio]
+value = 3.0
+unit  = "multiple of a part's own baseline tick time"
+note  = "operator, 2026-08-24: three times its own baseline is a structure being walked, not jitter. Per part, never a global threshold."
+
+[detector_perfect_run_ticks]
+value = 1024
+unit  = "health reports with zero errors"
+note  = "operator, 2026-08-24: about seventeen minutes of reports with not one lost input or refused frame is suspicious in a system wired to venues -- flagged suspect, which restarts nothing, only asks a human to confirm it genuinely cannot fail."
+
+[fold_silent_after_seconds]
+value = 10.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: a part that reported and has now been silent this long is faulted on the map. Ten times part_health_interval, matching heartbeat_silent_after_seconds so the map and the board go dark together."
+
+[human_override_path]
+value = "~/.config/ajit-segment-bots/override.toml"
+unit  = "path to a TOML file with one [override] table"
+note  = "operator, 2026-08-24: the door. The operator writes {instruction, scope, issued_at_ns, expires_at_ns} here over SSH; the system only reads it. Absent means no override; unreadable means stop everything."
+
+[progress_stages]
+value = ["entry-candidate", "trade-intent", "bounded-order", "order-request", "fill"]
+unit  = "journal kinds, in lifecycle order"
+note  = "operator, 2026-08-24: the trade lifecycle as the journal records it. A stall is located between two of these names -- candidates without intents is the arbiter refusing everything, intents without orders is the sizing chain."
+
+[progress_window]
+value = 12
+unit  = "measurement periods"
+note  = "operator, 2026-08-24: the history a period's output is compared against -- three hours at the period below."
+
+[progress_minimum_inputs]
+value = 1
+unit  = "first-stage entries per period"
+note  = "operator, 2026-08-24: one candidate in a period is enough reason to expect the chain to move. Quiet is not stalled; below this the period is quiet."
+
+[progress_slowdown_ratio]
+value = 5.0
+unit  = "multiple by which output may fall against its own baseline"
+note  = "operator, 2026-08-24: output at a fifth of baseline while inputs hold is the same failure as stopping, arriving slowly."
+
+[progress_period_seconds]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: a candidate and its fill are minutes apart, so counts flush to the detector every fifteen minutes; a tick-sized period would read ordinary latency as a stall."
+
+[admission_minimum_tests]
+value = 5
+unit  = "tests that must run for admission"
+note  = "operator, 2026-08-24: tests written by whatever wrote the part are the floor, not the ceiling. No test runner exists on this box yet, so admission refuses on no-tests-ran regardless -- this number binds the day a sandboxed runner exists."
+
+[capital_state_parts]
+value = ["paper-account-keeper", "position-recorder", "cost-basis-tracker", "usdt-pnl-accountant", "paper-fill-simulator"]
+unit  = "part ids holding capital-bearing state"
+note  = "operator, 2026-08-24: the parts a blind restart could lose a live position through. The run warden escalates their faults instead of restarting, and the replacement planner demands a flat book to swap them."
+
+[replacement_handover_parts]
+value = []
+unit  = "part ids that can hand state to a replacement"
+note  = "operator, 2026-08-24: honestly empty -- no part implements state handover yet. A part added here without the mechanism would let the planner plan a gapless swap that gaps."
+
+[survival_frugal_at_fraction]
+value = 0.5
+unit  = "fraction of the binding resource remaining"
+note  = "operator, 2026-08-24: half the runway gone is when discretionary work stops. Early on purpose: the cheap cuts buy the most time."
+
+[survival_critical_at_fraction]
+value = 0.2
+unit  = "fraction of the binding resource remaining"
+note  = "operator, 2026-08-24: a fifth left is when scanning for new work stops."
+
+[survival_shutdown_at_fraction]
+value = 0.05
+unit  = "fraction of the binding resource remaining"
+note  = "operator, 2026-08-24: the last twentieth is for closing and recording, nothing else."
+
+[survival_improvement_margin]
+value = 0.1
+unit  = "fraction of headroom above a threshold"
+note  = "operator, 2026-08-24: climbing out of a tier needs this much clearance above the line it fell through, or the tier flips every reading and every consumer thrashes."
+
+[survival_readings_before_improving]
+value = 3
+unit  = "consecutive readings above the margin"
+note  = "operator, 2026-08-24: falling is immediate, rising is slow. Three readings is sustained, one is a blip."
+
+[survival_burn_window]
+value = 12
+unit  = "readings"
+note  = "operator, 2026-08-24: the window the burn rate -- and so the runway in seconds -- is measured over. Short enough to notice a spend spike, long enough not to be one."
+
+[warden_maximum_restarts]
+value = 3
+unit  = "restarts of one part within the window"
+note  = "operator, 2026-08-24: the second restart is a fix and the fourth is a loop; three in the window and the part is given up for replacement."
+
+[warden_restart_window_seconds]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: the window restarts are counted in. Fifteen minutes: long enough that a flapping part cannot amortise its restarts away, short enough that yesterday's fault does not condemn today's."
+
+[warden_initial_backoff_seconds]
+value = 5.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: the wait before the first re-restart, doubling from here. Matches the capture supervisor's own restart delay, chosen there against venue bans."
+
+[warden_backoff_multiplier]
+value = 2.0
+unit  = "multiplier per attempt"
+note  = "operator, 2026-08-24: 5s, 10s, 20s. A transient fault recovers within the first; a permanent one stops consuming the machine."
+
+[warden_system_wide_ceiling]
+value = 5
+unit  = "parts restarting at once"
+note  = "operator, 2026-08-24: more than this many parts failing together is one cause, not many faults, and restarting into it hides the cause."
+
+[outage_silence_seconds]
+value = 60.0
+unit  = "seconds since a symbol's last print"
+note  = "operator, 2026-08-24: a symbol quiet for a minute is judged against the venue's other symbols -- one quiet symbol is a quiet market, most of them quiet is this system deaf. The top-30 symbols captured all print far inside a minute in the tape recorded so far."
+
+[outage_venue_wide_fraction]
+value = 0.8
+unit  = "fraction of a venue's symbols silent"
+note  = "operator, 2026-08-24: four in five symbols silent stops being the market and starts being the connection."
+
+[outage_failures_before_venue_down]
+value = 3
+unit  = "consecutive request failures"
+note  = "operator, 2026-08-24: dormant until an input carries request results -- none does yet -- but the number a venue is declared down at must be set where the operator can see it, not invented the day the input appears."

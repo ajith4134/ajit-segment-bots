@@ -267,3 +267,60 @@ def run_survival_tier_monitor(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    Quota is the subscription's own fraction used; money is metered spend
+    against its ceiling. Both arrive as levels and are read as levels, and a
+    resource that has never reported leaves the monitor at its most
+    restrictive answer, which is the honest one. Part-health is consumed as
+    the wake signal, and the seconds between readings -- which turn a burn
+    rate into a runway -- are the part's own health interval, the cadence
+    this loop actually runs at.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+
+    quotas = LatestValue(read=context.bus.reader("llm-quota-state"))
+    spends = LatestValue(read=context.bus.reader("llm-spend-state"))
+    health = Batch(read=context.bus.reader("part-health"))
+    publish_tier = context.bus.publisher_for("survival-tier")
+
+    from runtime.autonomy_types import CRITICAL, FRUGAL, SHUTDOWN
+
+    monitor = SurvivalTierMonitor(
+        thresholds={
+            FRUGAL: context.number("survival_frugal_at_fraction"),
+            CRITICAL: context.number("survival_critical_at_fraction"),
+            SHUTDOWN: context.number("survival_shutdown_at_fraction"),
+        },
+        improvement_margin=context.number("survival_improvement_margin"),
+        readings_before_improving=int(
+            context.number("survival_readings_before_improving")
+        ),
+        burn_window=int(context.number("survival_burn_window")),
+    )
+
+    def read_resources():
+        health.payloads()
+        readings = []
+        quota = quotas.value()
+        if quota is not None:
+            readings.append((QUOTA, max(0.0, 1.0 - quota.fraction_used)))
+        spend = spends.value()
+        if spend is not None:
+            readings.append((MONEY, max(0.0, 1.0 - spend.fraction_used)))
+        return tuple(readings)
+
+    return run_survival_tier_monitor(
+        monitor=monitor,
+        control_socket=context.control_socket,
+        read_resources=read_resources,
+        publish_tier=lambda tier: publish_tier((tier,)),
+        seconds_per_reading=context.health_interval_seconds,
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

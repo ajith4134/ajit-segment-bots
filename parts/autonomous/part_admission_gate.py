@@ -278,3 +278,66 @@ def run_part_admission_gate(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The envelope level rides in on the policy decisions this part consumes: a
+    ruling on admit-a-part carries the level it was ruled under, which is the
+    same fact the gate would otherwise have read from an envelope it does not
+    consume. The contract checker enforces the producer-exists half of R-01
+    in-process from the blueprint -- the full checker still guards every
+    commit. No test runner is installed, because running code the system wrote
+    for itself needs a sandbox this box does not have; the gate reports that
+    as no-tests-ran and refuses, so admission stays closed until a real runner
+    exists rather than open past one that pretended. An upstream change has no
+    engine method yet, so that input is drained where it arrives.
+    """
+    from runtime.input_assembly import Batch
+    from runtime.wiring_plan import load_blueprint
+
+    proposals = Batch(read=context.bus.reader("proposed-part"))
+    changes = Batch(read=context.bus.reader("upstream-change"))
+    decisions = Batch(read=context.bus.reader("policy-decision"))
+    publish_admitted = context.bus.publisher_for("admitted-part")
+
+    gate = PartAdmissionGate(
+        minimum_tests=int(context.number("admission_minimum_tests"))
+    )
+    produced: set = {"part-health"}
+    for feature in load_blueprint()["features"]:
+        gate.observe_existing_part(
+            feature["id"],
+            consumes=tuple(feature.get("consumes", ())),
+            produces=tuple(feature.get("produces", ())),
+        )
+        produced.update(feature.get("produces", ()))
+
+    def producer_exists_for_every_input(proposal):
+        unknown = set(proposal.consumes) - produced - set(proposal.produces)
+        if unknown:
+            return False, (
+                f"{', '.join(sorted(unknown))} is consumed and nothing produces it"
+            )
+        return True, "every consumed type has a producer"
+
+    gate.install_contract_checker(producer_exists_for_every_input)
+
+    def read_proposals():
+        changes.payloads()
+        for decision in decisions.payloads():
+            if decision.action == "admit-a-part":
+                gate.observe_envelope(decision.envelope_level)
+        return proposals.payloads()
+
+    return run_part_admission_gate(
+        gate=gate,
+        control_socket=context.control_socket,
+        read_proposals=read_proposals,
+        publish_admitted=lambda admitted: publish_admitted((admitted,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

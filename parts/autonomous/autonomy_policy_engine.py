@@ -267,3 +267,61 @@ def run_autonomy_policy_engine(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    A trade intent carries no notional by design -- sizing belongs to parts
+    that know the account -- so an intent is ruled on at size zero: the level
+    and competence checks bind here, and the size checks bind where sizes are
+    decided, against the envelope this engine's decisions carry. Competence
+    entries whose value is unmeasured are passed over rather than counted as
+    zero: an unmeasured subject is refused by the engine's own rule, not by an
+    invented number.
+    """
+    from runtime.input_assembly import Batch, LatestValue
+    from runtime.trade_intent import ADD_TO, OPEN, STAND_ASIDE
+
+    envelopes = LatestValue(read=context.bus.reader("autonomy-envelope"))
+    intents = Batch(read=context.bus.reader("trade-intent"))
+    proposals = Batch(read=context.bus.reader("proposed-part"))
+    competences = Batch(read=context.bus.reader("competence-map"))
+    publish_decisions = context.bus.publisher_for("policy-decision")
+
+    engine = AutonomyPolicyEngine(
+        earned_size_per_competence=context.number("policy_earned_size_per_competence"),
+        minimum_observations=int(context.number("policy_minimum_observations")),
+    )
+
+    def read_requests(_engine):
+        envelope = envelopes.value()
+        if envelope is not None:
+            engine.observe_envelope(envelope)
+        for entry in competences.payloads():
+            if entry.competence is not None:
+                engine.observe_competence(entry.symbol, entry.competence, entry.trades)
+        requests = []
+        for intent in intents.payloads():
+            if intent.action == STAND_ASIDE:
+                continue
+            action = (
+                OPEN_A_POSITION
+                if intent.action in (OPEN, ADD_TO)
+                else CLOSE_A_POSITION
+            )
+            requests.append((intent.symbol, action, 0.0))
+        for proposal in proposals.payloads():
+            requests.append((proposal.part_id, ADMIT_A_PART, 0.0))
+        return tuple(requests)
+
+    return run_autonomy_policy_engine(
+        engine=engine,
+        control_socket=context.control_socket,
+        read_requests=read_requests,
+        publish_decisions=lambda decision: publish_decisions((decision,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )

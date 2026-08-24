@@ -236,3 +236,46 @@ def run_human_override_reader(
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
     )
+
+
+def start_part(context) -> int:
+    """The one entry point every part carries (T-1).
+
+    The source is a TOML file at a path the operator names, somewhere this
+    system only ever reads. A file that does not exist is no override -- the
+    operator has not placed one. A file that exists but cannot be read or
+    parsed raises, and the engine treats that as an active stop: if the door
+    cannot be checked, the system does not get to assume nobody is at it.
+    """
+    import pathlib
+    import tomllib
+
+    publish_overrides = context.bus.publisher_for("human-override")
+
+    override_path = pathlib.Path(
+        str(context.setting("human_override_path").value)
+    ).expanduser()
+
+    def read_override_file():
+        if not override_path.exists():
+            return None
+        raw = tomllib.loads(override_path.read_text(encoding="utf-8"))
+        override = raw.get("override")
+        if not isinstance(override, dict):
+            raise ValueError(
+                f"{override_path} exists but carries no [override] table"
+            )
+        return override
+
+    reader = HumanOverrideReader()
+    reader.install_source(read_override_file)
+
+    return run_human_override_reader(
+        reader=reader,
+        control_socket=context.control_socket,
+        publish_overrides=lambda override: publish_overrides((override,)),
+        health_interval_seconds=context.health_interval_seconds,
+        input_descriptors=context.input_descriptors,
+        tick_floor_seconds=context.tick_floor_seconds,
+        emit_health=context.emit_health,
+    )
