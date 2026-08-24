@@ -1,0 +1,39 @@
+# Which parts matter most when the machine is contended. Lower wins; unlisted
+# parts take the middle rank (50). Parts at or below reservation_priority_ceiling
+# (10) are given a guaranteed CPU and memory floor by resource-reservation-ledger,
+# and the switching-planner never switches a reserved part off for memory, hog or
+# io reasons.
+#
+# Written by Claude 2026-08-24 when gate-actuator was first started, following the
+# reservation_priority_ceiling note of 2026-08-23 ("room for the operator to rank
+# the feed reader, the recorders and the collector among the first ten"). The
+# ranking is the operator's to change; the reasons each part is here:
+#
+#   venue-trade-stream-reader  writes the tape. An hour not captured is gone
+#                              permanently -- nothing else in this file is that.
+#   price-level-sampler        thirty-seven parts read nothing but its frames;
+#                              off, they all starve at once.
+#   heartbeat-collector        every board and every governor decision reads the
+#                              table it writes; off, the system goes dark to us.
+#   trade-lifecycle-recorder   the journal of what the bot did with money.
+#   position-recorder          the positions the paper account actually holds.
+#   paper-account-keeper       the paper balance itself.
+#   paper-fill-simulator       the venue stand-in; off mid-trade, resting stops
+#                              stop triggering while positions stay open.
+#   bull-conviction-model      the live run's learning (RL-071); its checkpoint
+#                              survives a stop but the run's unlearned tail does not.
+#   stream-budget-planner      decides the feed's connections; the reader keeps
+#                              its last plan, so it ranks below the reader itself.
+#   symbol-catalogue-reader    the universe the feed captures.
+
+[priority]
+"venue-trade-stream-reader" = 1
+"price-level-sampler" = 2
+"heartbeat-collector" = 3
+"trade-lifecycle-recorder" = 4
+"position-recorder" = 5
+"paper-account-keeper" = 6
+"paper-fill-simulator" = 7
+"bull-conviction-model" = 8
+"stream-budget-planner" = 9
+"symbol-catalogue-reader" = 10

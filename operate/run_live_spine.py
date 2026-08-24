@@ -54,6 +54,7 @@ apply_blas_thread_caps()
 
 from runtime.part_launcher import PartLauncher  # noqa: E402
 from runtime.settings_reader import load_settings_document, settings_directory  # noqa: E402
+from runtime.switch_service import ACTION_TURN_OFF, OUTCOME_FLIPPED  # noqa: E402
 from runtime.wiring_plan import derive_wiring  # noqa: E402
 
 STATE_DIRECTORY = pathlib.Path.home() / ".local/share/ajit-segment-bots"
@@ -86,23 +87,44 @@ LIVE_SPINE = (
     # writes. Until it was on the spine (2026-08-23) nothing consumed the
     # staleness or input loss every part had been reporting.
     "heartbeat-collector",
-    # The governor, observing and not yet acting (RL-068: the governor spine
-    # before the futures vertical). These four measure the machine and the
-    # parts on it and the planner publishes what it would switch; gate-actuator
-    # is deliberately not here, because a plan it enforced could switch the feed
-    # reader off, and an hour of tape not captured is gone. Turning it on is the
-    # operator's call, taken after the plans have been read for a while.
+    # The governor's meters, complete since 2026-08-24 (RL-068: the governor
+    # spine before the futures vertical). These measure the machine and the parts
+    # on it and feed the planner; none of them reads the market, so they start
+    # before the feed. The deciding half -- duty-cycle-planner, switching-planner,
+    # off-state-verifier and gate-actuator -- starts after the feed, below.
     "hardware-scanner",
     "part-priority-reader",
     "part-appetite-meter",
-    "switching-planner",
-    "off-state-verifier",
+    "hog-detector",
+    "io-pressure-meter",
+    "memory-pressure-forecaster",
+    "part-restart-budgeter",
+    "switch-oscillation-damper",
+    "resource-reservation-ledger",
+    "accelerator-scheduler",
     # The feed. These three replace operate/start_trade_capture.py entirely: the
     # catalogue picks the symbols, the planner packs them onto connections, and the
     # reader writes the tape and publishes market-data.
     "symbol-catalogue-reader",
     "stream-budget-planner",
     "venue-trade-stream-reader",
+    # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
+    # counts market activity per UTC hour, so it starts after the reader; the
+    # switching-planner weighs all fourteen inputs into a switch-plan; and
+    # gate-actuator -- the one part ever handed the switch endpoint -- carries it
+    # out, started last so the first plan it acts on was built with every meter
+    # already reporting. What made turning the actuator on safe is
+    # part-priority.toml: the feed reader, the sampler, the recorders and the
+    # collector hold the first ten ranks, resource-reservation-ledger gives each a
+    # guaranteed floor, and the planner never switches a reserved part off for
+    # memory, hog or io reasons -- so the plan that could have cost an hour of
+    # tape is a plan the policy cannot produce. Every governor part reports its
+    # standing, so a flip that happened is on the board, and one that did not is
+    # too.
+    "duty-cycle-planner",
+    "switching-planner",
+    "off-state-verifier",
+    "gate-actuator",
     # Every symbol's latest price, published four times a second as one frame per
     # venue. Thirty-seven parts read this instead of every trade, which is what
     # stops fan-out scaling with trading volume -- 12,707 deliveries a second
@@ -384,11 +406,34 @@ def main(argv: list[str]) -> int:
                 }
             )
 
+    # Parts the governor has switched off, which the restart loop below must not
+    # switch back on. Without this the supervisor and gate-actuator fight: the
+    # actuator stops a part, the loop sees a part not running and restarts it,
+    # switch-oscillation-damper reports the flapping, and the flapping is the
+    # supervision's own. The governor's off ends when the governor says on.
+    governor_switched_off: set[str] = set()
+
     try:
         while not stopping["asked"]:
-            switch_service.serve_pending()
+            for outcome in switch_service.serve_pending():
+                record(
+                    {
+                        "event": "governor-switch",
+                        "part_id": outcome.part_id,
+                        "action": outcome.action,
+                        "outcome": outcome.outcome,
+                        "detail": outcome.detail,
+                    }
+                )
+                if outcome.outcome == OUTCOME_FLIPPED:
+                    if outcome.action == ACTION_TURN_OFF:
+                        governor_switched_off.add(outcome.part_id)
+                    else:
+                        governor_switched_off.discard(outcome.part_id)
             now = time.monotonic()
             for part_id in spine:
+                if part_id in governor_switched_off:
+                    continue
                 if launcher.is_running(part_id):
                     policy.record_healthy(part_id)
                     continue

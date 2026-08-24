@@ -133,6 +133,18 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         "heartbeat-collector",
         # Same reason: it meters every part's health, its own consumers included.
         "part-appetite-meter",
+        # The governor's act loop, closed on 2026-08-24: the planner's plan feeds
+        # the actuator, the actuator's switch-records feed the damper and the
+        # verifier, and the damper's flap-reports feed the planner again. No
+        # ordering makes that a line. The spine starts the actuator last, so the
+        # first plan it ever acts on is one the planner built with every meter
+        # already reporting.
+        "switch-oscillation-damper",
+        "off-state-verifier",
+        "gate-actuator",
+        # In the same loop one arc further out: the faults it budgets against are
+        # the verifier's, and the budget it produces is the planner's input.
+        "part-restart-budgeter",
     }
 
     for part_id, inputs in consumes.items():

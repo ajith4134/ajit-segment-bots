@@ -138,14 +138,21 @@ def run_io_pressure_meter(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    last_pressure: list = [None]
+
+    def measure_and_publish() -> None:
+        last_pressure[0] = meter.measure()
+        publish_pressure(last_pressure[0])
+
     return run_part(
         declaration=PART_DECLARATION,
         control_socket=control_socket,
-        do_one_tick=lambda: publish_pressure(meter.measure()),
+        do_one_tick=measure_and_publish,
         emit_health=emit_health,
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_io_pressure(meter, last_pressure[0]),
     )
 
 
