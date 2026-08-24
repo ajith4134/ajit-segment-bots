@@ -477,4 +477,12 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        # The miner is built lazily, once enough labelled trades have been seen;
+        # before that the standing says so rather than describing a miner that
+        # does not exist yet.
+        read_standing=lambda: (
+            describe_mining(holder["miner"])
+            if holder["miner"] is not None
+            else {"miner_built": 0}
+        ),
     )

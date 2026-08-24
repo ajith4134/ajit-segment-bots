@@ -297,4 +297,5 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        read_standing=lambda: describe_budgets(budgeter),
     )
