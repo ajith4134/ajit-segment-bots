@@ -282,18 +282,73 @@ def read_journal_entries(path: pathlib.Path) -> tuple[list[dict], str | None]:
 
     A line that cannot be read is returned rather than skipped: a ledger with a
     hole in it must not render as a ledger with fewer trades.
+
+    For a file that fits in memory. The board's own pass streams instead --
+    `stream_journal_file` -- because the recorders write gigabytes a day and a
+    list of every entry is what OOM-killed this builder on 2026-08-24.
     """
     if not path.exists():
         return [], None
-    entries = []
-    for number, line in enumerate(path.read_text().splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError as failure:
-            return entries, f"line {number} of {path} is not readable: {failure}"
-    return entries, None
+    report = JournalFileReport(path=path)
+    entries = list(stream_journal_file(path, report))
+    return entries, report.problem
+
+
+@dataclass
+class JournalFileReport:
+    """What one pass over one recorder's file measured about the file itself."""
+
+    path: pathlib.Path
+    count: int = 0
+    chains: int = 0
+    broken: str | None = None
+    problem: str | None = None
+
+
+def stream_journal_file(path: pathlib.Path, report: JournalFileReport):
+    """Yield each entry once, verifying the chain as the entries pass.
+
+    One streaming pass carries everything the board needs -- the entries for
+    whoever is aggregating them, and the file's own count and chain verdict on
+    the report -- while holding one line in memory at a time. The recorders
+    write gigabytes a day; reading a file of that size into a list is how this
+    builder died at 22 GB on 2026-08-24, with the board stale behind it.
+    """
+    if not path.exists():
+        return
+    previous = None
+    with open(path, encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as failure:
+                report.problem = f"line {number} of {path} is not readable: {failure}"
+                return
+            report.count += 1
+            if report.broken is None:
+                expected = compute_digest(
+                    sequence=entry["sequence"],
+                    kind=entry["kind"],
+                    part_id=entry["part_id"],
+                    payload=entry["payload"],
+                    previous_digest=entry["previous_digest"],
+                )
+                if expected != entry["digest"]:
+                    report.broken = (
+                        f"entry {entry['sequence']} ({entry['kind']}) does not hash to "
+                        f"its own digest"
+                    )
+                elif entry["previous_digest"] == GENESIS_DIGEST:
+                    report.chains += 1
+                elif previous is not None and entry["previous_digest"] != previous:
+                    report.broken = (
+                        f"entry {entry['sequence']} follows a digest that is not the one "
+                        f"entry {entry['sequence'] - 1} produced"
+                    )
+                previous = entry["digest"]
+            yield entry
 
 
 def find_first_live_recorder_start_ns() -> int | None:
@@ -335,15 +390,38 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
     started -- anything weaker marks a test's fill live the moment a detector
     notices the same symbol again.
     """
-    furthest: dict[str, int] = {}
-    open_trade: dict[str, RecordedTrade] = {}
-    collected: list[RecordedTrade] = []
-
+    collector = TradeCollector(live_from_ns=live_from_ns, keep_unfilled=True)
     for entry in entries:
+        collector.observe(entry)
+    return collector.trades()
+
+
+class TradeCollector:
+    """`collect_trades`, one entry at a time, keeping only what will be listed.
+
+    The grouping is `collect_trades`' own -- that function now feeds this. What
+    the class adds is a memory rule for the streaming pass: with
+    `keep_unfilled=False`, a group that ends without ever seeing a fill is
+    counted and dropped rather than kept, because the detectors journal
+    millions of candidates a day and a board that held a `RecordedTrade` for
+    each was OOM-killed on 2026-08-24. Every group is still counted in
+    `groups_seen`, and the groups anything renders -- filled ones, and the
+    still-open ones -- are all retained.
+    """
+
+    def __init__(self, live_from_ns: int | None, keep_unfilled: bool) -> None:
+        self._live_from_ns = live_from_ns
+        self._keep_unfilled = keep_unfilled
+        self._furthest: dict[str, int] = {}
+        self._open: dict[str, RecordedTrade] = {}
+        self._collected: list[RecordedTrade] = []
+        self.groups_seen = 0
+
+    def observe(self, entry: dict) -> None:
         payload = entry.get("payload") or {}
         trade_id = payload.get("trade_id")
         if trade_id is None or entry["kind"] not in LIFECYCLE_STAGES:
-            continue
+            return
         position = LIFECYCLE_STAGES.index(entry["kind"])
         recorded_at = int(entry["recorded_at_ns"])
 
@@ -351,20 +429,22 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
         # a fill may arrive more than once for one order, because a partial fill is
         # ordinary, and splitting there would count one trade as two.
         repeats_legitimately = (
-            position == furthest.get(trade_id, -1) and entry["kind"] in REPEATABLE_STAGES
+            position == self._furthest.get(trade_id, -1)
+            and entry["kind"] in REPEATABLE_STAGES
         )
-        starts_a_new_trade = (
-            trade_id not in open_trade
-            or (position <= furthest.get(trade_id, -1) and not repeats_legitimately)
+        starts_a_new_trade = trade_id not in self._open or (
+            position <= self._furthest.get(trade_id, -1) and not repeats_legitimately
         )
         if starts_a_new_trade:
             trade = RecordedTrade(trade_id=trade_id)
-            open_trade[trade_id] = trade
-            collected.append(trade)
-            furthest[trade_id] = position
+            self.groups_seen += 1
+            self._open[trade_id] = trade
+            if self._keep_unfilled:
+                self._collected.append(trade)
+            self._furthest[trade_id] = position
         else:
-            trade = open_trade[trade_id]
-            furthest[trade_id] = max(furthest[trade_id], position)
+            trade = self._open[trade_id]
+            self._furthest[trade_id] = max(self._furthest[trade_id], position)
 
         trade.stages.append(entry["kind"])
         if trade.first_recorded_at_ns is None:
@@ -381,6 +461,9 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
         if isinstance(conviction, dict) and conviction.get("value") is not None:
             trade.conviction = float(conviction["value"])
         if entry["kind"] == "fill":
+            if not self._keep_unfilled and trade.fills == 0:
+                # Its first fill is what makes a group worth holding on to.
+                self._collected.append(trade)
             trade.fills += 1
             quantity = float(payload.get("quantity") or 0.0)
             price = float(payload.get("price") or 0.0)
@@ -396,10 +479,20 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
                 trade.exit_quantity += quantity
                 trade.exit_notional += quantity * price
             trade.fees += float(payload.get("fee") or 0.0)
-            if live_from_ns is not None and recorded_at >= live_from_ns:
+            if self._live_from_ns is not None and recorded_at >= self._live_from_ns:
                 trade.is_from_a_live_run = True
 
-    return sorted(collected, key=lambda trade: trade.first_recorded_at_ns or 0)
+    def trades(self) -> list[RecordedTrade]:
+        collected = self._collected
+        if not self._keep_unfilled:
+            # The still-open groups were deferred awaiting a fill; a group that is
+            # open at the end of the pass is state, not spam, and is listed.
+            held = {id(trade) for trade in collected}
+            collected = collected + [
+                trade for trade in self._open.values()
+                if trade.fills == 0 and id(trade) not in held
+            ]
+        return sorted(collected, key=lambda trade: trade.first_recorded_at_ns or 0)
 
 
 def verify_journal_chain(entries: list[dict]) -> tuple[int, str | None]:
@@ -677,31 +770,55 @@ def probe_noticed(entries: list[dict], live_from_ns: int | None) -> ProbeResult:
     So a large number here with nothing opened is not a fault -- it is the system
     noticing while it is still learning, which is what it should be doing.
     """
-    if live_from_ns is None:
-        return ProbeResult(
-            "Setups noticed", NOT_BUILT, "no live run yet", f"no spine including {RECORDER} in {SUPERVISOR_LOG}"
-        )
-    candidates = [
-        entry
-        for entry in entries
-        if entry["kind"] == "entry-candidate" and int(entry["recorded_at_ns"]) >= live_from_ns
-    ]
-    if not candidates:
+    scan = NoticedScan(live_from_ns)
+    for entry in entries:
+        scan.observe(entry)
+    return scan.result()
+
+
+class NoticedScan:
+    """`probe_noticed`'s counting, one entry at a time, holding three numbers.
+
+    The detectors journal millions of candidates a day; the probe needs their
+    count, their symbols and the newest timestamp, not the entries.
+    """
+
+    def __init__(self, live_from_ns: int | None) -> None:
+        self._live_from_ns = live_from_ns
+        self._count = 0
+        self._newest = 0
+        self._symbols: set = set()
+
+    def observe(self, entry: dict) -> None:
+        if self._live_from_ns is None or entry["kind"] != "entry-candidate":
+            return
+        recorded_at = int(entry["recorded_at_ns"])
+        if recorded_at < self._live_from_ns:
+            return
+        self._count += 1
+        self._newest = max(self._newest, recorded_at)
+        self._symbols.add((entry.get("payload") or {}).get("symbol"))
+
+    def result(self) -> ProbeResult:
+        if self._live_from_ns is None:
+            return ProbeResult(
+                "Setups noticed", NOT_BUILT, "no live run yet",
+                f"no spine including {RECORDER} in {SUPERVISOR_LOG}",
+            )
+        if not self._count:
+            return ProbeResult(
+                "Setups noticed",
+                WAITING,
+                "none on this run",
+                "no entry-candidate has been journalled since the trading half was started",
+            )
         return ProbeResult(
             "Setups noticed",
-            WAITING,
-            "none on this run",
-            "no entry-candidate has been journalled since the trading half was started",
+            OK,
+            f"{self._count} on {len(self._symbols)} symbols",
+            f"entry-candidate entries journalled since the live run began; most recent "
+            f"{as_time(self._newest)} UTC",
         )
-    newest = max(int(entry["recorded_at_ns"]) for entry in candidates)
-    symbols = {entry["payload"].get("symbol") for entry in candidates}
-    return ProbeResult(
-        "Setups noticed",
-        OK,
-        f"{len(candidates)} on {len(symbols)} symbols",
-        f"entry-candidate entries journalled since the live run began; most recent "
-        f"{as_time(newest)} UTC",
-    )
 
 
 def how_far_a_part_is_built(part_id: str, running: dict[str, int]) -> str:
@@ -749,17 +866,24 @@ def probe_journal_chain(per_file: dict, unreadable: str | None, path: pathlib.Pa
     """
     if unreadable:
         return ProbeResult("The record", FAILING, "unreadable", unreadable)
-    total = sum(len(read) for read, _ in per_file.values())
+    normalised = {}
+    for journal, value in per_file.items():
+        if isinstance(value, JournalFileReport):
+            normalised[journal] = (value.count, value.chains, value.broken)
+        else:
+            read, _problem = value
+            chains, broken = verify_journal_chain(read) if read else (0, None)
+            normalised[journal] = (len(read), chains, broken)
+    total = sum(count for count, _chains, _broken in normalised.values())
     if not total:
         return ProbeResult("The record", WAITING, "empty", f"{path} holds no entries")
 
     verdicts = {}
     broken_files = []
-    for journal, (read, _problem) in per_file.items():
-        if not read:
+    for journal, (count, chains, broken) in normalised.items():
+        if not count:
             continue
-        chains, broken = verify_journal_chain(read)
-        verdicts[journal.name] = (len(read), chains, broken)
+        verdicts[journal.name] = (count, chains, broken)
         if broken:
             broken_files.append(f"{journal.name}: {broken}")
     if broken_files:
@@ -1048,79 +1172,157 @@ def probe_decision_freshness(entries: list[dict]) -> ProbeResult:
     report anything and no tape has to be walked -- the gap between what the bot
     thought the market was and what it actually got is the whole measurement.
     """
-    decided = {}
-    drifts = []
+    scan = FreshnessScan()
     for entry in entries:
+        scan.observe(entry)
+    return scan.result()
+
+
+class FreshnessScan:
+    """`probe_decision_freshness`'s scan, one entry at a time.
+
+    Holds one decided price per (venue, symbol) and the most recent drifts --
+    only as many as the probe ages -- rather than every journal entry.
+    """
+
+    def __init__(self) -> None:
+        self._decided: dict = {}
+        self._drifts: list = []
+
+    def observe(self, entry: dict) -> None:
         payload = entry.get("payload") or {}
         symbol = payload.get("symbol")
         if entry.get("kind") == "bounded-order" and payload.get("entry_price"):
-            decided[(payload.get("venue_id"), symbol)] = float(payload["entry_price"])
+            self._decided[(payload.get("venue_id"), symbol)] = float(payload["entry_price"])
         elif entry.get("kind") == "fill" and payload.get("price"):
-            at = decided.get((payload.get("venue_id"), symbol))
+            at = self._decided.get((payload.get("venue_id"), symbol))
             if at and at > 0:
                 filled = float(payload["price"])
-                drifts.append((abs(filled - at) / at, symbol, at, filled))
+                self._drifts.append((abs(filled - at) / at, symbol, at, filled))
+                if len(self._drifts) > MOST_DECISIONS_AGED:
+                    self._drifts.pop(0)
 
-    if not drifts:
-        return ProbeResult(
-            "Decision freshness", WAITING, "nothing has filled yet",
-            "this compares the price each decision was made at against the price it filled "
-            "at; no order has both numbers on the ledger yet",
+    def result(self) -> ProbeResult:
+        drifts = self._drifts
+        if not drifts:
+            return ProbeResult(
+                "Decision freshness", WAITING, "nothing has filled yet",
+                "this compares the price each decision was made at against the price it "
+                "filled at; no order has both numbers on the ledger yet",
+            )
+
+        recent = drifts[-MOST_DECISIONS_AGED:]
+        recent.sort(reverse=True)
+        worst, symbol, at, filled = recent[0]
+        median = recent[len(recent) // 2][0]
+        proof = (
+            f"{len(recent)} most recent fill(s) against the price their decision was made "
+            f"at: median gap {median:.2%}, worst {worst:.2%} on {symbol}, decided at {at:g} "
+            f"and filled at {filled:g}"
         )
+        if worst > BADLY_STALE_DECISION:
+            return ProbeResult("Decision freshness", FAILING, f"worst {worst:.1%} adrift", proof)
+        if worst > DRIFTED_DECISION:
+            return ProbeResult("Decision freshness", WAITING, f"worst {worst:.1%} adrift", proof)
+        return ProbeResult("Decision freshness", OK, f"worst {worst:.2%} adrift", proof)
 
-    recent = drifts[-MOST_DECISIONS_AGED:]
-    recent.sort(reverse=True)
-    worst, symbol, at, filled = recent[0]
-    median = recent[len(recent) // 2][0]
-    proof = (
-        f"{len(recent)} most recent fill(s) against the price their decision was made at: "
-        f"median gap {median:.2%}, worst {worst:.2%} on {symbol}, decided at {at:g} and "
-        f"filled at {filled:g}"
+
+def probe_chain_continuity_from_reports(per_file: dict) -> ProbeResult:
+    """`probe_chain_continuity`'s verdict from the streaming pass's own facts.
+
+    The list-based probe re-verifies merged entries and reads a break at every
+    point two recorders interleaved as "one chain per recorder". The same three
+    verdicts fall out of the per-file reports directly: more than one recorder
+    writing is the interleaving case, one file with several chains is the
+    restart case, and one file with one unbroken chain is the ledger.
+    """
+    with_entries = [report for report in per_file.values() if report.count]
+    if not with_entries:
+        return ProbeResult(
+            "Tamper evidence", UNMEASURED, "no entries", "there is nothing to chain yet"
+        )
+    if len(with_entries) > 1:
+        return ProbeResult(
+            "Tamper evidence", NOT_BUILT, "one chain per recorder, per run",
+            "each recorder writes its own file and starts a fresh chain when it starts, so an "
+            "edit inside one run is detected and a whole run removed from a file is not; "
+            "the per-file chains are verified by the record probe above",
+        )
+    only = with_entries[0]
+    if only.broken:
+        return ProbeResult(
+            "Tamper evidence", FAILING, "chain broken", f"{only.path.name}: {only.broken}"
+        )
+    if only.chains > 1:
+        return ProbeResult(
+            "Tamper evidence",
+            NOT_BUILT,
+            f"{only.chains} separate chains",
+            "the journal starts again from the genesis digest every time a recorder starts, so "
+            "an edit inside one run is detected and a whole run deleted from the file is not; "
+            "continuing the chain needs the recorder to read the last digest before it appends",
+        )
+    return ProbeResult(
+        "Tamper evidence",
+        OK,
+        "one chain, unbroken",
+        "every entry follows the digest of the one before it, across every run",
     )
-    if worst > BADLY_STALE_DECISION:
-        return ProbeResult("Decision freshness", FAILING, f"worst {worst:.1%} adrift", proof)
-    if worst > DRIFTED_DECISION:
-        return ProbeResult("Decision freshness", WAITING, f"worst {worst:.1%} adrift", proof)
-    return ProbeResult("Decision freshness", OK, f"worst {worst:.2%} adrift", proof)
 
 
 def run_all_probes():
     """Every probe, the trades, and the closed trades -- from one read of the journal.
 
-    One read: the journal is hundreds of megabytes on a machine that has been
-    noticing setups for a day, and a board that walked it twice would take twice
-    as long to say the same thing.
+    One *streaming* read: the recorders write gigabytes a day, and the list of
+    every entry this used to build is what OOM-killed the builder at 22 GB on
+    2026-08-24 -- a board that cannot build is a stale board wearing a
+    timestamp. Each file is streamed once, its chain verified as the entries
+    pass, and the entries are merged in recorded order into aggregators that
+    keep counts and the trades worth listing rather than the journal itself.
     """
+    import heapq
+
     journal_path = read_journal_path()
-    # Read every recorder's file. The entries are merged in recorded order for the
-    # tables, and each file's chain is verified on its own -- those are different
-    # questions and answering the second on merged entries reports a break at
-    # every point where two recorders interleaved.
-    per_file = {path: read_journal_entries(path) for path in journal_paths()}
-    entries = sorted(
-        (entry for read, _ in per_file.values() for entry in read),
-        key=lambda entry: entry.get("recorded_at_ns", 0),
-    )
-    unreadable = next(
-        (problem for _read, problem in per_file.values() if problem), None
-    )
     live_from_ns = find_first_live_recorder_start_ns()
-    trades = collect_trades(entries, live_from_ns)
-    closed = collect_closed_trades(entries)
+
+    # Stream every recorder's file. The entries are merged in recorded order for
+    # the tables, and each file's chain is verified on its own as it streams --
+    # those are different questions and answering the second on merged entries
+    # reports a break at every point where two recorders interleaved.
+    per_file = {path: JournalFileReport(path=path) for path in journal_paths()}
+    streams = [
+        stream_journal_file(path, report) for path, report in per_file.items()
+    ]
+    collector = TradeCollector(live_from_ns=live_from_ns, keep_unfilled=False)
+    noticed = NoticedScan(live_from_ns)
+    freshness = FreshnessScan()
+    closed_entries: list[dict] = []
+    for entry in heapq.merge(*streams, key=lambda entry: entry.get("recorded_at_ns", 0)):
+        collector.observe(entry)
+        noticed.observe(entry)
+        freshness.observe(entry)
+        if entry.get("kind") == CLOSED_TRADE_KIND:
+            closed_entries.append(entry)
+
+    unreadable = next(
+        (report.problem for report in per_file.values() if report.problem), None
+    )
+    trades = collector.trades()
+    closed = collect_closed_trades(closed_entries)
     running = read_running_parts()
     results = [
         probe_money_mode(),
         probe_trading_half(running),
         probe_parts_alive(),
         probe_feed(read_tape_last_write_seconds()),
-        probe_noticed(entries, live_from_ns),
+        noticed.result(),
         probe_opened(trades, journal_path),
         probe_closed(running),
         probe_journal_chain(per_file, unreadable, journal_path),
-        probe_chain_continuity(entries),
+        probe_chain_continuity_from_reports(per_file),
         probe_learning(),
         probe_exit_plans(),
-        probe_decision_freshness(entries),
+        freshness.result(),
     ]
     return results, trades, journal_path, live_from_ns, closed
 
