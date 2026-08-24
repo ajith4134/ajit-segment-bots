@@ -42,7 +42,7 @@ from runtime.part_process import run_part
 from runtime.stream_plan import ConnectionAssignment, StreamPlan
 from runtime.symbol_universe import CapturableSymbol
 from runtime.tape import StreamKind
-from runtime.venues.venue_adapter import EVERY_SYMBOL, StreamRequest, VenueAdapter
+from runtime.venues.venue_adapter import StreamRequest, VenueAdapter
 
 PART_ID = "stream-budget-planner"
 
@@ -162,29 +162,29 @@ def _requests_for_kind(
     candle_interval: str,
     book_depth_levels: int,
 ) -> tuple[StreamRequest, ...]:
-    """One request per symbol, unless the venue quotes the whole market on one topic.
+    """One request per symbol, for every stream kind including quotes.
 
-    Binance does: `!bookTicker` covers every symbol listed now and every symbol
-    listed later, so planning one request per symbol would make this plan claim
-    connections that will never be opened -- and that count is exactly what the
-    open-file ceiling below is checked against. Bybit has no such topic and
-    answers None, so its symbols are named one by one as before.
+    An earlier version of this collapsed quotes to a venue's all-market topic
+    where it had one, so the plan would claim one connection rather than many.
+    Measured 2026-08-24 on Binance, same symbol and same 30-second window:
 
-    Asked of the adapter rather than decided here (T-4): which venue has a
-    wildcard is venue knowledge, and a planner that knew it would be a second
-    place to update when a third venue lands.
+        per-symbol btcusdt@bookTicker   6,598 updates   (219.9/s)
+        all-market !bookTicker              6 updates   (  0.2/s)
+
+    The all-market stream is throttled by about a thousand times per symbol. It
+    is a coverage tool, not a freshness tool -- and a quote's entire value is its
+    age. Against the 1.0-1.5s a volatile symbol's own moves say a price may be
+    believed, a quote arriving every five seconds is stale before it lands, which
+    is why the quote fallback rescued only a twentieth of the refusals it was
+    built to rescue.
+
+    So the plan names the symbols decisions are actually made on. Whole-universe
+    coverage remains available -- `every_symbol_quote_topic` is still the venue's
+    answer for it -- but it is a different question from this one, and answering
+    it here cost the freshness the feed exists for.
     """
     if not symbols:
         return ()
-    if stream_kind is StreamKind.QUOTE and adapter.every_symbol_quote_topic() is not None:
-        return (
-            StreamRequest(
-                stream_kind=stream_kind,
-                symbol=EVERY_SYMBOL,
-                candle_interval=candle_interval,
-                book_depth_levels=book_depth_levels,
-            ),
-        )
     return tuple(
         StreamRequest(
             stream_kind=stream_kind,

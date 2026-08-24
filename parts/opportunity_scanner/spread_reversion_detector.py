@@ -342,6 +342,19 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
         # trade rather than a feed that failed.
         "leg_priced_from_a_quote": detector.standing.leg_priced_from_a_quote,
         "leg_quote_too_wide": detector.standing.leg_quote_too_wide,
+        # Why a leg could not be priced, from the chooser's own counters. Without
+        # these, a refusal rate that stays high is a fact with no diagnosis: a leg
+        # that has no quote at all and one whose quote is itself too old are
+        # different failures with different fixes, and they were indistinguishable
+        # from outside on 2026-08-24.
+        **(
+            {}
+            if detector._reference_price is None
+            else {
+                f"leg_{name}": value
+                for name, value in detector._reference_price.describe().items()
+            }
+        ),
     }
 
 

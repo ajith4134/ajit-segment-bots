@@ -94,3 +94,40 @@ Quotes arrive faster than trades on Bybit by a factor of five. Handing them to
 readers one at a time re-creates exactly the fan-out that
 `apply_2026-08-24_sampled_price_levels.py` removed, so anything built on this
 publishes on a cadence rather than per update.
+
+## The all-market stream is throttled — measured 2026-08-24 20:2x
+
+`measure_quote_stream_throttling.py`, two sockets, same symbol, same 30-second
+window:
+
+    per-symbol btcusdt@bookTicker   6,598 updates for BTCUSDT   (219.9/s)
+    all-market !bookTicker              6 updates for BTCUSDT   (  0.2/s)
+
+**About a thousand times fewer per symbol.** `!bookTicker` covers the whole
+market on one socket, and that is a fact about coverage rather than about
+freshness — a quote's entire value is its age, and one arriving every five
+seconds is stale before it lands.
+
+This overturns a choice made earlier the same day. The quote feed was built on the
+all-market topic and `stream-budget-planner` collapsed its quote requests to it,
+on the reasoning that planning 872 per-symbol topics and then opening one would
+make the plan's own connection count fiction. That reasoning was sound and the
+conclusion was wrong: the plan was honest and the quotes were useless.
+
+What it cost, measured on the live run before the reversal: giving
+`spread-reversion-detector` the quote fallback moved its refusals from 50% of
+tests to 45%, when the defect it was built to fix was 34-50% of all its work.
+469 legs a second really were priced from a quote — the mechanism worked — but
+against the 1.0-1.5 s that a captured symbol's own moves say a price may be
+believed, a five-second-old quote is refused just as a stale trade is.
+
+Two things follow, and both are recorded rather than assumed:
+
+* **Freshness is per symbol.** The plan names the symbols decisions are made on,
+  for quotes exactly as for trades. Whole-universe coverage is still available —
+  `every_symbol_quote_topic` remains the venue's answer for it — but it answers a
+  different question.
+* **Bybit was never affected.** It has no wildcard, so its captured symbols were
+  always subscribed as `tickers.{SYMBOL}` and its quotes were always per-symbol.
+  The defect was Binance-only, and it was invisible until the two were measured
+  side by side rather than each on its own.
