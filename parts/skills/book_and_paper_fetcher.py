@@ -247,6 +247,7 @@ def run_book_and_paper_fetcher(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_fetching(fetcher),
     )
 
 

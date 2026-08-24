@@ -261,6 +261,7 @@ def run_onchain_position_reader(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_position_reading(reader),
     )
 
 

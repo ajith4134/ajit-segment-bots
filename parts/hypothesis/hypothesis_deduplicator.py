@@ -262,6 +262,7 @@ def run_hypothesis_deduplicator(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_deduplication(deduplicator),
     )
 
 def _shape_of(item):

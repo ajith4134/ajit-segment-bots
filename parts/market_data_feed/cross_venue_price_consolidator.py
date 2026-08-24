@@ -180,6 +180,7 @@ def run_cross_venue_price_consolidator(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_consolidation(consolidator),
     )
 
 

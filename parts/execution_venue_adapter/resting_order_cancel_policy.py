@@ -261,6 +261,7 @@ def run_resting_order_cancel_policy(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_cancel_policy(policy),
     )
 
 

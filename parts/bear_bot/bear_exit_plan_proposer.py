@@ -437,6 +437,7 @@ def run_bear_exit_plan_proposer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_exit_planning(proposer),
     )
 
 def _paired_targets(context) -> tuple[tuple[float, float], ...]:
