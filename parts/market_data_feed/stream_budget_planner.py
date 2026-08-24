@@ -295,6 +295,9 @@ def run_stream_budget_planner(
     """
     from runtime.hardware_facts import measure_hardware_facts
 
+    last_budget: list = [None]
+    refusals: list[int] = [0]
+
     def plan_once() -> None:
         try:
             budget = plan_stream_budget(
@@ -308,9 +311,30 @@ def run_stream_budget_planner(
                 venues_withheld=read_venues_withheld(),
             )
         except PlanRefused as refusal:
+            refusals[0] += 1
             publish_plan(None, str(refusal))
             return
+        last_budget[0] = budget
         publish_plan(budget, None)
+
+    def read_standing() -> dict:
+        # The last plan's numeric facts, flattened per venue: a heartbeat's
+        # standing keeps top-level numbers only. Before a first plan there is
+        # nothing to describe, and saying so beats an empty dict.
+        budget = last_budget[0]
+        if budget is None:
+            return {"part_id": PART_ID, "plans_made": 0, "plans_refused": refusals[0]}
+        described = describe_budget(budget)
+        flat: dict = {
+            "part_id": PART_ID,
+            "plans_refused": refusals[0],
+            "connections": described["connections"],
+            "open_files_required": described["open_files_required"],
+            "open_file_headroom": described["open_file_headroom"],
+        }
+        for venue, count in described["subscriptions_by_venue"].items():
+            flat[f"subscriptions.{venue}"] = count
+        return flat
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -320,6 +344,7 @@ def run_stream_budget_planner(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=read_standing,
     )
 
 

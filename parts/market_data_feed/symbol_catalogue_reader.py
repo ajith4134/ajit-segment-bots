@@ -460,6 +460,17 @@ def start_part(context) -> int:
         for reader in readers:
             publish_universe(reader.read_catalogue())
 
+    def describe_all_catalogues() -> dict:
+        # One recorder per venue in one process; a heartbeat standing keeps
+        # top-level numbers, so each venue's facts travel under a suffixed key.
+        merged: dict = {"part_id": PART_ID, "venues": len(readers)}
+        for reader in readers:
+            one = describe_catalogue(reader)
+            venue = one["venue_id"] or "unread"
+            for field in ("reads_completed", "listings_seen", "capturable_seen", "selected"):
+                merged[f"{field}.{venue}"] = one[field]
+        return merged
+
     return run_part(
         declaration=PART_DECLARATION,
         control_socket=context.control_socket,
@@ -468,4 +479,5 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        read_standing=describe_all_catalogues,
     )
