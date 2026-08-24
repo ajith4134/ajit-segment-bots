@@ -48,6 +48,7 @@ class PositionRecorderStanding:
     unchanged_skipped: int = 0
     closed_trades: int = 0
     excursions: int = 0
+    excursions_unchanged_skipped: int = 0
 
 
 class PositionRecorder:
@@ -56,6 +57,7 @@ class PositionRecorder:
     def __init__(self, journal: Journal) -> None:
         self._journal = journal
         self._held: dict[tuple[str, str], float] = {}
+        self._peaks: dict[tuple[str, str], tuple[float, float]] = {}
         self.standing = PositionRecorderStanding()
 
     def record_position(self, position) -> JournalEntry | None:
@@ -73,6 +75,9 @@ class PositionRecorder:
         elif position.is_flat:
             kind = CLOSED
             self.standing.closed += 1
+            # The next position on this symbol starts its own extremes; holding
+            # the closed one's would swallow a first excursion that matched it.
+            self._peaks.pop(key, None)
         else:
             kind = CHANGED
             self.standing.changed += 1
@@ -120,8 +125,21 @@ class PositionRecorder:
             },
         )
 
-    def record_excursion(self, excursion) -> JournalEntry:
-        """Journal how far an open position travelled, best and worst (RL-042)."""
+    def record_excursion(self, excursion) -> JournalEntry | None:
+        """Journal how far an open position travelled, best and worst (RL-042).
+
+        Only when either extreme actually moved. The tracker publishes one
+        excursion per price message per open position -- hundreds a second on a
+        liquid symbol -- and journaling each one wrote four gigabytes of
+        identical extremes in two days (measured 2026-08-24: 99.9% of the
+        file). The extremes are the record; the per-price path is the tape's.
+        """
+        key = (excursion.venue_id, excursion.symbol)
+        peaks = (excursion.best_unrealised, excursion.worst_unrealised)
+        if self._peaks.get(key) == peaks:
+            self.standing.excursions_unchanged_skipped += 1
+            return None
+        self._peaks[key] = peaks
         self.standing.excursions += 1
         return self._append(
             EXCURSION,
@@ -151,6 +169,7 @@ def describe_positions(recorder: PositionRecorder) -> dict:
         "unchanged_skipped": recorder.standing.unchanged_skipped,
         "closed_trades": recorder.standing.closed_trades,
         "excursions": recorder.standing.excursions,
+        "excursions_unchanged_skipped": recorder.standing.excursions_unchanged_skipped,
     }
 
 
@@ -166,7 +185,11 @@ def run_position_recorder(
             entry for position in positions if (entry := recorder.record_position(position))
         ]
         entries += [recorder.record_closed_trade(trade) for trade in closed_trades]
-        entries += [recorder.record_excursion(excursion) for excursion in excursions]
+        entries += [
+            entry
+            for excursion in excursions
+            if (entry := recorder.record_excursion(excursion))
+        ]
         publish_entries(tuple(entries))
 
     return run_part(

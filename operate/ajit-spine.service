@@ -1,0 +1,40 @@
+[Unit]
+# The live spine: 47 parts, the tape writer among them. Since 2026-08-23 this
+# is what writes the tape; operate/start_trade_capture.py is the fallback, and
+# the two refuse to run together -- two writers on one tape make a duplicate
+# indistinguishable from a real second print. So the capture units must be
+# *disabled* (not just stopped) when this is enabled, and vice versa:
+#
+#   systemctl --user disable --now 'ajit-capture@*'
+#   systemctl --user enable  --now ajit-spine
+#
+# Installed 2026-08-24, after the reboot at 04:35 that morning proved the
+# gap: the machine came back, the capture units came back, and the spine --
+# started by hand -- did not, costing eleven hours of learning on live prices
+# (the capture units kept the tape, which is why they stay installed as the
+# fallback). Lingering was already enabled for the capture units, so this
+# needs no further root.
+Description=ajit-segment-bots live spine (47 parts, writes the tape)
+After=network-online.target
+Wants=network-online.target
+# Never both: the spine's own lock and capture check are the hard guard; this
+# makes systemd agree instead of flapping restarts against the refusal.
+Conflicts=ajit-capture@binance-usdm.service ajit-capture@bybit-linear.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ajit-segment-bots
+ExecStart=%h/ajit-segment-bots/.venv/bin/python %h/ajit-segment-bots/operate/run_live_spine.py
+# Always: a spine that exits cleanly for any reason is still a spine that has
+# stopped, and history accrues only in real time. Restarts land in the spine's
+# own supervisor journal, so a flapping spine is visible rather than merely up.
+Restart=always
+RestartSec=5
+# SIGTERM runs the spine's stop path: parts are stopped, the tape and the
+# journals flush. SIGKILL is safe too -- both formats are built against it --
+# but a clean stop costs nothing.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

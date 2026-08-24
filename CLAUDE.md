@@ -121,9 +121,8 @@ highest-volume symbols on each, trades to disk at
 script: `operate/run_live_spine.py` starts 47 parts (the feed, the bull bot,
 the trading half, and the governor observing without `gate-actuator`), and
 `venue-trade-stream-reader` writes the tape. Check it is alive with
-`pgrep -f run_live_spine.py` and the *Parts alive* tile; restart with
-`kill -TERM <pid>` (flushes the tape and journals) then
-`setsid nohup .venv/bin/python operate/run_live_spine.py > ~/.local/share/ajit-segment-bots/live-spine.out 2>&1 &`.
+`systemctl --user status ajit-spine` and the *Parts alive* tile; restart with
+`systemctl --user restart ajit-spine` (SIGTERM flushes the tape and journals).
 The spine refuses to start while `start_trade_capture.py` runs, and vice
 versa — two writers on one tape make a duplicate indistinguishable from a real
 second print.
@@ -133,11 +132,15 @@ only in real time: every other part can be built against a tape that exists, and
 an hour not captured is gone permanently.
 
     operate/README.md          how to start, stop, and see what it has captured
-    operate/keep_capture_running.sh   the supervisor that restarts it if it dies
+    operate/ajit-spine.service       the systemd user unit the spine runs under
+    operate/keep_capture_running.sh  the capture fallback's shell supervisor
 
-It survives a crash and a logout. **It does not survive a reboot** — that needs
-one root command, and `operate/README.md` has it. If the supervisor log's last
-line is old, capture is not running.
+**Since 2026-08-24 the spine survives crashes, logouts and reboots**: it runs as
+the systemd user unit `ajit-spine` (Restart=always, lingering already enabled),
+installed after the 04:35 reboot that morning cost eleven hours of live
+learning — the capture units came back at boot and the hand-started spine did
+not. The `ajit-capture@` units stay installed but *disabled* as the fallback;
+enable one side only, never both.
 
 `operate/` is not parts. It stands in for `stream-budget-planner` and the
 governor until those exist, and should be deleted when they do.

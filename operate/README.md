@@ -48,16 +48,41 @@ and each connection's opens, closes and reconnects. Restarts are in
 `<venue>.supervisor.jsonl`. Neither file is the tape: the tape is what the venue
 said, these are what we observed about our own reading of it.
 
-## What survives what
+## Which side runs — the spine, since 2026-08-24
+
+The tape's normal writer is the **live spine**, not the capture script: the
+systemd user unit `ajit-spine` (`operate/ajit-spine.service`) runs
+`run_live_spine.py` at boot, restarts it if it dies, and stops it with SIGTERM
+so the tape and journals flush. Installed after the reboot of 2026-08-24 04:35
+proved the gap: the capture units came back at boot, the hand-started spine did
+not, and eleven hours of learning on live prices were lost (the capture kept
+the tape).
+
+```bash
+systemctl --user status  ajit-spine     # is it up, and since when
+systemctl --user restart ajit-spine     # clean stop, flush, start
+```
+
+The `ajit-capture@` units below stay installed but **disabled**, as the
+fallback for running capture without the spine. One side enabled, never both —
+the spine and the capture script refuse to run together, and systemd's
+`Conflicts=` makes it agree rather than flap restarts against that refusal:
+
+```bash
+systemctl --user disable --now ajit-spine
+systemctl --user enable  --now ajit-capture@binance-usdm ajit-capture@bybit-linear
+```
+
+## What survives what (the capture fallback)
 
 | event | survives? | why |
 |---|---|---|
 | the capture process crashes | **yes** | `keep_capture_running.sh` restarts it after 5 s and writes down that it did |
 | the SSH session ends | **yes** | started with `setsid`, so it is not in the session's process group |
 | `SIGKILL` of the capture | **yes, minus the message in flight** | the tape format is built against it, and the writer is unbuffered so records reach the kernel as they are appended |
-| **the machine reboots** | **no** | see below |
+| **the machine reboots** | **yes, since 2026-08-22** | the `ajit-capture@` units are installed and lingering is on; they only start if *enabled*, and they are disabled while the spine holds the tape |
 
-### Making it survive a reboot — two commands, one of them root
+### Installing the capture units — two commands, one of them root
 
 There is no cron on this box (`crontab` is not installed and `apt-get` needs a
 password), and a systemd **user** service is killed when the last login session
@@ -81,7 +106,8 @@ pkill -f keep_capture_running.sh
 
 Until that is done, **a reboot silently ends the capture.** The supervisor logs
 would simply stop, which is why they carry a `supervisor-started` line: a log
-whose last entry is old is a capture that is not running.
+whose last entry is old is a capture that is not running. (Done on this box
+2026-08-22; the units now sit disabled behind the spine.)
 
 ## What is captured right now
 

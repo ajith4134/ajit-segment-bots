@@ -462,6 +462,37 @@ def test_a_closed_trade_is_journalled_with_its_excursion():
     assert entry.payload["holding_seconds"] == pytest.approx(2.0)
 
 
+def an_excursion(best=15.0, worst=-2.0, current=1.0, samples=1):
+    from parts.portfolio_state.peak_excursion_tracker import PeakExcursion
+
+    return PeakExcursion(VENUE, SYMBOL, best, worst, 115.0, 98.0, current, samples, 0)
+
+
+def test_an_excursion_is_journalled_only_when_a_peak_moves():
+    """The tracker publishes one excursion per price; journaling each wrote four
+    gigabytes of identical extremes in two days (2026-08-24). The extremes are
+    the record; the per-price path is the tape's."""
+    recorder = PositionRecorder(Journal())
+    assert recorder.record_excursion(an_excursion()) is not None
+    assert recorder.record_excursion(an_excursion(current=2.0, samples=2)) is None
+    assert recorder.record_excursion(an_excursion(current=3.0, samples=3)) is None
+    assert recorder.record_excursion(an_excursion(best=20.0, samples=4)) is not None
+    assert recorder.record_excursion(an_excursion(best=20.0, worst=-5.0, samples=5)) is not None
+    assert recorder.standing.excursions == 3
+    assert recorder.standing.excursions_unchanged_skipped == 2
+
+
+def test_a_new_position_starts_its_own_extremes():
+    """A reopened symbol whose first extremes happen to match the closed one's
+    is still journalled -- held peaks would swallow it."""
+    recorder = PositionRecorder(Journal())
+    recorder.record_position(position(1.0))
+    assert recorder.record_excursion(an_excursion()) is not None
+    recorder.record_position(position(0.0))
+    recorder.record_position(position(1.0))
+    assert recorder.record_excursion(an_excursion()) is not None
+
+
 # ---- learning-recorder -------------------------------------------------------
 
 def test_a_forecast_backdated_after_its_subject_resolved_is_refused():
