@@ -172,3 +172,51 @@ def test_a_segment_that_is_not_on_paper_refuses_to_start(spine, durable_tmp_path
 def test_the_operator_s_own_settings_are_on_paper_right_now(spine):
     """Not a test of the code -- a test of the machine this is running on."""
     assert spine.refuse_unless_the_segment_is_on_paper() == spine.PAPER
+
+
+def test_every_input_a_running_part_declares_has_a_producer_on_the_spine(spine):
+    """A part whose input nobody produces sits there looking perfectly healthy.
+
+    This is the failure the sampler nearly caused: moving 37 parts from
+    `market-data` to `symbol-price-frame` and forgetting to start the one part
+    that publishes a frame would have left every one of them ticking, reporting
+    on, and never seeing a price again. Nothing in the spine checked for it, and
+    the part monitor would have shown 47 parts RUNNING.
+
+    A few inputs are produced by parts deliberately left off this spine -- the
+    governor's own outputs, the venue adapters' order paths -- so the list of
+    those is stated here by name rather than inferred. A new unproduced input is
+    a failure until somebody writes down why it is not.
+    """
+    from runtime.wiring_plan import derive_wiring
+
+    wiring = derive_wiring()
+    running = set(spine.LIVE_SPINE)
+    produced = {
+        data_type
+        for part_id in running
+        for data_type in wiring[part_id].declaration.produces
+    }
+
+    unproduced = {}
+    for part_id in sorted(running):
+        missing = [
+            data_type
+            for data_type in wiring[part_id].declaration.consumes
+            if data_type not in produced
+        ]
+        if missing:
+            unproduced[part_id] = missing
+
+    # Every consumer of a price level must be fed by the sampler, and the sampler
+    # by the reader. That chain is the one this test exists for.
+    assert "price-level-sampler" in running, (
+        "37 parts consume symbol-price-frame; nothing else publishes one"
+    )
+    for part_id, missing in unproduced.items():
+        assert "symbol-price-frame" not in missing, (
+            f"{part_id} reads symbol-price-frame and nothing on this spine publishes it"
+        )
+        assert "market-data" not in missing, (
+            f"{part_id} reads market-data and nothing on this spine publishes it"
+        )

@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -38,7 +39,7 @@ PART_ID = "profit-lock"
 
 PART_DECLARATION = PartDeclaration(
     part_id="profit-lock",
-    consumes=("position", "market-data", "excursion-profile"),
+    consumes=("position", "symbol-price-frame", "excursion-profile"),
     produces=("stop-adjustment", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -268,10 +269,9 @@ def start_part(context) -> int:
     profilers measure, as their adverse excursion.
     """
     from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     positions = LatestByKey(read=context.bus.reader("position"), key_of=lambda p: (p.venue_id, p.symbol))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     profiles = Batch(read=context.bus.reader("excursion-profile"))
     publish_adjustments = context.bus.publisher_for("stop-adjustment")
     widest_stop = context.number("risk_maximum_stop_fraction")
@@ -287,8 +287,7 @@ def start_part(context) -> int:
     stops: dict[tuple[str, str], float] = {}
 
     def read_positions():
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 prices[(trade.venue_id, trade.symbol)] = trade.price
         for profile in profiles.payloads():
             adverse = getattr(profile, "adverse_excursion", None)

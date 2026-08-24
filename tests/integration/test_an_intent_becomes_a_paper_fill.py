@@ -70,6 +70,12 @@ STOP_BELOW_ENTRY = 0.005
 # Everything that must be on for an intent to become a fill. Ordered so a part is
 # started after the parts it reads from.
 TRADING_HALF = (
+    # instrument-selector reads a price level rather than every print since
+    # 2026-08-24, and the sampler is what makes one. paper-fill-simulator still
+    # reads market-data directly and deliberately: a resting stop triggers on the
+    # market touching it, and a wick between frames must not be a wick that never
+    # happened.
+    "price-level-sampler",
     "main-account-settings-reader",
     "capital-allotment-reader",
     "capital-settings-validator",

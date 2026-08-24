@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.bot_opinion import ENTER_NOW, LONG, STAND_DOWN, WAIT_FOR_TRIGGER, EntryTiming
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import QuantileEstimator
@@ -42,7 +43,7 @@ BOT = "bull-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bull-entry-timer",
     consumes=(
-        "bull-side-candidate", "market-data", "bull-calibrated-conviction",
+        "bull-side-candidate", "symbol-price-frame", "bull-calibrated-conviction",
         "playbook-rule", "entry-quality",
     ),
     produces=("bull-entry-timing", "part-health"),
@@ -337,7 +338,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch, LatestByKey
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("bull-side-candidate"))
     convictions = LatestByKey(
         read=context.bus.reader("bull-calibrated-conviction"),
@@ -348,9 +349,9 @@ def start_part(context) -> int:
     publish_timings = context.bus.publisher_for("bull-entry-timing")
 
     def read_candidates_and_convictions(timer):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             timer.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for rule in rules.payloads():
             timer.observe_playbook_rule(rule)

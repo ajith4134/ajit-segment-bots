@@ -28,6 +28,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.forecast_types import ForecastAccuracy
 from runtime.learned_estimator import RateEstimator
@@ -38,7 +39,7 @@ PART_ID = "forecast-scorer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="forecast-scorer",
-    consumes=("price-forecast", "market-data"),
+    consumes=("price-forecast", "symbol-price-frame"),
     produces=("forecast-accuracy", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -270,10 +271,9 @@ def run_forecast_scorer(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     forecasts = Batch(read=context.bus.reader("price-forecast"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_accuracy = context.bus.publisher_for("forecast-accuracy")
     scorer = ForecastScorer(
         prior_accuracy=context.number("learning_prior_hit_rate"),
@@ -283,10 +283,9 @@ def start_part(context) -> int:
     )
 
     def read_forecasts_and_prices(_scorer) -> None:
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 scorer.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
         for forecast in forecasts.payloads():
             scorer.take_forecast(forecast)

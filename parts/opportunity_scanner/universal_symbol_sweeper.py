@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.market_signal import SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -42,7 +43,7 @@ TRADEABLE_GRADE = "tradeable"
 PART_DECLARATION = PartDeclaration(
     part_id="universal-symbol-sweeper",
     consumes=(
-        "market-data", "symbol-universe", "watch-condition", "liquidity-grade",
+        "symbol-price-frame", "symbol-universe", "watch-condition", "liquidity-grade",
         "position", "cross-segment-signal", "venue-announcement", "consolidated-price",
     ),
     produces=("entry-candidate", "part-health"),
@@ -298,9 +299,8 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey
     from runtime.rolling_statistics import RollingWindow
     from runtime.sweep_measurements import measure
-    from runtime.venues.venue_adapter import NormalisedTrade
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     universe = LatestByKey(read=context.bus.reader("symbol-universe"), key_of=lambda e: (e.venue_id, e.symbol))
     conditions = LatestByKey(read=context.bus.reader("watch-condition"), key_of=lambda c: c.condition_id)
     grades = Batch(read=context.bus.reader("liquidity-grade"))
@@ -325,9 +325,7 @@ def start_part(context) -> int:
     def read_universe(_sweeper):
         signals.payloads()
         announcements.payloads()
-        for trade in trades.payloads():
-            if not isinstance(trade, NormalisedTrade):
-                continue
+        for trade in levels_in(trades.payloads()):
             key = (trade.venue_id, trade.symbol)
             window = windows.get(key)
             if window is None:

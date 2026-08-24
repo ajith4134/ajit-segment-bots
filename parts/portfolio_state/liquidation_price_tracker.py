@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -14,7 +15,7 @@ PART_ID = "liquidation-price-tracker"
 
 PART_DECLARATION = PartDeclaration(
     part_id="liquidation-price-tracker",
-    consumes=("position", "leverage-choice", "market-data"),
+    consumes=("position", "leverage-choice", "symbol-price-frame"),
     produces=("liquidation-price", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -202,11 +203,10 @@ def start_part(context) -> int:
     import time as _time
 
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     positions = Batch(read=context.bus.reader("position"))
     choices = Batch(read=context.bus.reader("leverage-choice"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_liquidations = context.bus.publisher_for("liquidation-price")
     maintenance_rate = context.number("maintenance_margin_rate")
     tracker = LiquidationPriceTracker()
@@ -218,10 +218,9 @@ def start_part(context) -> int:
             tracker.set_maintenance_margin_rate(position.venue_id, position.symbol, maintenance_rate)
         for choice in choices.payloads():
             tracker.set_leverage(choice.venue_id, choice.symbol, choice.leverage)
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 tracker.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
 
     def tick() -> None:

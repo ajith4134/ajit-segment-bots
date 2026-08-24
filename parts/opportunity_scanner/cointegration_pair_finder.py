@@ -22,6 +22,7 @@ import math
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow, correlation, linear_fit
@@ -30,7 +31,7 @@ PART_ID = "cointegration-pair-finder"
 
 PART_DECLARATION = PartDeclaration(
     part_id="cointegration-pair-finder",
-    consumes=("market-data", "market-regime"),
+    consumes=("symbol-price-frame", "market-regime"),
     produces=("cointegrated-pair", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -279,7 +280,7 @@ def start_part(context) -> int:
 
     from runtime.input_assembly import Batch
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     regimes = Batch(read=context.bus.reader("market-regime"))
     publish_pairs = context.bus.publisher_for("cointegrated-pair")
 
@@ -296,9 +297,9 @@ def start_part(context) -> int:
     rotation_position = [0]
 
     def read_prices_and_pairs(_finder):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             finder.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
             symbols_by_venue.setdefault(trade.venue_id, set()).add(trade.symbol)
         # The regime is consumed to keep this part's reading of the market current

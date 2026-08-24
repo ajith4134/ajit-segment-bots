@@ -28,6 +28,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import ENTER_NOW, STAND_DOWN, WAIT_FOR_TRIGGER
 from runtime.part_declaration import PartDeclaration
@@ -38,7 +39,7 @@ PART_ID = "intent-timing-gate"
 
 PART_DECLARATION = PartDeclaration(
     part_id="intent-timing-gate",
-    consumes=("trade-intent", "market-data", "bull-entry-timing", "bear-entry-timing"),
+    consumes=("trade-intent", "symbol-price-frame", "bull-entry-timing", "bear-entry-timing"),
     produces=("timed-intent", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -240,10 +241,9 @@ def start_part(context) -> int:
     bots' own timing and the price now.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     intents = Batch(read=context.bus.reader("trade-intent"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     bull_timings = Batch(read=context.bus.reader("bull-entry-timing"))
     bear_timings = Batch(read=context.bus.reader("bear-entry-timing"))
     publish_timed = context.bus.publisher_for("timed-intent")
@@ -254,11 +254,10 @@ def start_part(context) -> int:
     prices: dict[tuple[str, str], float] = {}
 
     def read_intents_and_timings(_gate):
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 prices[(trade.venue_id, trade.symbol)] = trade.price
                 gate.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
         for timing in bull_timings.payloads():
             gate.observe_bot_timing(timing.bot, timing)

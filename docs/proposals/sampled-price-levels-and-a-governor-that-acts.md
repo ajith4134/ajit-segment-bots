@@ -57,11 +57,17 @@ symbol that a single part could compute once.
 **One frame per tick, carrying every symbol.** Not one message per symbol: that
 still scales with the universe (2 590 symbols at 1 Hz into 40 parts is 103 600
 deliveries a second). One frame per tick into 40 parts is 160 deliveries a second
-**and does not grow with the universe or with volume at all**. A frame is split
-per venue, because at 2 590 symbol-venue pairs a single frame is about 181 KB and
-the bus refuses a datagram over 131 072 bytes; per venue it is about 91 KB, which
-fits. Above that the runtime spec's own answer applies -- the payload goes to a
-state store and a reference is published in its place.
+**and does not grow with the universe or with volume at all**. A frame is per venue.
+
+The size was then measured rather than estimated, and the estimate was wrong. Real
+frames serialise at **50.1 bytes per symbol**, not the ~70 assumed above, so the
+largest frame the bus will carry under its 131 072-byte ceiling is **2 616
+symbols** -- and the full universe on one venue, about 1 295 perpetuals, is 64 980
+bytes. It fits with room to spare, and the split path exists for the case nobody
+predicted rather than for the ordinary one. `price_frame_maximum_symbols` is set
+to 2 000, which is 24% inside the measured ceiling and still above any real venue.
+A split is counted in the part's standing, so a universe that has outgrown one
+frame is visible rather than inferred.
 
 The cadence is decided by the staleness bound, not chosen: a level must be
 fresher than the tightest age any symbol will believe. That floor is 1.0 s

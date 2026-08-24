@@ -27,6 +27,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.trade_decoding_types import NearMissEpisode
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -35,7 +36,7 @@ PART_ID = "near-miss-recorder"
 
 PART_DECLARATION = PartDeclaration(
     part_id="near-miss-recorder",
-    consumes=("entry-candidate", "trade-intent", "directional-opinion", "market-data"),
+    consumes=("entry-candidate", "trade-intent", "directional-opinion", "symbol-price-frame"),
     produces=("near-miss-episode", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -269,12 +270,11 @@ def start_part(context) -> int:
     the price for its horizon to say what was missed.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     candidates = Batch(read=context.bus.reader("entry-candidate"))
     intents = Batch(read=context.bus.reader("trade-intent"))
     opinions = Batch(read=context.bus.reader("directional-opinion"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_episodes = context.bus.publisher_for("near-miss-episode")
     recorder = NearMissRecorder(
         horizon_seconds=context.number("near_miss_horizon"),
@@ -284,10 +284,9 @@ def start_part(context) -> int:
     latest_candidate: dict[tuple[str, str], object] = {}
 
     def read_refusals():
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 prices[(trade.venue_id, trade.symbol)] = trade.price
-                recorder.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+                recorder.observe_price(trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns)
         for candidate in candidates.payloads():
             latest_candidate[(candidate.venue_id, candidate.symbol)] = candidate
         opinions.payloads()

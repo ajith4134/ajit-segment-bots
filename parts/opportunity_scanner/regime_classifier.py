@@ -28,13 +28,14 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.price_frames import levels_in
 from runtime.rolling_statistics import RollingWindow, hurst_exponent
 
 PART_ID = "regime-classifier"
 
 PART_DECLARATION = PartDeclaration(
     part_id="regime-classifier",
-    consumes=("market-data",),
+    consumes=("symbol-price-frame",),
     produces=("market-regime", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -260,13 +261,13 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_regimes = context.bus.publisher_for("market-regime")
 
     def read_prices():
         return tuple(
-            (trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
-            for trade in trades.payloads()
+            (level.venue_id, level.symbol, level.price, level.observed_at_ns)
+            for level in levels_in(trades.payloads())
         )
 
     return run_regime_classifier(

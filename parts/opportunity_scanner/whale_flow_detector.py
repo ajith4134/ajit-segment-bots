@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.market_signal import CONTINUATION, LONG, SHORT, SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -33,7 +34,7 @@ PART_ID = "whale-flow-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="whale-flow-detector",
-    consumes=("whale-transfer", "market-data", "onchain-flow"),
+    consumes=("whale-transfer", "symbol-price-frame", "onchain-flow"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -206,7 +207,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     transfers = Batch(read=context.bus.reader("whale-transfer"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     flows = Batch(read=context.bus.reader("onchain-flow"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = WhaleFlowDetector(
@@ -225,7 +226,7 @@ def start_part(context) -> int:
 
     def read_transfers():
         flows.payloads()
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             symbol_of[(trade.venue_id, trade.symbol.removesuffix("USDT"))] = trade.symbol
             if hasattr(detector, "observe_price"):
                 detector.observe_price(trade.venue_id, trade.symbol, trade.price)

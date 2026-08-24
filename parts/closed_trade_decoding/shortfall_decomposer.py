@@ -37,7 +37,7 @@ PART_ID = "shortfall-decomposer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="shortfall-decomposer",
-    consumes=("closed-trade", "fill", "bounded-order", "order-book-snapshot", "market-data"),
+    consumes=("closed-trade", "fill", "bounded-order", "order-book-snapshot", "symbol-price-frame"),
     produces=("shortfall-breakdown", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -264,7 +264,7 @@ def start_part(context) -> int:
     fills = Batch(read=context.bus.reader("fill"))
     orders = Batch(read=context.bus.reader("bounded-order"))
     books = LatestByKey(read=context.bus.reader("order-book-snapshot"), key_of=lambda b: (b.venue_id, b.symbol))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_breakdowns = context.bus.publisher_for("shortfall-breakdown")
     decomposer = ShortfallDecomposer()
     order_of_symbol: dict[tuple[str, str], list] = {}

@@ -42,6 +42,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
 from runtime.learning_types import THE_SETUP_WAS_RIGHT, TrainingLabel
 from runtime.market_signal import LONG, SHORT
@@ -52,7 +53,7 @@ PART_ID = "signal-outcome-labeller"
 
 PART_DECLARATION = PartDeclaration(
     part_id="signal-outcome-labeller",
-    consumes=("entry-candidate", "market-data"),
+    consumes=("entry-candidate", "symbol-price-frame"),
     produces=("training-label", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -385,19 +386,19 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("entry-candidate"))
     publish_labels = context.bus.publisher_for("training-label")
     price_staleness = price_staleness_from(context)
 
     def read_prices_and_candidates(labeller: SignalOutcomeLabeller) -> None:
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             labeller.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
             if price_staleness is not None:
                 price_staleness.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
         for candidate in candidates.payloads():
             labeller.observe_candidate(candidate)

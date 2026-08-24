@@ -33,12 +33,13 @@ from dataclasses import dataclass, field
 from runtime.autonomy_types import OutageState
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.price_frames import levels_in
 
 PART_ID = "venue-outage-rider"
 
 PART_DECLARATION = PartDeclaration(
     part_id="venue-outage-rider",
-    consumes=("market-data", "part-health", "feed-gap"),
+    consumes=("symbol-price-frame", "part-health", "feed-gap"),
     produces=("outage-state", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -283,9 +284,8 @@ def start_part(context) -> int:
     book it cannot see. Part-health is the wake signal.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     health = Batch(read=context.bus.reader("part-health"))
     gaps = Batch(read=context.bus.reader("feed-gap"))
     publish_states = context.bus.publisher_for("outage-state")
@@ -302,9 +302,8 @@ def start_part(context) -> int:
         health.payloads()
         gaps.payloads()
         return tuple(
-            (trade.venue_id, trade.symbol, trade.venue_time_ns)
-            for trade in trades.payloads()
-            if isinstance(trade, NormalisedTrade)
+            (level.venue_id, level.symbol, level.observed_at_ns)
+            for level in levels_in(trades.payloads())
         )
 
     return run_venue_outage_rider(

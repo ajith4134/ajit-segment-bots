@@ -30,6 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.external_research_types import CopyLatency
 from runtime.learned_estimator import QuantileEstimator
 from runtime.part_declaration import PartDeclaration
@@ -39,7 +40,7 @@ PART_ID = "copy-latency-estimator"
 
 PART_DECLARATION = PartDeclaration(
     part_id="copy-latency-estimator",
-    consumes=("external-position", "market-data"),
+    consumes=("external-position", "symbol-price-frame"),
     produces=("copy-latency", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -227,11 +228,13 @@ def start_part(context) -> int:
     the same venue and symbol: their entry, our price now, and the delay
     between when they opened and when it was seen here.
     """
-    from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
+    from runtime.input_assembly import Batch
 
     positions = Batch(read=context.bus.reader("external-position"))
-    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    # A frame already carries the latest price per symbol, so a keyed level shape
+    # on top of it would be keeping the latest of the latest. Read as a batch and
+    # flattened to its levels.
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_latency = context.bus.publisher_for("copy-latency")
     estimator = CopyLatencyEstimator(
         window=int(context.number("learning_window")),
@@ -242,13 +245,16 @@ def start_part(context) -> int:
     )
 
     def read_pairs(_estimator):
-        latest = trades.mapping()
+        latest = {
+            (level.venue_id, level.symbol): level
+            for level in levels_in(trades.payloads())
+        }
         touched: set[tuple[str, str]] = set()
         for read in positions.payloads():
             for position in getattr(read, "positions", (read,)):
                 key = (position.venue_id, position.symbol)
                 trade = latest.get(key)
-                if not isinstance(trade, NormalisedTrade) or position.entry_price is None:
+                if position.entry_price is None:
                     continue
                 delay = max(0.0, (position.observed_at_ns - position.opened_at_ns) / 1e9)
                 estimator.observe(position.venue_id, position.symbol, str(position.side), float(position.entry_price), trade.price, delay)

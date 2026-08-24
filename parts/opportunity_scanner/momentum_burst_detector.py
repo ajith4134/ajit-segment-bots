@@ -20,6 +20,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.market_signal import (
     CONTINUATION, LONG, REVERSION, SHORT, SignalCalibrator, make_candidate,
 )
@@ -31,7 +32,7 @@ PART_ID = "momentum-burst-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="momentum-burst-detector",
-    consumes=("market-data", "symbol-profile", "playbook-rule"),
+    consumes=("symbol-price-frame", "symbol-profile", "playbook-rule"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -246,7 +247,7 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch, LatestByKey
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     # This detector is not given market-regime; the regime it judges in is
     # what the symbol's profile records, and "unclassified" until one does.
     profiles = LatestByKey(read=context.bus.reader("symbol-profile"), key_of=lambda p: (p.venue_id, p.symbol))
@@ -282,9 +283,9 @@ def start_part(context) -> int:
             if expectation and symbol:
                 detector.set_playbook_expectation(str(symbol), str(expectation))
         touched = set()
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             detector.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
             touched.add((trade.venue_id, trade.symbol))
         by_symbol = profiles.mapping()

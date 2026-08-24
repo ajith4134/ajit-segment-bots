@@ -32,6 +32,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.online_learner import RunningMoments
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -40,7 +41,7 @@ PART_ID = "cross-segment-signal-bridge"
 
 PART_DECLARATION = PartDeclaration(
     part_id="cross-segment-signal-bridge",
-    consumes=("whale-transfer", "market-data", "funding-forecast", "position"),
+    consumes=("whale-transfer", "symbol-price-frame", "funding-forecast", "position"),
     produces=("cross-segment-signal", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -317,11 +318,13 @@ def start_part(context) -> int:
     two segments should know about it. An underlying is the symbol with the
     settlement currency taken off its end.
     """
-    from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
+    from runtime.input_assembly import Batch
 
     transfers = Batch(read=context.bus.reader("whale-transfer"))
-    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    # A frame already carries the latest price per symbol, so a keyed level shape
+    # on top of it would be keeping the latest of the latest. Read as a batch and
+    # flattened to its levels.
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     forecasts = Batch(read=context.bus.reader("funding-forecast"))
     positions = Batch(read=context.bus.reader("position"))
     publish_signals = context.bus.publisher_for("cross-segment-signal")
@@ -340,11 +343,10 @@ def start_part(context) -> int:
 
     def read_observations(_bridge):
         touched: set[str] = set()
-        for (venue_id, symbol), trade in trades.mapping().items():
-            if isinstance(trade, NormalisedTrade):
-                underlying = underlying_of(symbol)
-                bridge.observe_segment_price(segment, underlying, trade.price)
-                touched.add(underlying)
+        for level in levels_in(trades.payloads()):
+            underlying = underlying_of(level.symbol)
+            bridge.observe_segment_price(segment, underlying, level.price)
+            touched.add(underlying)
         for position in positions.payloads():
             underlying = underlying_of(position.symbol)
             bridge.observe_position(segment, underlying, position.quantity != 0)

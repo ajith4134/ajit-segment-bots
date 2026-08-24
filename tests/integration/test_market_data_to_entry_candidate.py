@@ -1,8 +1,8 @@
-"""Four parts, four processes, real trades off the tape, one entry candidate.
+"""Real trades off the tape, through the sampler, to one entry candidate.
 
 This is the first test in the project where parts talk to each other. Nothing is
-mocked: `regime-classifier`, `cointegration-pair-finder` and
-`spread-reversion-detector` run as their own processes under the launcher, wired
+mocked: `price-level-sampler`, `regime-classifier`, `cointegration-pair-finder`
+and `spread-reversion-detector` run as their own processes under the launcher, wired
 only by what the blueprint says they consume and produce, and what flows into them
 is trades this machine actually recorded from Binance and Bybit.
 
@@ -42,12 +42,26 @@ RECEIVE_BUFFER_BYTES = 212_992
 MAXIMUM_MESSAGE_BYTES = 131_072
 
 # The chain under test, in the order data moves through it.
-SPINE = ("regime-classifier", "cointegration-pair-finder", "spread-reversion-detector")
+# The sampler stands between the feed and every part that reads a price level.
+# Publishing market-data straight at those parts stopped reaching them on
+# 2026-08-24: they read symbol-price-frame now, and the frame is what this
+# part makes out of the prints.
+SPINE = (
+    "price-level-sampler",
+    "regime-classifier",
+    "cointegration-pair-finder",
+    "spread-reversion-detector",
+)
 
 # Enough symbols for pairs to exist, few enough that the rotation reaches them all.
 SYMBOLS_PER_VENUE = 6
-# Comfortably past the 256-observation window every part in this chain needs.
-TRADES_PER_SYMBOL = 1_500
+# The parts in this chain fill 256-observation windows, and since 2026-08-24 an
+# observation is a sampled level, not a print: the sampler publishes four frames a
+# second whatever the replay's print rate, so the windows fill with wall time.
+# 256 observations at 4 Hz is 64 seconds, and what sets how long the replay runs
+# is how many trades it has to send -- 72,000 trades at 600 a second is 120
+# seconds, which fills every window with time to spare for the verdicts to flow.
+TRADES_PER_SYMBOL = 6_000
 # Paced at roughly twice the rate the tape is actually recording -- measured,
 # 285.3 messages a second across 62 symbols on 2026-08-22. Publishing as fast as
 # the loop can go measures the kernel instead of the chain: a burst of 4.7 million
@@ -123,6 +137,16 @@ def wait_for_address(address: pathlib.Path, patience_seconds: float = 30.0) -> b
     return False
 
 
+def price_inbox(wiring, part_id: str) -> pathlib.Path:
+    """The address a part hears the market at.
+
+    The sampler is the one part in this chain still fed prints; everything after
+    it reads the frame it makes out of them.
+    """
+    inboxes = wiring[part_id].inboxes
+    return inboxes.get("market-data") or inboxes["symbol-price-frame"]
+
+
 @pytest.fixture(scope="module")
 def todays_trades():
     """Real trades from both venues, read once and shared by the tests below."""
@@ -150,18 +174,27 @@ def replay_until(feed, trades, drain, stop_when, patience_seconds=PATIENCE_SECON
     restamp = arriving_now or (lambda batch: batch)
     deadline = time.monotonic() + patience_seconds
     position = 0
-    while position < len(trades) and time.monotonic() < deadline:
-        feed.publish("market-data", restamp(trades[position : position + REPLAY_BATCH]))
+    published = 0
+    while time.monotonic() < deadline:
+        batch = trades[position : position + REPLAY_BATCH]
         position += REPLAY_BATCH
+        if position >= len(trades):
+            # Loop the tape rather than fall silent. The windows downstream fill
+            # with wall time now, not with prints, and a feed that stops publishes
+            # no frames -- so a replay shorter than the windows would starve the
+            # chain it is testing. Every batch is restamped to now either way.
+            position = 0
+        feed.publish("market-data", restamp(batch))
+        published += len(batch)
         time.sleep(REPLAY_PAUSE_SECONDS)
         drain()
         if stop_when():
-            return position
+            return published
     settle = time.monotonic() + 5.0
     while time.monotonic() < settle and not stop_when():
         drain()
         time.sleep(0.05)
-    return position
+    return published
 
 
 def open_feed(wiring):
@@ -190,9 +223,9 @@ def test_real_trades_become_pair_verdicts(launcher, bus_root, todays_trades, arr
     feed = open_feed(wiring)
     seen = []
     try:
-        for part_id in ("regime-classifier", "cointegration-pair-finder"):
+        for part_id in ("price-level-sampler", "regime-classifier", "cointegration-pair-finder"):
             launcher.start(part_id)
-            assert wait_for_address(wiring[part_id].inboxes["market-data"])
+            assert wait_for_address(price_inbox(wiring, part_id))
 
         replay_until(
             feed,
@@ -244,8 +277,8 @@ def test_a_tradeable_pair_becomes_an_entry_candidate(
     try:
         for part_id in SPINE:
             launcher.start(part_id)
-            assert wait_for_address(wiring[part_id].inboxes["market-data"]), (
-                f"{part_id} never bound its market-data inbox"
+            assert wait_for_address(price_inbox(wiring, part_id)), (
+                f"{part_id} never bound the inbox it hears the market at"
             )
 
         replay_until(

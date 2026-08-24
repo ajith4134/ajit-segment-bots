@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.bot_opinion import FROM_A_SCANNER_MOVE, LONG, FollowCandidate
 from runtime.learned_estimator import QuantileEstimator
 from runtime.part_declaration import PartDeclaration
@@ -40,7 +41,7 @@ BOT = "profit-tailgating-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="tail-mover-qualifier",
-    consumes=("entry-candidate", "market-data", "symbol-profile", "tail-setup-weight"),
+    consumes=("entry-candidate", "symbol-price-frame", "symbol-profile", "tail-setup-weight"),
     produces=("follow-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -309,7 +310,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     candidates = Batch(read=context.bus.reader("entry-candidate"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     weights = Batch(read=context.bus.reader("tail-setup-weight"))
     publish_follow_candidates = context.bus.publisher_for("follow-candidate")
@@ -328,9 +329,9 @@ def start_part(context) -> int:
     round_trip = 2.0 * context.number("taker_fee_rate")
 
     def read_candidates_and_market(_qualifier):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             qualifier.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for profile in profiles.payloads():
             qualifier.observe_symbol_profile(profile.venue_id, profile.symbol, round_trip)

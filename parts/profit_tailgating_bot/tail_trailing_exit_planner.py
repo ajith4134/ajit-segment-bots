@@ -32,6 +32,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import LONG, SHORT, ExitPlan, ExitTarget
 from runtime.learned_estimator import Estimate, QuantileEstimator
@@ -44,7 +45,7 @@ BOT = "profit-tailgating-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="tail-trailing-exit-planner",
     consumes=(
-        "follow-candidate", "market-data", "symbol-profile",
+        "follow-candidate", "symbol-price-frame", "symbol-profile",
         "exit-counterfactual", "excursion-profile",
     ),
     produces=("tail-exit-plan", "part-health"),
@@ -381,7 +382,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey
 
     candidates = Batch(read=context.bus.reader("follow-candidate"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
     excursions = Batch(read=context.bus.reader("excursion-profile"))
@@ -398,9 +399,9 @@ def start_part(context) -> int:
     )
 
     def read_candidates_and_market(_planner):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             planner.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
         for profile in profiles.payloads():
             step = (profile.fields or {}).get("price_increment") if isinstance(profile.fields, dict) else None

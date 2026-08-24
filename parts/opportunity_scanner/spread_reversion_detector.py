@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
 from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
@@ -29,7 +30,7 @@ PART_ID = "spread-reversion-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="spread-reversion-detector",
-    consumes=("cointegrated-pair", "market-data"),
+    consumes=("cointegrated-pair", "symbol-price-frame"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -260,7 +261,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch, LatestByKey
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     pairs = LatestByKey(
         read=context.bus.reader("cointegrated-pair"),
         key_of=lambda pair: (pair.venue_id, pair.left_symbol, pair.right_symbol),
@@ -284,12 +285,12 @@ def start_part(context) -> int:
     )
 
     def read_pairs(_detector):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             detector.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
             price_staleness.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         return pairs.values()
 

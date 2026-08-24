@@ -34,6 +34,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -41,7 +42,7 @@ PART_ID = "counterfactual-replayer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="counterfactual-replayer",
-    consumes=("directional-opinion", "trade-intent", "market-data", "trade-episode"),
+    consumes=("directional-opinion", "trade-intent", "symbol-price-frame", "trade-episode"),
     produces=("counterfactual-outcome", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -302,7 +303,6 @@ def start_part(context) -> int:
     from dataclasses import dataclass
 
     from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     @dataclass(frozen=True)
     class ReplayableEpisode:
@@ -311,7 +311,7 @@ def start_part(context) -> int:
         realised_fraction: float
         side: str | None
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     opinions = LatestByKey(read=context.bus.reader("directional-opinion"), key_of=lambda o: (o.bot, o.venue_id, o.symbol))
     intents = LatestByKey(read=context.bus.reader("trade-intent"), key_of=lambda i: (i.venue_id, i.symbol))
     episodes = Batch(read=context.bus.reader("trade-episode"))
@@ -331,9 +331,8 @@ def start_part(context) -> int:
         return None
 
     def read_episodes(_replayer):
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
-                replayer.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+        for trade in levels_in(trades.payloads()):
+                replayer.observe_price(trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns)
         intents.mapping()
         held = opinions.mapping()
         jobs = []

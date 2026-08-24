@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow, correlation
@@ -37,7 +38,7 @@ PART_ID = "correlation-cluster-mapper"
 
 PART_DECLARATION = PartDeclaration(
     part_id="correlation-cluster-mapper",
-    consumes=("market-data",),
+    consumes=("symbol-price-frame",),
     produces=("correlation-cluster", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -284,10 +285,12 @@ def start_part(context) -> int:
     simultaneous observations, not between one symbol's every print and
     another's.
     """
-    from runtime.input_assembly import LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
+    from runtime.input_assembly import Batch
 
-    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    # A frame already carries the latest price per symbol, so a keyed level shape
+    # on top of it would be keeping the latest of the latest. Read as a batch and
+    # flattened to its levels.
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_clusters = context.bus.publisher_for("correlation-cluster")
     mapper = CorrelationClusterMapper(
         window_length=int(context.number("correlation_window_length")),
@@ -298,9 +301,8 @@ def start_part(context) -> int:
 
     def read_prices(_mapper) -> None:
         latest_by_symbol: dict[str, tuple[float, int]] = {}
-        for (venue_id, symbol), trade in trades.mapping().items():
-            if isinstance(trade, NormalisedTrade):
-                latest_by_symbol[symbol] = (trade.price, trade.venue_time_ns)
+        for level in levels_in(trades.payloads()):
+            latest_by_symbol[level.symbol] = (level.price, level.observed_at_ns)
         for symbol, (price, at_ns) in latest_by_symbol.items():
             mapper.observe_price(symbol, price, at_ns)
 

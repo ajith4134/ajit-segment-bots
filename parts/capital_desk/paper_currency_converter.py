@@ -20,6 +20,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.journal import Journal
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -28,7 +29,7 @@ PART_ID = "paper-currency-converter"
 
 PART_DECLARATION = PartDeclaration(
     part_id="paper-currency-converter",
-    consumes=("main-account-setting", "market-data"),
+    consumes=("main-account-setting", "symbol-price-frame"),
     produces=("paper-currency-rate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -228,7 +229,6 @@ def start_part(context) -> int:
     this part's own file.
     """
     from runtime.input_assembly import Batch, LatestValue
-    from runtime.venues.venue_adapter import NormalisedTrade
     import pathlib as _pathlib
 
     from runtime.journal import Journal, journal_path_for, read_journal_tail
@@ -246,7 +246,7 @@ def start_part(context) -> int:
     journal = Journal(append_line=append_line, continues_from=read_journal_tail(journal_path))
 
     mains = LatestValue(read=context.bus.reader("main-account-setting"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_conversions = context.bus.publisher_for("paper-currency-rate")
     converter = PaperCurrencyConverter(
         journal=journal, maximum_rate_age_seconds=context.number("paper_currency_rate_maximum_age")
@@ -257,8 +257,8 @@ def start_part(context) -> int:
         rates = []
         main = mains.value()
         wanted = None if main is None else main.currency
-        for trade in trades.payloads():
-            if not isinstance(trade, NormalisedTrade) or not trade.symbol.endswith(quote):
+        for trade in levels_in(trades.payloads()):
+            if not trade.symbol.endswith(quote):
                 continue
             base = trade.symbol[: -len(quote)]
             if wanted is not None and base == wanted:

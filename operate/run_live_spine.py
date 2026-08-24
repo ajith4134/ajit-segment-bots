@@ -103,6 +103,14 @@ LIVE_SPINE = (
     "symbol-catalogue-reader",
     "stream-budget-planner",
     "venue-trade-stream-reader",
+    # Every symbol's latest price, published four times a second as one frame per
+    # venue. Thirty-seven parts read this instead of every trade, which is what
+    # stops fan-out scaling with trading volume -- 12,707 deliveries a second
+    # measured on 2026-08-23, against 148 for the same parts on frames. Without it
+    # running, every one of those parts has an input nobody produces and sits
+    # there looking perfectly healthy, which is the failure this whole phase is
+    # about (docs/proposals/sampled-price-levels-and-a-governor-that-acts.md).
+    "price-level-sampler",
     # Noticing. The only path in the blueprint from market-data to an
     # entry-candidate without a playbook-rule, which the learning loop cannot build
     # until trades have happened.

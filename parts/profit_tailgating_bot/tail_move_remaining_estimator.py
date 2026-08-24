@@ -30,6 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.bot_opinion import (
     ESTIMATES_AGREE as AGREE, ESTIMATES_DISAGREE as DISAGREE, FROM_DECAY, FROM_FORECAST,
     FROM_HISTORY, NO_ESTIMATE_AVAILABLE as NONE_AVAILABLE, ONLY_ONE_ESTIMATE as ONLY_ONE,
@@ -45,7 +46,7 @@ BOT = "profit-tailgating-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="tail-move-remaining-estimator",
-    consumes=("follow-candidate", "market-data", "price-forecast"),
+    consumes=("follow-candidate", "symbol-price-frame", "price-forecast"),
     produces=("move-remaining", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -305,7 +306,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     candidates = Batch(read=context.bus.reader("follow-candidate"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     forecasts = Batch(read=context.bus.reader("price-forecast"))
     publish_readings = context.bus.publisher_for("move-remaining")
     estimator = TailMoveRemainingEstimator(
@@ -319,9 +320,9 @@ def start_part(context) -> int:
     )
 
     def read_candidates_and_market(_estimator):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             estimator.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for forecast in forecasts.payloads():
             if forecast.expected_return is not None:

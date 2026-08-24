@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.market_signal import CONTINUATION, LONG, SHORT, SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -33,7 +34,7 @@ PART_ID = "liquidation-cascade-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="liquidation-cascade-detector",
-    consumes=("liquidation-map", "market-data"),
+    consumes=("liquidation-map", "symbol-price-frame"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -278,7 +279,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     maps = Batch(read=context.bus.reader("liquidation-map"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = LiquidationCascadeDetector(
@@ -303,9 +304,9 @@ def start_part(context) -> int:
             detector.set_clusters(liquidation_map.venue_id, liquidation_map.symbol, tuple(liquidation_map.clusters))
             detector.set_book_depth(liquidation_map.venue_id, liquidation_map.symbol, liquidation_map.open_interest_notional)
             touched.add((liquidation_map.venue_id, liquidation_map.symbol))
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             detector.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
             touched.add((trade.venue_id, trade.symbol))
         return tuple(sorted(touched))

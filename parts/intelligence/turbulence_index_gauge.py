@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 import numpy
 
+from runtime.price_frames import levels_in
 from runtime.learned_estimator import QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -44,7 +45,7 @@ PART_ID = "turbulence-index-gauge"
 
 PART_DECLARATION = PartDeclaration(
     part_id="turbulence-index-gauge",
-    consumes=("market-data",),
+    consumes=("symbol-price-frame",),
     produces=("turbulence-index", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -317,10 +318,11 @@ def start_part(context) -> int:
     """
     import math
 
-    from runtime.input_assembly import LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
+    from runtime.input_assembly import Batch
 
-    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    # A frame already carries the latest price per symbol, so a keyed level shape
+    # on top of it would be keeping the latest of the latest.
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_index = context.bus.publisher_for("turbulence-index")
     gauge = TurbulenceIndexGauge(
         window_observations=int(context.number("correlation_window_length")),
@@ -333,9 +335,9 @@ def start_part(context) -> int:
 
     def read_returns(_gauge) -> None:
         latest: dict[str, float] = {}
-        for (venue_id, symbol), trade in trades.mapping().items():
-            if isinstance(trade, NormalisedTrade) and trade.price > 0:
-                latest[symbol] = trade.price
+        for level in levels_in(trades.payloads()):
+            if level.price > 0:
+                latest[level.symbol] = level.price
         returns = {
             symbol: math.log(price / sampled[symbol])
             for symbol, price in latest.items() if symbol in sampled and sampled[symbol] > 0

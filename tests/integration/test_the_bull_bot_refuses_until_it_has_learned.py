@@ -42,7 +42,16 @@ STOP_DEADLINE_SECONDS = 10.0
 RECEIVE_BUFFER_BYTES = 212_992
 MAXIMUM_MESSAGE_BYTES = 131_072
 
-SCANNER = ("regime-classifier", "cointegration-pair-finder", "spread-reversion-detector")
+# The sampler stands between the feed and every part that reads a price level.
+# Publishing market-data straight at those parts stopped reaching them on
+# 2026-08-24: they read symbol-price-frame now, and the frame is what this
+# part makes out of the prints.
+SCANNER = (
+    "price-level-sampler",
+    "regime-classifier",
+    "cointegration-pair-finder",
+    "spread-reversion-detector",
+)
 LABELLER = ("signal-outcome-labeller",)
 BULL = (
     "bull-setup-filter",
@@ -56,7 +65,12 @@ BULL = (
 )
 
 SYMBOLS_PER_VENUE = 6
-TRADES_PER_SYMBOL = 1_500
+# The scanner fills 256-observation windows, and since 2026-08-24 an observation
+# is a sampled level, not a print: frames arrive four times a second whatever the
+# replay's print rate, so the windows fill with wall time. 256 observations at
+# 4 Hz is 64 seconds; 72,000 trades at 600 a second replay for 120, which fills
+# every window with time to spare for candidates to flow through the bull half.
+TRADES_PER_SYMBOL = 6_000
 # Paced at roughly twice the rate the tape is actually recording -- measured,
 # 285.3 messages a second across 62 symbols on 2026-08-22. Publishing as fast as
 # the loop can go measures the kernel instead of the chain: a burst of 4.7 million
@@ -314,7 +328,7 @@ def test_the_whole_bull_chain_runs_and_correctly_forms_no_opinion(
     # scanner is starved. Measured, this box runs twelve part processes alongside
     # two live capture processes on twelve cores, and cointegration-pair-finder
     # tests 64 pairs a tick with a linear fit over each. So whether a candidate
-    # appears inside a thirty-second replay is a question about capacity, not about
+    # appears inside this replay is a question about capacity, not about
     # the chain -- and asserting it here would make a flaky test out of a real
     # finding. The finding is recorded instead: **the first live run needs either
     # fewer symbols or more headroom than this**, which is the governor's job and
@@ -358,11 +372,16 @@ def test_the_labeller_turns_real_candidates_into_real_labels(
 
         deadline = time.monotonic() + PATIENCE_SECONDS
         position = 0
-        while position < len(todays_trades) and time.monotonic() < deadline and not seen:
-            feed.publish(
-                "market-data", arriving_now(todays_trades[position : position + REPLAY_BATCH])
-            )
+        while time.monotonic() < deadline and not seen:
+            batch = todays_trades[position : position + REPLAY_BATCH]
             position += REPLAY_BATCH
+            if position >= len(todays_trades):
+                # Loop the tape rather than fall silent. A label is a candidate
+                # plus the sixty seconds of prices that resolve it, and a replay
+                # that ends before the horizon does starves the labeller of the
+                # very prices under test. Every batch is restamped to now.
+                position = 0
+            feed.publish("market-data", arriving_now(batch))
             time.sleep(REPLAY_PAUSE_SECONDS)
             seen.extend(labels.drain())
     finally:

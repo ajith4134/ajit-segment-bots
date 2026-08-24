@@ -141,9 +141,16 @@ for part_id in MOVED_TO_THE_FRAME:
         raise SystemExit(f"{part_id} is not in the registry; this edit is out of date")
     consumes = list(feature["consumes"])
     if "market-data" in consumes:
+        # Substituted in place. Sorting here would reorder edges this edit has no
+        # business reordering: a part's declaration in code carries the order its
+        # author wrote, and the two are compared for equality.
         consumes[consumes.index("market-data")] = "symbol-price-frame"
-        # A part that already read the frame for another reason must not read it twice.
-        feature["consumes"] = sorted(set(consumes))
+        if consumes.count("symbol-price-frame") > 1:
+            raise SystemExit(
+                f"{part_id} would read symbol-price-frame twice; it already consumed it "
+                f"before this edit, which this edit did not expect"
+            )
+        feature["consumes"] = consumes
         changed.append(f"{part_id}: market-data -> symbol-price-frame")
 
 for part_id in KEEPS_THE_PRINT_FOR_A_REASON_COUNTING_FIELDS_CANNOT_SEE:
@@ -158,7 +165,7 @@ for part_id in KEEPS_THE_PRINT_FOR_A_REASON_COUNTING_FIELDS_CANNOT_SEE:
         )
 
 if changed:
-    REGISTRY.write_text(json.dumps(registry, indent=2) + "\n")
+    REGISTRY.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n")
     print(f"{len(changed)} change(s) written to {REGISTRY}:")
     for line in changed:
         print(f"  {line}")

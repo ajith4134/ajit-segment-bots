@@ -26,6 +26,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED, RiskLimit
@@ -34,7 +35,7 @@ PART_ID = "margin-liquidation-watch"
 
 PART_DECLARATION = PartDeclaration(
     part_id="margin-liquidation-watch",
-    consumes=("position", "account-balance", "liquidation-price", "market-data"),
+    consumes=("position", "account-balance", "liquidation-price", "symbol-price-frame"),
     produces=("risk-limit", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -210,12 +211,11 @@ def start_part(context) -> int:
     position whose quantity goes to zero is forgotten.
     """
     from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     positions = Batch(read=context.bus.reader("position"))
     balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
     liquidations = LatestByKey(read=context.bus.reader("liquidation-price"), key_of=lambda l: (l.venue_id, l.symbol))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_limits = context.bus.publisher_for("risk-limit")
     segment = str(context.setting("segment_id").value)
     maintenance_rate = context.number("maintenance_margin_rate")
@@ -228,8 +228,7 @@ def start_part(context) -> int:
     notional: dict[tuple[str, str], float] = {}
 
     def read_positions_and_account(_watch) -> None:
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 marks[(trade.venue_id, trade.symbol)] = trade.price
         for position in positions.payloads():
             key = (position.venue_id, position.symbol)

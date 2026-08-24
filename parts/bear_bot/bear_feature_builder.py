@@ -30,6 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.bot_opinion import FeatureVector
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -41,7 +42,7 @@ BOT = "bear-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bear-feature-builder",
     consumes=(
-        "bear-side-candidate", "market-data", "order-book-snapshot",
+        "bear-side-candidate", "symbol-price-frame", "order-book-snapshot",
         "symbol-profile", "funding-forecast",
     ),
     produces=("bear-feature-vector", "part-health"),
@@ -378,7 +379,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("bear-side-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
@@ -386,9 +387,9 @@ def start_part(context) -> int:
     publish_vectors = context.bus.publisher_for("bear-feature-vector")
 
     def read_candidates_and_market(builder):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             builder.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for book in books.payloads():
             builder.observe_book(book.venue_id, book.symbol, book.bids, book.asks)

@@ -37,6 +37,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
@@ -47,7 +48,7 @@ PART_ID = "instrument-selector"
 PART_DECLARATION = PartDeclaration(
     part_id="instrument-selector",
     consumes=(
-        "trade-intent", "market-data", "implied-vol-surface", "liquidity-grade", "timed-intent",
+        "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
         "symbol-universe",
     ),
     produces=("instrument-choice", "part-health"),
@@ -617,7 +618,7 @@ def start_part(context) -> int:
     surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
     grades = Batch(read=context.bus.reader("liquidity-grade"))
     timed = Batch(read=context.bus.reader("timed-intent"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     universe = Batch(read=context.bus.reader("symbol-universe"))
     publish_choices = context.bus.publisher_for("instrument-choice")
 
@@ -633,11 +634,11 @@ def start_part(context) -> int:
             selector.observe_listed_symbol(listed)
         for instrument in list(surfaces.payloads()) + list(grades.payloads()):
             selector.observe_listed_instrument(instrument)
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             # The venue's own time for the print, not this part's clock: how old a
             # price is has to be measured from when the market made it.
             selector.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         timed.payloads()
         return intents.payloads()

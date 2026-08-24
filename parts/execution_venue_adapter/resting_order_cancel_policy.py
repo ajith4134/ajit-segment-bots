@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
@@ -33,7 +34,7 @@ PART_ID = "resting-order-cancel-policy"
 
 PART_DECLARATION = PartDeclaration(
     part_id="resting-order-cancel-policy",
-    consumes=("order-request", "market-data"),
+    consumes=("order-request", "symbol-price-frame"),
     produces=("cancel-decision", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -266,10 +267,9 @@ def run_resting_order_cancel_policy(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import NormalisedTrade
 
     orders = Batch(read=context.bus.reader("order-request"))
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_decisions = context.bus.publisher_for("cancel-decision")
     policy = RestingOrderCancelPolicy(
         prior_time_to_live_seconds=context.number("resting_order_prior_time_to_live"),
@@ -286,10 +286,9 @@ def start_part(context) -> int:
                 policy.observe_order_finished(order.cancels_client_order_id)
             elif order.order_type == "limit" and order.limit_price > 0 and order.outcome == "routed":
                 policy.observe_order_placed(order.client_order_id, order.venue_id, order.symbol, order.limit_price)
-        for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+        for trade in levels_in(trades.payloads()):
                 policy.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
 
     def publish(decisions) -> None:

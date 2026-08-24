@@ -32,6 +32,7 @@ import math
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow, correlation
@@ -40,7 +41,7 @@ PART_ID = "regime-break-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="regime-break-detector",
-    consumes=("market-data", "journal-entry", "market-event"),
+    consumes=("symbol-price-frame", "journal-entry", "market-event"),
     produces=("regime-break-alert", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -366,10 +367,12 @@ def start_part(context) -> int:
     symbols. The regimes checked are the ones the journal has named: a
     regime no entry has mentioned is not one this system is in.
     """
-    from runtime.input_assembly import Batch, LatestByKey
-    from runtime.venues.venue_adapter import NormalisedTrade
+    from runtime.input_assembly import Batch
 
-    trades = LatestByKey(read=context.bus.reader("market-data"), key_of=lambda t: (t.venue_id, t.symbol))
+    # A frame already carries the latest price per symbol, so a keyed level shape
+    # on top of it would be keeping the latest of the latest. Read as a batch and
+    # flattened to its levels.
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     entries = Batch(read=context.bus.reader("journal-entry"))
     events = Batch(read=context.bus.reader("market-event"))
     publish_alerts = context.bus.publisher_for("regime-break-alert")
@@ -389,9 +392,8 @@ def start_part(context) -> int:
 
     def read_market_and_events(_detector):
         latest: dict[str, tuple[float, int]] = {}
-        for (venue_id, symbol), trade in trades.mapping().items():
-            if isinstance(trade, NormalisedTrade):
-                latest[symbol] = (trade.price, trade.venue_time_ns)
+        for level in levels_in(trades.payloads()):
+            latest[level.symbol] = (level.price, level.observed_at_ns)
         for symbol, (price, at_ns) in latest.items():
             detector.observe_price(symbol, price, at_ns)
         for event in events.payloads():

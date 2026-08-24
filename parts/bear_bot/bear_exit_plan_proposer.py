@@ -29,6 +29,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from runtime.price_frames import levels_in
 from runtime.bot_opinion import SHORT, ExitPlan, ExitTarget
 from runtime.part_declaration import PartDeclaration
 # Defined once, in the substrate. They were defined here and again in the
@@ -43,7 +44,7 @@ BOT = "bear-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bear-exit-plan-proposer",
     consumes=(
-        "bear-side-candidate", "market-data", "symbol-profile",
+        "bear-side-candidate", "symbol-price-frame", "symbol-profile",
         "bear-calibrated-conviction", "excursion-profile", "horizon-profile", "stop-audit",
     ),
     produces=("bear-exit-plan", "part-health"),
@@ -464,7 +465,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch, LatestByKey
 
-    trades = Batch(read=context.bus.reader("market-data"))
+    trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("bear-side-candidate"))
     convictions = LatestByKey(
         read=context.bus.reader("bear-calibrated-conviction"),
@@ -477,9 +478,9 @@ def start_part(context) -> int:
     publish_plans = context.bus.publisher_for("bear-exit-plan")
 
     def read_candidates_and_profiles(proposer):
-        for trade in trades.payloads():
+        for trade in levels_in(trades.payloads()):
             proposer.observe_price(
-                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for profile in profiles.payloads():
             proposer.observe_symbol_profile(profile)
