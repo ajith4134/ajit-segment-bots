@@ -64,6 +64,9 @@ class CascadeStanding:
     no_volatility: int = 0
     outcomes_learned: int = 0
     densest_cluster_seen: float = 0.0
+    # How many times a hole in the feed stopped a return being computed. A
+    # detector that quietly stops firing looks exactly like a quiet market.
+    series_breaks: int = 0
 
 
 class LiquidationCascadeDetector:
@@ -78,6 +81,7 @@ class LiquidationCascadeDetector:
         cascade_depth_multiple: float,
         horizon_seconds: float,
         calibrator: SignalCalibrator,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if reach_in_volatilities <= 0 or cascade_depth_multiple <= 0:
@@ -90,23 +94,49 @@ class LiquidationCascadeDetector:
         self._horizon = horizon_seconds
         self._calibrator = calibrator
         self._now_ns = now_ns
+        # How long a symbol may be silent before the series is judged to have a
+        # hole in it rather than a gap between prints. None means the caller stated
+        # no bound, and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._returns: dict[tuple[str, str], RollingWindow] = {}
+        self._last_price_at_ns: dict[tuple[str, str], int] = {}
         self._last_price: dict[tuple[str, str], float] = {}
         self._clusters: dict[tuple[str, str], tuple[LiquidationCluster, ...]] = {}
         self._book_depth: dict[tuple[str, str], float] = {}
         self.standing = CascadeStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, turned into a return against the previous one.
+
+        **A return is only computed across an unbroken pair of prints.** The bus
+        drops rather than blocks, so a symbol's prints stop and resume; the first
+        print after the hole differs from the last one before it by everything the
+        market did while nobody was listening, and computed as a return that is a
+        move of any size in an instant -- which is precisely the shape this
+        detector fires on. Past the bound the previous price is dropped instead,
+        and this print becomes the new starting point.
+        """
         key = (venue_id, symbol)
         previous = self._last_price.get(key)
+        previous_at_ns = self._last_price_at_ns.get(key)
         self._last_price[key] = price
+        self._last_price_at_ns[key] = at_ns
         if previous is None or previous == 0:
+            return
+        if (
+            self._maximum_gap_seconds is not None
+            and previous_at_ns is not None
+            and (at_ns - previous_at_ns) / 1e9 > self._maximum_gap_seconds
+        ):
+            self.standing.series_breaks += 1
             return
         window = self._returns.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+            )
             self._returns[key] = window
-        window.observe((price - previous) / previous)
+        window.observe((price - previous) / previous, at_ns)
 
     def set_clusters(self, venue_id: str, symbol: str, clusters: tuple[LiquidationCluster, ...]) -> None:
         self._clusters[(venue_id, symbol)] = tuple(clusters)
@@ -264,6 +294,7 @@ def start_part(context) -> int:
             half_life_observations=context.number("signal_half_life_observations"),
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
 
     def read_map(_detector):
@@ -273,7 +304,9 @@ def start_part(context) -> int:
             detector.set_book_depth(liquidation_map.venue_id, liquidation_map.symbol, liquidation_map.open_interest_notional)
             touched.add((liquidation_map.venue_id, liquidation_map.symbol))
         for trade in trades.payloads():
-            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            detector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
             touched.add((trade.venue_id, trade.symbol))
         return tuple(sorted(touched))
 

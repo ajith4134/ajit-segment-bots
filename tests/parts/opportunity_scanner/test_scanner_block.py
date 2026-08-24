@@ -14,6 +14,7 @@ would bury every real signal.
 import importlib
 import json
 import math
+import time
 
 import pytest
 
@@ -43,7 +44,7 @@ from parts.opportunity_scanner.sentiment_shift_detector import (
     NO_DIVERGENCE, SENTIMENT_STEADY, SentimentShiftDetector,
 )
 from parts.opportunity_scanner.spread_reversion_detector import (
-    PAIR_NOT_COINTEGRATED, SpreadReversionDetector,
+    A_LEG_IS_STALE, PAIR_NOT_COINTEGRATED, SpreadReversionDetector,
 )
 from parts.opportunity_scanner.universal_symbol_sweeper import UniversalSymbolSweeper
 from parts.opportunity_scanner.volatility_gap_detector import (
@@ -77,6 +78,7 @@ BLOCK_PARTS = {
     "sentiment-shift-detector": "parts.opportunity_scanner.sentiment_shift_detector",
 }
 
+SECOND_NS = 1_000_000_000
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
 
@@ -202,8 +204,8 @@ def classifier(minimum=50):
 def test_a_symbol_with_too_little_history_is_unclassified(real_trade_prices):
     """A regime that flips every tick is worse than no regime."""
     subject = classifier(minimum=100)
-    for price in real_trade_prices[:20]:
-        subject.observe_price(VENUE, SYMBOL, price)
+    for index, price in enumerate(real_trade_prices[:20]):
+        subject.observe_price(VENUE, SYMBOL, price, index * SECOND_NS)
     regime = subject.classify(VENUE, SYMBOL)
     assert regime.regime == UNCLASSIFIED
     assert regime.is_classified is False
@@ -212,8 +214,8 @@ def test_a_symbol_with_too_little_history_is_unclassified(real_trade_prices):
 def test_the_real_tape_classifies_and_says_what_from(real_trade_prices):
     """2000 real trades is enough to reach a verdict, and the verdict carries its number."""
     subject = classifier(minimum=30)
-    for price in real_trade_prices:
-        subject.observe_price(VENUE, SYMBOL, price)
+    for index, price in enumerate(real_trade_prices):
+        subject.observe_price(VENUE, SYMBOL, price, index * SECOND_NS)
     regime = subject.classify(VENUE, SYMBOL)
     assert regime.is_classified
     assert regime.regime in (TRENDING, REVERTING, RANDOM)
@@ -226,7 +228,7 @@ def test_the_real_tape_classifies_and_says_what_from(real_trade_prices):
 def test_a_constructed_trend_classifies_as_trending():
     subject = classifier(minimum=30)
     for index in range(300):
-        subject.observe_price(VENUE, SYMBOL, 100.0 + index * 0.5)
+        subject.observe_price(VENUE, SYMBOL, 100.0 + index * 0.5, index * SECOND_NS)
     assert subject.classify(VENUE, SYMBOL).regime == TRENDING
 
 
@@ -250,9 +252,9 @@ def reversion_detector(z=2.0, minimum=20, volatility=0.0001):
 def test_a_stretched_price_in_a_reverting_regime_fires():
     subject = reversion_detector(z=2.0, minimum=20)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-        subject.observe_price(VENUE, SYMBOL, 101.0)
-    subject.observe_price(VENUE, SYMBOL, 130.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+        subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 130.0, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(REVERTING))
     assert candidate is not None
     assert candidate.direction == SHORT
@@ -263,9 +265,9 @@ def test_the_same_stretch_in_a_trend_does_not_fire():
     """A reverter that ignores regime sells strength in a bull market."""
     subject = reversion_detector(z=2.0, minimum=20)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-        subject.observe_price(VENUE, SYMBOL, 101.0)
-    subject.observe_price(VENUE, SYMBOL, 130.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+        subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 130.0, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(TRENDING, hurst=0.7))
     assert candidate is None
     assert outcome == WRONG_REGIME
@@ -274,7 +276,7 @@ def test_the_same_stretch_in_a_trend_does_not_fire():
 def test_a_series_that_barely_moved_is_refused():
     subject = reversion_detector(z=1.0, minimum=10, volatility=0.01)
     for index in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0 + (0.0001 if index % 2 else 0.0))
+        subject.observe_price(VENUE, SYMBOL, 100.0 + (0.0001 if index % 2 else 0.0), subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(REVERTING))
     assert candidate is None
     assert outcome == NO_VOLATILITY
@@ -283,7 +285,7 @@ def test_a_series_that_barely_moved_is_refused():
 def test_an_ordinary_price_does_not_fire(real_trade_prices):
     subject = reversion_detector(z=3.0, minimum=20)
     for price in real_trade_prices[:60]:
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(REVERTING))
     assert outcome in (NOT_STRETCHED, NO_VOLATILITY)
 
@@ -296,15 +298,15 @@ def test_confidence_is_learned_not_the_z_score():
         minimum_volatility_fraction=0.0001, horizon_seconds=300.0, calibrator=shared,
     )
     for _ in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-        subject.observe_price(VENUE, SYMBOL, 101.0)
-    subject.observe_price(VENUE, SYMBOL, 120.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+        subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 120.0, subject._now_ns())
     first, _ = subject.detect(VENUE, SYMBOL, Regime(REVERTING))
     assert first.confidence.is_fitted is False
 
     for _ in range(20):
         subject.observe_outcome(REVERTING, reverted=False)
-    subject.observe_price(VENUE, SYMBOL, 120.0)
+    subject.observe_price(VENUE, SYMBOL, 120.0, subject._now_ns())
     later, _ = subject.detect(VENUE, SYMBOL, Regime(REVERTING))
     assert later.confidence.is_fitted is True
     assert later.confidence.value < 0.5
@@ -324,8 +326,8 @@ def test_a_burst_without_a_playbook_rule_is_not_a_claim():
     price = 100.0
     for _ in range(20):
         price *= 1.0001
-        subject.observe_price(VENUE, SYMBOL, price)
-    subject.observe_price(VENUE, SYMBOL, price * 1.05)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, price * 1.05, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate is None
     assert outcome == NO_PLAYBOOK
@@ -337,13 +339,13 @@ def test_the_playbook_decides_which_way_a_burst_is_traded():
     price = 100.0
     for _ in range(20):
         price *= 1.0001
-        subject.observe_price(VENUE, SYMBOL, price)
-    subject.observe_price(VENUE, SYMBOL, price * 1.05)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, price * 1.05, subject._now_ns())
     candidate, _ = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate.direction == SHORT
 
     subject.set_playbook_expectation(SYMBOL, CONTINUATION)
-    subject.observe_price(VENUE, SYMBOL, price * 1.10)
+    subject.observe_price(VENUE, SYMBOL, price * 1.10, subject._now_ns())
     candidate, _ = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate.direction == LONG
 
@@ -353,7 +355,7 @@ def test_an_ordinary_move_for_this_symbol_is_not_a_burst(real_trade_prices):
     subject = burst_detector(z=4.0, minimum=20)
     subject.set_playbook_expectation(SYMBOL, REVERSION)
     for price in real_trade_prices[:60]:
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert outcome in (NOT_A_BURST, "fired")
 
@@ -421,8 +423,8 @@ def test_a_reverting_spread_is_cointegrated():
     for index in range(100):
         base = 100.0 + index * 0.1
         wobble = 0.5 if index % 2 else -0.5
-        subject.observe_price(VENUE, "AUSDT", base + wobble)
-        subject.observe_price(VENUE, "BUSDT", base)
+        subject.observe_price(VENUE, "AUSDT", base + wobble, index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", base, index * SECOND_NS)
     pair = subject.test_pair(VENUE, "AUSDT", "BUSDT")
     assert pair.state == COINTEGRATED
     assert pair.is_tradeable is True
@@ -433,8 +435,8 @@ def test_correlated_symbols_that_drift_apart_are_not_cointegrated():
     """The classic way to lose money on pairs."""
     subject = pair_finder(minimum=30, reversion_floor=0.2)
     for index in range(100):
-        subject.observe_price(VENUE, "AUSDT", 100.0 + index * 0.5)
-        subject.observe_price(VENUE, "BUSDT", 100.0 + index * 0.1)
+        subject.observe_price(VENUE, "AUSDT", 100.0 + index * 0.5, index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", 100.0 + index * 0.1, index * SECOND_NS)
     pair = subject.test_pair(VENUE, "AUSDT", "BUSDT")
     assert pair.state == CORRELATED_ONLY
     assert pair.is_tradeable is False
@@ -444,14 +446,14 @@ def test_a_pair_that_stops_cointegrating_is_retired():
     subject = pair_finder(minimum=20, reversion_floor=0.2)
     for index in range(60):
         base = 100.0 + index * 0.1
-        subject.observe_price(VENUE, "AUSDT", base + (0.5 if index % 2 else -0.5))
-        subject.observe_price(VENUE, "BUSDT", base)
+        subject.observe_price(VENUE, "AUSDT", base + (0.5 if index % 2 else -0.5), index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", base, index * SECOND_NS)
     assert subject.test_pair(VENUE, "AUSDT", "BUSDT").state == COINTEGRATED
     assert len(subject.cointegrated_pairs) == 1
 
     for index in range(200):
-        subject.observe_price(VENUE, "AUSDT", 100.0 + index * 2.0)
-        subject.observe_price(VENUE, "BUSDT", 100.0)
+        subject.observe_price(VENUE, "AUSDT", 100.0 + index * 2.0, (60 + index) * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", 100.0, (60 + index) * SECOND_NS)
     subject.test_pair(VENUE, "AUSDT", "BUSDT")
     assert subject.cointegrated_pairs == ()
     assert subject.standing.pairs_retired == 1
@@ -460,8 +462,8 @@ def test_a_pair_that_stops_cointegrating_is_retired():
 def test_too_little_history_judges_nothing():
     subject = pair_finder(minimum=50)
     for index in range(10):
-        subject.observe_price(VENUE, "AUSDT", 100.0 + index)
-        subject.observe_price(VENUE, "BUSDT", 100.0 + index)
+        subject.observe_price(VENUE, "AUSDT", 100.0 + index, index * SECOND_NS)
+        subject.observe_price(VENUE, "BUSDT", 100.0 + index, index * SECOND_NS)
     assert subject.test_pair(VENUE, "AUSDT", "BUSDT").state == PAIR_TOO_FEW
 
 
@@ -479,18 +481,20 @@ class Pair:
         self.is_tradeable = tradeable
 
 
-def spread_detector(z=2.0, minimum=20):
+def spread_detector(z=2.0, minimum=20, price_staleness=None, clock=None):
     return SpreadReversionDetector(
         z_threshold=z, window_length=100, minimum_observations=minimum,
         horizon_seconds=300.0, calibrator=calibrator(),
+        price_staleness=price_staleness,
+        now_ns=clock or time.time_ns,
     )
 
 
 def test_a_stretched_spread_names_both_legs():
     """A detector that fired on one leg would take a directional bet it never intended."""
     subject = spread_detector(z=2.0, minimum=100)
-    subject.observe_price(VENUE, "AUSDT", 105.0)
-    subject.observe_price(VENUE, "BUSDT", 100.0)
+    subject.observe_price(VENUE, "AUSDT", 105.0, subject._now_ns())
+    subject.observe_price(VENUE, "BUSDT", 100.0, subject._now_ns())
     candidate, _ = subject.detect(Pair(mean=0.0, deviation=1.0))
     assert candidate is not None
     assert candidate.evidence["short_symbol"] == "AUSDT"
@@ -500,8 +504,8 @@ def test_a_stretched_spread_names_both_legs():
 
 def test_a_retired_pair_produces_nothing_however_stretched():
     subject = spread_detector(z=1.0, minimum=100)
-    subject.observe_price(VENUE, "AUSDT", 200.0)
-    subject.observe_price(VENUE, "BUSDT", 100.0)
+    subject.observe_price(VENUE, "AUSDT", 200.0, subject._now_ns())
+    subject.observe_price(VENUE, "BUSDT", 100.0, subject._now_ns())
     candidate, outcome = subject.detect(Pair(tradeable=False))
     assert candidate is None
     assert outcome == PAIR_NOT_COINTEGRATED
@@ -522,7 +526,7 @@ def test_extreme_funding_with_price_no_longer_paying_fires():
         subject.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
     subject.observe_funding(VENUE, SYMBOL, 0.01)
     for index in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0 - index)
+        subject.observe_price(VENUE, SYMBOL, 100.0 - index, subject._now_ns())
     candidate, _ = subject.detect(VENUE, SYMBOL)
     assert candidate is not None
     assert candidate.direction == SHORT
@@ -536,7 +540,7 @@ def test_extreme_funding_while_price_still_rises_does_not_fire():
         subject.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
     subject.observe_funding(VENUE, SYMBOL, 0.01)
     for index in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0 + index)
+        subject.observe_price(VENUE, SYMBOL, 100.0 + index, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL)
     assert candidate is None
     assert outcome == PRICE_STILL_REWARDING
@@ -562,7 +566,7 @@ def cascade_detector(reach=2.0, minimum_notional=1_000_000.0, depth_multiple=2.0
 
 def feed_volatility(subject, price=100.0, steps=40):
     for index in range(steps):
-        subject.observe_price(VENUE, SYMBOL, price * (1 + (0.005 if index % 2 else -0.005)))
+        subject.observe_price(VENUE, SYMBOL, price * (1 + (0.005 if index % 2 else -0.005)), subject._now_ns())
 
 
 def test_a_dense_cluster_in_reach_fires_toward_it():
@@ -688,7 +692,7 @@ def test_sentiment_moving_while_price_has_not_is_the_signal():
     subject = sentiment_detector(z=2.0, minimum=20)
     for index in range(30):
         subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_sentiment(VENUE, SYMBOL, 0.95)
     candidate, _ = subject.detect(VENUE, SYMBOL)
     assert candidate is not None
@@ -698,10 +702,10 @@ def test_sentiment_that_price_has_already_followed_is_not_a_divergence():
     subject = sentiment_detector(z=2.0, minimum=20, agreement=0.01)
     for index in range(30):
         subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_sentiment(VENUE, SYMBOL, 0.95)
     for index in range(6):
-        subject.observe_price(VENUE, SYMBOL, 100.0 * (1.01 ** (index + 1)))
+        subject.observe_price(VENUE, SYMBOL, 100.0 * (1.01 ** (index + 1)), subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL)
     assert candidate is None
     assert outcome == NO_DIVERGENCE
@@ -716,7 +720,7 @@ def test_which_way_to_trade_sentiment_is_learned_not_assumed():
     )
     for index in range(30):
         subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     for _ in range(20):
         subject.observe_outcome("sentiment-is-contrarian-at-extremes", True)
     subject.observe_sentiment(VENUE, SYMBOL, 0.95)
@@ -881,3 +885,38 @@ def test_an_incomplete_sweep_resumes_rather_than_always_covering_the_prefix():
     first, _ = subject.sweep(universe, (a_condition(),))
     second, _ = subject.sweep(universe, (a_condition(),))
     assert {candidate.symbol for candidate in first} != {candidate.symbol for candidate in second}
+
+
+def test_a_spread_with_a_stale_leg_is_refused_rather_than_fired_on():
+    """A stale leg does not read as a quiet leg -- it reads as the widest stretch.
+
+    The spread is one price minus another, and the two arrive separately. If one
+    stops updating while the other runs, the difference grows without the market
+    ever having produced it, which is exactly the shape this detector exists to
+    fire on. So it is refused by name.
+    """
+    from runtime.price_staleness import PriceStalenessEstimator
+
+    at = [1_000 * SECOND_NS]
+
+    def clock():
+        return at[0]
+
+    pinned_to_one_second = PriceStalenessEstimator(
+        materiality_fraction=0.0011, anchor_seconds=1.0, quantile=0.95, window=3_600,
+        observations_needed=300, prior_one_second_move=0.000898,
+        minimum_age_seconds=1.0, maximum_age_seconds=1.0,
+    )
+    subject = spread_detector(z=2.0, minimum=100, price_staleness=pinned_to_one_second, clock=clock)
+    subject.observe_price(VENUE, "AUSDT", 105.0, clock())
+    subject.observe_price(VENUE, "BUSDT", 100.0, clock())
+    assert subject.detect(Pair(mean=0.0, deviation=1.0))[0] is not None
+
+    # One leg goes on printing; the other has not been heard from in an hour.
+    at[0] += 3_360 * SECOND_NS
+    subject.observe_price(VENUE, "AUSDT", 130.0, clock())
+
+    candidate, reason = subject.detect(Pair(mean=0.0, deviation=1.0))
+    assert candidate is None
+    assert reason == A_LEG_IS_STALE
+    assert subject.standing.stale_leg == 1

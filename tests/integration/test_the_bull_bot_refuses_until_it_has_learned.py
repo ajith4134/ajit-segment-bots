@@ -191,8 +191,18 @@ def watch_at(wiring, owner_part_id: str, data_type: str) -> Inbox:
     )
 
 
-def replay_watching(launcher, wiring, running, watched, trades, stop_when=lambda: False):
-    """Start the parts, replay real trades, and collect what the watchers saw."""
+def replay_watching(
+    launcher, wiring, running, watched, trades, stop_when=lambda: False, arriving_now=None
+):
+    """Start the parts, replay real trades, and collect what the watchers saw.
+
+    `arriving_now` dates each batch as though the market had just printed it. The
+    tape read here starts at the beginning of today, so without it a part that
+    judges how old a price is refuses the whole replay -- correctly, since those
+    prints really are hours old. Only a replay has to say when it is pretending to
+    be (RL-071).
+    """
+    restamp = arriving_now or (lambda batch: batch)
     seen = {data_type: [] for data_type in watched}
     feed = Publisher(
         part_id="venue-trade-stream-reader",
@@ -210,7 +220,7 @@ def replay_watching(launcher, wiring, running, watched, trades, stop_when=lambda
         deadline = time.monotonic() + PATIENCE_SECONDS
         position = 0
         while position < len(trades) and time.monotonic() < deadline:
-            feed.publish("market-data", trades[position : position + REPLAY_BATCH])
+            feed.publish("market-data", restamp(trades[position : position + REPLAY_BATCH]))
             position += REPLAY_BATCH
             time.sleep(REPLAY_PAUSE_SECONDS)
             for data_type, inbox in watched.items():
@@ -231,7 +241,9 @@ def replay_watching(launcher, wiring, running, watched, trades, stop_when=lambda
 
 
 @pytest.mark.slow
-def test_the_bull_bot_turns_candidates_into_feature_vectors(launcher, bus_root, todays_trades):
+def test_the_bull_bot_turns_candidates_into_feature_vectors(
+    launcher, bus_root, todays_trades, arriving_now
+):
     """Everything up to the model works, on real trades, across seven processes."""
     running = SCANNER + LABELLER + ("bull-setup-filter", "bull-feature-builder")
     wiring = derive_wiring(runtime_directory=bus_root)
@@ -242,7 +254,9 @@ def test_the_bull_bot_turns_candidates_into_feature_vectors(launcher, bus_root, 
         "bull-feature-vector": watch_at(wiring, "bull-outlier-rejector", "bull-feature-vector"),
     }
     try:
-        seen, delivered = replay_watching(launcher, wiring, running, watched, todays_trades)
+        seen, delivered = replay_watching(
+            launcher, wiring, running, watched, todays_trades, arriving_now=arriving_now
+        )
     finally:
         for inbox in watched.values():
             inbox.close()
@@ -259,7 +273,9 @@ def test_the_bull_bot_turns_candidates_into_feature_vectors(launcher, bus_root, 
 
 
 @pytest.mark.slow
-def test_the_whole_bull_chain_runs_and_correctly_forms_no_opinion(launcher, bus_root, todays_trades):
+def test_the_whole_bull_chain_runs_and_correctly_forms_no_opinion(
+    launcher, bus_root, todays_trades, arriving_now
+):
     """Eleven processes, and the refusal that proves the model is honest.
 
     An untrained model forms no conviction; without one there is no timing and no
@@ -275,7 +291,9 @@ def test_the_whole_bull_chain_runs_and_correctly_forms_no_opinion(launcher, bus_
         "training-label": watch_at(wiring, "sample-weight-assigner", "training-label"),
     }
     try:
-        seen, delivered = replay_watching(launcher, wiring, running, watched, todays_trades)
+        seen, delivered = replay_watching(
+            launcher, wiring, running, watched, todays_trades, arriving_now=arriving_now
+        )
         still_running = [part_id for part_id in running if launcher.is_running(part_id)]
     finally:
         for inbox in watched.values():
@@ -305,7 +323,9 @@ def test_the_whole_bull_chain_runs_and_correctly_forms_no_opinion(launcher, bus_
 
 
 @pytest.mark.slow
-def test_the_labeller_turns_real_candidates_into_real_labels(launcher, bus_root, todays_trades):
+def test_the_labeller_turns_real_candidates_into_real_labels(
+    launcher, bus_root, todays_trades, arriving_now
+):
     """The bootstrap, end to end: a detector's claim becomes a training label.
 
     This is the piece that was missing from the blueprint. If it works, the model
@@ -339,7 +359,9 @@ def test_the_labeller_turns_real_candidates_into_real_labels(launcher, bus_root,
         deadline = time.monotonic() + PATIENCE_SECONDS
         position = 0
         while position < len(todays_trades) and time.monotonic() < deadline and not seen:
-            feed.publish("market-data", todays_trades[position : position + REPLAY_BATCH])
+            feed.publish(
+                "market-data", arriving_now(todays_trades[position : position + REPLAY_BATCH])
+            )
             position += REPLAY_BATCH
             time.sleep(REPLAY_PAUSE_SECONDS)
             seen.extend(labels.drain())

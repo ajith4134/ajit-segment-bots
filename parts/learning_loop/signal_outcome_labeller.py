@@ -42,6 +42,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
 from runtime.learning_types import THE_SETUP_WAS_RIGHT, TrainingLabel
 from runtime.market_signal import LONG, SHORT
 from runtime.part_declaration import PartDeclaration
@@ -67,6 +68,7 @@ REFUSED_NO_PRICE = "no-price-has-been-seen-for-this-symbol"
 REFUSED_UNKNOWN_DIRECTION = "the-candidate-names-no-tradeable-direction"
 REFUSED_AT_CAPACITY = "too-many-claims-are-already-open"
 REFUSED_ALREADY_OPEN = "this-detector-already-has-an-open-claim-on-this-symbol"
+REFUSED_STALE_PRICE = "the-last-price-for-this-symbol-is-too-old-to-label-against"
 
 
 @dataclass
@@ -132,6 +134,7 @@ class SignalOutcomeLabeller:
         self,
         move_fraction: float,
         maximum_open_claims: int,
+        price_staleness: PriceStalenessEstimator | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if move_fraction <= 0:
@@ -141,8 +144,12 @@ class SignalOutcomeLabeller:
             )
         self._move_fraction = move_fraction
         self._maximum_open_claims = maximum_open_claims
+        # How old this symbol's last print may be and still be the price a claim
+        # was made at. None means the caller stated no bound, and this part does
+        # not invent one (RL-061).
+        self._price_staleness = price_staleness
         self._now_ns = now_ns
-        self._latest_price: dict[tuple[str, str], float] = {}
+        self._latest_price: dict[tuple[str, str], ObservedPrice] = {}
         self._open: dict[tuple[str, str, str], OpenClaim] = {}
         # The same claims indexed by the symbol they are about. Every trade has to
         # update every claim on that symbol, and scanning all open claims per trade
@@ -155,10 +162,19 @@ class SignalOutcomeLabeller:
 
     # -- watching the market -------------------------------------------------
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        """One live trade. Every open claim on this symbol is measured against it."""
+    def observe_price(self, venue_id: str, symbol: str, price: float, observed_at_ns: int) -> None:
+        """One live trade. Every open claim on this symbol is measured against it.
+
+        `observed_at_ns` is the venue's own time for the print and has no default.
+        What this part produces is the training label the conviction model learns
+        from, so a claim opened against a price the market had already left teaches
+        the model that a detector called a move it never called. That is not a
+        wrong trade -- it is a wrong lesson, and it survives every trade after it.
+        """
         self.standing.prices_observed += 1
-        self._latest_price[(venue_id, symbol)] = price
+        self._latest_price[(venue_id, symbol)] = ObservedPrice(
+            price=price, observed_at_ns=observed_at_ns
+        )
         for claim in self._open_by_symbol.get((venue_id, symbol), {}).values():
             moved = claim.move_fraction(price)
             claim.best_favourable_fraction = max(claim.best_favourable_fraction, moved)
@@ -171,12 +187,23 @@ class SignalOutcomeLabeller:
         if candidate.direction not in (LONG, SHORT):
             return None, self._refuse(REFUSED_UNKNOWN_DIRECTION)
 
-        price = self._latest_price.get((candidate.venue_id, candidate.symbol))
-        if price is None or price <= 0:
+        key_symbol = (candidate.venue_id, candidate.symbol)
+        observed = self._latest_price.get(key_symbol)
+        if observed is None or observed.price <= 0:
             # Without a price at the moment of the claim there is nothing to
             # measure the move against, and inventing one from the next tick would
             # give the detector a head start it did not have.
             return None, self._refuse(REFUSED_NO_PRICE)
+        price = observed.price
+
+        # A price older than this symbol's own moves say is believable is not the
+        # price at the moment of the claim, whatever its age in seconds. Refused
+        # rather than used, because the label built on it would be indistinguishable
+        # from a real one for as long as the model kept it.
+        if self._price_staleness is not None:
+            bound = self._price_staleness.believable_age_seconds(*key_symbol)
+            if observed.age_seconds(self._now_ns()) > bound.value:
+                return None, self._refuse(REFUSED_STALE_PRICE)
 
         key = (candidate.detector, candidate.venue_id, candidate.symbol)
         if key in self._open:
@@ -311,6 +338,12 @@ def describe_labelling(labeller: SignalOutcomeLabeller) -> dict:
         "unresolved": labeller.standing.unresolved,
         "measured_hit_rate": labeller.standing.measured_hit_rate,
         "prices_observed": labeller.standing.prices_observed,
+        # Lifted out of by_refusal as a plain number: what rides on a health
+        # report is numbers only, and a claim refused inside a nested map is a
+        # refusal no table carries.
+        "refused_for_a_stale_price": labeller.standing.by_refusal.get(
+            REFUSED_STALE_PRICE, 0
+        ),
         "by_refusal": dict(sorted(labeller.standing.by_refusal.items())),
         "by_detector": dict(sorted(labeller.standing.by_detector.items())),
     }
@@ -338,6 +371,7 @@ def run_signal_outcome_labeller(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_labelling(labeller),
     )
 
 
@@ -354,10 +388,17 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("market-data"))
     candidates = Batch(read=context.bus.reader("entry-candidate"))
     publish_labels = context.bus.publisher_for("training-label")
+    price_staleness = price_staleness_from(context)
 
     def read_prices_and_candidates(labeller: SignalOutcomeLabeller) -> None:
         for trade in trades.payloads():
-            labeller.observe_price(trade.venue_id, trade.symbol, trade.price)
+            labeller.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
+            if price_staleness is not None:
+                price_staleness.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
         for candidate in candidates.payloads():
             labeller.observe_candidate(candidate)
 
@@ -365,6 +406,7 @@ def start_part(context) -> int:
         labeller=SignalOutcomeLabeller(
             move_fraction=context.number("signal_label_move_fraction"),
             maximum_open_claims=int(context.number("signal_label_maximum_open_claims")),
+            price_staleness=price_staleness,
         ),
         control_socket=context.control_socket,
         read_prices_and_candidates=read_prices_and_candidates,

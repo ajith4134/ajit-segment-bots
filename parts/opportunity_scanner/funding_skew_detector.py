@@ -70,6 +70,7 @@ class FundingSkewDetector:
         price_confirmation_window: int,
         horizon_seconds: float,
         calibrator: SignalCalibrator,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if skew_z_threshold <= 0:
@@ -81,6 +82,10 @@ class FundingSkewDetector:
         self._horizon = horizon_seconds
         self._calibrator = calibrator
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._funding: dict[tuple[str, str], RollingWindow] = {}
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = SkewStanding()
@@ -95,13 +100,16 @@ class FundingSkewDetector:
         window.observe(rate)
         self.standing.symbols_tracked = len(self._funding)
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._price_window)
+            window = RollingWindow(
+                length=self._price_window,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_outcome(self, regime: str, unwound: bool) -> None:
         self._calibrator.observe_outcome(PART_ID, regime, unwound)
@@ -233,6 +241,7 @@ def start_part(context) -> int:
             half_life_observations=context.number("signal_half_life_observations"),
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
 
     def read_funding(_detector):
@@ -243,7 +252,9 @@ def start_part(context) -> int:
                 detector.observe_funding(forecast.venue_id, forecast.symbol, forecast.predicted_rate)
                 touched.add((forecast.venue_id, forecast.symbol))
         for trade in trades.payloads():
-            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            detector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         return tuple(sorted(touched))
 
     def publish(candidates) -> None:

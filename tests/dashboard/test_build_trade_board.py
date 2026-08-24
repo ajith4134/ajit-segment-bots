@@ -576,10 +576,11 @@ def test_decision_freshness_measures_the_decision_price_against_the_fill(board):
     """
     entries = [
         {"kind": "bounded-order", "recorded_at_ns": 1,
-         "payload": {"venue_id": "binance-usdm", "symbol": "ENAUSDT", "entry_price": 0.17019}},
+         "payload": {"venue_id": "binance-usdm", "symbol": "ENAUSDT", "entry_price": 0.17019,
+                     "side": "buy", "trade_id": "t-1"}},
         {"kind": "fill", "recorded_at_ns": 2,
          "payload": {"venue_id": "binance-usdm", "symbol": "ENAUSDT", "price": 0.18043,
-                     "quantity": 1.0, "side": "buy"}},
+                     "quantity": 1.0, "side": "buy", "trade_id": "t-1"}},
     ]
     result = board.probe_decision_freshness(entries)
     assert result.state == board.FAILING
@@ -590,13 +591,74 @@ def test_decision_freshness_measures_the_decision_price_against_the_fill(board):
 def test_a_decision_that_filled_where_it_expected_reads_ok(board):
     entries = [
         {"kind": "bounded-order", "recorded_at_ns": 1,
-         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "entry_price": 77_500.0}},
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "entry_price": 77_500.0,
+                     "side": "buy", "trade_id": "t-1"}},
         {"kind": "fill", "recorded_at_ns": 2,
          "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "price": 77_512.0,
-                     "quantity": 0.01, "side": "buy"}},
+                     "quantity": 0.01, "side": "buy", "trade_id": "t-1"}},
     ]
     result = board.probe_decision_freshness(entries)
     assert result.state == board.OK
+
+
+def test_an_exit_fill_is_not_measured_against_the_entry_it_closes(board):
+    """A closing fill lands wherever the trade went. That is the trade's result.
+
+    Measured against the entry, a winning trade reads as a decision made at a
+    price 4% from the market -- which is what this tile calls badly stale. The
+    exit and the entry share a trade id and differ in side, and that is what
+    separates them: the fill this tile is about is the one that opened the
+    position, at the price the decision named.
+    """
+    entries = [
+        {"kind": "bounded-order", "recorded_at_ns": 1,
+         "payload": {"venue_id": "binance-usdm", "symbol": "SOXLUSDT", "entry_price": 100.0,
+                     "side": "buy", "trade_id": "t-1"}},
+        {"kind": "fill", "recorded_at_ns": 2,
+         "payload": {"venue_id": "binance-usdm", "symbol": "SOXLUSDT", "price": 100.02,
+                     "quantity": 1.0, "side": "buy", "trade_id": "t-1"}},
+        {"kind": "fill", "recorded_at_ns": 3,
+         "payload": {"venue_id": "binance-usdm", "symbol": "SOXLUSDT", "price": 104.0,
+                     "quantity": 1.0, "side": "sell", "trade_id": "t-1"}},
+    ]
+    result = board.probe_decision_freshness(entries)
+    assert result.state == board.OK, result.proof
+    assert "0.02%" in result.proof
+
+
+def test_only_the_first_fill_of_an_order_measures_the_decision(board):
+    """Later partials are the order working through the book, which is slippage."""
+    entries = [
+        {"kind": "bounded-order", "recorded_at_ns": 1,
+         "payload": {"venue_id": "binance-usdm", "symbol": "XRPUSDC", "entry_price": 1.4689,
+                     "side": "buy", "trade_id": "t-1"}},
+        {"kind": "fill", "recorded_at_ns": 2,
+         "payload": {"venue_id": "binance-usdm", "symbol": "XRPUSDC", "price": 1.4691,
+                     "quantity": 1.0, "side": "buy", "trade_id": "t-1"}},
+        {"kind": "fill", "recorded_at_ns": 3,
+         "payload": {"venue_id": "binance-usdm", "symbol": "XRPUSDC", "price": 1.4858,
+                     "quantity": 1.0, "side": "buy", "trade_id": "t-1"}},
+    ]
+    result = board.probe_decision_freshness(entries)
+    assert result.state == board.OK, result.proof
+    assert "1 fill(s)" in result.proof or "1 most recent" in result.proof
+
+
+def test_a_fill_for_a_trade_no_order_was_recorded_for_is_not_measured(board):
+    """A fill whose order is older than the journal window has nothing to compare
+    against, and pairing it with another trade's price on the same symbol is how
+    this tile came to report a trade's profit as a stale decision."""
+    entries = [
+        {"kind": "bounded-order", "recorded_at_ns": 1,
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "entry_price": 77_500.0,
+                     "side": "buy", "trade_id": "t-1"}},
+        {"kind": "fill", "recorded_at_ns": 2,
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "price": 90_000.0,
+                     "quantity": 0.01, "side": "buy", "trade_id": "a-different-trade"}},
+    ]
+    result = board.probe_decision_freshness(entries)
+    assert result.state == board.WAITING
+    assert "nothing has filled yet" in result.value
 
 
 def test_nothing_filled_reads_as_waiting_not_as_healthy(board):
@@ -604,6 +666,89 @@ def test_nothing_filled_reads_as_waiting_not_as_healthy(board):
     result = board.probe_decision_freshness([])
     assert result.state == board.WAITING
     assert "nothing has filled yet" in result.value
+
+
+# ---- decisions that never reached the book ------------------------------------
+
+def _decision(symbol, action="open", side="long", at=1):
+    return {"kind": "trade-intent", "recorded_at_ns": at,
+            "payload": {"venue_id": "binance-usdm", "symbol": symbol, "side": side,
+                        "action": action}}
+
+
+def _order(symbol, side="long", action="open", at=2):
+    return {"kind": "bounded-order", "recorded_at_ns": at,
+            "payload": {"venue_id": "binance-usdm", "symbol": symbol, "entry_price": 100.0,
+                        "intent_id": f"binance-usdm|{symbol}|{side}|{action}"}}
+
+
+def test_a_decision_that_reached_the_book_is_not_counted_as_refused(board):
+    scan = board.RefusedDecisionScan()
+    for entry in (_decision("BTCUSDT"), _order("BTCUSDT")):
+        scan.observe(entry)
+
+    result = scan.result()
+    assert result.state == board.OK
+    assert "1 of 1" in result.proof
+
+
+def test_standing_aside_is_a_decision_not_to_trade_and_never_a_refusal(board):
+    """The arbiter republishes its view every tick, and most ticks it stands aside.
+
+    Counting those as decisions the system failed to act on would read as a bot
+    refusing thousands of trades a minute while it was in fact declining to take
+    them, which is the opposite fact.
+    """
+    scan = board.RefusedDecisionScan()
+    scan.observe(_decision("BTCUSDT", action="stand-aside"))
+
+    result = scan.result()
+    assert result.state == board.WAITING
+    assert "no actionable decision" in result.value
+
+
+def test_one_decision_republished_every_tick_counts_once(board):
+    """Identity is the decision, not the message: venue, symbol, side, action."""
+    scan = board.RefusedDecisionScan()
+    for tick in range(50):
+        scan.observe(_decision("BTCUSDT", at=tick))
+    scan.observe(_order("BTCUSDT"))
+
+    assert "1 of 1" in scan.result().proof
+
+
+def test_every_decision_refused_is_the_failure_state(board):
+    """The shape a bound set too tight makes: the bot still decides and never trades.
+
+    A board that showed this as an absence of trades would be indistinguishable
+    from a quiet market, which is the reassurance Rule 8 exists to refuse.
+    """
+    scan = board.RefusedDecisionScan()
+    for symbol in ("BTCUSDT", "ETHUSDT", "ENAUSDT"):
+        scan.observe(_decision(symbol))
+
+    result = scan.result()
+    assert result.state == board.FAILING
+    assert "0 of 3" in result.proof
+    assert "none" in result.value
+
+
+def test_some_refused_is_reported_without_inventing_a_threshold(board):
+    """Refusals are ordinary -- capital, risk limits, an unlisted instrument. The
+    number is shown; only none-at-all is a verdict."""
+    scan = board.RefusedDecisionScan()
+    for symbol in ("BTCUSDT", "ETHUSDT", "ENAUSDT", "SOLUSDT"):
+        scan.observe(_decision(symbol))
+    scan.observe(_order("BTCUSDT"))
+
+    result = scan.result()
+    assert result.state == board.OK
+    assert "1 of 4" in result.proof
+
+
+def test_nothing_decided_yet_is_not_healthy(board):
+    result = board.RefusedDecisionScan().result()
+    assert result.state == board.WAITING
 
 
 # ---- Parts alive: the first consumer of staleness and input loss ---------------
@@ -691,3 +836,57 @@ def test_everything_reporting_with_no_loss_reads_ok(board, heartbeat_settings):
     ])
     result = board.probe_parts_alive(now_ns=11_000_000_000)
     assert result.state == board.OK and result.value == "2 of 2 reporting"
+
+
+# ---- refusals a part counted, and somebody finally reads ----------------------
+
+def test_stale_price_refusals_are_read_off_the_table(board, tmp_path, monkeypatch):
+    """The tile that closes the loop on 2026-08-23.
+
+    Each part counts why it refused. Until 2026-08-24 nothing read those counters,
+    so a part refusing every decision for a stale price and a part with nothing to
+    decide produced the same board.
+    """
+    document = {
+        "collected_at_ns": 1_000,
+        "heartbeats": [
+            {"part_id": "instrument-selector", "state": "reporting",
+             "standing": {"refused_for_a_stale_price": 41.0, "chosen": 12.0}},
+            {"part_id": "signal-outcome-labeller", "state": "reporting",
+             "standing": {"refused_for_a_stale_price": 7.0}},
+            {"part_id": "tick-size-resolver", "state": "reporting", "standing": {}},
+        ],
+    }
+    result = board.probe_stale_price_refusals(document)
+    assert result.state == board.OK
+    assert "48" in result.value
+    assert "instrument-selector" in result.proof and "41" in result.proof
+
+
+def test_a_part_refusing_everything_for_staleness_is_failing(board):
+    """Refusing is right. Refusing everything means the bound is unreachable, and a
+    bot that cannot act is not a bot with nothing to do."""
+    document = {
+        "collected_at_ns": 1_000,
+        "heartbeats": [
+            {"part_id": "instrument-selector", "state": "reporting",
+             "standing": {"refused_for_a_stale_price": 500.0, "chosen": 0.0}},
+        ],
+    }
+    result = board.probe_stale_price_refusals(document)
+    assert result.state == board.FAILING
+    assert "nothing was chosen" in result.proof
+
+
+def test_no_part_reporting_a_standing_is_not_measured(board):
+    """Rule 8: a counter nothing reported is not a count of zero."""
+    document = {
+        "collected_at_ns": 1_000,
+        "heartbeats": [{"part_id": "tick-size-resolver", "state": "reporting"}],
+    }
+    result = board.probe_stale_price_refusals(document)
+    assert result.state == board.UNMEASURED
+
+
+def test_no_heartbeat_table_at_all_is_not_measured(board):
+    assert board.probe_stale_price_refusals(None).state == board.UNMEASURED

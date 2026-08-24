@@ -135,12 +135,23 @@ def todays_trades():
     return trades
 
 
-def replay_until(feed, trades, drain, stop_when, patience_seconds=PATIENCE_SECONDS):
-    """Publish real trades at a pace no inbox has to swallow whole, draining as we go."""
+def replay_until(feed, trades, drain, stop_when, patience_seconds=PATIENCE_SECONDS,
+                 arriving_now=None):
+    """Publish real trades at a pace no inbox has to swallow whole, draining as we go.
+
+    `arriving_now` dates each batch as though the market had just printed it. The
+    tape read here starts at the beginning of today, so without it every part that
+    judges how old a price is refuses the whole replay -- correctly, because those
+    prints really are hours old. `spread-reversion-detector` in particular refuses
+    a spread whose legs are stale, since a frozen leg is what makes a spread look
+    maximally stretched. Only a replay has to say when it is pretending to be
+    (RL-071).
+    """
+    restamp = arriving_now or (lambda batch: batch)
     deadline = time.monotonic() + patience_seconds
     position = 0
     while position < len(trades) and time.monotonic() < deadline:
-        feed.publish("market-data", trades[position : position + REPLAY_BATCH])
+        feed.publish("market-data", restamp(trades[position : position + REPLAY_BATCH]))
         position += REPLAY_BATCH
         time.sleep(REPLAY_PAUSE_SECONDS)
         drain()
@@ -162,7 +173,7 @@ def open_feed(wiring):
 
 
 @pytest.mark.slow
-def test_real_trades_become_pair_verdicts(launcher, bus_root, todays_trades):
+def test_real_trades_become_pair_verdicts(launcher, bus_root, todays_trades, arriving_now):
     """The finder judges real symbol pairs, and says which state each is in.
 
     The verdicts are read at `spread-reversion-detector`'s own address, with that
@@ -188,6 +199,7 @@ def test_real_trades_become_pair_verdicts(launcher, bus_root, todays_trades):
             todays_trades,
             drain=lambda: seen.extend(verdicts.drain()),
             stop_when=lambda: any(message.payload.is_tradeable for message in seen),
+            arriving_now=arriving_now,
         )
         delivered = feed.standing["market-data"].delivered
     finally:
@@ -209,7 +221,9 @@ def test_real_trades_become_pair_verdicts(launcher, bus_root, todays_trades):
 
 
 @pytest.mark.slow
-def test_a_tradeable_pair_becomes_an_entry_candidate(launcher, bus_root, todays_trades):
+def test_a_tradeable_pair_becomes_an_entry_candidate(
+    launcher, bus_root, todays_trades, arriving_now
+):
     wiring = derive_wiring(runtime_directory=bus_root)
 
     # Where an entry candidate would land. A real consumer of the type, bound here
@@ -239,6 +253,7 @@ def test_a_tradeable_pair_becomes_an_entry_candidate(launcher, bus_root, todays_
             todays_trades,
             drain=lambda: seen_candidates.extend(candidates.drain()),
             stop_when=lambda: bool(seen_candidates),
+            arriving_now=arriving_now,
         )
         delivered = feed.standing["market-data"].delivered
     finally:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.forecast_types import ForecastAccuracy
 from runtime.learned_estimator import RateEstimator
 from runtime.part_declaration import PartDeclaration
@@ -94,8 +95,16 @@ class ForecastScorer:
         self._unusable: dict[str, int] = {}
         self.standing = ScorerStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default. A price with no age cannot be told apart from a
+        price that stopped arriving, which is how a symbol frozen for 56 minutes
+        was traded on 2026-08-23.
+        """
+        self._prices[(venue_id, symbol)] = ObservedPrice(
+            price=price, observed_at_ns=at_ns
+        )
 
     def take_forecast(self, forecast) -> None:
         """Hold a forecast until its horizon elapses.
@@ -109,7 +118,8 @@ class ForecastScorer:
             self._unusable[forecast.state] = self._unusable.get(forecast.state, 0) + 1
             return
 
-        price = self._prices.get((forecast.venue_id, forecast.symbol))
+        observed = self._prices.get((forecast.venue_id, forecast.symbol))
+        price = None if observed is None else observed.price
         if price is None:
             self.standing.dropped_no_price += 1
             return
@@ -139,7 +149,8 @@ class ForecastScorer:
 
     def _score_one(self, pending: PendingForecast) -> ForecastAccuracy | None:
         forecast = pending.forecast
-        price_now = self._prices.get((forecast.venue_id, forecast.symbol))
+        observed_now = self._prices.get((forecast.venue_id, forecast.symbol))
+        price_now = None if observed_now is None else observed_now.price
         if price_now is None or pending.price_at_forecast <= 0:
             self.standing.dropped_no_price += 1
             return None
@@ -274,7 +285,9 @@ def start_part(context) -> int:
     def read_forecasts_and_prices(_scorer) -> None:
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
-                scorer.observe_price(trade.venue_id, trade.symbol, trade.price)
+                scorer.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
         for forecast in forecasts.payloads():
             scorer.take_forecast(forecast)
 

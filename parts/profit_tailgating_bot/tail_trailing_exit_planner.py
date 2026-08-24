@@ -32,6 +32,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import LONG, SHORT, ExitPlan, ExitTarget
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
@@ -149,8 +150,16 @@ class TailTrailingExitPlanner:
         self._entry_prices: dict[tuple[str, str], float] = {}
         self.standing = PlannerStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default. A price with no age cannot be told apart from a
+        price that stopped arriving, which is how a symbol frozen for 56 minutes
+        was traded on 2026-08-23.
+        """
+        self._prices[(venue_id, symbol)] = ObservedPrice(
+            price=price, observed_at_ns=at_ns
+        )
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, price_step: float) -> None:
         self._price_steps[(venue_id, symbol)] = price_step
@@ -198,7 +207,8 @@ class TailTrailingExitPlanner:
         self.standing.plans_requested += 1
         key = (candidate.venue_id, candidate.symbol)
 
-        price = self._prices.get(key)
+        observed = self._prices.get(key)
+        price = None if observed is None else observed.price
         if price is None or price <= 0:
             return None, self._refuse(NO_PRICE)
 
@@ -389,7 +399,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_market(_planner):
         for trade in trades.payloads():
-            planner.observe_price(trade.venue_id, trade.symbol, trade.price)
+            planner.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
         for profile in profiles.payloads():
             step = (profile.fields or {}).get("price_increment") if isinstance(profile.fields, dict) else None
             if step:

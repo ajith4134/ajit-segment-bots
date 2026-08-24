@@ -93,6 +93,7 @@ class RegimeBreakDetector:
         volatility_step_multiple: float,
         correlation_jump: float,
         persistence_observations: int,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if recent_window >= established_window:
@@ -117,18 +118,25 @@ class RegimeBreakDetector:
         self._correlation_jump = correlation_jump
         self._persistence = persistence_observations
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._returns: dict[str, RollingWindow] = {}
         self._broken: dict[str, RegimeBreakAlert] = {}
         self._elevated_for: dict[str, int] = {}
         self._events: list = []
         self.standing = DetectorStanding()
 
-    def observe_price(self, symbol: str, price: float) -> None:
+    def observe_price(self, symbol: str, price: float, at_ns: int) -> None:
         window = self._returns.get(symbol)
         if window is None:
-            window = RollingWindow(length=self._established_window)
+            window = RollingWindow(
+                length=self._established_window,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._returns[symbol] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_market_event(self, event: str, symbols=()) -> None:
         """A delisting, a halt, a fork: an event that changes the rules.
@@ -372,6 +380,7 @@ def start_part(context) -> int:
         volatility_step_multiple=context.number("regime_break_volatility_step_multiple"),
         correlation_jump=context.number("regime_break_correlation_jump"),
         persistence_observations=int(context.number("regime_break_persistence_observations")),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
     # The market-event data type's own vocabulary for events that change the
     # rules -- named here by value, because a part names data, never another part.
@@ -379,12 +388,12 @@ def start_part(context) -> int:
     regimes_named: set[str] = set()
 
     def read_market_and_events(_detector):
-        latest: dict[str, float] = {}
+        latest: dict[str, tuple[float, int]] = {}
         for (venue_id, symbol), trade in trades.mapping().items():
             if isinstance(trade, NormalisedTrade):
-                latest[symbol] = trade.price
-        for symbol, price in latest.items():
-            detector.observe_price(symbol, price)
+                latest[symbol] = (trade.price, trade.venue_time_ns)
+        for symbol, (price, at_ns) in latest.items():
+            detector.observe_price(symbol, price, at_ns)
         for event in events.payloads():
             if event.event_type in rule_changing:
                 detector.observe_market_event(event.event_type, tuple(event.symbols))

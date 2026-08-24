@@ -192,14 +192,23 @@ class BullExitPlanProposer:
         self._audits: dict[tuple[str, str], StopAudit] = {}
         self.standing = ProposerStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default, and it replaces this part's own clock in the recent
+        window. The cold-start stop distance is "how far did this symbol trade
+        through the last N seconds", and stamping prints with the moment they were
+        processed answers that about the reader rather than about the market: under
+        input loss a batch of prints spanning a minute arrives at once and reads as
+        a minute's range compressed into an instant.
+        """
         key = (venue_id, symbol)
         self._prices[key] = price
         window = self._recent.get(key)
         if window is None:
             window = deque(maxlen=self._cold_start_price_window)
             self._recent[key] = window
-        window.append((self._now_ns(), price))
+        window.append((at_ns, price))
 
     def live_range_fraction(self, venue_id: str, symbol: str, seconds: float):
         """How far this symbol traded through the last `seconds`, as a fraction of price.
@@ -547,7 +556,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_profiles(proposer):
         for trade in trades.payloads():
-            proposer.observe_price(trade.venue_id, trade.symbol, trade.price)
+            proposer.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         for profile in profiles.payloads():
             proposer.observe_symbol_profile(profile)
         for excursion in excursions.payloads():

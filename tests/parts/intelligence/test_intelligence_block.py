@@ -226,7 +226,7 @@ def a_break_detector(established=60, recent=10, minimum=10, step=2.0, jump=0.3, 
 def feed_calm(detector, symbols=("A", "B"), count=60):
     for index in range(count):
         for offset, symbol in enumerate(symbols):
-            detector.observe_price(symbol, 100.0 * (1 + 0.001 * ((index + offset) % 2)))
+            detector.observe_price(symbol, 100.0 * (1 + 0.001 * ((index + offset) % 2)), detector._now_ns())
 
 
 def test_a_spike_is_not_a_break():
@@ -234,7 +234,7 @@ def test_a_spike_is_not_a_break():
     subject = a_break_detector(persistence=3)
     feed_calm(subject)
     for symbol in ("A", "B"):
-        subject.observe_price(symbol, 200.0)
+        subject.observe_price(symbol, 200.0, subject._now_ns())
     assert subject.check("reverting").has_broken is False
 
 
@@ -243,7 +243,7 @@ def test_a_persistent_volatility_step_is_a_break():
     feed_calm(subject, count=80)
     for round_ in range(6):
         for symbol in ("A", "B"):
-            subject.observe_price(symbol, 100.0 * (1 + 0.2 * ((round_ % 2) - 0.5)))
+            subject.observe_price(symbol, 100.0 * (1 + 0.2 * ((round_ % 2) - 0.5)), subject._now_ns())
         subject.check("reverting")
     assert subject.check("reverting").state in (VOLATILITY_STEPPED, CORRELATIONS_CONVERGED)
 
@@ -304,8 +304,8 @@ def test_two_prices_that_trend_together_are_not_thereby_correlated():
     """Two prices both trending up correlate at 0.99 and share no risk."""
     subject = a_cluster_mapper(minimum=5, threshold=0.8)
     for index in range(60):
-        subject.observe_price("A", 100.0 + index + (1.0 if index % 2 else -1.0))
-        subject.observe_price("B", 100.0 + index + (-1.0 if index % 2 else 1.0))
+        subject.observe_price("A", 100.0 + index + (1.0 if index % 2 else -1.0), subject._now_ns())
+        subject.observe_price("B", 100.0 + index + (-1.0 if index % 2 else 1.0), subject._now_ns())
     correlation, _ = subject.correlation_between("A", "B")
     assert correlation < 0, "their returns move opposite even as both prices rise"
 
@@ -314,9 +314,9 @@ def test_symbols_whose_returns_move_together_form_one_cluster():
     subject = a_cluster_mapper(minimum=5, threshold=0.8)
     for index in range(60):
         move = 1.0 if index % 2 else -1.0
-        subject.observe_price("A", 100.0 + move)
-        subject.observe_price("B", 200.0 + move * 2)
-        subject.observe_price("C", 50.0 - move)
+        subject.observe_price("A", 100.0 + move, subject._now_ns())
+        subject.observe_price("B", 200.0 + move * 2, subject._now_ns())
+        subject.observe_price("C", 50.0 - move, subject._now_ns())
     clusters = subject.map()
     grouped = {frozenset(cluster.symbols) for cluster in clusters}
     assert any(len(group) > 1 for group in grouped)
@@ -326,8 +326,8 @@ def test_a_pair_with_too_little_history_is_unmeasured_not_uncorrelated():
     """Treating it as uncorrelated concentrates a book in the symbols nobody has data on."""
     subject = a_cluster_mapper(minimum=50)
     for index in range(10):
-        subject.observe_price("A", 100.0 + index)
-        subject.observe_price("B", 100.0 + index)
+        subject.observe_price("A", 100.0 + index, subject._now_ns())
+        subject.observe_price("B", 100.0 + index, subject._now_ns())
     subject.map()
     assert subject.standing.unmeasured_pairs == 1
 
@@ -336,9 +336,9 @@ def test_a_cluster_reports_its_weakest_link():
     subject = a_cluster_mapper(minimum=5, threshold=0.5)
     for index in range(60):
         move = 1.0 if index % 2 else -1.0
-        subject.observe_price("A", 100.0 + move)
-        subject.observe_price("B", 100.0 + move)
-        subject.observe_price("C", 100.0 + move * (1.0 if index % 4 else -1.0))
+        subject.observe_price("A", 100.0 + move, subject._now_ns())
+        subject.observe_price("B", 100.0 + move, subject._now_ns())
+        subject.observe_price("C", 100.0 + move * (1.0 if index % 4 else -1.0), subject._now_ns())
     clusters = [cluster for cluster in subject.map() if len(cluster.symbols) > 1]
     if clusters:
         assert clusters[0].weakest_correlation <= clusters[0].average_correlation + 1e-9
@@ -421,7 +421,7 @@ def an_anomaly_detector(disagreement=0.01, stale=60.0, minimum_volume=1000.0, mo
 def test_one_venue_moving_alone_is_a_data_problem_until_proven_otherwise():
     """A genuine move arbitrages across venues in seconds."""
     subject = an_anomaly_detector(disagreement=0.01)
-    subject.observe_price(VENUE, SYMBOL, 110.0)
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
     subject.observe_consolidated_price(SYMBOL, 100.0, venues=3)
     subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
     anomaly = subject.check(VENUE, SYMBOL)
@@ -431,14 +431,14 @@ def test_one_venue_moving_alone_is_a_data_problem_until_proven_otherwise():
 
 def test_a_crossed_book_is_not_a_market_state():
     subject = an_anomaly_detector()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_book(VENUE, SYMBOL, best_bid=101.0, best_ask=100.0)
     assert subject.check(VENUE, SYMBOL).anomaly == CROSSED_BOOK
 
 
 def test_the_first_print_after_a_gap_is_the_reconnection():
     subject = an_anomaly_detector()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_feed_gap(VENUE, SYMBOL, True)
     assert subject.check(VENUE, SYMBOL).anomaly == DURING_A_FEED_GAP
 
@@ -453,8 +453,8 @@ def test_a_stale_feed_is_detected():
 
 def test_a_move_without_volume_is_a_print_not_a_trade():
     subject = an_anomaly_detector(minimum_volume=10_000.0, move=0.01)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 105.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 105.0, subject._now_ns())
     subject.observe_consolidated_price(SYMBOL, 105.0, venues=3)
     subject.observe_volume(VENUE, SYMBOL, 5.0)
     assert subject.check(VENUE, SYMBOL).anomaly == MOVE_WITHOUT_VOLUME
@@ -463,7 +463,7 @@ def test_a_move_without_volume_is_a_print_not_a_trade():
 def test_a_single_venue_symbol_is_reported_as_uncheckable_not_clean():
     """A single-venue symbol is where a bad feed goes unnoticed."""
     subject = an_anomaly_detector()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_consolidated_price(SYMBOL, 100.0, venues=1)
     anomaly = subject.check(VENUE, SYMBOL)
     assert anomaly.anomaly == CANNOT_CROSS_CHECK
@@ -472,7 +472,7 @@ def test_a_single_venue_symbol_is_reported_as_uncheckable_not_clean():
 
 def test_an_anomaly_is_never_something_to_trade_on():
     subject = an_anomaly_detector()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_feed_gap(VENUE, SYMBOL, True)
     assert subject.check(VENUE, SYMBOL).should_be_traded_on is False
 

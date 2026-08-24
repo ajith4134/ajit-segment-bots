@@ -157,10 +157,10 @@ def teach_normal_moves(qualifier, fraction=0.04, count=30):
 
 def run_a_move(qualifier, steps, start=100.0):
     price = start
-    qualifier.observe_price(VENUE, SYMBOL, price)
+    qualifier.observe_price(VENUE, SYMBOL, price, qualifier._now_ns())
     for step in steps:
         price *= 1.0 + step
-        qualifier.observe_price(VENUE, SYMBOL, price)
+        qualifier.observe_price(VENUE, SYMBOL, price, qualifier._now_ns())
     return price
 
 
@@ -431,7 +431,7 @@ def test_the_three_views_are_reported_separately():
     price = 100.0
     for _ in range(10):
         price *= 1.002
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_price_forecast(VENUE, SYMBOL, 0.02)
     reading = subject.estimate(a_follow(done=0.5))
     assert len(reading.estimates) == 3
@@ -445,7 +445,7 @@ def test_disagreeing_views_report_the_smallest_and_say_they_disagree():
     price = 100.0
     for _ in range(10):
         price *= 1.0001
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_price_forecast(VENUE, SYMBOL, 0.09)
     reading = subject.estimate(a_follow(done=0.1))
     assert reading.agreement == ESTIMATES_DISAGREE
@@ -465,7 +465,7 @@ def test_a_single_view_is_marked_as_uncheckable():
 def test_a_move_that_has_stopped_making_progress_has_nothing_left_from_decay():
     subject = an_estimator(minimum=5, lookback=5)
     for _ in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     reading = subject.estimate(a_follow())
     assert reading.estimates.get("the-move's-own-rate-of-progress") == 0.0
 
@@ -478,7 +478,7 @@ def test_an_estimate_never_exceeds_the_largest_move_ever_recorded():
     price = 100.0
     for _ in range(10):
         price *= 1.05
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_price_forecast(VENUE, SYMBOL, 5.0)
     reading = subject.estimate(a_follow(done=0.1))
     assert reading.remaining_fraction <= 0.03
@@ -659,7 +659,7 @@ def a_planner(trail_multiple=1.5, minimum_trail=0.002, tighten_after=0.02, tight
 
 def a_prepared_planner(retracement=0.01, **kwargs):
     subject = a_planner(**kwargs)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_retracement_profile(
         RetracementProfile(venue_id=VENUE, symbol=SYMBOL,
                            normal_retracement_fraction=retracement,
@@ -687,7 +687,7 @@ def test_the_trail_width_comes_from_what_this_symbol_retraces():
 
 def test_a_symbol_with_no_retracement_record_gets_no_plan():
     subject = a_planner()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     assert subject.plan(a_follow(), a_remaining())[1] == NO_EXCURSION_PROFILE
 
 

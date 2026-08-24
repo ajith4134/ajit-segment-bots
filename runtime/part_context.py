@@ -122,6 +122,7 @@ class PartContext:
                     observed_at_ns=health.observed_at_ns,
                     refused_control_frame=health.refused_control_frame,
                     input_loss=tuple(sorted(self.bus.input_loss().items())),
+                    standing=health.standing,
                 )
             ],
         )

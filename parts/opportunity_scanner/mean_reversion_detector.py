@@ -70,6 +70,7 @@ class MeanReversionDetector:
         minimum_volatility_fraction: float,
         horizon_seconds: float,
         calibrator: SignalCalibrator,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if z_threshold <= 0:
@@ -81,16 +82,23 @@ class MeanReversionDetector:
         self._horizon = horizon_seconds
         self._calibrator = calibrator
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = DetectorStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         self.standing.observations += 1
         window = self._prices.get((venue_id, symbol))
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[(venue_id, symbol)] = window
-        window.observe(price)
+        window.observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
     def observe_outcome(self, regime: str, reverted: bool) -> None:
@@ -225,13 +233,16 @@ def start_part(context) -> int:
             half_life_observations=context.number("signal_half_life_observations"),
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
 
     def read_prices_and_regimes(_detector):
         rules.payloads()
         touched = set()
         for trade in trades.payloads():
-            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            detector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
             touched.add((trade.venue_id, trade.symbol))
         by_symbol = regimes.mapping()
         return tuple(by_symbol[key] for key in sorted(touched) if key in by_symbol)

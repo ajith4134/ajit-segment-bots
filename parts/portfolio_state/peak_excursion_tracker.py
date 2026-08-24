@@ -57,6 +57,7 @@ class PeakExcursionTracker:
 
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
+        self._last_observed_at_ns: dict[tuple[str, str], int] = {}
         self._basis: dict[tuple[str, str], tuple[float, float, str]] = {}
         self._extremes: dict[tuple[str, str], list[float]] = {}
         self._samples: dict[tuple[str, str], int] = {}
@@ -77,7 +78,20 @@ class PeakExcursionTracker:
             )
         self.standing.positions_tracked = len(self._basis)
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> PeakExcursion | None:
+    def observe_price(
+        self, venue_id: str, symbol: str, price: float, observed_at_ns: int
+    ) -> PeakExcursion | None:
+        """One print against an open position's cost basis.
+
+        `observed_at_ns` is the venue's own time for the print and has no default.
+        Until 2026-08-24 the excursion was stamped with this part's clock instead,
+        so a price that reached it late -- the bus drops rather than blocks, so
+        prints do arrive late -- was recorded as the market of the moment it was
+        read. Eight and a half million excursions are the record stop placement and
+        exit timing are learned from, and every one of them dated by when it was
+        processed rather than when it happened is a record of a market that never
+        existed in that order.
+        """
         self.standing.prices_seen += 1
         key = (venue_id, symbol)
         basis = self._basis.get(key)
@@ -93,6 +107,7 @@ class PeakExcursionTracker:
         if unrealised < extremes[1]:
             extremes[1], extremes[3] = unrealised, price
         self._samples[key] = self._samples.get(key, 0) + 1
+        self._last_observed_at_ns[key] = observed_at_ns
 
         return PeakExcursion(
             venue_id=venue_id,
@@ -103,7 +118,7 @@ class PeakExcursionTracker:
             worst_price=extremes[3],
             current_unrealised=unrealised,
             samples=self._samples[key],
-            observed_at_ns=self._now_ns(),
+            observed_at_ns=observed_at_ns,
         )
 
     def read(self, venue_id: str, symbol: str) -> PeakExcursion | None:
@@ -113,7 +128,12 @@ class PeakExcursionTracker:
             return None
         return PeakExcursion(
             venue_id, symbol, extremes[0], extremes[1], extremes[2], extremes[3],
-            extremes[0], self._samples.get(key, 0), self._now_ns(),
+            extremes[0], self._samples.get(key, 0),
+            # When the market last printed for this position, not when the reader
+            # happened to ask: an excursion describes the market, and dating it by
+            # the moment it was read would make a position nobody is pricing look
+            # freshly measured.
+            self._last_observed_at_ns.get(key, self._now_ns()),
         )
 
 
@@ -144,8 +164,8 @@ def run_peak_excursion_tracker(
         for position in positions:
             tracker.observe_position(position)
         excursions = []
-        for venue_id, symbol, price in prices:
-            excursion = tracker.observe_price(venue_id, symbol, price)
+        for venue_id, symbol, price, observed_at_ns in prices:
+            excursion = tracker.observe_price(venue_id, symbol, price, observed_at_ns)
             if excursion is not None:
                 excursions.append(excursion)
         publish_excursion(tuple(excursions))
@@ -186,7 +206,8 @@ def start_part(context) -> int:
         # -- so the input is read and named, not silently half-applied.
         bases.payloads()
         prices = tuple(
-            (trade.venue_id, trade.symbol, trade.price) for trade in trades.payloads()
+            (trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+            for trade in trades.payloads()
         )
         return tuple(positions.payloads()), prices
 

@@ -127,3 +127,37 @@ def read_captured_trades(read_captured_payloads):
         return trades
 
     return read
+
+
+@pytest.fixture(scope="session")
+def arriving_now():
+    """Return a restamper: real captured trades, dated as though just printed.
+
+    The prices, sizes, sides and the spacing between prints are the venue's own,
+    and none of it is altered -- that is what RL-063 is for. What is restamped is
+    only when each print says it happened.
+
+    This is the seam RL-071 names. A part that judges how old a price is compares
+    the print's time against now, so a fixture recorded this morning, or on
+    2026-08-22, is correctly refused as stale when replayed this afternoon. The
+    live spine never needs this: its prints carry the market's own time and are
+    genuinely current. Only a replay has to say when it is pretending to be, and
+    saying so here, once, keeps the pretence out of the parts.
+
+    Restamp at each publish rather than once per run: an integration test that
+    takes minutes would otherwise watch its own fixture age past every bound
+    halfway through.
+    """
+    import dataclasses
+    import time
+
+    def restamp(trades):
+        if not trades:
+            return trades
+        shift_ns = time.time_ns() - max(trade.venue_time_ns for trade in trades)
+        return [
+            dataclasses.replace(trade, venue_time_ns=trade.venue_time_ns + shift_ns)
+            for trade in trades
+        ]
+
+    return restamp

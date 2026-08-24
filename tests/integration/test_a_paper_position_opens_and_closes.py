@@ -170,9 +170,13 @@ class TheClosingChain:
             self.exit_orders_sent.append(action)
             self.book.simulate(**as_paper_order(as_order_request(action)))
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        """One live price: excursions move, and the book tests what is resting."""
-        self.excursions.observe_price(venue_id, symbol, price)
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One live print: excursions move, and the book tests what is resting.
+
+        The print's own time travels with it, because an excursion is dated by the
+        market that made it rather than by the moment this chain processed it.
+        """
+        self.excursions.observe_price(venue_id, symbol, price, observed_at_ns=at_ns)
         for result in self.book.evaluate_resting({(venue_id, symbol): price}):
             if result.did_fill:
                 excursion = self.excursions.read(venue_id, symbol)
@@ -259,7 +263,7 @@ def test_a_paper_position_opens_rests_its_exits_and_closes_on_a_real_price(real_
 
     # -- the market runs, and reaches the target --------------------------------
     for trade in real_trades:
-        chain.observe_price(trade.venue_id, trade.symbol, trade.price)
+        chain.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
         if chain.closed_trades:
             break
 
@@ -319,7 +323,7 @@ def test_the_stop_closes_the_trade_when_the_market_goes_the_other_way(real_trade
     assert chain.book.standing.orders_on_the_book == 2
 
     for trade in real_trades:
-        chain.observe_price(trade.venue_id, trade.symbol, trade.price)
+        chain.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
         if chain.closed_trades:
             break
 

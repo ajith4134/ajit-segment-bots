@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
 from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -39,6 +40,7 @@ FIRED = "fired"
 NOT_STRETCHED = "spread-not-stretched-far-enough"
 PAIR_NOT_COINTEGRATED = "pair-is-not-currently-cointegrated"
 NO_PRICES = "no-current-prices-for-both-legs"
+A_LEG_IS_STALE = "one-leg's-last-price-is-too-old-to-price-the-spread-with"
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ class SpreadStanding:
     not_stretched: int = 0
     not_cointegrated: int = 0
     no_prices: int = 0
+    stale_leg: int = 0
     outcomes_learned: int = 0
     widest_z: float = 0.0
 
@@ -72,6 +75,8 @@ class SpreadReversionDetector:
         minimum_observations: int,
         horizon_seconds: float,
         calibrator: SignalCalibrator,
+        price_staleness: PriceStalenessEstimator | None = None,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if z_threshold <= 0:
@@ -81,13 +86,22 @@ class SpreadReversionDetector:
         self._minimum = minimum_observations
         self._horizon = horizon_seconds
         self._calibrator = calibrator
+        # A spread is two prices subtracted, and they arrive separately. If either
+        # leg is old the difference is not a spread that ever existed -- and a
+        # stale leg produces exactly the shape this detector exists to fire on,
+        # because a price that stopped moving while the other leg ran looks like
+        # the widest stretch it has ever seen. Both bounds are the caller's to
+        # state; this part invents neither (RL-061).
+        self._price_staleness = price_staleness
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._now_ns = now_ns
         self._prices: dict[tuple[str, str], float] = {}
         self._spreads: dict[tuple[str, str, str], RollingWindow] = {}
         self.standing = SpreadStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One leg's print, with the venue's own time for it."""
+        self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=at_ns)
 
     def observe_outcome(self, regime: str, reverted: bool) -> None:
         self._calibrator.observe_outcome(PART_ID, regime, reverted)
@@ -109,13 +123,28 @@ class SpreadReversionDetector:
             self.standing.no_prices += 1
             return None, NO_PRICES
 
-        spread = left - pair.hedge_ratio * right
+        if self._price_staleness is not None:
+            at = self._now_ns()
+            for symbol, observed in (
+                (pair.left_symbol, left), (pair.right_symbol, right),
+            ):
+                bound = self._price_staleness.believable_age_seconds(pair.venue_id, symbol)
+                if observed.age_seconds(at) > bound.value:
+                    self.standing.stale_leg += 1
+                    return None, A_LEG_IS_STALE
+
+        spread = left.price - pair.hedge_ratio * right.price
+        # The spread is as recent as its older leg, not as its newer one: a
+        # difference is only as current as the least current thing in it.
+        spread_at_ns = min(left.observed_at_ns, right.observed_at_ns)
         key = (pair.venue_id, pair.left_symbol, pair.right_symbol)
         window = self._spreads.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+            )
             self._spreads[key] = window
-        window.observe(spread)
+        window.observe(spread, spread_at_ns)
 
         z = window.z_score(spread, self._minimum)
         if z is None:
@@ -186,6 +215,7 @@ def describe_spreads(detector: SpreadReversionDetector) -> dict:
         "not_stretched": detector.standing.not_stretched,
         "pair_not_cointegrated": detector.standing.not_cointegrated,
         "no_prices": detector.standing.no_prices,
+        "stale_leg": detector.standing.stale_leg,
         "outcomes_learned": detector.standing.outcomes_learned,
         "widest_z": detector.standing.widest_z,
     }
@@ -214,6 +244,7 @@ def run_spread_reversion_detector(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_spreads(detector),
     )
 
 
@@ -236,6 +267,7 @@ def start_part(context) -> int:
     )
     publish_candidates = context.bus.publisher_for("entry-candidate")
 
+    price_staleness = price_staleness_from(context)
     detector = SpreadReversionDetector(
         z_threshold=context.number("spread_reversion_z_threshold"),
         window_length=int(context.number("spread_reversion_window_length")),
@@ -247,11 +279,18 @@ def start_part(context) -> int:
             half_life_observations=context.number("signal_half_life_observations"),
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
+        price_staleness=price_staleness,
+        maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
 
     def read_pairs(_detector):
         for trade in trades.payloads():
-            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            detector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
+            price_staleness.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         return pairs.values()
 
     return run_spread_reversion_detector(

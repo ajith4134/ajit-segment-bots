@@ -1082,7 +1082,7 @@ def probe_parts_alive(now_ns: int | None = None) -> ProbeResult:
     made on data that is not what the market is saying now.
     """
     runtime = load_settings_document(settings_directory() / "runtime.toml", "runtime")
-    path = pathlib.Path(str(runtime.read_value("heartbeat_table_path"))).expanduser()
+    path = heartbeat_table_path()
     silent_after = float(runtime.read_value("heartbeat_silent_after_seconds"))
     document = read_heartbeat_table_file(path)
     if document is None:
@@ -1172,6 +1172,11 @@ def probe_decision_freshness(entries: list[dict]) -> ProbeResult:
     journalled on the order, and the price the book filled it at. No part has to
     report anything and no tape has to be walked -- the gap between what the bot
     thought the market was and what it actually got is the whole measurement.
+
+    The fill has to be the right one. A fill is matched to its own order by trade
+    id and direction, and only the first counts: an exit fill compared against the
+    entry it closes measures the trade's profit, and a later partial measures how
+    far the order walked the book. Neither is what the bot believed the market was.
     """
     scan = FreshnessScan()
     for entry in entries:
@@ -1182,26 +1187,52 @@ def probe_decision_freshness(entries: list[dict]) -> ProbeResult:
 class FreshnessScan:
     """`probe_decision_freshness`'s scan, one entry at a time.
 
-    Holds one decided price per (venue, symbol) and the most recent drifts --
-    only as many as the probe ages -- rather than every journal entry.
+    Holds one decided order per trade id and the most recent drifts -- only as
+    many as the probe ages -- rather than every journal entry.
+
+    **A fill is matched to its own order, by trade id and by side.** Keyed on the
+    symbol instead, as this was until 2026-08-24, a closing fill is compared
+    against the entry it closes: the two share a trade id and differ in side, and
+    the gap between them is the trade's profit or loss. That made a winning trade
+    read as a decision taken 4% away from the market, which is what this tile
+    calls badly stale -- so the one measurement built to catch a stale decision
+    reported ordinary successful trades as the failure.
+
+    Only the first fill of an order counts. Later partials are the order working
+    through the book, which is slippage: real, worth measuring, and not this.
     """
 
+    ENTRY_FILL = "the first fill on this order, in the order's own direction"
+
     def __init__(self) -> None:
-        self._decided: dict = {}
+        self._orders: dict = {}
+        self._measured: set = set()
         self._drifts: list = []
 
     def observe(self, entry: dict) -> None:
         payload = entry.get("payload") or {}
-        symbol = payload.get("symbol")
-        if entry.get("kind") == "bounded-order" and payload.get("entry_price"):
-            self._decided[(payload.get("venue_id"), symbol)] = float(payload["entry_price"])
-        elif entry.get("kind") == "fill" and payload.get("price"):
-            at = self._decided.get((payload.get("venue_id"), symbol))
-            if at and at > 0:
-                filled = float(payload["price"])
-                self._drifts.append((abs(filled - at) / at, symbol, at, filled))
-                if len(self._drifts) > MOST_DECISIONS_AGED:
-                    self._drifts.pop(0)
+        kind = entry.get("kind")
+        trade_id = payload.get("trade_id")
+        if kind == "bounded-order" and payload.get("entry_price") and trade_id:
+            self._orders[trade_id] = (
+                float(payload["entry_price"]), payload.get("side"), payload.get("symbol")
+            )
+        elif kind == "fill" and payload.get("price") and trade_id:
+            order = self._orders.get(trade_id)
+            if order is None or trade_id in self._measured:
+                return
+            decided, side, symbol = order
+            if side is not None and payload.get("side") != side:
+                # The closing fill. Its distance from the entry is the trade's
+                # result, and reading it here is how a profit became a defect.
+                return
+            if decided <= 0:
+                return
+            self._measured.add(trade_id)
+            filled = float(payload["price"])
+            self._drifts.append((abs(filled - decided) / decided, symbol, decided, filled))
+            if len(self._drifts) > MOST_DECISIONS_AGED:
+                self._drifts.pop(0)
 
     def result(self) -> ProbeResult:
         drifts = self._drifts
@@ -1217,15 +1248,144 @@ class FreshnessScan:
         worst, symbol, at, filled = recent[0]
         median = recent[len(recent) // 2][0]
         proof = (
-            f"{len(recent)} most recent fill(s) against the price their decision was made "
-            f"at: median gap {median:.2%}, worst {worst:.2%} on {symbol}, decided at {at:g} "
-            f"and filled at {filled:g}"
+            f"{len(recent)} most recent opening fill(s) against the price their own decision "
+            f"was made at, matched by trade id and direction: median gap {median:.2%}, worst "
+            f"{worst:.2%} on {symbol}, decided at {at:g} and filled at {filled:g}"
         )
         if worst > BADLY_STALE_DECISION:
             return ProbeResult("Decision freshness", FAILING, f"worst {worst:.1%} adrift", proof)
         if worst > DRIFTED_DECISION:
             return ProbeResult("Decision freshness", WAITING, f"worst {worst:.1%} adrift", proof)
         return ProbeResult("Decision freshness", OK, f"worst {worst:.2%} adrift", proof)
+
+
+def heartbeat_table_path() -> pathlib.Path:
+    """Where heartbeat-collector writes, from the settings that name it."""
+    runtime = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    return pathlib.Path(str(runtime.read_value("heartbeat_table_path"))).expanduser()
+
+
+def probe_stale_price_refusals(document) -> ProbeResult:
+    """How many decisions each part declined because the price it had was too old.
+
+    The counter that closes the loop on 2026-08-23. A part that refuses a stale
+    price is doing the right thing, and a part that refuses every one of them is a
+    bound nothing can satisfy -- which stops the bot while looking, from outside,
+    exactly like a market with nothing worth trading. Both are the same number,
+    and the difference is whether anything was chosen alongside the refusals.
+
+    Read from the standing every part now reports on its own health, through the
+    table heartbeat-collector writes. Nothing here asks a part a question: it is
+    the part's own count of its own refusals.
+    """
+    label = "Stale prices refused"
+    if not document:
+        return ProbeResult(
+            label, UNMEASURED, "no heartbeat table",
+            "heartbeat-collector has not written a table, so no part's own counters "
+            "have been read by anything",
+        )
+    refusals, chosen, by_part = 0.0, 0.0, []
+    reported_any = False
+    for beat in document.get("heartbeats", ()):
+        standing = beat.get("standing") or {}
+        if standing:
+            reported_any = True
+        refused = float(standing.get("refused_for_a_stale_price", 0) or 0)
+        refused += float(standing.get("refused_for_no_price_ever", 0) or 0)
+        chosen += float(standing.get("chosen", 0) or 0)
+        if refused:
+            refusals += refused
+            by_part.append((refused, beat.get("part_id")))
+    if not reported_any:
+        return ProbeResult(
+            label, UNMEASURED, "no part reported a standing",
+            "every part in the table reported health without any of its own counters; "
+            "a counter nothing reported is not a count of zero",
+        )
+    if not refusals:
+        return ProbeResult(
+            label, OK, "none refused",
+            "no part has refused a decision for the age of the price it had",
+        )
+    by_part.sort(reverse=True)
+    detail = ", ".join(f"{part_id} {count:.0f}" for count, part_id in by_part[:4])
+    proof = f"{refusals:.0f} refusal(s) for a price too old to act on: {detail}"
+    if chosen <= 0:
+        return ProbeResult(
+            label, FAILING, f"{refusals:.0f} refused, none placed",
+            proof + ". Alongside them nothing was chosen at all, so the bound is "
+            "refusing everything rather than the stale ones",
+        )
+    return ProbeResult(label, OK, f"{refusals:.0f} refused", proof)
+
+
+class RefusedDecisionScan:
+    """How many decisions to trade actually reached the book, one entry at a time.
+
+    Between a decision and an order stand every part that can say no: the
+    instrument selector, the sizer, the risk limiters, the capital bounds. Each of
+    those refusals is legitimate on its own, and none of them is journalled -- so
+    a system that had quietly stopped being able to trade at all would show on
+    this board as an absence of trades, which is exactly what a quiet market looks
+    like. That is the reassurance Rule 8 exists to refuse.
+
+    Identity is the decision -- venue, symbol, side, action -- and not the message.
+    The arbiter republishes a standing opinion every tick, so one decision arrives
+    thousands of times; counting messages would report a bot refusing thousands of
+    trades a minute while it was in fact holding one view.
+
+    Standing aside is not counted. It is a decision not to trade, and the opposite
+    of a trade the system could not place.
+
+    No threshold is invented. Refusals are ordinary, the number is shown, and the
+    only verdict passed is on the unambiguous case: decisions were made, and not
+    one of them reached the book.
+    """
+
+    STAND_ASIDE = "stand-aside"
+
+    def __init__(self) -> None:
+        self._decided: set = set()
+        self._reached_the_book: set = set()
+
+    def observe(self, entry: dict) -> None:
+        payload = entry.get("payload") or {}
+        kind = entry.get("kind")
+        if kind == "trade-intent":
+            if payload.get("action") == self.STAND_ASIDE:
+                return
+            venue, symbol = payload.get("venue_id"), payload.get("symbol")
+            side, action = payload.get("side"), payload.get("action")
+            if symbol and action:
+                self._decided.add(f"{venue}|{symbol}|{side}|{action}")
+        elif kind == "bounded-order":
+            intent_id = payload.get("intent_id")
+            if intent_id:
+                self._reached_the_book.add(intent_id)
+
+    def result(self) -> ProbeResult:
+        label = "Decisions reaching the book"
+        decided = len(self._decided)
+        if not decided:
+            return ProbeResult(
+                label, WAITING, "no actionable decision yet",
+                "every trade-intent on the ledger so far says stand aside, or none has been "
+                "recorded; a bot that has not decided to trade has refused nothing",
+            )
+        placed = len(self._decided & self._reached_the_book)
+        proof = (
+            f"{placed} of {decided} distinct decision(s) on the ledger became an order. "
+            f"A decision is venue, symbol, side and action, so one view republished every "
+            f"tick counts once"
+        )
+        if placed == 0:
+            return ProbeResult(
+                label, FAILING, f"none of {decided} placed", proof
+                + ". Every decision was refused between the brain and the book -- which reads "
+                "on a board as an absence of trades and is not one",
+            )
+        return ProbeResult(label, OK, f"{placed} of {decided} placed", proof)
 
 
 def probe_chain_continuity_from_reports(per_file: dict) -> ProbeResult:
@@ -1297,11 +1457,13 @@ def run_all_probes():
     collector = TradeCollector(live_from_ns=live_from_ns, keep_unfilled=False)
     noticed = NoticedScan(live_from_ns)
     freshness = FreshnessScan()
+    refused = RefusedDecisionScan()
     closed_entries: list[dict] = []
     for entry in heapq.merge(*streams, key=lambda entry: entry.get("recorded_at_ns", 0)):
         collector.observe(entry)
         noticed.observe(entry)
         freshness.observe(entry)
+        refused.observe(entry)
         if entry.get("kind") == CLOSED_TRADE_KIND:
             closed_entries.append(entry)
 
@@ -1324,6 +1486,8 @@ def run_all_probes():
         probe_learning(),
         probe_exit_plans(),
         freshness.result(),
+        refused.result(),
+        probe_stale_price_refusals(read_heartbeat_table_file(heartbeat_table_path())),
     ]
     return results, trades, journal_path, live_from_ns, closed
 

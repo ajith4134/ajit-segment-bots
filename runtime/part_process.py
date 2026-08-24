@@ -66,6 +66,13 @@ class PartHealth:
     # corrupts their answer -- a part that lost input and stayed quiet would be
     # reporting an answer it cannot support.
     input_loss: tuple[tuple[str, int], ...] = ()
+    # The countable part of what this part says about its own work: how many times
+    # it refused, fired, cleared a window, fell back to a prior. Carried because
+    # every part in this system already computes exactly that in a describe_*
+    # function and, until 2026-08-24, nothing read one -- so a part that had begun
+    # refusing every decision looked identical to a part with nothing to decide.
+    # Numbers only, and capped: see countable_standing.
+    standing: tuple[tuple[str, float], ...] = ()
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:
@@ -112,6 +119,36 @@ def wait_for_control_or_data(control_socket, input_descriptors, timeout_seconds:
     )
 
 
+# How many of a part's own counters ride on one health report. The bus refuses a
+# datagram over 128 KiB and health is published on every interval by every part,
+# so this is a ceiling on what one part can spend of that. Thirty-two is more
+# counters than any describe_* in this system currently produces.
+MOST_STANDING_COUNTERS = 32
+
+
+def countable_standing(standing) -> tuple[tuple[str, float], ...]:
+    """The numeric facts in a part's standing, flattened, sorted and capped.
+
+    Numbers only. A part's standing also holds names, reasons and per-symbol maps
+    that grow with the universe, and none of those belong on a channel every part
+    writes to on every interval. Left behind rather than truncated: a number that
+    arrived half-serialised is worse than one that did not arrive.
+
+    Sorted by name so the same keys survive from one report to the next -- a cap
+    that dropped a different counter each time would make a rising count look like
+    a falling one.
+    """
+    if not standing:
+        return ()
+    numeric = []
+    for name, value in standing.items():
+        if isinstance(value, bool):
+            numeric.append((name, float(value)))
+        elif isinstance(value, (int, float)):
+            numeric.append((name, float(value)))
+    return tuple(sorted(numeric)[:MOST_STANDING_COUNTERS])
+
+
 def run_part(
     declaration: PartDeclaration,
     control_socket,
@@ -121,6 +158,7 @@ def run_part(
     rate_ratio: float = FULL_RATE_RATIO,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = NO_TICK_FLOOR,
+    read_standing: Callable[[], dict] | None = None,
 ) -> int:
     """Run one part until the governor turns it off, then return.
 
@@ -202,6 +240,7 @@ def run_part(
                     staleness_seconds=staleness,
                     observed_at_ns=time.time_ns(),
                     refused_control_frame=refused_control_frame,
+                    standing=countable_standing(read_standing() if read_standing else None),
                 )
             )
             last_health_at = now

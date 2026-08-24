@@ -109,11 +109,11 @@ def labels_from_real_prices(prices, direction=LONG, detector=DETECTOR, wanted=40
         move_fraction=MOVE_FRACTION, maximum_open_claims=100, now_ns=clock
     )
     collected = []
-    labeller.observe_price(VENUE, SYMBOL, prices[0])
+    labeller.observe_price(VENUE, SYMBOL, prices[0], clock.at_ns)
     labeller.observe_candidate(a_claim(direction, detector))
     for price in prices[1:]:
         clock.advance_seconds(0.1)
-        labeller.observe_price(VENUE, SYMBOL, price)
+        labeller.observe_price(VENUE, SYMBOL, price, clock.at_ns)
         collected.extend(labeller.resolve_settled_claims())
         if len(collected) >= wanted:
             break

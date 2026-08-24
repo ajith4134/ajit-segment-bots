@@ -97,6 +97,7 @@ class RegimeClassifier:
         minimum_observations: int,
         trending_above: float,
         reverting_below: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not reverting_below < RANDOM_WALK_HURST < trending_above:
@@ -109,12 +110,23 @@ class RegimeClassifier:
         self._trending_above = trending_above
         self._reverting_below = reverting_below
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = ClassifierStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, with the venue's own time for it.
+
+        A regime is a statement about a continuous stretch of market. Computed
+        across a hole in the feed it describes two stretches with the reconnect
+        between them read as a move, which is how a quiet market and a dead socket
+        come to be classified as a breakout.
+        """
         self.standing.observations += 1
-        self._window_for((venue_id, symbol)).observe(price)
+        self._window_for((venue_id, symbol)).observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
     def classify(self, venue_id: str, symbol: str) -> MarketRegime:
@@ -161,7 +173,9 @@ class RegimeClassifier:
     def _window_for(self, key) -> RollingWindow:
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+            )
             self._prices[key] = window
         return window
 
@@ -210,8 +224,8 @@ def run_regime_classifier(
         # goes out once per health interval, so a consumer started later holds
         # every symbol within a second.
         touched = set()
-        for venue_id, symbol, price in read_prices():
-            classifier.observe_price(venue_id, symbol, price)
+        for venue_id, symbol, price, at_ns in read_prices():
+            classifier.observe_price(venue_id, symbol, price, at_ns)
             touched.add((venue_id, symbol))
         now = _time.monotonic()
         if now - last_full_publish[0] >= health_interval_seconds:
@@ -251,7 +265,8 @@ def start_part(context) -> int:
 
     def read_prices():
         return tuple(
-            (trade.venue_id, trade.symbol, trade.price) for trade in trades.payloads()
+            (trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+            for trade in trades.payloads()
         )
 
     return run_regime_classifier(
@@ -260,6 +275,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("regime_minimum_observations")),
             trending_above=context.number("regime_trending_hurst_above"),
             reverting_below=context.number("regime_reverting_hurst_below"),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
         ),
         control_socket=context.control_socket,
         read_prices=read_prices,

@@ -431,3 +431,53 @@ def test_a_part_holding_its_floor_is_still_switchable(one_inbox):
 
     assert not thread.is_alive(), "the part did not stop while holding its tick floor"
     assert took < long_floor, f"switching off waited out the floor: {took:.2f}s"
+
+
+# ---- what a part says about its own work -------------------------------------
+
+def test_a_standing_is_flattened_to_countable_facts():
+    """Health carries numbers, not a part's whole inner state.
+
+    The bus refuses a datagram over 128 KiB, and one part's standing already holds
+    a per-symbol map that would grow with the universe. So what rides on health is
+    the countable part of it: how many times this part refused, lost, cleared or
+    fired. A dict, a string or a nested structure is left behind rather than
+    truncated, because a number that arrived half-serialised is worse than one
+    that did not arrive.
+    """
+    from runtime.part_process import countable_standing
+
+    flattened = dict(countable_standing({
+        "part_id": "instrument-selector",
+        "refused_for_a_stale_price": 12,
+        "chosen": 481,
+        "widest_z": 3.25,
+        "is_learning": True,
+        "refused_by_reason": {"nothing-listed": 3},
+        "price_staleness": {"believable_age_seconds": {"binance-usdm|BTCUSDT": 8.6}},
+    }))
+
+    assert flattened == {
+        "refused_for_a_stale_price": 12.0,
+        "chosen": 481.0,
+        "widest_z": 3.25,
+        "is_learning": 1.0,
+    }
+
+
+def test_a_standing_is_capped_so_one_part_cannot_fill_a_datagram():
+    from runtime.part_process import countable_standing
+
+    huge = {f"counter_{index}": index for index in range(500)}
+    flattened = countable_standing(huge)
+
+    assert len(flattened) == 32
+    assert flattened == tuple(sorted(flattened)), "capped by name, so the same keys survive twice"
+
+
+def test_a_part_with_nothing_to_say_about_itself_says_nothing():
+    from runtime.part_process import countable_standing
+
+    assert countable_standing(None) == ()
+    assert countable_standing({}) == ()
+    assert countable_standing({"part_id": "x", "notes": "words"}) == ()

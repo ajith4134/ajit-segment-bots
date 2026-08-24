@@ -25,6 +25,7 @@ from parts.learning_loop.signal_outcome_labeller import (
     REFUSED_ALREADY_OPEN,
     REFUSED_AT_CAPACITY,
     REFUSED_NO_PRICE,
+    REFUSED_STALE_PRICE,
     SignalOutcomeLabeller,
     describe_labelling,
 )
@@ -130,14 +131,14 @@ def test_a_move_in_the_claimed_direction_labels_the_setup_right(real_prices):
     clock = Clock()
     labeller = a_labeller(clock)
     opening_price = real_prices[0]
-    labeller.observe_price(VENUE, SYMBOL, opening_price)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
 
     claim, reason = labeller.observe_candidate(a_claim(LONG))
     assert reason == CLAIM_OPENED
     assert claim is not None
 
     clock.advance_seconds(1.0)
-    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.1))
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.1), clock.at_ns)
     labels = labeller.resolve_settled_claims()
 
     assert len(labels) == 1
@@ -158,11 +159,11 @@ def test_a_move_against_the_claim_labels_the_setup_wrong(real_prices):
     clock = Clock()
     labeller = a_labeller(clock)
     opening_price = real_prices[0]
-    labeller.observe_price(VENUE, SYMBOL, opening_price)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
     labeller.observe_candidate(a_claim(LONG))
 
     clock.advance_seconds(1.0)
-    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 - MOVE_FRACTION * 1.1))
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 - MOVE_FRACTION * 1.1), clock.at_ns)
     labels = labeller.resolve_settled_claims()
 
     assert [label.labels for label in labels] == [{THE_SETUP_WAS_RIGHT: False}]
@@ -175,10 +176,10 @@ def test_a_short_claim_is_right_when_the_price_falls(real_prices):
     clock = Clock()
     labeller = a_labeller(clock)
     opening_price = real_prices[0]
-    labeller.observe_price(VENUE, SYMBOL, opening_price)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
     labeller.observe_candidate(a_claim(SHORT))
 
-    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 - MOVE_FRACTION * 1.1))
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 - MOVE_FRACTION * 1.1), clock.at_ns)
     labels = labeller.resolve_settled_claims()
 
     assert [label.labels for label in labels] == [{THE_SETUP_WAS_RIGHT: True}]
@@ -189,13 +190,13 @@ def test_a_quiet_market_produces_no_label_at_all(real_prices):
     clock = Clock()
     labeller = a_labeller(clock)
     opening_price = real_prices[0]
-    labeller.observe_price(VENUE, SYMBOL, opening_price)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
     labeller.observe_candidate(a_claim())
 
     # Real prices, drifting less than the barrier.
     for price in real_prices[:50]:
         nudged = opening_price * (1 + (price / opening_price - 1) * 0.01)
-        labeller.observe_price(VENUE, SYMBOL, nudged)
+        labeller.observe_price(VENUE, SYMBOL, nudged, clock.at_ns)
 
     clock.advance_seconds(HORIZON_SECONDS + 1)
     labels = labeller.resolve_settled_claims()
@@ -212,12 +213,12 @@ def test_a_claim_is_labelled_when_the_barrier_is_hit_not_when_the_horizon_ends(r
     clock = Clock()
     labeller = a_labeller(clock)
     opening_price = real_prices[0]
-    labeller.observe_price(VENUE, SYMBOL, opening_price)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
     labeller.observe_candidate(a_claim(LONG))
 
     clock.advance_seconds(2.0)
-    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.2))
-    labeller.observe_price(VENUE, SYMBOL, opening_price)  # gave it all back
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.2), clock.at_ns)
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)  # gave it all back
     labels = labeller.resolve_settled_claims()
 
     assert [label.labels for label in labels] == [{THE_SETUP_WAS_RIGHT: True}]
@@ -226,7 +227,7 @@ def test_a_claim_is_labelled_when_the_barrier_is_hit_not_when_the_horizon_ends(r
 def test_one_open_claim_per_detector_per_symbol(real_prices):
     """A detector firing every tick must not teach one move a thousand times."""
     labeller = a_labeller(Clock())
-    labeller.observe_price(VENUE, SYMBOL, real_prices[0])
+    labeller.observe_price(VENUE, SYMBOL, real_prices[0], labeller._now_ns())
     labeller.observe_candidate(a_claim())
     claim, reason = labeller.observe_candidate(a_claim())
 
@@ -241,7 +242,7 @@ def test_claims_are_bounded_and_the_refusal_is_counted(real_prices):
     )
     for index in range(4):
         symbol = f"SYMBOL{index}"
-        labeller.observe_price(VENUE, symbol, 100.0)
+        labeller.observe_price(VENUE, symbol, 100.0, labeller._now_ns())
         labeller.observe_candidate(
             make_candidate(
                 detector=DETECTOR,
@@ -280,10 +281,10 @@ def test_real_captured_prices_resolve_claims_both_ways(real_prices):
     verdicts = []
     for index in range(0, len(real_prices) - 1, 40):
         price = real_prices[index]
-        labeller.observe_price(VENUE, SYMBOL, price)
+        labeller.observe_price(VENUE, SYMBOL, price, clock.at_ns)
         labeller.observe_candidate(a_claim(LONG))
         for later in real_prices[index + 1 : index + 40]:
-            labeller.observe_price(VENUE, SYMBOL, later)
+            labeller.observe_price(VENUE, SYMBOL, later, clock.at_ns)
         clock.advance_seconds(HORIZON_SECONDS + 1)
         for label in labeller.resolve_settled_claims():
             verdicts.append(label.labels[THE_SETUP_WAS_RIGHT])
@@ -292,3 +293,58 @@ def test_real_captured_prices_resolve_claims_both_ways(real_prices):
     standing = describe_labelling(labeller)
     assert standing["resolved_right"] + standing["resolved_wrong"] == len(verdicts)
     assert standing["measured_hit_rate"] is not None
+
+
+def test_a_claim_is_refused_when_the_price_it_would_be_measured_against_is_stale():
+    """A wrong label is worse than a wrong trade: it survives every trade after it.
+
+    The claim's whole meaning is "the detector called this move from here". Opened
+    against a price the market had already left, it records a starting point that
+    never existed at that moment, and the conviction model learns a detector's
+    skill from the difference.
+    """
+    from runtime.price_staleness import PriceStalenessEstimator
+
+    clock = Clock()
+    pinned_to_one_second = PriceStalenessEstimator(
+        materiality_fraction=0.0011,
+        anchor_seconds=1.0,
+        quantile=0.95,
+        window=3_600,
+        observations_needed=300,
+        prior_one_second_move=0.000898,
+        minimum_age_seconds=1.0,
+        maximum_age_seconds=1.0,
+    )
+    labeller = SignalOutcomeLabeller(
+        move_fraction=MOVE_FRACTION,
+        maximum_open_claims=10,
+        price_staleness=pinned_to_one_second,
+        now_ns=clock,
+    )
+    labeller.observe_price(VENUE, SYMBOL, 100.0, clock.at_ns)
+
+    fresh, reason = labeller.observe_candidate(a_claim())
+    assert fresh is not None, reason
+
+    clock.advance_seconds(3_360.0)
+    # A different detector, so the only thing that can refuse this claim is the
+    # age of the price -- not the one-claim-per-detector rule.
+    import dataclasses
+
+    stale, reason = labeller.observe_candidate(
+        dataclasses.replace(a_claim(), detector="a-detector-with-no-claim-open")
+    )
+    assert stale is None
+    assert reason == REFUSED_STALE_PRICE
+
+
+def test_a_labeller_told_no_bound_labels_against_whatever_it_has():
+    """RL-061: the bound is a named setting, and this part invents none."""
+    clock = Clock()
+    labeller = a_labeller(clock)
+    labeller.observe_price(VENUE, SYMBOL, 100.0, clock.at_ns)
+    clock.advance_seconds(3_360.0)
+
+    claim, reason = labeller.observe_candidate(a_claim())
+    assert claim is not None, reason

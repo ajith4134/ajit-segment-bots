@@ -75,6 +75,7 @@ class TailMoveRemainingEstimator:
         prior_normal_move_fraction: float,
         agreement_fraction: float,
         decay_lookback: int,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < agreement_fraction <= 1.0:
@@ -92,19 +93,26 @@ class TailMoveRemainingEstimator:
         self._agreement_fraction = agreement_fraction
         self._decay_lookback = decay_lookback
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._normal_moves: dict[tuple[str, str], QuantileEstimator] = {}
         self._largest_observed: dict[tuple[str, str], float] = {}
         self._forecasts: dict[tuple[str, str], float] = {}
         self.standing = EstimatorStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_completed_move(self, venue_id: str, symbol: str, move_fraction: float) -> None:
         key = (venue_id, symbol)
@@ -312,7 +320,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_market(_estimator):
         for trade in trades.payloads():
-            estimator.observe_price(trade.venue_id, trade.symbol, trade.price)
+            estimator.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         for forecast in forecasts.payloads():
             if forecast.expected_return is not None:
                 estimator.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)

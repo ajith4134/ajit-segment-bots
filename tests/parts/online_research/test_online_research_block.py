@@ -697,7 +697,7 @@ def test_an_exchange_rotating_its_own_wallets_is_not_flow():
     subject = a_transfer_reader()
     subject.observe_address("hot", EXCHANGE_INTERNAL, "binance")
     subject.observe_address("cold", CUSTODY)
-    subject.observe_price("ETH", 3_000.0)
+    subject.observe_price("ETH", 3_000.0, subject._now_ns())
     result = subject.read(a_transfer_row(from_address="hot", to_address="cold"))
     assert result.state == INTERNAL_ROTATION
 
@@ -706,7 +706,7 @@ def test_coins_reaching_a_deposit_address_create_the_option_to_sell():
     subject = a_transfer_reader(minimum=1_000.0)
     subject.observe_address("w-1", UNKNOWN_WALLET)
     subject.observe_address("w-2", EXCHANGE_DEPOSIT, "binance")
-    subject.observe_price("ETH", 3_000.0)
+    subject.observe_price("ETH", 3_000.0, subject._now_ns())
     result = subject.read(a_transfer_row())
     assert result.state == TRANSFER_READ
     assert result.transfer.could_become_supply
@@ -717,7 +717,7 @@ def test_coins_leaving_an_exchange_remove_the_option_to_sell():
     subject = a_transfer_reader(minimum=1_000.0)
     subject.observe_address("w-1", EXCHANGE_WITHDRAWAL, "binance")
     subject.observe_address("w-2", CUSTODY)
-    subject.observe_price("ETH", 3_000.0)
+    subject.observe_price("ETH", 3_000.0, subject._now_ns())
     result = subject.read(a_transfer_row())
     assert result.transfer.leaves_the_market
 
@@ -725,7 +725,7 @@ def test_coins_leaving_an_exchange_remove_the_option_to_sell():
 def test_size_is_measured_in_quote_value_not_units():
     subject = a_transfer_reader(minimum=1_000_000.0)
     subject.observe_address("w-2", EXCHANGE_DEPOSIT, "binance")
-    subject.observe_price("ETH", 10.0)
+    subject.observe_price("ETH", 10.0, subject._now_ns())
     assert subject.read(a_transfer_row(quantity=100.0)).state == NOT_LARGE_ENOUGH
 
 
@@ -756,7 +756,7 @@ def _a_transfer(reader, transfer_id, to_kind=EXCHANGE_DEPOSIT, quantity=100.0,
                 confirmed_at_ns=None, clock=None):
     reader.observe_address("in", UNKNOWN_WALLET)
     reader.observe_address("out", to_kind, "binance")
-    reader.observe_price("ETH", 3_000.0)
+    reader.observe_price("ETH", 3_000.0, reader._now_ns())
     row = a_transfer_row(transfer_id, quantity=quantity, from_address="in", to_address="out")
     row["confirmed_at_ns"] = confirmed_at_ns if confirmed_at_ns is not None else clock.now_ns
     return reader.read(row).transfer
@@ -787,7 +787,7 @@ def test_inflow_and_outflow_are_kept_separately():
     reader_out = a_transfer_reader(minimum=1.0)
     reader_out.observe_address("in", EXCHANGE_WITHDRAWAL, "binance")
     reader_out.observe_address("out", CUSTODY)
-    reader_out.observe_price("ETH", 3_000.0)
+    reader_out.observe_price("ETH", 3_000.0, reader_out._now_ns())
     row = a_transfer_row("tx-2", quantity=100.0, from_address="in", to_address="out")
     row["confirmed_at_ns"] = clock.now_ns
     subject.observe_transfer(reader_out.read(row).transfer, "binance")

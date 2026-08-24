@@ -50,6 +50,7 @@ BLOCK_PARTS = {
     "funding-settlement-recorder": "parts.ledger.funding_settlement_recorder",
 }
 
+SECOND_NS = 1_000_000_000
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
 SECOND = 1_000_000_000
@@ -222,9 +223,13 @@ def test_the_best_and_worst_points_are_both_kept():
     """RL-042: a trade that closed flat after being 5% up was a missed exit."""
     tracker = PeakExcursionTracker()
     tracker.observe_position(position(2.0, entry=100.0))
-    tracker.observe_price(VENUE, SYMBOL, 105.0)
-    tracker.observe_price(VENUE, SYMBOL, 90.0)
-    excursion = tracker.observe_price(VENUE, SYMBOL, 100.0)
+    tracker.observe_price(VENUE, SYMBOL, 105.0, observed_at_ns=1 * SECOND_NS)
+    tracker.observe_price(VENUE, SYMBOL, 90.0, observed_at_ns=2 * SECOND_NS)
+    excursion = tracker.observe_price(VENUE, SYMBOL, 100.0, observed_at_ns=3 * SECOND_NS)
+    assert excursion.observed_at_ns == 3 * SECOND_NS, (
+        "an excursion is dated by the print it describes, not by when the part read it: "
+        "8.5 million of these are what stop placement and exit timing are learned from"
+    )
     assert excursion.best_unrealised == pytest.approx(10.0)
     assert excursion.worst_unrealised == pytest.approx(-20.0)
     assert excursion.current_unrealised == pytest.approx(0.0)
@@ -234,20 +239,20 @@ def test_the_best_and_worst_points_are_both_kept():
 def test_a_short_position_profits_when_the_price_falls():
     tracker = PeakExcursionTracker()
     tracker.observe_position(position(-1.0, entry=100.0))
-    excursion = tracker.observe_price(VENUE, SYMBOL, 90.0)
+    excursion = tracker.observe_price(VENUE, SYMBOL, 90.0, observed_at_ns=4 * SECOND_NS)
     assert excursion.best_unrealised == pytest.approx(10.0)
 
 
 def test_a_price_with_no_position_is_counted_not_estimated():
     tracker = PeakExcursionTracker()
-    assert tracker.observe_price(VENUE, SYMBOL, 100.0) is None
+    assert tracker.observe_price(VENUE, SYMBOL, 100.0, observed_at_ns=5 * SECOND_NS) is None
     assert tracker.standing.without_cost_basis == 1
 
 
 def test_going_flat_clears_the_excursion():
     tracker = PeakExcursionTracker()
     tracker.observe_position(position(1.0, entry=100.0))
-    tracker.observe_price(VENUE, SYMBOL, 200.0)
+    tracker.observe_price(VENUE, SYMBOL, 200.0, observed_at_ns=6 * SECOND_NS)
     tracker.observe_position(position(0.0))
     assert tracker.read(VENUE, SYMBOL) is None
 
@@ -299,7 +304,7 @@ def test_distance_to_liquidation_is_measured_against_the_live_price():
     tracker.observe_position(position(1.0, entry=100.0))
     tracker.set_leverage(VENUE, SYMBOL, 10.0)
     tracker.set_maintenance_margin_rate(VENUE, SYMBOL, 0.005)
-    tracker.observe_price(VENUE, SYMBOL, 95.0)
+    tracker.observe_price(VENUE, SYMBOL, 95.0, tracker._now_ns())
     result = tracker.compute(VENUE, SYMBOL)
     assert result.distance_fraction == pytest.approx((95.0 - 90.5) / 95.0)
 

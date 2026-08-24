@@ -225,7 +225,7 @@ def a_builder(minimum=5):
 def a_prepared_builder(prices, minimum=5):
     subject = a_builder(minimum)
     for price in prices:
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 5.0),))
     subject.observe_funding(VENUE, SYMBOL, 0.0001)
     subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
@@ -263,8 +263,8 @@ def test_downside_volatility_separates_a_fall_from_a_rally():
     for index in range(60):
         price_down *= 0.99 if index % 3 else 1.001
         price_up *= 1.01 if index % 3 else 0.999
-        falling.observe_price(VENUE, SYMBOL, price_down)
-        rising.observe_price(VENUE, SYMBOL, price_up)
+        falling.observe_price(VENUE, SYMBOL, price_down, falling._now_ns())
+        rising.observe_price(VENUE, SYMBOL, price_up, rising._now_ns())
     down = falling.build(a_side_candidate()).features["downside_volatility_ratio"]
     up = rising.build(a_side_candidate()).features["downside_volatility_ratio"]
     assert down > up
@@ -275,7 +275,7 @@ def test_squeeze_room_is_thin_when_a_moving_symbol_has_a_light_offer_side():
     price = 100.0
     for index in range(60):
         price *= 1.02 if index % 2 else 0.98
-        subject.observe_price(VENUE, SYMBOL, price)
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_book(VENUE, SYMBOL, bids=((99.0, 100.0),), asks=((101.0, 0.01),))
     thin = subject.build(a_side_candidate()).features["squeeze_room"]
     subject.observe_book(VENUE, SYMBOL, bids=((99.0, 100.0),), asks=((101.0, 10_000.0),))
@@ -286,7 +286,7 @@ def test_squeeze_room_is_thin_when_a_moving_symbol_has_a_light_offer_side():
 def test_the_carry_feature_is_signed_as_a_cost_to_the_short():
     subject = a_builder(minimum=5)
     for _ in range(60):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_funding(VENUE, SYMBOL, -0.01)
     charged = subject.build(a_side_candidate(horizon=86400.0)).features["funding_carry_over_horizon"]
     subject.observe_funding(VENUE, SYMBOL, 0.01)
@@ -553,8 +553,8 @@ def test_a_short_waits_for_a_bounce_above_here_not_a_pullback_below():
     """The bull waits below; a short that waits below watches the move finish."""
     subject = a_timer(floor=0.02)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 90.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 90.0, subject._now_ns())
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.9))
     assert timing.action == WAIT_FOR_TRIGGER
     assert timing.trigger_price > 90.0
@@ -563,8 +563,8 @@ def test_a_short_waits_for_a_bounce_above_here_not_a_pullback_below():
 def test_a_price_still_above_its_mean_is_shorted_now():
     subject = a_timer(floor=0.0)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 105.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 105.0, subject._now_ns())
     assert subject.decide(a_side_candidate(), ConvictionStub(0.9)).action == ENTER_NOW
 
 
@@ -572,8 +572,8 @@ def test_a_waiting_short_expires_and_the_reason_names_the_carry():
     clock = Clock()
     subject = a_timer(clock=clock, floor=0.02)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 90.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 90.0, subject._now_ns())
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.9))
     assert "carry" in timing.reason
     assert subject.has_expired(timing) is False
@@ -584,7 +584,7 @@ def test_a_waiting_short_expires_and_the_reason_names_the_carry():
 def test_a_playbook_rule_can_withhold_a_short():
     subject = a_timer()
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_playbook_rule(
         PlaybookRule(detector=DETECTOR, bounce_fraction=None, withholds=True, reason="never worked")
     )
@@ -595,8 +595,8 @@ def test_a_playbook_rule_can_withhold_a_short():
 def test_a_playbook_rule_can_demand_a_higher_bounce_never_a_lower_one():
     subject = a_timer(floor=0.02)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 90.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 90.0, subject._now_ns())
     plain = subject.decide(a_side_candidate(), ConvictionStub(0.9)).trigger_price
 
     subject.observe_playbook_rule(
@@ -647,7 +647,7 @@ def a_horizon(seconds=600.0, is_fitted=True):
 
 def a_prepared_proposer(minimum_reward=1.0, maximum_stop=0.15, profile=None, horizon=None):
     subject = a_proposer(minimum_reward, maximum_stop)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_excursion_profile(profile or a_profile())
     subject.observe_horizon_profile(horizon or a_horizon())
     return subject
@@ -683,14 +683,14 @@ def test_no_excursion_record_falls_back_to_the_range_and_no_range_is_refused_by_
     no plan, it is a plan from the symbol's own range -- and with one print
     there is no range, which is its own refusal."""
     without_excursion = a_proposer()
-    without_excursion.observe_price(VENUE, SYMBOL, 100.0)
+    without_excursion.observe_price(VENUE, SYMBOL, 100.0, without_excursion._now_ns())
     without_excursion.observe_horizon_profile(a_horizon())
     assert without_excursion.propose(a_side_candidate(), ConvictionStub(0.8))[1] == NO_RANGE
 
 
 def test_no_horizon_record_uses_the_horizon_the_detector_claimed():
     without_horizon = a_proposer()
-    without_horizon.observe_price(VENUE, SYMBOL, 100.0)
+    without_horizon.observe_price(VENUE, SYMBOL, 100.0, without_horizon._now_ns())
     without_horizon.observe_excursion_profile(a_profile())
     plan, outcome = without_horizon.propose(a_side_candidate(), ConvictionStub(0.8))
     assert plan is not None, outcome
@@ -1026,7 +1026,9 @@ def test_a_short_is_planned_before_any_short_has_closed_from_the_symbols_own_ran
     subject = a_proposer(minimum_reward=1.0, clock=clock)
     # Forty prints swinging 2% inside the claimed horizon, then a short candidate.
     for index in range(40):
-        subject.observe_price(VENUE, SYMBOL, 100.0 + (2.0 if index % 2 else 0.0))
+        subject.observe_price(
+            VENUE, SYMBOL, 100.0 + (2.0 if index % 2 else 0.0), subject._now_ns()
+        )
         clock.advance_seconds(1.0)
     candidate = a_side_candidate()
     plan, outcome = subject.propose(candidate, ConvictionStub(0.8))
@@ -1037,6 +1039,6 @@ def test_a_short_is_planned_before_any_short_has_closed_from_the_symbols_own_ran
 
 def test_too_few_prints_refuse_a_cold_start_plan_by_name():
     subject = a_proposer()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert plan is None and outcome == NO_RANGE

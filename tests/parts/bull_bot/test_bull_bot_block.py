@@ -350,10 +350,11 @@ def test_a_negative_weight_is_refused_rather_than_inverting_the_detector():
 
 # ---- bull-feature-builder ---------------------------------------------------
 
-def a_builder(minimum=5):
+def a_builder(minimum=5, maximum_gap_seconds=None):
     return BullFeatureBuilder(
         short_window=10, long_window=50, minimum_observations=minimum,
         reference_order_size_quote=1000.0,
+        maximum_gap_seconds=maximum_gap_seconds,
     )
 
 
@@ -366,10 +367,10 @@ def test_a_feature_that_could_not_be_measured_is_named_not_defaulted():
     assert vector.is_complete is False
 
 
-def test_a_complete_vector_names_where_every_feature_came_from(real_trade_prices):
+def test_a_complete_vector_names_where_every_feature_came_from(read_captured_trades):
     subject = a_builder(minimum=5)
-    for price in real_trade_prices[:60]:
-        subject.observe_price(VENUE, SYMBOL, price)
+    for trade in read_captured_trades(limit=60):
+        subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
     subject.observe_funding(VENUE, SYMBOL, 0.0001)
     subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
@@ -379,11 +380,11 @@ def test_a_complete_vector_names_where_every_feature_came_from(real_trade_prices
     assert set(vector.sources) == set(vector.features)
 
 
-def test_every_feature_is_a_fraction_not_a_price(real_trade_prices):
+def test_every_feature_is_a_fraction_not_a_price(read_captured_trades):
     """A model trained on absolute prices learns the price level it was trained at."""
     subject = a_builder(minimum=5)
-    for price in real_trade_prices[:60]:
-        subject.observe_price(VENUE, SYMBOL, price)
+    for trade in read_captured_trades(limit=60):
+        subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
     subject.observe_funding(VENUE, SYMBOL, 0.0001)
     subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
@@ -704,7 +705,7 @@ def test_a_price_at_its_mean_is_entered_now():
     clock = Clock()
     subject = a_timer(clock=clock)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.9))
     assert timing.action == ENTER_NOW
     assert timing.valid_until_ns is not None
@@ -713,8 +714,8 @@ def test_a_price_at_its_mean_is_entered_now():
 def test_an_extended_price_waits_for_a_level_and_the_level_is_below_here():
     subject = a_timer(cap=0.005)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 120.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 120.0, subject._now_ns())
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.9))
     assert timing.action == WAIT_FOR_TRIGGER
     assert timing.trigger_price < 120.0
@@ -725,8 +726,8 @@ def test_every_waiting_intention_expires():
     clock = Clock()
     subject = a_timer(clock=clock, cap=0.005)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 120.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 120.0, subject._now_ns())
     timing = subject.decide(a_side_candidate(), ConvictionStub(0.9))
     assert subject.has_expired(timing) is False
     clock.advance_seconds(61)
@@ -736,7 +737,7 @@ def test_every_waiting_intention_expires():
 def test_a_playbook_rule_can_withhold_entry():
     subject = a_timer()
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_playbook_rule(
         PlaybookRule(detector=DETECTOR, pullback_fraction=None, withholds=True, reason="never worked")
     )
@@ -749,8 +750,8 @@ def test_a_playbook_rule_can_only_narrow_never_widen():
     """A learned rule must not be able to talk the bot into the entry its record refuses."""
     subject = a_timer(cap=0.005)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 120.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 120.0, subject._now_ns())
     without_rule = subject.decide(a_side_candidate(), ConvictionStub(0.9)).trigger_price
 
     subject.observe_playbook_rule(
@@ -769,8 +770,8 @@ def test_a_playbook_rule_can_only_narrow_never_widen():
 def test_the_extension_cap_is_learned_per_detector():
     subject = a_timer(cap=0.005)
     for _ in range(30):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 110.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
     for _ in range(50):
         subject.observe_entry_quality("momentum-burst-detector", extension_at_entry=0.5, given_away=0.001)
     burst = subject.decide(a_side_candidate(detector="momentum-burst-detector"), ConvictionStub(0.9))
@@ -817,7 +818,7 @@ def a_horizon(seconds=600.0, is_fitted=True):
 
 def a_prepared_proposer(minimum_reward=1.0, profile=None, horizon=None):
     subject = a_proposer(minimum_reward)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_excursion_profile(profile or a_profile())
     subject.observe_horizon_profile(horizon or a_horizon())
     return subject
@@ -837,8 +838,8 @@ def feed_a_range(subject, low=99.6, high=100.4, prints=COLD_START_MINIMUM_PRINTS
     span the symbol traded through, which is what an ATR stop is measured from.
     """
     for index in range(prints):
-        subject.observe_price(VENUE, SYMBOL, low if index % 2 else high)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, low if index % 2 else high, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
 
 
 def test_a_symbol_with_no_excursion_record_is_planned_from_its_own_live_range():
@@ -930,7 +931,7 @@ def test_a_symbol_that_has_not_moved_gets_no_stop():
     """A flat window gives a zero range, and a stop at the entry price is not one."""
     subject = a_proposer()
     for _ in range(COLD_START_MINIMUM_PRINTS + 1):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_horizon_profile(a_horizon())
     plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert plan is None
@@ -1367,3 +1368,30 @@ def test_a_watcher_whose_close_threshold_sits_below_its_reduce_one_is_refused():
             prior_invalidation_hit_rate=0.5, prior_weight=4.0,
             half_life_observations=200, minimum_observations=20,
         )
+
+
+def test_a_hole_in_the_feed_is_not_a_return(read_captured_trades):
+    """The window must not compute a return straight across a gap.
+
+    The bus drops rather than blocks, so a symbol's prints stop and resume. Given
+    a gap bound, the window clears and every feature goes back to missing until it
+    refills -- which is a bull bot that declines to have a view, and not one whose
+    view was built from a move the market never made.
+    """
+    trades = read_captured_trades(limit=60)
+    subject = a_builder(minimum=5, maximum_gap_seconds=5.0)
+    for trade in trades:
+        subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
+    subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
+    subject.observe_funding(VENUE, SYMBOL, 0.0001)
+    subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
+    assert subject.build(a_side_candidate()).is_complete
+
+    after_the_hole = trades[-1].venue_time_ns + 3_360 * 1_000_000_000
+    subject.observe_price(VENUE, SYMBOL, trades[-1].price * 1.3, after_the_hole)
+
+    vector = subject.build(a_side_candidate())
+    assert vector.is_complete is False, (
+        "one print after a 56-minute hole cannot support a return, a volatility ratio "
+        "or anything else the window is asked for"
+    )

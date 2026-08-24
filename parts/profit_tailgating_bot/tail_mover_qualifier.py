@@ -80,6 +80,7 @@ class TailMoverQualifier:
         minimum_remaining_over_cost: float,
         default_setup_weight: float,
         minimum_setup_weight: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_fraction_of_normal_move < maximum_fraction_of_normal_move:
@@ -100,19 +101,26 @@ class TailMoverQualifier:
         self._default_weight = default_setup_weight
         self._minimum_weight = minimum_setup_weight
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._normal_moves: dict[tuple[str, str], QuantileEstimator] = {}
         self._costs: dict[tuple[str, str], float] = {}
         self._weights: dict[str, float] = {}
         self.standing = QualifierStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_completed_move(self, venue_id: str, symbol: str, move_fraction: float) -> None:
         """How far one finished move in this symbol actually went.
@@ -321,7 +329,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_market(_qualifier):
         for trade in trades.payloads():
-            qualifier.observe_price(trade.venue_id, trade.symbol, trade.price)
+            qualifier.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         for profile in profiles.payloads():
             qualifier.observe_symbol_profile(profile.venue_id, profile.symbol, round_trip)
         for weight in weights.payloads():

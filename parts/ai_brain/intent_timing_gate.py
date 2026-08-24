@@ -28,6 +28,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import ENTER_NOW, STAND_DOWN, WAIT_FOR_TRIGGER
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -87,8 +88,14 @@ class IntentTimingGate:
         self._bot_timings: dict[tuple[str, str, str], object] = {}
         self.standing = GateStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default. A price with no age cannot be told apart from a
+        price that stopped arriving, which is how a symbol frozen for 56 minutes
+        was traded on 2026-08-23.
+        """
+        self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=at_ns)
 
     def observe_bot_timing(self, bot: str, timing) -> None:
         self._bot_timings[(bot, timing.venue_id, timing.symbol)] = timing
@@ -102,7 +109,8 @@ class IntentTimingGate:
         self.standing.intents_timed += 1
         key = (intent.venue_id, intent.symbol)
 
-        price = self._prices.get(key)
+        observed = self._prices.get(key)
+        price = None if observed is None else observed.price
         if price is None:
             return self._refuse(intent, NO_PRICE, "no price has arrived for this symbol")
 
@@ -249,7 +257,9 @@ def start_part(context) -> int:
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
                 prices[(trade.venue_id, trade.symbol)] = trade.price
-                gate.observe_price(trade.venue_id, trade.symbol, trade.price)
+                gate.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
         for timing in bull_timings.payloads():
             gate.observe_bot_timing(timing.bot, timing)
         for timing in bear_timings.payloads():

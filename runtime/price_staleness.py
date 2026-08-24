@@ -184,3 +184,24 @@ class PriceStalenessEstimator:
                 for venue_id, symbol in sorted(self._moves)
             },
         }
+
+
+def price_staleness_from(context) -> PriceStalenessEstimator:
+    """The estimator a part builds from its settings, assembled in one place.
+
+    Every part that judges a price needs the same seven numbers, and seven
+    settings read separately in each of them is seven chances for two parts to
+    disagree about how old a price may be. What makes a stale price material is
+    the same threshold that makes a cost material, so the materiality is the round
+    trip's taker fee rather than a number of its own (RL-061).
+    """
+    return PriceStalenessEstimator(
+        materiality_fraction=2 * context.number("taker_fee_rate"),
+        anchor_seconds=context.number("reference_price_move_anchor_seconds"),
+        quantile=context.number("reference_price_move_quantile"),
+        window=int(context.number("reference_price_move_window")),
+        observations_needed=int(context.number("reference_price_move_observations_needed")),
+        prior_one_second_move=context.number("reference_price_prior_one_second_move"),
+        minimum_age_seconds=context.number("reference_price_minimum_age_seconds"),
+        maximum_age_seconds=context.number("reference_price_maximum_age_seconds"),
+    )

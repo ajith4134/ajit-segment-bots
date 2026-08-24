@@ -95,6 +95,7 @@ class BearFeatureBuilder:
         long_window: int,
         minimum_observations: int,
         settlements_per_day: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if short_window >= long_window:
@@ -109,13 +110,25 @@ class BearFeatureBuilder:
         self._minimum = minimum_observations
         self._settlements_per_day = settlements_per_day
         self._now_ns = now_ns
+        # How long this symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._symbols: dict[tuple[str, str], SymbolObservations] = {}
         self.standing = BuilderStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print into both windows, with the venue's own time for it.
+
+        `at_ns` has no default. Every feature about volatility and return is
+        computed from these windows, and a window that cannot see time computes
+        them straight across a hole in the feed -- the first print after the gap
+        sits beside the last one before it, and the difference becomes a return no
+        market produced.
+        """
         observations = self._observations_for(venue_id, symbol)
-        observations.short_window.observe(price)
-        observations.long_window.observe(price)
+        observations.short_window.observe(price, at_ns)
+        observations.long_window.observe(price, at_ns)
 
     def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
         self._observations_for(venue_id, symbol).book = (tuple(bids), tuple(asks))
@@ -230,8 +243,12 @@ class BearFeatureBuilder:
         observations = self._symbols.get(key)
         if observations is None:
             observations = SymbolObservations(
-                short_window=RollingWindow(length=self._short),
-                long_window=RollingWindow(length=self._long),
+                short_window=RollingWindow(
+                    length=self._short, maximum_gap_seconds=self._maximum_gap_seconds
+                ),
+                long_window=RollingWindow(
+                    length=self._long, maximum_gap_seconds=self._maximum_gap_seconds
+                ),
             )
             self._symbols[key] = observations
             self.standing.symbols_tracked = len(self._symbols)
@@ -370,7 +387,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_market(builder):
         for trade in trades.payloads():
-            builder.observe_price(trade.venue_id, trade.symbol, trade.price)
+            builder.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         for book in books.payloads():
             builder.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
         for profile in profiles.payloads():
@@ -385,6 +404,7 @@ def start_part(context) -> int:
             long_window=int(context.number("bear_feature_long_window")),
             minimum_observations=int(context.number("bear_feature_minimum_observations")),
             settlements_per_day=context.number("bear_settlements_per_day"),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
         ),
         control_socket=context.control_socket,
         read_candidates_and_market=read_candidates_and_market,

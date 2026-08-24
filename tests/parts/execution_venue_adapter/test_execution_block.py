@@ -564,14 +564,14 @@ def cancel_policy(prior_ttl=30.0, prior_distance=0.01, minimum=3):
 def test_a_fresh_order_near_the_market_is_held():
     subject, _ = cancel_policy()
     subject.observe_order_placed("o1", VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 100.1)
+    subject.observe_price(VENUE, SYMBOL, 100.1, subject._now_ns())
     assert subject.decide("o1").action == HOLD
 
 
 def test_an_order_resting_past_its_tolerance_is_pulled():
     subject, clock = cancel_policy(prior_ttl=30.0)
     subject.observe_order_placed("o1", VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     clock.now += 31
     assert subject.decide("o1").action == CANCEL_TIME
 
@@ -579,7 +579,7 @@ def test_an_order_resting_past_its_tolerance_is_pulled():
 def test_an_order_the_market_walked_away_from_is_pulled():
     subject, _ = cancel_policy(prior_distance=0.01)
     subject.observe_order_placed("o1", VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 110.0)
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
     decision = subject.decide("o1")
     assert decision.action == CANCEL_DISTANCE
     assert decision.distance_fraction == pytest.approx(10.0 / 110.0)
@@ -590,7 +590,7 @@ def test_patience_is_learned_from_what_actually_filled():
     subject, clock = cancel_policy(prior_ttl=5.0, minimum=3)
     for index in range(5):
         subject.observe_order_placed(f"o{index}", VENUE, SYMBOL, 100.0)
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
         clock.now += 60.0
         subject.observe_order_filled(f"o{index}")
     subject.observe_order_placed("new", VENUE, SYMBOL, 100.0)

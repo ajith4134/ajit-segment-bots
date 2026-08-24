@@ -83,6 +83,7 @@ class CorrelationClusterMapper:
         window_length: int,
         minimum_shared_observations: int,
         cluster_threshold: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < cluster_threshold <= 1.0:
@@ -97,16 +98,23 @@ class CorrelationClusterMapper:
         self._minimum = minimum_shared_observations
         self._threshold = cluster_threshold
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[str, RollingWindow] = {}
         self.standing = MapperStanding()
 
-    def observe_price(self, symbol: str, price: float) -> None:
+    def observe_price(self, symbol: str, price: float, at_ns: int) -> None:
         self.standing.observations += 1
         window = self._prices.get(symbol)
         if window is None:
-            window = RollingWindow(length=self._window)
+            window = RollingWindow(
+                length=self._window,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[symbol] = window
-        window.observe(price)
+        window.observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
     def correlation_between(self, left: str, right: str) -> tuple[float | None, int]:
@@ -285,15 +293,16 @@ def start_part(context) -> int:
         window_length=int(context.number("correlation_window_length")),
         minimum_shared_observations=int(context.number("correlation_minimum_shared_observations")),
         cluster_threshold=context.number("correlation_cluster_threshold"),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
 
     def read_prices(_mapper) -> None:
-        latest_by_symbol: dict[str, float] = {}
+        latest_by_symbol: dict[str, tuple[float, int]] = {}
         for (venue_id, symbol), trade in trades.mapping().items():
             if isinstance(trade, NormalisedTrade):
-                latest_by_symbol[symbol] = trade.price
-        for symbol, price in latest_by_symbol.items():
-            mapper.observe_price(symbol, price)
+                latest_by_symbol[symbol] = (trade.price, trade.venue_time_ns)
+        for symbol, (price, at_ns) in latest_by_symbol.items():
+            mapper.observe_price(symbol, price, at_ns)
 
     def publish(items) -> None:
         kept = tuple(item for item in items if item is not None)

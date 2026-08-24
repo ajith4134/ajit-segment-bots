@@ -31,6 +31,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.external_research_types import WhaleTransfer
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -129,8 +130,16 @@ class WhaleTransferReader:
             )
         self._known_addresses[address] = (kind, venue_id)
 
-    def observe_price(self, asset: str, quote_price: float) -> None:
-        self._prices[asset] = quote_price
+    def observe_price(self, asset: str, quote_price: float, at_ns: int) -> None:
+        """One asset's quote price, with the time it was quoted at.
+
+        This one converts a transfer's size into quote terms rather than deciding
+        a trade, so an old quote misstates how large a movement was rather than
+        mispricing an order. It still travels with its time: a reader that cannot
+        see the age of a number cannot decide whether to believe it, and that is
+        the property this whole sweep is about.
+        """
+        self._prices[asset] = ObservedPrice(price=quote_price, observed_at_ns=at_ns)
 
     def kind_of(self, address: str) -> str:
         return self._known_addresses.get(address, (UNKNOWN_WALLET, None))[0]
@@ -178,7 +187,8 @@ class WhaleTransferReader:
             )
 
         quantity = float(row["quantity"])
-        price = self._prices.get(row["asset"])
+        observed = self._prices.get(row["asset"])
+        price = None if observed is None else observed.price
         quote_value = quantity * price if price is not None else None
         if quote_value is None:
             self.standing.unpriced += 1

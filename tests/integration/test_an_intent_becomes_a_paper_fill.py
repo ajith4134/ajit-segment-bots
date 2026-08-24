@@ -176,31 +176,6 @@ def real_prices(read_captured_payloads):
     return trades
 
 
-def arriving_now(trades):
-    """The captured trades, dated as though the market had just printed them.
-
-    The prices, sizes, sides and the spacing between prints are the venue's own --
-    that is what RL-063 is for, and none of it is altered. What is restamped is
-    only when each print says it happened, and it is restamped at every publish
-    rather than once, because this run takes minutes: a part that judges how old a
-    price is would otherwise watch a fixture recorded on 2026-08-22 age past every
-    bound mid-test and correctly refuse to trade on it.
-
-    This is the seam RL-071 names. The live spine gets prints whose times are the
-    market's own and needs no help; only a replay has to say when it is pretending
-    to be, and saying so explicitly here is what keeps the pretence out of the
-    parts.
-    """
-    import dataclasses
-    import time
-
-    shift_ns = time.time_ns() - trades[-1].venue_time_ns
-    return [
-        dataclasses.replace(trade, venue_time_ns=trade.venue_time_ns + shift_ns)
-        for trade in trades
-    ]
-
-
 @pytest.fixture
 def captured_universe(read_captured_json):
     """The symbols the venue listed, on the terms it listed them on.
@@ -285,7 +260,7 @@ def an_intent(entry_price: float) -> TradeIntent:
 
 @pytest.mark.slow
 def test_an_intent_becomes_a_paper_fill(
-    launcher, bus_root, real_prices, captured_universe, isolated_settings
+    launcher, bus_root, real_prices, captured_universe, isolated_settings, arriving_now
 ):
     wiring = derive_wiring(runtime_directory=bus_root)
 

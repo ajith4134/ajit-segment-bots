@@ -95,6 +95,7 @@ class BullEntryTimer:
         entry_quality_window: int,
         prior_extension_cap: float,
         prior_entry_cost_fraction: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if trigger_validity_seconds <= 0:
@@ -111,6 +112,10 @@ class BullEntryTimer:
         self._validity_seconds = trigger_validity_seconds
         self._maximum_extension_quantile = maximum_extension_quantile
         self._now_ns = now_ns
+        # How long this symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._rules: dict[str, PlaybookRule] = {}
         self._entry_quality = QuantileEstimator(
@@ -121,13 +126,22 @@ class BullEntryTimer:
         self._prior_extension_cap = prior_extension_cap
         self.standing = TimerStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print into this symbol's window, with the venue's own time for it.
+
+        `at_ns` has no default. The window is what "how extended is this move"
+        is measured from, and a window computed across a hole in the feed reads
+        the reconnect as the extension -- which times an entry against a move
+        that never happened.
+        """
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_playbook_rule(self, rule: PlaybookRule) -> None:
         self._rules[rule.detector] = rule
@@ -335,7 +349,9 @@ def start_part(context) -> int:
 
     def read_candidates_and_convictions(timer):
         for trade in trades.payloads():
-            timer.observe_price(trade.venue_id, trade.symbol, trade.price)
+            timer.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         for rule in rules.payloads():
             timer.observe_playbook_rule(rule)
         for entry in quality.payloads():
@@ -360,6 +376,7 @@ def start_part(context) -> int:
             trigger_validity_seconds=context.number("bull_entry_trigger_validity"),
             maximum_extension_quantile=context.number("bull_entry_maximum_extension_quantile"),
             entry_quality_window=int(context.number("bull_entry_quality_window")),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             prior_extension_cap=context.number("bull_entry_prior_extension_cap"),
             prior_entry_cost_fraction=context.number("bull_entry_prior_entry_cost_fraction"),
         ),

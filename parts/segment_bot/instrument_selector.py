@@ -559,6 +559,16 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "symbols_with_listed_instruments": len(selector._listed),
         "listings_registered": selector.standing.listings_registered,
         "listings_skipped": dict(sorted(selector.standing.listings_skipped.items())),
+        # The two refusals about price age, lifted out of by_refusal as plain
+        # numbers. What rides on a health report is numbers only, and a refusal
+        # buried in a nested map is a refusal no table carries.
+        "refused_for_a_stale_price": selector.standing.by_refusal.get(
+            REFERENCE_PRICE_IS_TOO_OLD, 0
+        ),
+        "refused_for_no_price_ever": selector.standing.by_refusal.get(
+            NO_REFERENCE_PRICE_HAS_EVER_ARRIVED, 0
+        ),
+        "intents_refused": sum(selector.standing.by_refusal.values()),
         # What this part currently believes about how long each symbol's price is
         # worth acting on. Reported because a refusal that cannot be seen from
         # outside is indistinguishable from an input that never arrived, and a
@@ -588,6 +598,7 @@ def run_instrument_selector(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
+        read_standing=lambda: describe_instrument_selection(selector),
     )
 
 

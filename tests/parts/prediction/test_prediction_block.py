@@ -493,18 +493,18 @@ def test_a_forecast_is_not_scored_before_its_horizon_elapses():
     """Scoring early credits the model for a move that has not finished."""
     clock = Clock()
     subject = a_scorer(clock=clock)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.take_forecast(a_forecast(horizon=60.0, at_ns=clock()))
     assert subject.score_due() == ()
     clock.advance_seconds(61)
-    subject.observe_price(VENUE, SYMBOL, 101.0)
+    subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
     assert len(subject.score_due()) == 1
 
 
 def test_an_unusable_forecast_is_counted_not_scored_as_a_miss():
     """Folding a refusal in as a miss would make honesty look like being wrong."""
     subject = a_scorer()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.take_forecast(a_forecast(state=MODEL_NOT_LOADED))
     assert subject.standing.unusable_forecasts_counted == 1
     assert subject.standing.still_waiting == 0
@@ -513,10 +513,10 @@ def test_an_unusable_forecast_is_counted_not_scored_as_a_miss():
 def test_direction_and_magnitude_are_scored_separately():
     clock = Clock()
     subject = a_scorer(minimum=1, clock=clock)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.take_forecast(a_forecast(expected=0.10, horizon=60.0, at_ns=clock()))
     clock.advance_seconds(61)
-    subject.observe_price(VENUE, SYMBOL, 100.5)
+    subject.observe_price(VENUE, SYMBOL, 100.5, subject._now_ns())
     accuracy = subject.score_due()[0]
     assert accuracy.directional_accuracy.value > 0.5, "it called the direction"
     assert accuracy.mean_absolute_error > 0.09, "and badly overshot the magnitude"
@@ -527,10 +527,10 @@ def test_interval_coverage_is_scored():
     clock = Clock()
     subject = a_scorer(minimum=1, clock=clock)
     for index in range(5):
-        subject.observe_price(VENUE, SYMBOL, 100.0)
+        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
         subject.take_forecast(a_forecast(expected=0.0, lower=-0.001, upper=0.001, at_ns=clock()))
         clock.advance_seconds(61)
-        subject.observe_price(VENUE, SYMBOL, 110.0)
+        subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
         subject.score_due()
     accuracy = subject._records[
         ("kronos-forecaster", "base", f"{VENUE}:{SYMBOL}", 60.0)
@@ -542,10 +542,10 @@ def test_a_forecast_of_exactly_zero_is_not_scored_as_a_direction():
     """A model forecasting zero has not called a direction."""
     clock = Clock()
     subject = a_scorer(minimum=1, clock=clock)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.take_forecast(a_forecast(expected=0.0, at_ns=clock()))
     clock.advance_seconds(61)
-    subject.observe_price(VENUE, SYMBOL, 105.0)
+    subject.observe_price(VENUE, SYMBOL, 105.0, subject._now_ns())
     accuracy = subject.score_due()[0]
     assert accuracy.directional_accuracy.observations == 0
 

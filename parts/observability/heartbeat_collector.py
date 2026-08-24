@@ -62,6 +62,11 @@ class Heartbeat:
     # bound, from a consumer that is losing its feed right now; only the second
     # is a decision being made on data that is not what the market is saying.
     input_loss_since_previous: tuple[tuple[str, int], ...] = ()
+    # The countable part of what the part said about its own work. Carried for the
+    # same reason input_loss is: every part computes these in a describe_* function
+    # and nothing read one, so a part that had started refusing every decision was
+    # indistinguishable from a part with nothing to decide.
+    standing: tuple[tuple[str, float], ...] = ()
 
     @property
     def is_healthy(self) -> bool:
@@ -203,6 +208,10 @@ class HeartbeatCollector:
                         for kind, count in getattr(health, "input_loss", ()) or ()
                     ),
                     input_loss_since_previous=self._loss_since_previous.get(part_id, ()),
+                    standing=tuple(
+                        (str(name), float(value))
+                        for name, value in getattr(health, "standing", ()) or ()
+                    ),
                     reason=reason,
                 )
             )
@@ -293,6 +302,7 @@ def heartbeat_table_as_document(table: HeartbeatTable, standing: CollectorStandi
                 "refused_control_frame": beat.refused_control_frame,
                 "input_loss": list(beat.input_loss),
                 "input_loss_since_previous": list(beat.input_loss_since_previous),
+                "standing": dict(beat.standing),
                 "reason": beat.reason,
             }
             for beat in table.heartbeats

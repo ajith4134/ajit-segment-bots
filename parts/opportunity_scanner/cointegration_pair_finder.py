@@ -85,6 +85,7 @@ class CointegrationPairFinder:
         minimum_observations: int,
         minimum_correlation: float,
         minimum_reversion_strength: float,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_reversion_strength < 1.0:
@@ -94,17 +95,30 @@ class CointegrationPairFinder:
         self._minimum_correlation = minimum_correlation
         self._minimum_reversion = minimum_reversion_strength
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._cointegrated: set[tuple[str, str, str]] = set()
         self.standing = FinderStanding()
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, with the venue's own time for it.
+
+        Two series are only cointegrated relative to each other over one stretch of
+        market. A hole in either one leaves the pair's histories describing
+        different spans, and the relationship measured across them is between two
+        things that were never observed together.
+        """
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length, maximum_gap_seconds=self._maximum_gap_seconds
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
     def test_pair(self, venue_id: str, left_symbol: str, right_symbol: str) -> CointegratedPair:
@@ -274,6 +288,7 @@ def start_part(context) -> int:
         minimum_observations=int(context.number("cointegration_minimum_observations")),
         minimum_correlation=context.number("cointegration_minimum_correlation"),
         minimum_reversion_strength=context.number("cointegration_minimum_reversion_strength"),
+        maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
     pairs_per_tick = int(context.number("cointegration_pairs_tested_per_tick"))
     symbols_by_venue: dict[str, set[str]] = {}
@@ -282,7 +297,9 @@ def start_part(context) -> int:
 
     def read_prices_and_pairs(_finder):
         for trade in trades.payloads():
-            finder.observe_price(trade.venue_id, trade.symbol, trade.price)
+            finder.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
             symbols_by_venue.setdefault(trade.venue_id, set()).add(trade.symbol)
         # The regime is consumed to keep this part's reading of the market current
         # even when it is drained by nobody else; the pair test itself is

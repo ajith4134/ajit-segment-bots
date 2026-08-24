@@ -72,6 +72,7 @@ class SentimentShiftDetector:
         price_agreement_fraction: float,
         horizon_seconds: float,
         calibrator: SignalCalibrator,
+        maximum_gap_seconds: float | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if shift_z_threshold <= 0:
@@ -83,6 +84,10 @@ class SentimentShiftDetector:
         self._horizon = horizon_seconds
         self._calibrator = calibrator
         self._now_ns = now_ns
+        # How long a symbol may be silent before its window is judged to have a
+        # hole in it rather than a series. None means the caller stated no bound,
+        # and this part does not invent one (RL-061).
+        self._maximum_gap_seconds = maximum_gap_seconds
         self._sentiment: dict[tuple[str, str], RollingWindow] = {}
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self.standing = SentimentStanding()
@@ -92,17 +97,23 @@ class SentimentShiftDetector:
         key = (venue_id, symbol)
         window = self._sentiment.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._sentiment[key] = window
         window.observe(reading)
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         key = (venue_id, symbol)
         window = self._prices.get(key)
         if window is None:
-            window = RollingWindow(length=self._window_length)
+            window = RollingWindow(
+                length=self._window_length,
+                maximum_gap_seconds=self._maximum_gap_seconds,
+            )
             self._prices[key] = window
-        window.observe(price)
+        window.observe(price, at_ns)
 
     def observe_outcome(self, relationship: str, was_right: bool) -> None:
         """Whether price followed sentiment, or reversed against it, after a call."""
@@ -251,13 +262,16 @@ def start_part(context) -> int:
             half_life_observations=context.number("signal_half_life_observations"),
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
+            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
     )
     venues_of: dict[str, set[str]] = {}
 
     def read_sentiment(_detector):
         rules.payloads()
         for trade in trades.payloads():
-            detector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            detector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
             venues_of.setdefault(trade.symbol, set()).add(trade.venue_id)
         touched = set()
         for reading in readings.payloads():

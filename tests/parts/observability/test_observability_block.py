@@ -32,7 +32,7 @@ from parts.observability.fund_conservation_auditor import (
     CONSERVED, DIVERGED, FundConservationAuditor,
 )
 from parts.observability.heartbeat_collector import (
-    LATE, NEVER_REPORTED, REPORTING, SILENT, HeartbeatCollector,
+    LATE, NEVER_REPORTED, REPORTING, SILENT, HeartbeatCollector, heartbeat_table_as_document,
 )
 from parts.observability.probe_runner import (
     FAILED as PROBE_FAILED, MEASURED, NOT_RUN, TIMED_OUT, ProbeRunner,
@@ -69,8 +69,8 @@ class Clock:
         return self.now
 
 
-def health(part_id, state="on"):
-    return PartHealth(part_id, state, 1.0, 0.1, 1, None)
+def health(part_id, state="on", standing=()):
+    return PartHealth(part_id, state, 1.0, 0.1, 1, None, standing=standing)
 
 
 @pytest.mark.parametrize("part_id", sorted(BLOCK_PARTS))
@@ -663,3 +663,47 @@ def test_heartbeat_collector_carries_the_entry_point_the_launcher_needs():
     from runtime.part_launcher import PART_ENTRY_POINT
 
     assert callable(getattr(heartbeat_collector, PART_ENTRY_POINT))
+
+
+def test_the_table_carries_what_a_part_says_about_its_own_work():
+    """The defect this closes: PartHealth carried facts nothing ever read.
+
+    `input_loss` sat on health from the day the substrate was built and no reader
+    consumed it, while a symbol's price stayed frozen for 56 minutes in a part
+    whose health read fine. A part's own counters were in the same position: every
+    part computes them in a describe_* function, and the function was called by
+    nothing. A refusal that reaches no table is a refusal nobody can see.
+    """
+    subject = collector(Clock())
+    subject.observe_health(
+        health("instrument-selector",
+               standing=(("chosen", 481.0), ("refused_for_a_stale_price", 12.0)))
+    )
+
+    row = next(
+        beat for beat in subject.read_table().heartbeats
+        if beat.part_id == "instrument-selector"
+    )
+    assert dict(row.standing)["refused_for_a_stale_price"] == 12.0
+    assert dict(row.standing)["chosen"] == 481.0
+
+
+def test_a_part_that_says_nothing_about_itself_carries_an_empty_standing():
+    subject = collector(Clock())
+    subject.observe_health(health("tick-size-resolver"))
+
+    row = subject.read_table().heartbeats[0]
+    assert row.standing == ()
+
+
+def test_the_written_table_carries_the_standing_a_reader_will_look_for():
+    """The table on disk is what every board reads. A counter that reaches the
+    collector and not the file is a counter nothing can display."""
+    subject = collector(Clock())
+    subject.observe_health(health("instrument-selector", standing=(("refused_for_a_stale_price", 12.0),)))
+
+    document = heartbeat_table_as_document(subject.read_table(), subject.standing)
+    row = next(
+        beat for beat in document["heartbeats"] if beat["part_id"] == "instrument-selector"
+    )
+    assert row["standing"]["refused_for_a_stale_price"] == 12.0

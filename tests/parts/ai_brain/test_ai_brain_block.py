@@ -828,7 +828,7 @@ def a_timing(bot=BULL, action=ENTER_NOW, trigger=100.0):
 def test_every_timed_intent_carries_an_expiry():
     """An intent with no expiry is a trade taken later by aged-out reasoning."""
     subject = a_gate(validity=30.0)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_bot_timing(BULL, a_timing())
     timed = subject.gate(an_intent(bots=(BULL,)))
     assert timed.act_now
@@ -839,7 +839,7 @@ def test_every_timed_intent_carries_an_expiry():
 def test_an_expired_intent_is_detected():
     clock = Clock()
     subject = a_gate(validity=10.0, clock=clock)
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_bot_timing(BULL, a_timing())
     timed = subject.gate(an_intent(bots=(BULL,)))
     assert subject.has_expired(timed) is False
@@ -850,7 +850,7 @@ def test_an_expired_intent_is_detected():
 def test_the_strictest_bot_timing_wins():
     """Acting now on a view half of whose evidence says it is early is the worst of both."""
     subject = a_gate()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_bot_timing(BULL, a_timing(BULL, ENTER_NOW))
     subject.observe_bot_timing(TAIL, a_timing(TAIL, WAIT_FOR_TRIGGER, trigger=98.0))
     timed = subject.gate(an_intent(bots=(BULL, TAIL)))
@@ -863,7 +863,7 @@ def test_price_moving_past_the_decision_refuses_the_intent():
     """A conviction formed at one price is not the same conviction two percent away."""
     subject = a_gate(drift=0.01)
     subject.record_decision_price(VENUE, SYMBOL, 100.0)
-    subject.observe_price(VENUE, SYMBOL, 105.0)
+    subject.observe_price(VENUE, SYMBOL, 105.0, subject._now_ns())
     subject.observe_bot_timing(BULL, a_timing())
     timed = subject.gate(an_intent(bots=(BULL,)))
     assert timed.act_now is False
@@ -873,7 +873,7 @@ def test_price_moving_past_the_decision_refuses_the_intent():
 
 def test_a_bot_standing_down_since_the_intent_stops_it():
     subject = a_gate()
-    subject.observe_price(VENUE, SYMBOL, 100.0)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
     subject.observe_bot_timing(BULL, a_timing(BULL, STAND_DOWN))
     assert subject.gate(an_intent(bots=(BULL,))).waited_for == A_BOT_STOOD_DOWN_ON_TIMING
 

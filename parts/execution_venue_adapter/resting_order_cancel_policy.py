@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -119,8 +120,14 @@ class RestingOrderCancelPolicy:
         self._resting[order_id] = _RestingOrder(venue_id, symbol, limit_price, self._monotonic())
         self.standing.orders_watched = len(self._resting)
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default. A price with no age cannot be told apart from a
+        price that stopped arriving, which is how a symbol frozen for 56 minutes
+        was traded on 2026-08-23.
+        """
+        self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=at_ns)
 
     def observe_order_filled(self, order_id: str) -> None:
         """A fill is the only evidence of what patience is worth on this symbol."""
@@ -129,7 +136,8 @@ class RestingOrderCancelPolicy:
             return
         key = (order.venue_id, order.symbol)
         self._seconds_estimator(key).observe(self._monotonic() - order.placed_at_monotonic)
-        price = self._prices.get(key)
+        observed = self._prices.get(key)
+        price = None if observed is None else observed.price
         if price and order.limit_price:
             self._distance_estimator(key).observe(abs(price - order.limit_price) / price)
         self.standing.fills_learned_from += 1
@@ -147,7 +155,8 @@ class RestingOrderCancelPolicy:
 
         key = (order.venue_id, order.symbol)
         resting = self._monotonic() - order.placed_at_monotonic
-        price = self._prices.get(key)
+        observed = self._prices.get(key)
+        price = None if observed is None else observed.price
         distance = abs(price - order.limit_price) / price if price and order.limit_price else None
 
         ttl = self._seconds_estimator(key).estimate(
@@ -279,7 +288,9 @@ def start_part(context) -> int:
                 policy.observe_order_placed(order.client_order_id, order.venue_id, order.symbol, order.limit_price)
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
-                policy.observe_price(trade.venue_id, trade.symbol, trade.price)
+                policy.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
 
     def publish(decisions) -> None:
         acted = tuple(d for d in decisions if d.action != HOLD)

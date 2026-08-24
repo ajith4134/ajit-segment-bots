@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.price_staleness import ObservedPrice
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.trading_types import LONG
@@ -81,8 +82,16 @@ class LiquidationPriceTracker:
     def set_maintenance_margin_rate(self, venue_id: str, symbol: str, rate: float) -> None:
         self._margin_rates[(venue_id, symbol)] = rate
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
-        self._prices[(venue_id, symbol)] = price
+    def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """One print, kept with the venue's own time for it.
+
+        `at_ns` has no default. A price with no age cannot be told apart from a
+        price that stopped arriving, which is how a symbol frozen for 56 minutes
+        was traded on 2026-08-23.
+        """
+        self._prices[(venue_id, symbol)] = ObservedPrice(
+            price=price, observed_at_ns=at_ns
+        )
 
     def compute(self, venue_id: str, symbol: str) -> LiquidationPrice | None:
         key = (venue_id, symbol)
@@ -106,7 +115,8 @@ class LiquidationPriceTracker:
         liquidation = entry - move if position.direction == LONG else entry + move
         self.standing.computed += 1
 
-        current = self._prices.get(key)
+        observed = self._prices.get(key)
+        current = None if observed is None else observed.price
         distance = None
         if current:
             distance = abs(current - liquidation) / current
@@ -210,7 +220,9 @@ def start_part(context) -> int:
             tracker.set_leverage(choice.venue_id, choice.symbol, choice.leverage)
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
-                tracker.observe_price(trade.venue_id, trade.symbol, trade.price)
+                tracker.observe_price(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
 
     def tick() -> None:
         read_inputs(tracker)
