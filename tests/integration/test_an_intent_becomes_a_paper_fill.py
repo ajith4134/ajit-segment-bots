@@ -176,6 +176,31 @@ def real_prices(read_captured_payloads):
     return trades
 
 
+def arriving_now(trades):
+    """The captured trades, dated as though the market had just printed them.
+
+    The prices, sizes, sides and the spacing between prints are the venue's own --
+    that is what RL-063 is for, and none of it is altered. What is restamped is
+    only when each print says it happened, and it is restamped at every publish
+    rather than once, because this run takes minutes: a part that judges how old a
+    price is would otherwise watch a fixture recorded on 2026-08-22 age past every
+    bound mid-test and correctly refuse to trade on it.
+
+    This is the seam RL-071 names. The live spine gets prints whose times are the
+    market's own and needs no help; only a replay has to say when it is pretending
+    to be, and saying so explicitly here is what keeps the pretence out of the
+    parts.
+    """
+    import dataclasses
+    import time
+
+    shift_ns = time.time_ns() - trades[-1].venue_time_ns
+    return [
+        dataclasses.replace(trade, venue_time_ns=trade.venue_time_ns + shift_ns)
+        for trade in trades
+    ]
+
+
 @pytest.fixture
 def captured_universe(read_captured_json):
     """The symbols the venue listed, on the terms it listed them on.
@@ -320,7 +345,7 @@ def test_an_intent_becomes_a_paper_fill(
         warm_up_ends = time.monotonic() + WARM_UP_SECONDS
         while time.monotonic() < warm_up_ends:
             catalogue.publish("symbol-universe", captured_universe)
-            feed.publish("market-data", real_prices[-40:])
+            feed.publish("market-data", arriving_now(real_prices[-40:]))
             time.sleep(PUBLISH_INTERVAL_SECONDS)
 
         # The intent is republished while it stands, which is what the arbiter
@@ -338,7 +363,7 @@ def test_an_intent_becomes_a_paper_fill(
         deadline = time.monotonic() + PATIENCE_SECONDS
         while time.monotonic() < deadline and not seen["fill"]:
             catalogue.publish("symbol-universe", captured_universe)
-            feed.publish("market-data", real_prices[-40:])
+            feed.publish("market-data", arriving_now(real_prices[-40:]))
             brain.publish("trade-intent", [intent])
             time.sleep(PUBLISH_INTERVAL_SECONDS)
             for data_type, inbox in watched.items():
@@ -354,7 +379,7 @@ def test_an_intent_becomes_a_paper_fill(
         while time.monotonic() < settled_by and not any(
             message.payload.kind == "fill" for message in seen["journal-entry"]
         ):
-            feed.publish("market-data", real_prices[-40:])
+            feed.publish("market-data", arriving_now(real_prices[-40:]))
             time.sleep(PUBLISH_INTERVAL_SECONDS)
             for data_type, inbox in watched.items():
                 seen[data_type].extend(inbox.drain())

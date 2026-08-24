@@ -1,0 +1,99 @@
+BTCUSDT: 807425 sampled trades
+  age     1s  median 0.005692%  p95 0.037444%  p99 0.083151%
+  age     2s  median 0.007636%  p95 0.046928%  p99 0.097994%
+  age     5s  median 0.011637%  p95 0.065237%  p99 0.153587%
+  age    10s  median 0.016923%  p95 0.093422%  p99 0.184587%
+  age    15s  median 0.020349%  p95 0.104699%  p99 0.203134%
+  age    30s  median 0.029182%  p95 0.143642%  p99 0.276671%
+  age    45s  median 0.034869%  p95 0.169035%  p99 0.293808%
+  age    60s  median 0.039928%  p95 0.172321%  p99 0.319559%
+  age   120s  median 0.056098%  p95 0.243664%  p99 0.366902%
+  age   300s  median 0.081051%  p95 0.304936%  p99 0.507213%
+  age   600s  median 0.116079%  p95 0.444498%  p99 0.726546%
+  age  1800s  median 0.179777%  p95 0.544100%  p99 0.990697%
+  age  3360s  median 0.191121%  p95 0.703358%  p99 0.962588%
+ETHUSDT: 1120633 sampled trades
+  age     1s  median 0.010097%  p95 0.090185%  p99 0.196877%
+  age     2s  median 0.013825%  p95 0.121689%  p99 0.297227%
+  age     5s  median 0.020879%  p95 0.167525%  p99 0.395250%
+  age    10s  median 0.029812%  p95 0.214677%  p99 0.711741%
+  age    15s  median 0.035867%  p95 0.252413%  p99 0.880548%
+  age    30s  median 0.050043%  p95 0.375744%  p99 1.041071%
+  age    45s  median 0.059425%  p95 0.450058%  p99 1.162514%
+  age    60s  median 0.069283%  p95 0.570343%  p99 1.039172%
+  age   120s  median 0.090947%  p95 0.576189%  p99 1.156809%
+  age   300s  median 0.144014%  p95 0.602511%  p99 0.954681%
+  age   600s  median 0.185374%  p95 0.836761%  p99 1.116455%
+  age  1800s  median 0.277041%  p95 1.057834%  p99 1.455984%
+  age  3360s  median 0.325679%  p95 1.208972%  p99 1.601779%
+SOLUSDT: 161778 sampled trades
+  age     1s  median 0.010578%  p95 0.043229%  p99 0.094419%
+  age     2s  median 0.010718%  p95 0.062696%  p99 0.115716%
+  age     5s  median 0.020973%  p95 0.086123%  p99 0.167364%
+  age    10s  median 0.021652%  p95 0.118522%  p99 0.216990%
+  age    15s  median 0.031837%  p95 0.140056%  p99 0.259011%
+  age    30s  median 0.043131%  p95 0.194133%  p99 0.366992%
+  age    45s  median 0.054042%  p95 0.242847%  p99 0.444348%
+  age    60s  median 0.064288%  p95 0.280414%  p99 0.487066%
+  age   120s  median 0.094414%  p95 0.336226%  p99 0.635091%
+  age   300s  median 0.137210%  p95 0.527108%  p99 0.819849%
+  age   600s  median 0.191073%  p95 0.646460%  p99 1.018908%
+  age  1800s  median 0.336576%  p95 0.910728%  p99 1.266496%
+  age  3360s  median 0.308183%  p95 1.024504%  p99 1.578892%
+ENAUSDT: 991129 sampled trades
+  age     1s  median 0.030110%  p95 0.146818%  p99 0.290680%
+  age     2s  median 0.042686%  p95 0.196040%  p99 0.355170%
+  age     5s  median 0.065541%  p95 0.306801%  p99 0.532102%
+  age    10s  median 0.091169%  p95 0.411496%  p99 0.661274%
+  age    15s  median 0.113786%  p95 0.474703%  p99 0.776126%
+  age    30s  median 0.164046%  p95 0.615314%  p99 0.943284%
+  age    45s  median 0.204228%  p95 0.736890%  p99 1.095175%
+  age    60s  median 0.247731%  p95 0.848147%  p99 1.188425%
+  age   120s  median 0.350435%  p95 1.161327%  p99 1.644281%
+  age   300s  median 0.527808%  p95 1.867342%  p99 2.506702%
+  age   600s  median 0.673001%  p95 2.383151%  p99 3.314644%
+  age  1800s  median 1.305009%  p95 4.393511%  p99 5.221111%
+  age  3360s  median 1.683038%  p95 6.258907%  p99 7.328108%
+ADAUSDT: 60229 sampled trades
+  age     1s  median 0.043840%  p95 0.089326%  p99 0.139211%
+  age     2s  median 0.044131%  p95 0.092123%  p99 0.178015%
+  age     5s  median 0.044444%  p95 0.133869%  p99 0.222618%
+  age    10s  median 0.045086%  p95 0.177541%  p99 0.277264%
+  age    15s  median 0.045641%  p95 0.185787%  p99 0.350570%
+  age    30s  median 0.088535%  p95 0.271862%  p99 0.489324%
+  age    45s  median 0.089666%  p95 0.325430%  p99 0.675371%
+  age    60s  median 0.091848%  p95 0.374181%  p99 0.758929%
+  age   120s  median 0.136612%  p95 0.491071%  p99 0.928793%
+  age   300s  median 0.184162%  p95 0.794021%  p99 1.233480%
+  age   600s  median 0.273973%  p95 0.967033%  p99 1.532745%
+  age  1800s  median 0.494049%  p95 1.442308%  p99 2.214503%
+  age  3360s  median 0.535236%  p95 1.913043%  p99 2.432667%
+1000PEPEUSDT: 550938 sampled trades
+  age     1s  median 0.017679%  p95 0.091429%  p99 0.162150%
+  age     2s  median 0.024796%  p95 0.118727%  p99 0.212146%
+  age     5s  median 0.039091%  p95 0.170196%  p99 0.301236%
+  age    10s  median 0.053931%  p95 0.227035%  p99 0.401309%
+  age    15s  median 0.066215%  p95 0.265811%  p99 0.445655%
+  age    30s  median 0.092769%  p95 0.353069%  p99 0.606514%
+  age    45s  median 0.114061%  p95 0.433343%  p99 0.720540%
+  age    60s  median 0.130136%  p95 0.515964%  p99 0.816275%
+  age   120s  median 0.186930%  p95 0.692908%  p99 1.062940%
+  age   300s  median 0.296229%  p95 1.037854%  p99 1.551794%
+  age   600s  median 0.401150%  p95 1.418998%  p99 1.990462%
+  age  1800s  median 0.705415%  p95 2.098704%  p99 2.595134%
+  age  3360s  median 0.882809%  p95 2.608630%  p99 3.093773%
+
+{
+  "round_trip_cost_fraction": 0.0011,
+  "largest_age_whose_p95_drift_stays_within_one_round_trip": {
+    "BTCUSDT": 15,
+    "ETHUSDT": 1,
+    "SOLUSDT": 5,
+    "ENAUSDT": null,
+    "ADAUSDT": 2,
+    "1000PEPEUSDT": 1
+  },
+  "binding_across_symbols": 1
+}
+
+written /home/anushadudekula71/ajit-segment-bots/measurements/2026-08-24-reference-price-staleness/price-drift-by-age.json

@@ -52,7 +52,7 @@ from parts.risk_capital_allocation.participation_capped_order_splitter import (
 )
 from parts.risk_capital_allocation.position_sizer import (
     REFUSED_NO_INCREMENT, REFUSED_NO_LIMIT, REFUSED_STOP_INVALID, REFUSED_TOO_SMALL,
-    SIZED, SHRUNK_TO_FIT, PositionSizer,
+    SIZED, SHRUNK_TO_FIT, PositionSizer, entry_price_for,
 )
 from parts.risk_capital_allocation.profit_lock import (
     HELD, MOVED_TO_BREAK_EVEN, NOT_YET_PROFITABLE, TRAILED, ProfitLock,
@@ -453,6 +453,61 @@ def test_no_forecast_and_no_history_places_nothing():
 
 
 # ---- position-sizer ----------------------------------------------------------
+
+class Choice:
+    """An instrument-choice, as the sizer reads it -- by shape, never by import."""
+
+    def __init__(self, reference_price=None, chosen="BTCUSDT-PERP", state="chosen"):
+        self.reference_price = reference_price
+        self.chosen = chosen
+        self.state = state
+
+    @property
+    def is_actionable(self):
+        return self.chosen is not None
+
+
+class Plan:
+    def __init__(self, entry_price=None, stop_price=None):
+        self.entry_price = entry_price
+        self.stop_price = stop_price
+
+
+def test_the_entry_price_comes_from_the_refined_plan_when_there_is_one():
+    assert entry_price_for(Plan(entry_price=101.0), Choice(reference_price=100.0)) == 101.0
+
+
+def test_a_choice_that_chose_something_lends_its_reference_price():
+    """No plan exists before any trade has closed, and the choice carries the price."""
+    assert entry_price_for(None, Choice(reference_price=100.0)) == 100.0
+
+
+def test_a_choice_that_refused_lends_nothing():
+    """The defect this closes: a refusal still had a price attached, and the sizer
+    took it.
+
+    `instrument-selector` answers "nothing is listed for this symbol", "the best
+    instrument is in a segment that is not built", or "this symbol's last price is
+    too old to size against" by returning a choice with no instrument in it. The
+    price it carries is evidence about the refusal, not an entry. Sizing against it
+    builds an order for an instrument the part that knows about instruments has
+    just said cannot carry the trade.
+    """
+    refused = Choice(reference_price=100.0, chosen=None, state="this-symbol's-last-price-is-too-old-to-size-against")
+    assert entry_price_for(None, refused) is None
+    assert entry_price_for(Plan(entry_price=None), refused) is None
+
+
+def test_a_refusal_cannot_be_overridden_by_an_absent_plan():
+    """A plan that exists but has no entry price must not fall through to a refusal."""
+    assert entry_price_for(Plan(entry_price=None, stop_price=99.0), Choice(chosen=None)) is None
+
+
+def test_no_choice_at_all_is_not_a_price():
+    assert entry_price_for(None, None) is None
+    assert entry_price_for(Plan(entry_price=101.0), None) == 101.0
+
+
 
 def sizer(fee=0.0004, slippage=0.0):
     return PositionSizer(taker_fee_rate=fee, slippage_fraction=slippage)

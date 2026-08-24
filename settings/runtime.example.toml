@@ -3704,3 +3704,38 @@ note  = "operator, 2026-08-24: four in five symbols silent stops being the marke
 value = 3
 unit  = "consecutive request failures"
 note  = "operator, 2026-08-24: dormant until an input carries request results -- none does yet -- but the number a venue is declared down at must be set where the operator can see it, not invented the day the input appears."
+
+[reference_price_move_anchor_seconds]
+value = 1.0
+unit  = "seconds between the prints a move is measured across"
+note  = "operator, 2026-08-24: two trades a millisecond apart differ by the tick, not by the symbol's volatility, so a move is only measured against an anchor at least this old and is then scaled to one second by the square root of the gap. One second because that is the unit the bound is expressed in and the finest spacing at which the top-30 symbols all print reliably: BTCUSDT printed 807,425 times on 2026-08-23, ADAUSDT 60,229, so a one-second anchor is dense for the busiest and still reachable for the quietest."
+
+[reference_price_move_quantile]
+value = 0.95
+unit  = "quantile of the absolute one-second move"
+note  = "operator, 2026-08-24: the bound must hold on an unusual second, not a typical one -- a price is dangerous exactly when the market moved, and a median move would size the bound for the calm the trade is not taken in. The measurement in measurements/2026-08-24-reference-price-staleness/ reports median, p95 and p99 side by side, and p95 is the one the bound is set from."
+
+[reference_price_move_window]
+value = 3600
+unit  = "one-second moves kept per symbol"
+note  = "operator, 2026-08-24: an hour of moves at the anchor spacing. Bounded because volatility is not stationary -- a symbol calm this morning and violent this afternoon must be believed for a shorter time this afternoon -- and an hour is long enough that one burst cannot dominate the quantile while short enough that this morning does not decide this afternoon's bound."
+
+[reference_price_move_observations_needed]
+value = 300
+unit  = "one-second moves before the estimate is the symbol's own"
+note  = "operator, 2026-08-24: five minutes of prints. Below it the bound falls back to the measured prior rather than to a quantile of a handful of moves, which on a quiet five minutes would read as a symbol that never moves and licence an arbitrarily old price. Never seen is answered by the prior, not by optimism."
+
+[reference_price_prior_one_second_move]
+value = 0.000898
+unit  = "fraction of price, 95th percentile of the absolute one-second move"
+note  = "operator, 2026-08-24: what a symbol whose own moves have not been measured yet is assumed to do. The median across the six symbols measured on this system's own tape for 2026-08-23 -- BTCUSDT 0.0374%, SOLUSDT 0.0432%, ADAUSDT 0.0893%, ETHUSDT 0.0902%, 1000PEPEUSDT 0.0914%, ENAUSDT 0.1468% -- so an unmeasured symbol is treated as an ordinary one of this venue's top thirty rather than as the calmest or the wildest. It implies a 1.5s bound before anything is learned. Re-measure with measurements/2026-08-24-reference-price-staleness/measure_price_drift_by_age.py when the captured universe changes."
+
+[reference_price_minimum_age_seconds]
+value = 1.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: the floor on the learned bound. Below the one-second anchor spacing the estimate is extrapolating inside its own resolution and cannot tell a 0.5s bound from a 0.1s one, so a symbol volatile enough to imply less than a second is held here rather than believed to a precision the measurement does not have. ENAUSDT implies 0.56s and is clamped to this."
+
+[reference_price_maximum_age_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "operator, 2026-08-24: the ceiling on the learned bound. At sixty seconds every symbol measured on 2026-08-23 has a 95th-percentile drift at or above the median stop distance of the 320 bounded orders this system has actually produced (0.1866%): BTCUSDT 0.172%, 1000PEPEUSDT 0.510%, ETHUSDT 0.570%. A price that old cannot place a stop at all, whatever a quiet hour's quantile says about the symbol."

@@ -38,6 +38,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
 from runtime.trading_types import DATED_FUTURE, OPTION, PERPETUAL_FUTURE, SPOT
 
@@ -72,6 +73,8 @@ NONE_CAN_CARRY_THE_INTENT = "no-listed-instrument-can-express-this-intent"
 BEST_IS_IN_AN_UNBUILT_SEGMENT = "the-best-instrument-is-in-a-segment-that-is-not-built"
 NONE_LIQUID_ENOUGH = "no-instrument-is-liquid-enough-at-this-size"
 NONE_FAST_ENOUGH = "no-instrument-can-be-filled-inside-the-intent's-window"
+NO_REFERENCE_PRICE_HAS_EVER_ARRIVED = "this-symbol-has-never-printed-a-trade-here"
+REFERENCE_PRICE_IS_TOO_OLD = "this-symbol's-last-price-is-too-old-to-size-against"
 
 
 @dataclass(frozen=True)
@@ -117,8 +120,17 @@ class InstrumentChoice:
     # parts downstream have to size a position against a price and none of them
     # consumes market-data: the sizer's risk is a distance from an entry, and an
     # entry price that arrived separately would be a price from a different moment
-    # than the choice it belongs to. None when nothing has traded yet.
+    # than the choice it belongs to. None when nothing has traded yet, and None
+    # when what did trade is older than this part was told to believe -- a price
+    # withheld reads to every reader downstream as the absence it is, rather than
+    # as a number.
     reference_price: float | None = None
+    # When that price printed, by the venue's own clock. Carried separately from
+    # `chosen_at_ns` because they are different moments, and conflating them is the
+    # defect this field closes: a choice made now can only carry a price from
+    # whenever the symbol last traded, and on the live run of 2026-08-23 that gap
+    # reached fifty-six minutes while every message about it looked current.
+    reference_price_observed_at_ns: int | None = None
 
     @property
     def is_actionable(self) -> bool:
@@ -149,6 +161,7 @@ class InstrumentSelector:
         built_segments: tuple,
         maximum_cost_fraction: float,
         round_trip_cost_fraction: float | None = None,
+        price_staleness: PriceStalenessEstimator | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not built_segments:
@@ -164,8 +177,20 @@ class InstrumentSelector:
         # trades. None means it registers none, which is the right behaviour for a
         # caller that did not say what trading costs.
         self._round_trip_cost_fraction = round_trip_cost_fraction
-        self._prices: dict[tuple[str, str], float] = {}
+        # How old a symbol's last print may be and still be a price this part will
+        # let a position be sized against -- asked per symbol rather than held as a
+        # number here, because BTCUSDT tolerates fifteen seconds where ETHUSDT
+        # tolerates one and a single bound would be wrong for both. None means the
+        # caller stated no bound, and this part does not invent one (RL-061).
+        self._price_staleness = price_staleness
+        # Price and the moment it printed, together, because they are one fact.
+        self._prices: dict[tuple[str, str], ObservedPrice] = {}
         self._now_ns = now_ns
+        # The moment and the symbol the choice being built is about, so the price
+        # handed out is judged against the same instant, and the same symbol, the
+        # refusal was.
+        self._deciding_at_ns = now_ns()
+        self._deciding_about: tuple[str, str] = ("", "")
         self._listed: dict[tuple[str, str], list] = {}
         self.standing = SelectorStanding()
 
@@ -209,9 +234,13 @@ class InstrumentSelector:
             return instrument.premium_fraction * (1.0 - math.sqrt(1.0 - held))
         return None
 
-    def observe_price(self, venue_id: str, symbol: str, price: float) -> None:
+    def observe_price(self, venue_id: str, symbol: str, price: float, observed_at_ns: int) -> None:
         """The last trade for a symbol, kept so a choice carries the price it was
-        made at.
+        made at, and when that price printed.
+
+        `observed_at_ns` has no default on purpose. A caller that omitted it would
+        be storing a price with no age, which is exactly the shape that priced an
+        ENAUSDT order fifty-six minutes late on 2026-08-23.
 
         It registers no instrument. What contracts a venue lists and what they
         cost to hold is the venue's own statement, and it arrives on
@@ -219,7 +248,9 @@ class InstrumentSelector:
         exists, not a statement of its terms. Inferring one here is what left every
         perpetual with an unpriceable carry.
         """
-        self._prices[(venue_id, symbol)] = price
+        self._prices[(venue_id, symbol)] = ObservedPrice(price=price, observed_at_ns=observed_at_ns)
+        if self._price_staleness is not None:
+            self._price_staleness.observe_price(venue_id, symbol, price, observed_at_ns)
 
     def observe_listed_symbol(self, listed) -> None:
         """One entry of `symbol-universe`: a contract the venue lists, on its terms.
@@ -280,10 +311,19 @@ class InstrumentSelector:
         )
         self.standing.listings_registered += 1
 
-    def select(self, intent) -> InstrumentChoice:
-        """One intent, priced against everything listed for its symbol."""
+    def select(self, intent, now_ns: int | None = None) -> InstrumentChoice:
+        """One intent, priced against everything listed for its symbol.
+
+        `now_ns` is when the decision is being made, which is what the reference
+        price's age is measured against. It defaults to this part's clock so the
+        live tick loop reads unchanged; a caller replaying the tape passes the
+        moment it is replaying, because a price is stale relative to the decision
+        and not to the wall clock of whoever is asking.
+        """
         self.standing.intents_seen += 1
+        at = self._now_ns() if now_ns is None else now_ns
         key = (intent.venue_id, intent.symbol)
+        self._deciding_at_ns, self._deciding_about = at, key
         listed = self._listed.get(key, [])
 
         if not listed:
@@ -372,6 +412,18 @@ class InstrumentSelector:
                 f"past the {self._maximum_cost:.3%} this intent may spend to be expressed",
             )
 
+        # Everything about the instrument holds. What is left is whether this part
+        # knows what the symbol is worth right now, and a position cannot be sized
+        # against a price nobody can date. Checked last so the refusal can name the
+        # instrument that would otherwise have been chosen.
+        refusal = self._price_refusal(key, at)
+        if refusal is not None:
+            state, why = refusal
+            return self._choice(
+                intent, None, None, None, len(listed), rejected, None, state,
+                f"{best.contract_symbol} would carry this intent at {best_cost:.3%}, and {why}",
+            )
+
         self.standing.chosen += 1
         self.standing.by_kind[best.instrument_kind] = (
             self.standing.by_kind.get(best.instrument_kind, 0) + 1
@@ -391,6 +443,48 @@ class InstrumentSelector:
             + f", the cheapest of {len(priced)} usable instrument(s)"
             + unbuilt_note,
         )
+
+    def _believable_price(self, observed: "ObservedPrice | None") -> float | None:
+        """The price to hand downstream, or None where it is too old to hand over.
+
+        The time it printed still travels with the choice either way: a reader that
+        can see when the last price was is being told why there is no number, which
+        is a different thing from being told nothing.
+        """
+        if observed is None or self._price_staleness is None:
+            return None if observed is None else observed.price
+        bound = self._price_staleness.believable_age_seconds(*self._deciding_about)
+        if observed.age_seconds(self._deciding_at_ns) > bound.value:
+            return None
+        return observed.price
+
+    def _price_refusal(self, key: tuple[str, str], at_ns: int) -> tuple[str, str] | None:
+        """Why this symbol cannot be priced right now, or None if it can.
+
+        Only reached when a bound was given. Told nothing about staleness, this
+        part refuses nothing on age -- which is the behaviour every caller had
+        before the bound existed, and is why the bound is where the provenance is.
+        """
+        if self._price_staleness is None:
+            return None
+        observed = self._prices.get(key)
+        if observed is None:
+            return (
+                NO_REFERENCE_PRICE_HAS_EVER_ARRIVED,
+                "no trade has ever printed for this symbol here, so there is no price to "
+                "size a position against. Never seen is not a stale price and not a zero",
+            )
+        age = observed.age_seconds(at_ns)
+        bound = self._price_staleness.believable_age_seconds(*key)
+        if age > bound.value:
+            return (
+                REFERENCE_PRICE_IS_TOO_OLD,
+                f"the last trade this part saw for the symbol printed {age:.0f}s ago, past the "
+                f"{bound.value:.2f}s this symbol's own moves say a price may be believed "
+                f"({bound.reason}). Sizing against it would put the risk a fixed distance from "
+                f"a price the market has left",
+            )
+        return None
 
     def _cannot_carry(self, instrument: ListedInstrument, intent) -> str | None:
         """Why this instrument cannot express this intent, or None if it can."""
@@ -432,6 +526,7 @@ class InstrumentSelector:
     ) -> InstrumentChoice:
         if state != CHOSEN:
             self.standing.by_refusal[state] = self.standing.by_refusal.get(state, 0) + 1
+        observed = self._prices.get((intent.venue_id, intent.symbol))
         return InstrumentChoice(
             venue_id=intent.venue_id,
             symbol=intent.symbol,
@@ -444,7 +539,8 @@ class InstrumentSelector:
             state=state,
             reason=reason,
             chosen_at_ns=self._now_ns(),
-            reference_price=self._prices.get((intent.venue_id, intent.symbol)),
+            reference_price=self._believable_price(observed),
+            reference_price_observed_at_ns=None if observed is None else observed.observed_at_ns,
         )
 
 
@@ -463,6 +559,14 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "symbols_with_listed_instruments": len(selector._listed),
         "listings_registered": selector.standing.listings_registered,
         "listings_skipped": dict(sorted(selector.standing.listings_skipped.items())),
+        # What this part currently believes about how long each symbol's price is
+        # worth acting on. Reported because a refusal that cannot be seen from
+        # outside is indistinguishable from an input that never arrived, and a
+        # bound that quietly collapsed to its floor would stop every trade while
+        # looking exactly like a market nobody wanted to trade.
+        "price_staleness": (
+            None if selector._price_staleness is None else selector._price_staleness.describe()
+        ),
     }
 
 
@@ -519,7 +623,11 @@ def start_part(context) -> int:
         for instrument in list(surfaces.payloads()) + list(grades.payloads()):
             selector.observe_listed_instrument(instrument)
         for trade in trades.payloads():
-            selector.observe_price(trade.venue_id, trade.symbol, trade.price)
+            # The venue's own time for the print, not this part's clock: how old a
+            # price is has to be measured from when the market made it.
+            selector.observe_price(
+                trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+            )
         timed.payloads()
         return intents.payloads()
 
@@ -533,6 +641,21 @@ def start_part(context) -> int:
             # halves of an instrument's cost come from the two sides that own
             # them.
             round_trip_cost_fraction=2 * context.number("taker_fee_rate"),
+            # What makes a stale price material is the same threshold that makes a
+            # cost material, so the two come from one setting rather than from two
+            # that could disagree.
+            price_staleness=PriceStalenessEstimator(
+                materiality_fraction=2 * context.number("taker_fee_rate"),
+                anchor_seconds=context.number("reference_price_move_anchor_seconds"),
+                quantile=context.number("reference_price_move_quantile"),
+                window=int(context.number("reference_price_move_window")),
+                observations_needed=int(
+                    context.number("reference_price_move_observations_needed")
+                ),
+                prior_one_second_move=context.number("reference_price_prior_one_second_move"),
+                minimum_age_seconds=context.number("reference_price_minimum_age_seconds"),
+                maximum_age_seconds=context.number("reference_price_maximum_age_seconds"),
+            ),
         ),
         control_socket=context.control_socket,
         read_intents_and_instruments=read_intents_and_instruments,

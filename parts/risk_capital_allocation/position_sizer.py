@@ -259,6 +259,33 @@ class PositionSizer:
         )
 
 
+def entry_price_for(plan, instrument) -> float | None:
+    """What to size against, or None when nothing here is a price.
+
+    A stop-target-plan refines the stop against clusters and measured excursions,
+    and stop-target-placer refuses to make one until it has a volatility forecast
+    or excursion history -- neither of which exists before any trade has closed.
+    The intent already carries the stop the bot's own exit plan proposed, and the
+    instrument choice carries what the symbol last traded at, so both numbers are
+    available from inputs this part declares. The plan is preferred when it
+    exists, because it is the refined one.
+
+    **A choice that chose nothing lends nothing.** Its reference price is evidence
+    about the refusal -- what the symbol last printed, when the part that knows
+    about instruments declined to name one -- and not an entry. Until 2026-08-24
+    it was read as an entry anyway, so a symbol whose instrument was unlisted, or
+    in an unbuilt segment, or whose last price was too old to believe, still
+    produced a sized order. Read by shape rather than by import, because this part
+    knows the data it consumes and not the part that produces it (T-4).
+    """
+    refined = getattr(plan, "entry_price", None)
+    if refined:
+        return refined
+    if instrument is None or not getattr(instrument, "is_actionable", False):
+        return None
+    return getattr(instrument, "reference_price", None)
+
+
 def describe_sizing(sizer: PositionSizer) -> dict:
     return {
         "part_id": PART_ID,
@@ -385,17 +412,7 @@ def start_part(context) -> int:
             increment = increment_by_symbol.get(key)
             instrument = instrument_by_symbol.get(key)
 
-            # A stop-target-plan refines the stop against clusters and measured
-            # excursions, and stop-target-placer refuses to make one until it has a
-            # volatility forecast or excursion history -- neither of which exists
-            # before any trade has closed. The intent already carries the stop the
-            # bot's own exit plan proposed, and the instrument choice carries what
-            # the symbol last traded at, so both numbers are available from inputs
-            # this part declares. The plan is preferred when it exists, because it
-            # is the refined one.
-            entry_price = getattr(plan, "entry_price", None) or getattr(
-                instrument, "reference_price", None
-            )
+            entry_price = entry_price_for(plan, instrument)
             stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
             if entry_price is None or stop_price is None or balance is None or binding is None:
                 continue

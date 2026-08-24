@@ -99,3 +99,31 @@ def read_captured_json():
 def capture_manifest():
     """What was captured, when, from where, and how it was subset."""
     return json.loads((CAPTURED_ROOT / "capture-manifest.json").read_text())
+
+
+@pytest.fixture(scope="session")
+def read_captured_trades(read_captured_payloads):
+    """Return a reader: real trades off the captured tape, in this system's terms.
+
+    Decoded by the venue's own adapter rather than by a parser written here, for
+    the same reason the payload readers import the capture script: a second
+    definition of what a venue's message means is a second thing to keep in step.
+
+    RL-063 -- a test about staleness needs prices whose spacing in time is the
+    market's own. Invented timestamps would make the test agree with whatever the
+    code does.
+    """
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    def read(venue: str = "binance-usdm", name: str = "2026-08-22-btcusdt-aggtrade-run.jsonl",
+             limit: int | None = None):
+        adapter = load_venue_adapter(venue)
+        trades = []
+        for _, payload in read_captured_payloads(venue, name):
+            trades.extend(adapter.read_trades(payload))
+            if limit is not None and len(trades) >= limit:
+                return trades[:limit]
+        assert trades, f"{venue}/{name} decoded to no trades"
+        return trades
+
+    return read

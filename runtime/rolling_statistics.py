@@ -22,18 +22,76 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RollingWindow:
-    """The last N observations of one series, and what can be said about them."""
+    """The last N observations of one series, and what can be said about them.
+
+    **A window may be told what a hole in the series looks like.** Given
+    `maximum_gap_seconds`, an observation arriving longer than that after the last
+    one clears everything before it: the stretch of market the window described has
+    a hole in it, and statistics computed across the hole are not conservative,
+    they are wrong. The clearing is what makes them safe -- every statistic returns
+    None again until the window refills, so a detector's existing
+    minimum-observations guard is what declines to fire, with no detector needing
+    to grow a gap check of its own.
+
+    The failure this exists to prevent is specific. The bus drops rather than
+    blocks, so under load a symbol's prints stop and later resume. To a window with
+    no sense of time the first print after the hole sits directly beside the last
+    one before it, and the difference between them reads as a move that happened in
+    an instant -- which is precisely the shape a momentum-burst or a
+    liquidation-cascade detector exists to fire on.
+
+    Told nothing about time, a window keeps none: not every series is a price, and
+    a window over model error or restart counts has no clock to be judged against.
+    """
 
     length: int
+    maximum_gap_seconds: float | None = None
     values: deque = field(default_factory=deque)
+    _last_observed_at_ns: int | None = None
+    _series_breaks: int = 0
 
     def __post_init__(self) -> None:
         if self.length < 2:
             raise ValueError("a window shorter than two observations describes nothing")
+        if self.maximum_gap_seconds is not None and not self.maximum_gap_seconds > 0:
+            raise ValueError(
+                "the gap bound is a positive number of seconds, or None for a window with no "
+                f"clock; got {self.maximum_gap_seconds!r}"
+            )
         self.values = deque(self.values, maxlen=self.length)
 
-    def observe(self, value: float) -> None:
+    def observe(self, value: float, at_ns: int | None = None) -> None:
+        if self.maximum_gap_seconds is not None:
+            if at_ns is None:
+                raise ValueError(
+                    "this window was given a gap bound, so every observation must carry when "
+                    "it happened; a value with no time would assert a continuity nothing checked"
+                )
+            if self._last_observed_at_ns is not None:
+                gap_seconds = (at_ns - self._last_observed_at_ns) / 1e9
+                if gap_seconds > self.maximum_gap_seconds:
+                    self.values.clear()
+                    self._series_breaks += 1
+            self._last_observed_at_ns = at_ns
+        elif at_ns is not None:
+            self._last_observed_at_ns = at_ns
         self.values.append(float(value))
+
+    @property
+    def series_breaks(self) -> int:
+        """How many times a hole in the series emptied this window.
+
+        Counted rather than merely acted on: a window clearing repeatedly is a feed
+        that keeps stopping, and a detector that quietly never fires looks exactly
+        like a market in which nothing is happening.
+        """
+        return self._series_breaks
+
+    def seconds_since_last_observation(self, now_ns: int) -> float | None:
+        """How long this series has been silent, or None if it never spoke."""
+        if self._last_observed_at_ns is None:
+            return None
+        return (now_ns - self._last_observed_at_ns) / 1e9
 
     @property
     def count(self) -> int:

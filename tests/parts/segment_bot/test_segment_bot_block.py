@@ -11,14 +11,17 @@ import importlib
 import pytest
 
 from parts.segment_bot.instrument_selector import (
-    BEST_IS_IN_AN_UNBUILT_SEGMENT, CHOSEN, DATED_FUTURE, NONE_CAN_CARRY_THE_INTENT,
-    NONE_LIQUID_ENOUGH, NOTHING_AVAILABLE, OPTION, PERPETUAL_FUTURE, SPOT,
-    InstrumentSelector, ListedInstrument,
+    BEST_IS_IN_AN_UNBUILT_SEGMENT, CHOSEN, DATED_FUTURE,
+    NO_REFERENCE_PRICE_HAS_EVER_ARRIVED, NONE_CAN_CARRY_THE_INTENT,
+    NONE_LIQUID_ENOUGH, NOTHING_AVAILABLE, OPTION, PERPETUAL_FUTURE,
+    REFERENCE_PRICE_IS_TOO_OLD, SPOT, InstrumentSelector, ListedInstrument,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
+from runtime.price_staleness import PriceStalenessEstimator
 
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
+SECOND_NS = 1_000_000_000
 
 
 class Intent:
@@ -26,9 +29,9 @@ class Intent:
 
     def __init__(
         self, is_long=True, notional=10_000.0, horizon_seconds=3600.0,
-        needs_convexity=False, fill_within_seconds=None,
+        needs_convexity=False, fill_within_seconds=None, venue_id=VENUE, symbol=SYMBOL,
     ):
-        self.venue_id, self.symbol = VENUE, SYMBOL
+        self.venue_id, self.symbol = venue_id, symbol
         self.is_long = is_long
         self.notional_quote = notional
         self.horizon_seconds = horizon_seconds
@@ -295,11 +298,31 @@ def a_real_universe(read_captured_json):
     )
 
 
-def a_selector_that_pays_fees(taker_fee_rate=0.0005):
+def a_selector_that_pays_fees(taker_fee_rate=0.0005, believable_age_seconds=None):
+    """A selector, optionally told how old a price may be.
+
+    The bound is pinned rather than learned in these tests -- floor and ceiling set
+    to the same second -- because what is under test here is what the selector does
+    with a bound, not how the bound is arrived at. That is
+    tests/runtime/test_price_staleness.py, against the tape.
+    """
+    staleness = None
+    if believable_age_seconds is not None:
+        staleness = PriceStalenessEstimator(
+            materiality_fraction=2 * taker_fee_rate,
+            anchor_seconds=1.0,
+            quantile=0.95,
+            window=3_600,
+            observations_needed=300,
+            prior_one_second_move=0.000898,
+            minimum_age_seconds=believable_age_seconds,
+            maximum_age_seconds=believable_age_seconds,
+        )
     return InstrumentSelector(
         built_segments=("futures",),
         maximum_cost_fraction=0.05,
         round_trip_cost_fraction=2 * taker_fee_rate,
+        price_staleness=staleness,
     )
 
 
@@ -445,13 +468,111 @@ def test_a_trade_registers_a_price_and_never_an_instrument():
     priced, while looking from outside exactly like a venue that listed nothing.
     """
     subject = a_selector_that_pays_fees()
-    subject.observe_price(VENUE, SYMBOL, 77_000.0)
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=1_000 * SECOND_NS)
 
     choice = subject.select(Intent())
     assert choice.state == NOTHING_AVAILABLE
     assert choice.reference_price == 77_000.0, (
         "the price a choice was made at must still travel with the choice"
     )
+
+
+def test_a_reference_price_carries_when_it_was_observed():
+    """The fact the sizer needed and the choice never carried.
+
+    On the live run of 2026-08-23 an ENAUSDT order was priced at 0.17019, the real
+    market of 09:29:08, fifty-six minutes earlier. The choice that carried that
+    price was stamped `chosen_at_ns` = the moment it was made, so every reader
+    downstream saw a message that was genuinely fresh with a price inside it that
+    was not. A price and the time it was seen are one fact and travel together.
+    """
+    subject = a_selector_that_pays_fees()
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=1_000 * SECOND_NS)
+
+    choice = subject.select(Intent())
+    assert choice.reference_price == 77_000.0
+    assert choice.reference_price_observed_at_ns == 1_000 * SECOND_NS
+
+
+def test_a_choice_is_refused_when_its_price_is_older_than_the_bound(read_captured_json):
+    """A symbol whose prints stopped cannot be sized against, and says so.
+
+    Not a null price with a chosen instrument: the sizer would then fall back to
+    the stop plan's entry and price the order off a different stale number. The
+    refusal is the answer, and it is one of this part's countable states (T-5).
+    """
+    at = 1_000 * SECOND_NS
+    subject = a_selector_that_pays_fees(believable_age_seconds=60.0)
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=at)
+
+    fresh = subject.select(Intent(), now_ns=at + 30 * SECOND_NS)
+    assert fresh.state == CHOSEN
+
+    stale = subject.select(Intent(), now_ns=at + 3_360 * SECOND_NS)
+    assert stale.state == REFERENCE_PRICE_IS_TOO_OLD
+    assert stale.is_actionable is False
+    assert stale.chosen is None
+    assert "3360" in stale.reason or "3,360" in stale.reason
+    assert subject.standing.by_refusal[REFERENCE_PRICE_IS_TOO_OLD] == 1
+
+
+def test_a_symbol_that_never_printed_is_refused_for_that_and_not_for_age(read_captured_json):
+    """Never seen and too old are different facts and must not share a reason."""
+    subject = a_selector_that_pays_fees(believable_age_seconds=60.0)
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+
+    choice = subject.select(Intent(), now_ns=1_000 * SECOND_NS)
+    assert choice.state == NO_REFERENCE_PRICE_HAS_EVER_ARRIVED
+    assert choice.reference_price is None
+    assert choice.reference_price_observed_at_ns is None
+
+
+def test_a_price_that_comes_back_makes_the_symbol_tradable_again(read_captured_json):
+    """The symbol went quiet; it did not cease to exist."""
+    at = 1_000 * SECOND_NS
+    later = at + 3_360 * SECOND_NS
+    subject = a_selector_that_pays_fees(believable_age_seconds=60.0)
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=at)
+    assert subject.select(Intent(), now_ns=later).state == REFERENCE_PRICE_IS_TOO_OLD
+
+    subject.observe_price(VENUE, SYMBOL, 78_500.0, observed_at_ns=later)
+    back = subject.select(Intent(), now_ns=later)
+    assert back.state == CHOSEN
+    assert back.reference_price == 78_500.0
+
+
+def test_without_a_bound_a_price_never_expires(read_captured_json):
+    """RL-061: the bound is a named setting. A selector given none does not invent
+    one, and does not silently expire anything either."""
+    at = 1_000 * SECOND_NS
+    subject = a_selector_that_pays_fees()
+    for listed in a_real_universe(read_captured_json):
+        subject.observe_listed_symbol(listed)
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=at)
+
+    choice = subject.select(Intent(), now_ns=at + 3_360 * SECOND_NS)
+    assert choice.state == CHOSEN
+    assert choice.reference_price == 77_000.0
+
+
+def test_the_price_a_real_tape_last_printed_is_what_a_choice_carries(read_captured_trades):
+    """Against the tape rather than an invented number (RL-063)."""
+    trades = read_captured_trades(limit=200)
+    subject = a_selector_that_pays_fees(believable_age_seconds=60.0)
+    for trade in trades:
+        subject.observe_price(trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
+
+    last = trades[-1]
+    choice = subject.select(
+        Intent(venue_id=last.venue_id, symbol=last.symbol), now_ns=last.venue_time_ns
+    )
+    assert choice.reference_price == last.price
+    assert choice.reference_price_observed_at_ns == last.venue_time_ns
 
 
 def test_a_republished_universe_replaces_a_contract_s_terms(read_captured_json):
