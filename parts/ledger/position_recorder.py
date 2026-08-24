@@ -54,8 +54,16 @@ class PositionRecorderStanding:
 class PositionRecorder:
     """Journals a position each time the quantity held actually changes."""
 
-    def __init__(self, journal: Journal) -> None:
+    def __init__(self, journal: Journal, excursion_move_fraction: float) -> None:
+        if not excursion_move_fraction > 0:
+            raise ValueError(
+                "excursion_move_fraction is the price move an extreme must make before it is "
+                f"journalled again, as a fraction, and must be positive; got "
+                f"{excursion_move_fraction!r}. Zero journals every twitch of the peak, which "
+                f"wrote 8.59 million entries in two live days."
+            )
         self._journal = journal
+        self._excursion_move_fraction = excursion_move_fraction
         self._held: dict[tuple[str, str], float] = {}
         self._peaks: dict[tuple[str, str], tuple[float, float]] = {}
         self.standing = PositionRecorderStanding()
@@ -128,18 +136,27 @@ class PositionRecorder:
     def record_excursion(self, excursion) -> JournalEntry | None:
         """Journal how far an open position travelled, best and worst (RL-042).
 
-        Only when either extreme actually moved. The tracker publishes one
-        excursion per price message per open position -- hundreds a second on a
-        liquid symbol -- and journaling each one wrote four gigabytes of
-        identical extremes in two days (measured 2026-08-24: 99.9% of the
-        file). The extremes are the record; the per-price path is the tape's.
+        Only when either extreme has moved by `excursion_move_fraction` of its
+        last journalled price. Skipping exact repeats was tried first (2026-08-24
+        morning) and did not hold: an extreme is set by the market's newest best
+        print, so on a trending symbol it moves on nearly every trade, and the
+        journal took 8.59 million entries -- 4.2 GB, 99.9% of the file -- in two
+        days anyway. This journal exists so a restarted spine recovers an open
+        position's extremes; a peak recovered a fraction of a percent shy of the
+        true one is the same recovery, and the per-price path stays the tape's.
+        The extreme that ends the trade is exact regardless: the closed-trade
+        entry carries the final best and worst.
         """
         key = (excursion.venue_id, excursion.symbol)
-        peaks = (excursion.best_unrealised, excursion.worst_unrealised)
-        if self._peaks.get(key) == peaks:
-            self.standing.excursions_unchanged_skipped += 1
-            return None
-        self._peaks[key] = peaks
+        previous = self._peaks.get(key)
+        if previous is not None:
+            previous_best, previous_worst = previous
+            best_moved = abs(excursion.best_price - previous_best) >= abs(previous_best) * self._excursion_move_fraction
+            worst_moved = abs(excursion.worst_price - previous_worst) >= abs(previous_worst) * self._excursion_move_fraction
+            if not best_moved and not worst_moved:
+                self.standing.excursions_unchanged_skipped += 1
+                return None
+        self._peaks[key] = (excursion.best_price, excursion.worst_price)
         self.standing.excursions += 1
         return self._append(
             EXCURSION,
@@ -255,7 +272,8 @@ def start_part(context) -> int:
             journal=Journal(
                 append_line=append_line,
                 continues_from=read_journal_tail(journal_path),
-            )
+            ),
+            excursion_move_fraction=context.number("excursion_journal_move_fraction"),
         ),
         control_socket=context.control_socket,
         read_events=read_events,

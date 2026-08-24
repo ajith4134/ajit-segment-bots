@@ -101,13 +101,6 @@ class LearningRecorder:
         self.standing.by_kind[kind] = self.standing.by_kind.get(kind, 0) + 1
         return entry
 
-    def claims_of_kind(self, kind: str) -> tuple[JournalEntry, ...]:
-        return tuple(
-            entry
-            for entry in self._journal.entries
-            if entry.part_id == PART_ID and entry.kind == kind
-        )
-
 
 def describe_learning(recorder: LearningRecorder) -> dict:
     return {

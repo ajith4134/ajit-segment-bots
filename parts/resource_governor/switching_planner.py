@@ -124,6 +124,20 @@ class SwitchingPlanner:
                 else f"capacity is missing {', '.join(inputs.capacity.unmeasurable)}"
             )
             return SwitchPlan((), (), f"cannot plan: {missing}", self._now_ns())
+        if not inputs.usages:
+            # Missing is not empty, for what runs exactly as for capacity. No
+            # part-resource-usage reading means the metering is absent -- the
+            # appetite meter off, or the parts outside their scopes -- not that
+            # nothing is running. Planning against it reads every running part
+            # as off: measured live 2026-08-24, the first plans this part ever
+            # produced switched "on" all ten reserved parts, every one of them
+            # already running, ten times a plan, and the actuator recorded 324
+            # failed flips of parts that never stopped before the spine came down.
+            self.standing.refusals += 1
+            return SwitchPlan(
+                (), (), "cannot plan: no part-resource-usage readings, so what is "
+                "running is unknown rather than nothing", self._now_ns(),
+            )
 
         decisions: list[SwitchDecision] = []
         held: list[str] = []

@@ -84,6 +84,10 @@ class CapitalSettingsChangeRecorder:
         self._journal = journal
         self._now_ns = now_ns
         self._known: dict[tuple[str, str], float | str] = {}
+        # Each setting's recorded history, kept here rather than read back out
+        # of the journal: a journal with a sink retains nothing in memory.
+        # Bounded by how often the operator actually edits a settings file.
+        self._history: dict[tuple[str, str], list[dict]] = {}
         self.standing = RecorderStanding()
 
     def observe(self, scope: str, settings: dict) -> tuple[SettingChange, ...]:
@@ -132,18 +136,16 @@ class CapitalSettingsChangeRecorder:
         key = f"{change.scope}.{change.setting}"
         self.standing.by_setting[key] = self.standing.by_setting.get(key, 0) + 1
 
-        return self._journal.append(
-            kind=kind,
-            part_id=PART_ID,
-            payload={
-                "scope": change.scope,
-                "setting": change.setting,
-                "previous_value": change.previous_value,
-                "new_value": change.new_value,
-                "direction": change.direction,
-                "changed_at_ns": change.changed_at_ns,
-            },
-        )
+        payload = {
+            "scope": change.scope,
+            "setting": change.setting,
+            "previous_value": change.previous_value,
+            "new_value": change.new_value,
+            "direction": change.direction,
+            "changed_at_ns": change.changed_at_ns,
+        }
+        self._history.setdefault((change.scope, change.setting), []).append(payload)
+        return self._journal.append(kind=kind, part_id=PART_ID, payload=payload)
 
     def last_changed_at(self, scope: str, setting: str) -> int | None:
         """When one setting last moved, read from the journal rather than the file.
@@ -151,23 +153,12 @@ class CapitalSettingsChangeRecorder:
         The board's "when it last changed" answer. A file's mtime would say when
         it was saved, which is a different question and often a misleading one.
         """
-        latest = None
-        for entry in self._journal.entries:
-            if entry.part_id != PART_ID:
-                continue
-            if entry.payload.get("scope") == scope and entry.payload.get("setting") == setting:
-                latest = entry.payload.get("changed_at_ns", latest)
-        return latest
+        recorded = self._history.get((scope, setting))
+        return recorded[-1]["changed_at_ns"] if recorded else None
 
     def history_of(self, scope: str, setting: str) -> tuple[dict, ...]:
-        """Every recorded value of one setting, oldest first."""
-        return tuple(
-            entry.payload
-            for entry in self._journal.entries
-            if entry.part_id == PART_ID
-            and entry.payload.get("scope") == scope
-            and entry.payload.get("setting") == setting
-        )
+        """Every value this recorder has journalled for one setting, oldest first."""
+        return tuple(self._history.get((scope, setting), ()))
 
 
 def describe_changes(recorder: CapitalSettingsChangeRecorder) -> dict:

@@ -387,6 +387,15 @@ def planner():
     return SwitchingPlanner(memory_exhaustion_warning_seconds=120.0, io_stall_fraction=0.5)
 
 
+def test_no_usage_readings_means_no_plan(capacity):
+    """Missing is not empty: no part-resource-usage reading means the metering
+    is absent, not that nothing is running."""
+    plan = planner().plan(GovernorInputs(capacity=capacity, admitted_parts=("a",)))
+    assert not plan.is_plannable
+    assert plan.decisions == ()
+    assert "part-resource-usage" in plan.unplannable_reason
+
+
 def test_no_capacity_reading_means_no_plan(capacity):
     plan = planner().plan(GovernorInputs(capacity=None, running_parts=("a",)))
     assert not plan.is_plannable
@@ -406,7 +415,7 @@ def test_a_hog_under_contention_is_switched_off(capacity):
 
     report = HogReport("greedy", CPU, 8.0, 1.0, 8.0, True, 1)
     plan = planner().plan(
-        GovernorInputs(capacity=capacity, running_parts=("greedy",), hog_reports=(report,))
+        GovernorInputs(capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),), hog_reports=(report,))
     )
     assert [(d.part_id, d.action) for d in plan.decisions] == [("greedy", TURN_OFF)]
 
@@ -433,6 +442,7 @@ def test_a_flapping_part_is_held_rather_than_started(capacity):
     plan = planner().plan(
         GovernorInputs(
             capacity=capacity,
+            usages=(usage("hardware-scanner"),),
             admitted_parts=("flappy",),
             flap_reports={"flappy": FlapReport("flappy", 4, 60.0, 1.0, 30.0, 1)},
         )
@@ -446,7 +456,7 @@ def test_a_part_out_of_restart_budget_is_held(capacity):
 
     budget = RestartBudget("crashy", EXHAUSTED, 5, 3, 40.0, "spent", 1)
     plan = planner().plan(
-        GovernorInputs(capacity=capacity, restart_requests=("crashy",), restart_budgets={"crashy": budget})
+        GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), restart_requests=("crashy",), restart_budgets={"crashy": budget})
     )
     assert plan.held == ("crashy",)
 
@@ -458,6 +468,7 @@ def test_offs_are_ordered_before_ons(capacity):
         GovernorInputs(
             capacity=capacity,
             running_parts=("greedy",),
+            usages=(usage("greedy"),),
             hog_reports=(HogReport("greedy", CPU, 8.0, 1.0, 8.0, True, 1),),
             admitted_parts=("newcomer",),
         )
@@ -470,7 +481,7 @@ def test_imminent_memory_exhaustion_switches_off_the_fastest_grower(capacity):
 
     forecast = MemoryForecast(30.0, 1e9, 3 * 10**10, "leaky", 1e9, 8, "growing", 1)
     plan = planner().plan(
-        GovernorInputs(capacity=capacity, running_parts=("leaky", "quiet"), memory_forecast=forecast)
+        GovernorInputs(capacity=capacity, running_parts=("leaky", "quiet"), usages=(usage("leaky"), usage("quiet")), memory_forecast=forecast)
     )
     assert [(d.part_id, d.action) for d in plan.decisions] == [("leaky", TURN_OFF)]
 
@@ -480,7 +491,7 @@ def test_imminent_memory_exhaustion_switches_off_the_fastest_grower(capacity):
 def test_every_decision_is_flipped_and_recorded(capacity):
     flipped = []
     actuator = GateActuator(switch_part=lambda part_id, action: flipped.append((part_id, action)))
-    plan = planner().plan(GovernorInputs(capacity=capacity, admitted_parts=("a", "b")))
+    plan = planner().plan(GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("a", "b")))
     records = actuator.apply(plan)
     assert len(records) == 2 and all(r.outcome == FLIPPED for r in records)
     assert flipped == [(r.part_id, r.action) for r in records]
@@ -492,7 +503,7 @@ def test_a_failed_flip_is_recorded_and_the_rest_still_run(capacity):
             raise OSError("no such cgroup")
 
     actuator = GateActuator(switch_part=switch)
-    plan = planner().plan(GovernorInputs(capacity=capacity, admitted_parts=("broken", "fine")))
+    plan = planner().plan(GovernorInputs(capacity=capacity, usages=(usage("hardware-scanner"),), admitted_parts=("broken", "fine")))
     records = {r.part_id: r for r in actuator.apply(plan)}
     assert records["broken"].outcome == FAILED
     assert records["fine"].outcome == FLIPPED

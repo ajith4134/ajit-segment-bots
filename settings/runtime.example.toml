@@ -3754,3 +3754,8 @@ note  = "operator, 2026-08-24: how often price-level-sampler publishes every sym
 value = 2000
 unit  = "symbols in one frame"
 note  = "operator, 2026-08-24: how many symbols one frame may carry before it is split. Measured on this box 2026-08-24 by serialising real frames: 50.1 bytes per symbol, so the largest frame the bus will carry under its 131,072-byte ceiling is 2,616 symbols. 2,000 keeps 24% headroom against that measurement and still sits above the full universe on either venue -- binance-usdm listed about 1,295 perpetuals, which is 64,980 bytes -- so a real universe never splits and the split path exists for the case nobody predicted rather than for the ordinary one. A split is counted in the part's standing, so a universe that has outgrown one frame is visible rather than inferred."
+
+[excursion_journal_move_fraction]
+value = 0.002
+unit  = "fraction of the last journalled extreme price"
+note  = "operator, 2026-08-24: how far a position's best or worst price must move past its last journalled value before position-recorder journals the excursion again. The first guard -- skipping exact repeats -- did not hold: an extreme is set by the market's newest best print, so on a trending symbol it moves on nearly every trade, and the journal took 8.59 million peak-excursion entries (4.2 GB, 99.9% of the file, 4.4 GiB of recorder RSS) in two live days. This journal exists so a restarted spine recovers an open position's extremes; recovering a peak at most 0.2% shy of the true one is the same recovery, and the exact extremes still land in the closed-trade entry when the trade ends. 0.2% is the same move signal_label_move_fraction already defines as the smallest the system treats as real, and the per-price path remains on the tape."

@@ -59,6 +59,13 @@ class TradeLifecycleRecorder:
     def __init__(self, journal: Journal) -> None:
         self._journal = journal
         self._furthest_stage: dict[str, int] = {}
+        # The distinct stages recorded per trade, in first-recorded order, kept
+        # here rather than read back out of the journal: a journal with a sink
+        # retains nothing, and this recorder's journal held 3.6 GiB in memory
+        # when it did. Distinct on purpose -- at most five entries per trade,
+        # where a list of every repeat would regrow the same leak one symbol's
+        # stream of entry-candidates at a time.
+        self._stages_of: dict[str, list[str]] = {}
         self.standing = LifecycleStanding()
 
     def record(self, stage: str, trade_id: str, payload: dict) -> JournalEntry | None:
@@ -106,17 +113,16 @@ class TradeLifecycleRecorder:
         )
         self.standing.recorded += 1
         self.standing.stage_counts[stage] = self.standing.stage_counts.get(stage, 0) + 1
+        stages = self._stages_of.setdefault(trade_id, [])
+        if stage not in stages:
+            stages.append(stage)
         if stage == "fill":
             self.standing.trades_filled += 1
         return entry
 
     def stages_recorded_for(self, trade_id: str) -> tuple[str, ...]:
-        """Which stages of one trade are on the journal, in order."""
-        return tuple(
-            entry.kind
-            for entry in self._journal.entries
-            if entry.part_id == PART_ID and entry.payload.get("trade_id") == trade_id
-        )
+        """The distinct stages of one trade this recorder has journalled, in order."""
+        return tuple(self._stages_of.get(trade_id, ()))
 
 
 def describe_lifecycle(recorder: TradeLifecycleRecorder) -> dict:

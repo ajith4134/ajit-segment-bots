@@ -99,11 +99,19 @@ def compute_digest(sequence: int, kind: str, part_id: str, payload: dict, previo
 
 
 class Journal:
-    """Appends entries and hands back what was written. In memory plus a sink.
+    """Appends entries and hands back what was written. The record is the sink.
 
     The sink is injected rather than opened here: a recorder writing to a file, a
     test writing to a list, and a later phase writing to durable storage are the
     same journal with different sinks, and none of them changes the chain.
+
+    A journal with a sink keeps nothing in memory but the chain state -- the last
+    digest and the count. It has to: `position-recorder` retaining what it had
+    already written to disk held 4.4 GiB of anonymous memory over two live days
+    (measured 2026-08-24, 8.59 million entries), which is the file duplicated in
+    RAM for nobody. Only a journal with no sink retains its entries, because
+    memory is then the only record there is -- which is what a test wants and a
+    recorder must never be.
     """
 
     def __init__(
@@ -114,7 +122,8 @@ class Journal:
     ) -> None:
         self._append_line = append_line
         self._now_ns = now_ns
-        self._entries: list[JournalEntry] = []
+        self._entries: list[JournalEntry] | None = None if append_line is not None else []
+        self._appended = 0
         # Where this journal picks up. Without it a restarted recorder appends to
         # the same file starting again from the genesis digest, which leaves the
         # file holding one chain per process: an edit inside a run is detected,
@@ -126,7 +135,18 @@ class Journal:
 
     @property
     def entries(self) -> tuple[JournalEntry, ...]:
-        """What this journal appended. Entries it continues from are not re-read."""
+        """What this journal appended. Entries it continues from are not re-read.
+
+        Only a journal without a sink can answer: one with a sink deliberately
+        keeps nothing, and its record is the file. Asking it here is a defect in
+        the caller, and a loud refusal beats an empty tuple that reads as a
+        journal nothing was written to.
+        """
+        if self._entries is None:
+            raise RuntimeError(
+                "this journal writes to a sink and retains nothing in memory; its record is "
+                "what the sink holds. Read the sink, or keep what append() returned."
+            )
         return tuple(self._entries)
 
     @property
@@ -134,7 +154,7 @@ class Journal:
         return self._last_digest
 
     def append(self, kind: str, part_id: str, payload: dict) -> JournalEntry:
-        sequence = self._entries_before + len(self._entries) + 1
+        sequence = self._entries_before + self._appended + 1
         digest = compute_digest(sequence, kind, part_id, payload, self._last_digest)
         entry = JournalEntry(
             sequence=sequence,
@@ -145,7 +165,9 @@ class Journal:
             digest=digest,
             recorded_at_ns=self._now_ns(),
         )
-        self._entries.append(entry)
+        self._appended += 1
+        if self._entries is not None:
+            self._entries.append(entry)
         self._last_digest = digest
         if self._append_line is not None:
             self._append_line(entry.as_line())

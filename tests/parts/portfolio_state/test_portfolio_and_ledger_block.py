@@ -447,7 +447,7 @@ def test_a_trade_first_seen_mid_lifecycle_is_still_recorded():
 # ---- position-recorder -------------------------------------------------------
 
 def test_only_a_real_change_is_journalled():
-    recorder = PositionRecorder(Journal())
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
     assert recorder.record_position(position(1.0)).kind == OPENED
     assert recorder.record_position(position(1.0)) is None
     assert recorder.record_position(position(2.0)).kind == CHANGED
@@ -456,7 +456,7 @@ def test_only_a_real_change_is_journalled():
 
 
 def test_a_closed_trade_is_journalled_with_its_excursion():
-    recorder = PositionRecorder(Journal())
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
     from runtime.trading_types import ClosedTrade
 
     trade = ClosedTrade(
@@ -467,22 +467,27 @@ def test_a_closed_trade_is_journalled_with_its_excursion():
     assert entry.payload["holding_seconds"] == pytest.approx(2.0)
 
 
-def an_excursion(best=15.0, worst=-2.0, current=1.0, samples=1):
+def an_excursion(best=15.0, worst=-2.0, best_price=115.0, worst_price=98.0, current=1.0, samples=1):
     from parts.portfolio_state.peak_excursion_tracker import PeakExcursion
 
-    return PeakExcursion(VENUE, SYMBOL, best, worst, 115.0, 98.0, current, samples, 0)
+    return PeakExcursion(VENUE, SYMBOL, best, worst, best_price, worst_price, current, samples, 0)
 
 
-def test_an_excursion_is_journalled_only_when_a_peak_moves():
-    """The tracker publishes one excursion per price; journaling each wrote four
-    gigabytes of identical extremes in two days (2026-08-24). The extremes are
-    the record; the per-price path is the tape's."""
-    recorder = PositionRecorder(Journal())
+def test_an_excursion_is_journalled_only_when_a_peak_moves_meaningfully():
+    """The tracker publishes one excursion per price. Journaling each wrote four
+    gigabytes in two days, and skipping only exact repeats did not hold either:
+    an extreme is set by the market's newest best print, so it moves on nearly
+    every trade of a trending symbol (8.59 million entries, 2026-08-24). Only a
+    move past excursion_move_fraction of the last journalled price is a new
+    record; the per-price path is the tape's."""
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
     assert recorder.record_excursion(an_excursion()) is not None
-    assert recorder.record_excursion(an_excursion(current=2.0, samples=2)) is None
-    assert recorder.record_excursion(an_excursion(current=3.0, samples=3)) is None
-    assert recorder.record_excursion(an_excursion(best=20.0, samples=4)) is not None
-    assert recorder.record_excursion(an_excursion(best=20.0, worst=-5.0, samples=5)) is not None
+    # The peak creeping by less than the fraction is the flood, not a record.
+    assert recorder.record_excursion(an_excursion(best_price=115.1, samples=2)) is None
+    assert recorder.record_excursion(an_excursion(best_price=115.2, samples=3)) is None
+    # Past the fraction on either extreme is a record again.
+    assert recorder.record_excursion(an_excursion(best_price=116.0, samples=4)) is not None
+    assert recorder.record_excursion(an_excursion(best_price=116.0, worst_price=97.0, samples=5)) is not None
     assert recorder.standing.excursions == 3
     assert recorder.standing.excursions_unchanged_skipped == 2
 
@@ -490,7 +495,7 @@ def test_an_excursion_is_journalled_only_when_a_peak_moves():
 def test_a_new_position_starts_its_own_extremes():
     """A reopened symbol whose first extremes happen to match the closed one's
     is still journalled -- held peaks would swallow it."""
-    recorder = PositionRecorder(Journal())
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
     recorder.record_position(position(1.0))
     assert recorder.record_excursion(an_excursion()) is not None
     recorder.record_position(position(0.0))
@@ -680,7 +685,7 @@ def test_a_restarted_recorder_continues_the_chain_it_already_wrote(durable_tmp_p
     carried_on = second_run.append("fill", "trade-lifecycle-recorder", {"trade_id": "two"})
 
     assert carried_on.sequence == 3, "the sequence restarted, so two entries share a number"
-    assert carried_on.previous_digest == first_run.entries[-1].digest
+    assert carried_on.previous_digest == first_run.last_digest
     assert carried_on.previous_digest != GENESIS_DIGEST
 
     written = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
