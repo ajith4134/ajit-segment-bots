@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import pathlib
 import sys
 from dataclasses import dataclass, field
@@ -1840,6 +1841,12 @@ def build_page() -> str:
 
 
 def main() -> int:
+    # The builder walks gigabytes of journal and tape beside a live spine, and
+    # its CPU pressure starved regime-classifier into real input loss on
+    # 2026-08-24 -- which this board then measured and painted red. A probe must
+    # not cause the failure it reports: the build yields to the spine and runs
+    # full speed only when the machine is otherwise idle.
+    os.nice(19)
     BOARD_PATH.write_text(build_page())
     results, trades, _path, _live, closed = run_all_probes()
     print(
