@@ -52,6 +52,8 @@ class PositionCloseDetector:
         self._direction: dict[tuple[str, str], str] = {}
         self._realised: dict[tuple[str, str], float] = {}
         self._fees: dict[tuple[str, str], float] = {}
+        self._entered_quantity: dict[tuple[str, str], float] = {}
+        self._entry_cost: dict[tuple[str, str], float] = {}
         self._opened_at: dict[tuple[str, str], int] = {}
         self._excursion: dict[tuple[str, str], tuple[float, float]] = {}
         self._seen_fills: set[str] = set()
@@ -76,7 +78,11 @@ class PositionCloseDetector:
             if direction == FLAT:
                 self._opened_at[key] = fill.filled_at_ns
                 self._realised[key] = 0.0
+                self._entered_quantity[key] = 0.0
+                self._entry_cost[key] = 0.0
             self._direction[key] = fill_direction
+            self._entered_quantity[key] = self._entered_quantity.get(key, 0.0) + fill.quantity
+            self._entry_cost[key] = self._entry_cost.get(key, 0.0) + fill.quantity * fill.price
             book.add(Lot(fill.quantity, fill.price, fill.filled_at_ns, fill.fee))
             self.standing.open_symbols = sum(1 for b in self._books.values() if b.lots)
             return None
@@ -93,7 +99,7 @@ class PositionCloseDetector:
             self.standing.partial_closes += 1
             return None
 
-        trade = self._close(key, fill, direction, closing)
+        trade = self._close(key, fill, direction)
         remaining = fill.quantity - closing
         if remaining > 0:
             self.standing.reversals += 1
@@ -101,21 +107,32 @@ class PositionCloseDetector:
             self._opened_at[key] = fill.filled_at_ns
             self._realised[key] = 0.0
             self._fees[key] = 0.0
+            self._entered_quantity[key] = remaining
+            self._entry_cost[key] = remaining * fill.price
             book.add(Lot(remaining, fill.price, fill.filled_at_ns, 0.0))
         else:
             self._direction[key] = FLAT
         self.standing.open_symbols = sum(1 for b in self._books.values() if b.lots)
         return trade
 
-    def _close(self, key, fill, direction, closing_quantity) -> ClosedTrade:
+    def _close(self, key, fill, direction) -> ClosedTrade:
+        """The round trip as a whole: everything entered, at what it cost to enter.
+
+        Not the closing fill. A round trip sold in slices realises its profit
+        across all of them, so backing an entry price out of the last slice alone
+        divides the whole trip's profit by a fraction of its quantity and invents
+        an entry the market never printed -- the smaller the last slice, the
+        further from the truth. What was entered is tracked as it is entered.
+        """
         best, worst = self._excursion.get(key, (None, None))
         self.standing.trades_closed += 1
-        entry_price = fill.price - (self._realised[key] / closing_quantity) * (1 if direction == LONG else -1)
+        entered = self._entered_quantity.get(key, 0.0)
+        entry_price = self._entry_cost.get(key, 0.0) / entered if entered else fill.price
         return ClosedTrade(
             venue_id=fill.venue_id,
             symbol=fill.symbol,
             direction=direction,
-            quantity=closing_quantity,
+            quantity=entered,
             entry_price=entry_price,
             exit_price=fill.price,
             realised_pnl=self._realised[key],

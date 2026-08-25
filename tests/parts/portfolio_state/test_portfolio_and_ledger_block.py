@@ -186,6 +186,60 @@ def test_reaching_flat_emits_the_round_trip():
     assert trade.holding_seconds == pytest.approx(2.0)
 
 
+def test_the_round_trip_is_priced_by_what_it_entered_not_by_its_last_slice():
+    """Same round trip, sold in one slice or in two: the same entry and quantity.
+
+    The entry used to be backed out of the closing fill, so the whole trip's
+    profit was divided by whatever fraction happened to close last. A trade sold
+    0.9 then 0.1 reported an entry the market never printed.
+    """
+    whole = PositionCloseDetector()
+    whole.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    in_one = whole.observe_fill(fill("f2", SELL, 110.0, 1.0, at=2))
+
+    sliced = PositionCloseDetector()
+    sliced.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    sliced.observe_fill(fill("f2", SELL, 110.0, 0.9, at=2))
+    in_two = sliced.observe_fill(fill("f3", SELL, 110.0, 0.1, at=3))
+
+    assert in_one.entry_price == pytest.approx(100.0)
+    assert in_one.quantity == pytest.approx(1.0)
+    assert in_two.entry_price == pytest.approx(in_one.entry_price)
+    assert in_two.quantity == pytest.approx(in_one.quantity)
+
+
+def test_the_entry_price_is_weighted_across_every_opening_fill():
+    """Bought 1 at 90 and 1 at 110: the round trip entered at 100, not at either."""
+    detector = PositionCloseDetector()
+    detector.observe_fill(fill("f1", BUY, 90.0, 1.0, at=1))
+    detector.observe_fill(fill("f2", BUY, 110.0, 1.0, at=2))
+    trade = detector.observe_fill(fill("f3", SELL, 105.0, 2.0, at=3))
+    assert trade.entry_price == pytest.approx(100.0)
+    assert trade.quantity == pytest.approx(2.0)
+
+
+def test_a_reversal_prices_the_new_round_trip_from_its_own_entry():
+    """The side opened by a reversal entered at the reversing fill's price."""
+    detector = PositionCloseDetector()
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    first = detector.observe_fill(fill("f2", SELL, 120.0, 3.0, at=2))
+    second = detector.observe_fill(fill("f3", BUY, 110.0, 2.0, at=3))
+    assert first.entry_price == pytest.approx(100.0)
+    assert first.quantity == pytest.approx(1.0)
+    assert second.entry_price == pytest.approx(120.0)
+    assert second.quantity == pytest.approx(2.0)
+
+
+def test_the_reported_entry_and_exit_reproduce_the_realised_profit():
+    """A closed trade's four numbers must agree with each other."""
+    detector = PositionCloseDetector()
+    detector.observe_fill(fill("f1", BUY, 100.0, 2.0, at=1))
+    detector.observe_fill(fill("f2", SELL, 130.0, 1.5, at=2))
+    trade = detector.observe_fill(fill("f3", SELL, 130.0, 0.5, at=3))
+    implied = (trade.exit_price - trade.entry_price) * trade.quantity
+    assert implied == pytest.approx(trade.realised_pnl)
+
+
 def test_closing_fills_match_the_oldest_lots_first():
     """Bought at 100 then 200, sold once at 150: the 100 lot is what closed."""
     detector = PositionCloseDetector()
