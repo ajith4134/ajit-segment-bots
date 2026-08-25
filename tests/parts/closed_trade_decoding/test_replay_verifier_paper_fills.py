@@ -18,6 +18,7 @@ import pytest
 
 from parts.closed_trade_decoding.trade_replay_verifier import (
     AGREES,
+    describe_replay_verification,
     NO_VENUE_RECORD,
     SERIOUS,
     TradeReplayVerifier,
@@ -153,3 +154,22 @@ def test_every_field_check_survives_the_paper_change(field_name, changed):
     outcome = v.verify("trade-7", ("g1",))
 
     assert [m.field for m in outcome.mismatches] == [field_name]
+
+
+def test_the_unverifiable_counters_reach_the_board():
+    """A run of paper trades must not read as a verifier that found nothing.
+
+    Without these on the standing, "nothing could be checked" and "nothing was
+    wrong" are the same picture -- and so is "this part has stopped working".
+    """
+    v = verifier()
+    v.observe_journal_entry("f1", journal_entry("f1"))
+    v.observe_paper_fill("f1")
+    v.verify("trade-1", ("f1",))
+
+    described = describe_replay_verification(v)
+
+    assert described["paper_fills_not_verifiable"] == 1
+    assert described["trades_not_verifiable"] == 1
+    assert described["trades_that_agreed"] == 0
+    assert described["mismatches_found"] == 0

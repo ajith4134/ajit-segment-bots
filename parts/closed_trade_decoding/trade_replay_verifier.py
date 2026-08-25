@@ -312,6 +312,12 @@ def describe_replay_verification(verifier: TradeReplayVerifier) -> dict:
         "serious": verifier.standing.serious,
         "minor": verifier.standing.minor,
         "fills_the_journal_never_saw": verifier.standing.fills_the_journal_never_saw,
+        # The two that say "nothing could be checked" rather than "nothing was
+        # wrong". Without them on the board a run of paper trades reads as a
+        # verifier finding nothing, which is indistinguishable from a verifier
+        # that has stopped working (Rule 8).
+        "paper_fills_not_verifiable": verifier.standing.paper_fills_not_verifiable,
+        "trades_not_verifiable": verifier.standing.trades_not_verifiable,
         "fields_checked": list(CHECKED_FIELDS),
         "repairs_the_journal": False,
         "repairs_made": verifier.standing.repairs_made,
