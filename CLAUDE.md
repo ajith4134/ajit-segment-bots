@@ -254,6 +254,55 @@ board, which would be free to disagree with the one the bot acts on.
 marked as a test's.** The integration test runs the same fourteen parts, and the
 boundary is read from the supervisor log rather than guessed.
 
+## The live board — a real URL, since 2026-08-25
+
+    systemctl --user status ajit-board          # API + frontend, loopback only
+    systemctl --user status ajit-board-tunnel   # the public URL
+    operate/read_board_url.sh                   # what that URL is right now
+
+The part board served live instead of published, over a cloudflared quick
+tunnel that dials *out* — no inbound port, port 22 stays the only thing
+listening. **The URL changes on every restart**, so it is read from the tunnel's
+journal rather than remembered.
+
+Two views over the same probes. *How far built* is the rung ladder. *What it is
+doing* is new: every part's live standing counters with a **measured** rate,
+taken as a delta between two heartbeat tables the serving process actually
+observed. Three-valued on purpose — `WORKING` is a counter that moved, `IDLE` is
+every counter holding still (a finding, not a fault), `NOT MEASURED` is no rate
+taken yet, because calling that idle would assert a measurement nobody made.
+
+`/api/board` is the expensive shape (327 rungs, measured off the filesystem) and
+is polled slowly; `/api/activity` is one small file and is polled fast. They fail
+independently: when activity dies the shape stays on screen and only the live
+column goes dark.
+
+Never trust a green `npm run build`. `dashboard/web/verify_live_board_renders.sh`
+mounts the page in Chromium, waits for a *second* poll so a rate exists, opens a
+block, opens a part, and fails on any console error. It is separate from
+`verify_board_renders.sh`, which waits for `networkidle` — that never fires on a
+page that polls forever.
+
+## Position state survives a restart — since 2026-08-25
+
+`position-close-detector` and `cost-basis-tracker` checkpoint their lot books to
+`position_state_root` on every fill, and restore on start.
+
+Before this they held them in memory alone. The spine had started 46 times, 855
+positions had been opened and 115 round trips closed: **every start forgot every
+open position**, and a position whose lots are forgotten can never reach flat,
+never emits a `closed-trade`, and can never be scored. 86% of everything ever
+opened was unaccounted for and nothing reported it as a fault.
+
+Quantities are stored as strings, and `runtime/trading_types.exact_quantity` is
+the door they come through. `Decimal(str(x))`, never `Decimal(x)` — the latter
+carries the float's error in. `LotBook.is_flat` is `== 0` exactly, so there is no
+tolerance to tune and no numeric literal to justify under RL-061.
+
+**Still memory-only, and it costs something measurable:** the cointegration
+scanner's pair statistics. Every restart makes it re-learn from nothing, and the
+bot cannot trade until it has.
+
 ## Wiring explorer
 
     python3 dashboard/build_wiring_explorer.py
