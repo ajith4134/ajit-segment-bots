@@ -205,3 +205,82 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
 .counter-value { color: var(--text); }
 .counter-rate { color: var(--faint); text-align: right; }
 .counter-moving .counter-name { color: var(--text); }
+
+/* ---- server load ------------------------------------------------------------
+   Gauges rather than numbers alone: headroom is the question, and a bar answers
+   "how close to full" faster than a percentage does. One colour scale across CPU,
+   memory and disk so the colours mean the same thing wherever they appear. */
+
+.machine { display: flex; flex-direction: column; gap: 16px; }
+.machine-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.machine-head h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+
+.gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.gauge { background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 13px 15px; }
+.gauge-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.gauge-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.gauge-headline { font: 600 22px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: -0.02em; }
+.gauge-track { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; }
+.gauge-fill { height: 100%; border-radius: 3px; transition: width 400ms ease; }
+.gauge-detail { color: var(--muted); font-size: 10.5px; margin-top: 8px; }
+.gauge-proof { color: var(--faint); font-size: 9.5px; margin-top: 4px; line-height: 1.45; }
+
+.cores { background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 12px 15px; }
+.cores-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+.cores-row { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; }
+.core { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.core-track {
+  width: 22px; height: 46px; background: var(--sunk); border-radius: 3px;
+  display: flex; align-items: flex-end; overflow: hidden;
+}
+.core-fill { width: 100%; transition: height 400ms ease; }
+.core-name { color: var(--faint); font-size: 9px; }
+
+.part-cost { background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 13px 15px 6px; }
+.part-cost-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.part-cost-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.faint { color: var(--faint); font-size: 10px; }
+
+.cost-table { display: flex; flex-direction: column; max-height: 460px; overflow-y: auto; }
+.cost-row {
+  display: grid; grid-template-columns: 1fr 74px 84px 62px; gap: 10px;
+  padding: 4px 0; font-size: 11px; border-top: 1px solid #161C27; align-items: baseline;
+}
+.cost-head { border-top: none; color: var(--faint); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; }
+.cost-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cost-cpu, .cost-mem, .cost-pid { text-align: right; }
+.cost-mem { color: var(--muted); }
+
+/* ---- trading ---------------------------------------------------------------
+   Tables, because a position is a row of numbers that have to line up to be
+   compared. Wide content scrolls inside its own box rather than pushing the page. */
+
+.trade-panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+  margin-bottom: 14px; overflow: hidden;
+}
+.trade-panel-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 13px 15px; flex-wrap: wrap;
+}
+.trade-panel-head h3 { margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+.trade-panel-figures { display: flex; gap: 7px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.trade-panel-figures .sep { color: var(--faint); }
+
+.trade-empty { padding: 16px 15px; color: var(--muted); font-size: 12px; line-height: 1.6; background: var(--sunk); }
+.trade-proof { padding: 8px 15px 10px; color: var(--faint); font-size: 9.5px; line-height: 1.5; border-top: 1px solid #161C27; }
+
+.trade-scroll { overflow-x: auto; max-height: 340px; overflow-y: auto; }
+.trade-scroll-tall { max-height: 560px; }
+.trade-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.trade-table th {
+  position: sticky; top: 0; background: var(--sunk); z-index: 1;
+  text-align: left; padding: 7px 10px; font: 500 9.5px/1 "IBM Plex Mono", monospace;
+  text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.trade-table th.n, .trade-table td.n { text-align: right; }
+.trade-table td { padding: 6px 10px; border-top: 1px solid #161C27; white-space: nowrap; }
+.trade-table tbody tr:hover { background: #161C27; }
+.trade-table .sym { font-weight: 600; }
+.trade-table .faint { color: var(--faint); }

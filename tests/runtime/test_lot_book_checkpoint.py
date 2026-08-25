@@ -196,3 +196,92 @@ def test_nothing_open_restores_as_nothing_open_rather_than_failing(durable_tmp_p
         store.restore("position-close-detector", "positions", SETTINGS).state
     ) == 0
     assert after.standing.open_symbols == 0
+
+
+# ---- the pair scanner keeps its series and its verdicts ----------------------
+
+def test_the_scanner_keeps_its_series_and_verdicts_across_a_restart(durable_tmp_path):
+    """Pairs grow as the square of symbols, so a cold scanner is blind for minutes.
+
+    The windows themselves refill in under a minute. What is expensive is the
+    rotation: every pair has to be tested before the scanner can say which ones
+    are tradeable, and nothing downstream can act until it has.
+    """
+    from parts.opportunity_scanner.cointegration_pair_finder import CointegrationPairFinder
+
+    settings = {"cointegration_window_length": 8.0}
+    store = DurableStateStore(durable_tmp_path)
+
+    def finder():
+        return CointegrationPairFinder(
+            window_length=8, minimum_observations=4,
+            minimum_correlation=0.5, minimum_reversion_strength=0.05,
+        )
+
+    before = finder()
+    for step in range(10):
+        before.observe_price("bybit-linear", "AAAUSDT", 100.0 + step, (step + 1) * SECOND)
+        before.observe_price("bybit-linear", "BBBUSDT", 200.0 + 2 * step, (step + 1) * SECOND)
+    before._cointegrated.add(("bybit-linear", "AAAUSDT", "BBBUSDT"))
+    store.save("cointegration-pair-finder", "pairs", before.read_checkpoint_state(), settings)
+
+    after = finder()
+    assert after.restore_from_checkpoint(
+        store.restore("cointegration-pair-finder", "pairs", settings).state
+    ) == 2
+    assert after.cointegrated_pairs == (("bybit-linear", "AAAUSDT", "BBBUSDT"),)
+    # The series came back full, so the pair is testable immediately rather than
+    # after another window's worth of prints.
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 8
+    assert after._prices[("bybit-linear", "AAAUSDT")].latest == pytest.approx(109.0)
+
+
+def test_a_restored_series_measures_the_gap_across_the_restart(durable_tmp_path):
+    """The outage is the one discontinuity a restored window must not miss.
+
+    Without the stored observation time the first price after a restart sits
+    beside the last one before it and reads as a move that happened in an instant
+    -- exactly the shape a detector fires on.
+    """
+    from parts.opportunity_scanner.cointegration_pair_finder import CointegrationPairFinder
+
+    def finder():
+        return CointegrationPairFinder(
+            window_length=8, minimum_observations=4,
+            minimum_correlation=0.5, minimum_reversion_strength=0.05,
+            maximum_gap_seconds=5.0,
+        )
+
+    before = finder()
+    for step in range(8):
+        before.observe_price("bybit-linear", "AAAUSDT", 100.0 + step, (step + 1) * SECOND)
+    state = before.read_checkpoint_state()
+
+    after = finder()
+    after.restore_from_checkpoint(state)
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 8
+    # An hour later: the window must clear rather than treat it as continuous.
+    after.observe_price("bybit-linear", "AAAUSDT", 500.0, 3600 * SECOND)
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 1
+
+
+def test_a_scanner_restored_under_a_different_window_is_refused(durable_tmp_path):
+    """A different window length describes a different stretch of market."""
+    from parts.opportunity_scanner.cointegration_pair_finder import CointegrationPairFinder
+
+    store = DurableStateStore(durable_tmp_path)
+    before = CointegrationPairFinder(
+        window_length=8, minimum_observations=4,
+        minimum_correlation=0.5, minimum_reversion_strength=0.05,
+    )
+    before.observe_price("bybit-linear", "AAAUSDT", 100.0, SECOND)
+    store.save(
+        "cointegration-pair-finder", "pairs", before.read_checkpoint_state(),
+        {"cointegration_window_length": 8.0},
+    )
+
+    restoration = store.restore(
+        "cointegration-pair-finder", "pairs", {"cointegration_window_length": 256.0}
+    )
+    assert not restoration.was_restored
+    assert "cointegration_window_length" in restoration.detail

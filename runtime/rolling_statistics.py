@@ -124,6 +124,49 @@ class RollingWindow:
         self._last_observed_value = float(value)
         self.values.append(float(value))
 
+    def as_document(self) -> dict:
+        """This window as JSON, complete enough to resume rather than restart.
+
+        The observations alone are not enough. `_last_observed_at_ns` is what the
+        next gap is measured against, and a window restored without it treats the
+        first observation after a restart as continuous with one from before the
+        restart -- the gap across the outage is exactly the discontinuity this
+        class exists to notice, and it would be the one gap it missed.
+
+        `_recent_gaps_seconds` comes back too, because the patience bound is a p99
+        estimated from this series' own gaps. Restored without them the estimate
+        starts from nothing, and an illiquid symbol clears its window on the first
+        ordinary quiet.
+        """
+        return {
+            "values": list(self.values),
+            "last_observed_at_ns": self._last_observed_at_ns,
+            "last_observed_value": self._last_observed_value,
+            "series_breaks": self._series_breaks,
+            "redelivered_skipped": self._redelivered_skipped,
+            "recent_gaps_seconds": list(self._recent_gaps_seconds),
+        }
+
+    def restore_document(self, document: dict) -> None:
+        """Refill this window from `as_document`, keeping its own configuration.
+
+        Length and the gap bounds are this process's settings, not the stored
+        ones: an operator who changed a window's length means the new one to
+        apply, and the deques' `maxlen` trims a longer stored series to fit.
+        """
+        self.values = deque(
+            (float(v) for v in document.get("values") or ()), maxlen=self.length
+        )
+        last_at = document.get("last_observed_at_ns")
+        self._last_observed_at_ns = None if last_at is None else int(last_at)
+        last_value = document.get("last_observed_value")
+        self._last_observed_value = None if last_value is None else float(last_value)
+        self._series_breaks = int(document.get("series_breaks") or 0)
+        self._redelivered_skipped = int(document.get("redelivered_skipped") or 0)
+        self._recent_gaps_seconds = deque(
+            (float(g) for g in document.get("recent_gaps_seconds") or ()), maxlen=self.length
+        )
+
     def _gap_bound_seconds(self) -> float:
         """What counts as a hole for this series, right now.
 

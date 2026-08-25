@@ -60,9 +60,24 @@ if (await page.locator('.part-row-open').count()) {
   countersShown = await page.locator('.counter').count()
 }
 
-// And the build view must still be reachable — the live view is a second view, not a
-// replacement for the one that was already verified.
-await page.locator('.view').nth(1).click()
+// Every view must draw. The live view is one of four, not a replacement for the
+// others, and a tab that renders nothing is the failure this check exists to catch.
+await page.locator('.view').nth(1).click()          // Trading
+await page.waitForTimeout(2500)
+const tradePanels = await page.locator('.trade-panel').count()
+const tradeRows = await page.locator('.trade-table tbody tr').count()
+const tradeEmpty = await page.locator('.trade-empty').count()
+
+await page.locator('.view').nth(2).click()          // Server load
+await page.waitForTimeout(4000)
+const gauges = await page.locator('.gauge').count()
+const cores = await page.locator('.core').count()
+const costRows = await page.locator('.cost-row').count()
+const gaugeHeadlines = await page.evaluate(() =>
+  [...document.querySelectorAll('.gauge')].map((g) =>
+    `${g.querySelector('.gauge-label').textContent}=${g.querySelector('.gauge-headline').textContent}`))
+
+await page.locator('.view').nth(3).click()          // How far built
 await page.waitForTimeout(300)
 const buildPanels = await page.locator('.panel').count()
 
@@ -71,7 +86,11 @@ await page.waitForTimeout(300)
 await page.screenshot({ path: shot, fullPage: false })
 await browser.close()
 
-const result = { ...seen, partsShown, countersShown, buildPanels, consoleErrors: errors, failedRequests: failed }
+const result = {
+  ...seen, partsShown, countersShown, buildPanels,
+  tradePanels, tradeRows, tradeEmpty, gauges, cores, costRows, gaugeHeadlines,
+  consoleErrors: errors, failedRequests: failed,
+}
 console.log(JSON.stringify(result, null, 2))
 
 if (seen.rootChildren === 0) { console.error('RENDER FAILED: #root is empty'); process.exit(1) }
@@ -79,6 +98,13 @@ if (seen.blockCards === 0) { console.error('RENDER FAILED: no block cards drawn'
 if (partsShown === 0) { console.error('RENDER FAILED: opening a block showed no parts'); process.exit(1) }
 if (countersShown === 0) { console.error('RENDER FAILED: opening a part showed no counters'); process.exit(1) }
 if (buildPanels === 0) { console.error('RENDER FAILED: the build view drew nothing'); process.exit(1) }
+if (tradePanels < 2) { console.error('RENDER FAILED: the trading view drew fewer than two panels'); process.exit(1) }
+// Rows OR an explicit empty state -- a table with neither is a view that silently
+// shows nothing, which is exactly what NOTHING YET exists to prevent.
+if (tradeRows === 0 && tradeEmpty === 0) { console.error('RENDER FAILED: trading drew no rows and no empty state'); process.exit(1) }
+if (gauges < 4) { console.error('RENDER FAILED: server load drew fewer than four gauges'); process.exit(1) }
+if (cores === 0) { console.error('RENDER FAILED: server load drew no per-core bars'); process.exit(1) }
+if (costRows === 0) { console.error('RENDER FAILED: server load drew no per-part costs'); process.exit(1) }
 if (errors.length) { console.error('CONSOLE ERRORS PRESENT'); process.exit(1) }
 if (seen.liveRates === 0) {
   // Not fatal on its own: a board watched while the spine is stopped correctly shows

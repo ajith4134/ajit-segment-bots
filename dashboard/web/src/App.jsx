@@ -4,6 +4,9 @@ import { useActivity } from './useActivity.js'
 import { RUNGS, rung } from './theme.js'
 import BlockPanel from './BlockPanel.jsx'
 import LiveBoard from './LiveBoard.jsx'
+import MachineLoad from './MachineLoad.jsx'
+import TradingView from './TradingView.jsx'
+import { useMachine, useTrades } from './useMachine.js'
 
 const LADDER = ['DECLARED', 'IMPLEMENTED', 'TESTED', 'RUNNING']
 const OFF_LADDER = ['FAILING', 'NOT MEASURED']
@@ -44,6 +47,8 @@ function describeProgress(counts, totals) {
 export default function App() {
   const { data, error, mode } = useBoard()
   const { activity, activityError } = useActivity()
+  const { machine, machineError } = useMachine()
+  const { trades, tradesError } = useTrades()
   const [view, setView] = useState('live')
   const [tab, setTab] = useState('overview')
 
@@ -93,6 +98,12 @@ export default function App() {
         <button className={`view${view === 'live' ? ' active' : ''}`} onClick={() => setView('live')}>
           What it is doing
         </button>
+        <button className={`view${view === 'trading' ? ' active' : ''}`} onClick={() => setView('trading')}>
+          Trading
+        </button>
+        <button className={`view${view === 'machine' ? ' active' : ''}`} onClick={() => setView('machine')}>
+          Server load
+        </button>
         <button className={`view${view === 'build' ? ' active' : ''}`} onClick={() => setView('build')}>
           How far built
         </button>
@@ -107,6 +118,10 @@ export default function App() {
 
       {view === 'live' ? (
         <LiveBoard data={data} activity={activity} activityError={activityError} />
+      ) : view === 'trading' ? (
+        <TradingView trades={trades} tradesError={tradesError} />
+      ) : view === 'machine' ? (
+        <MachineLoad machine={machine} machineError={machineError} />
       ) : (
         <>
           <div className="banner">{describeProgress(counts, totals)}</div>

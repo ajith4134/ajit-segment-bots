@@ -261,3 +261,33 @@ class CheckpointSchedule:
     @property
     def observations_at_last_write(self) -> int | None:
         return self._written_at
+
+
+def restore_and_arm_checkpoint(store, schedule, part_id, component, holder, settings):
+    """Bring a component's state back, and return the function that writes it down.
+
+    `holder` is anything with `read_checkpoint_state()`, `restore_from_checkpoint()`
+    and a `standing` -- named by shape rather than by part, so this stays substrate
+    and never becomes a list of the parts that use it (T-4).
+
+    A checkpoint that cannot be read starts the component cold and says so in the
+    standing. Refusing to start would be worse: a part that will not run because it
+    cannot remember has turned a recoverable gap into an outage.
+
+    The first write happens here, before any observation. A file saying "nothing
+    held, as of this time" is what lets a board tell a part that has never run from
+    one that came back holding nothing (Rule 8).
+    """
+    restoration = store.restore(part_id, component, settings)
+    if restoration.was_restored:
+        holder.standing.restored_symbols = holder.restore_from_checkpoint(restoration.state)
+    holder.standing.checkpoint_verdict = restoration.verdict
+
+    def write_checkpoint(observations: int) -> None:
+        if not schedule.is_due(observations):
+            return
+        store.save(part_id, component, holder.read_checkpoint_state(), settings)
+        schedule.record_written(observations)
+
+    write_checkpoint(0)
+    return write_checkpoint

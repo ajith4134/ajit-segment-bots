@@ -15,6 +15,8 @@ and `mode` says whether the whole payload came from a live probe or a frozen sna
 
     GET /api/board     the whole measured state: every part's rung and its proof
     GET /api/activity  what every reporting part is doing now, and how fast
+    GET /api/machine   what this server is spending: cpu, memory, disk, per part
+    GET /api/trades    what the bot holds and what it has closed
     GET /api/blueprint the design only, no measurement
     GET /            the built frontend from web/dist, when it exists
 """
@@ -42,7 +44,9 @@ from completion import (  # noqa: E402
     block_completion,
     part_is_measured_complete,
 )
+from machine_load import MachineLoadReader  # noqa: E402
 from part_activity import ActivityReader, summarise_block_activity  # noqa: E402
+from trade_activity import build_trade_activity  # noqa: E402
 from render_blueprint import find_contract_violations, load_feature_registry  # noqa: E402
 
 DIST = HERE / "web" / "dist"
@@ -52,6 +56,9 @@ BUILT_RUNGS = (IMPLEMENTED, TESTED, RUNNING)
 # has to be compared against something this process actually saw. Per-request
 # readers would each hold one sample and no rate would ever exist.
 ACTIVITY_READER = ActivityReader()
+# Same reason: a CPU percentage is a difference between two /proc/stat readings,
+# and the second one needs a first one this process actually took.
+MACHINE_READER = MachineLoadReader()
 
 
 def summarise_block_state(rungs: list[str]) -> str:
@@ -178,6 +185,27 @@ def build_activity_payload() -> dict:
     }
 
 
+def build_machine_payload() -> dict:
+    """What this server is spending right now, measured on every call."""
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **MACHINE_READER.read_machine_load(),
+    }
+
+
+def build_trade_payload() -> dict:
+    """What the bot holds and what it has closed.
+
+    Heavier than the other routes -- it marks each held symbol against the tape --
+    so it is meant to be polled slowly. The cost is the number of open positions,
+    not the size of the universe.
+    """
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **build_trade_activity(),
+    }
+
+
 def build_blueprint_payload() -> dict:
     """The design with no measurement in it, for anything that only needs the shape."""
     registry = load_feature_registry()
@@ -210,6 +238,12 @@ class BoardHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/activity":
             self._send_json(build_activity_payload())
+            return
+        if route == "/api/machine":
+            self._send_json(build_machine_payload())
+            return
+        if route == "/api/trades":
+            self._send_json(build_trade_payload())
             return
         if route == "/api/blueprint":
             self._send_json(build_blueprint_payload())

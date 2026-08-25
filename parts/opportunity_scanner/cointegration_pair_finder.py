@@ -19,15 +19,20 @@ stopped existing.
 from __future__ import annotations
 
 import math
+import pathlib
 import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
+from runtime.durable_state import RESTORED
 from runtime.part_declaration import PartDeclaration
+from runtime.lot_book_checkpoint import book_key_of, book_key_text
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow, correlation, linear_fit
 
 PART_ID = "cointegration-pair-finder"
+
+CHECKPOINT_COMPONENT = "pairs"
 
 PART_DECLARATION = PartDeclaration(
     part_id="cointegration-pair-finder",
@@ -76,7 +81,14 @@ class FinderStanding:
     verdicts_published: int = 0
     verdicts_suppressed: int = 0
     symbols_tracked: int = 0
+    prices_observed: int = 0
     strongest_reversion: float = 0.0
+    # What survived the last off switch. `restored_symbols` is the name the
+    # substrate sets; here it counts price series brought back, and
+    # `restored_pairs` counts the verdicts that came with them.
+    restored_symbols: int = 0
+    restored_pairs: int = 0
+    checkpoint_verdict: str = ""
 
 
 class CointegrationPairFinder:
@@ -116,7 +128,20 @@ class CointegrationPairFinder:
         different spans, and the relationship measured across them is between two
         things that were never observed together.
         """
-        key = (venue_id, symbol)
+        window = self._window_for((venue_id, symbol))
+        window.observe(price, at_ns)
+        self.standing.symbols_tracked = len(self._prices)
+        # Counts observations rather than ticks: what a crash costs is prices,
+        # and the checkpoint schedule is spelled in the same unit.
+        self.standing.prices_observed += 1
+
+    def _window_for(self, key: tuple[str, str]) -> RollingWindow:
+        """This symbol's series, made on first sight with this process's settings.
+
+        One place, so a series restored from a checkpoint is configured exactly as
+        one built from a live print -- a restore that made its windows a different
+        length would judge a different stretch of market from the tests that follow.
+        """
         window = self._prices.get(key)
         if window is None:
             window = RollingWindow(
@@ -125,8 +150,7 @@ class CointegrationPairFinder:
                 gap_patience_multiple=self._gap_patience_multiple,
             )
             self._prices[key] = window
-        window.observe(price, at_ns)
-        self.standing.symbols_tracked = len(self._prices)
+        return window
 
     def test_pair(self, venue_id: str, left_symbol: str, right_symbol: str) -> CointegratedPair:
         self.standing.pairs_tested += 1
@@ -248,6 +272,41 @@ class CointegrationPairFinder:
         self.standing.verdicts_suppressed += 1
         return None
 
+    def read_checkpoint_state(self) -> dict:
+        """The price series and the verdicts, so a restart does not start blind.
+
+        What this saves is not a little time. The windows refill in under a minute,
+        but the pair verdicts are earned by rotating through every pair a few at a
+        time -- pairs grow as the square of symbols, so at 50 symbols a venue that
+        rotation is thousands of pairs long. A cold scanner publishes nothing
+        tradeable until it has been round, and nothing downstream of it can act.
+
+        Each window carries its own last observation time, so the gap across the
+        restart is measured rather than assumed continuous. Without that the first
+        price after an outage would sit beside the last one before it and read as a
+        move that happened in an instant -- which is exactly the shape a detector
+        fires on.
+        """
+        return {
+            "prices": {
+                book_key_text(key): window.as_document()
+                for key, window in self._prices.items()
+            },
+            "cointegrated": [list(pair) for pair in sorted(self._cointegrated)],
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Refill the series and the verdicts. Returns how many series came back."""
+        for text, document in (state.get("prices") or {}).items():
+            window = self._window_for(book_key_of(text))
+            window.restore_document(document)
+        self._cointegrated = {
+            tuple(pair) for pair in (state.get("cointegrated") or ()) if len(pair) == 3
+        }
+        self.standing.symbols_tracked = len(self._prices)
+        self.standing.restored_pairs = len(self._cointegrated)
+        return len(self._prices)
+
     def _retire(self, pair_key) -> None:
         """A pair that stops cointegrating stops being tradeable, immediately."""
         if pair_key in self._cointegrated:
@@ -287,6 +346,10 @@ def describe_pairs(finder: CointegrationPairFinder) -> dict:
         "verdicts_published": finder.standing.verdicts_published,
         "verdicts_suppressed": finder.standing.verdicts_suppressed,
         "symbols_tracked": finder.standing.symbols_tracked,
+        "prices_observed": finder.standing.prices_observed,
+        "restored_symbols": finder.standing.restored_symbols,
+        "restored_pairs": finder.standing.restored_pairs,
+        "checkpoint_restored": 1.0 if finder.standing.checkpoint_verdict == RESTORED else 0.0,
         "strongest_reversion": finder.standing.strongest_reversion,
     }
 
@@ -296,6 +359,7 @@ def run_cointegration_pair_finder(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
         pairs = read_prices_and_pairs(finder)
@@ -309,6 +373,11 @@ def run_cointegration_pair_finder(
         # them once the untradeable pairs go unsaid.
         if news:
             publish_pairs(news)
+        # After publishing, and on its own schedule: the series and verdicts are
+        # written every pair_state_checkpoint_interval observations, not every
+        # tick, because a tick is a few milliseconds and an fsync is not.
+        if write_checkpoint is not None:
+            write_checkpoint(finder.standing.prices_observed)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -351,6 +420,34 @@ def start_part(context) -> int:
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
     )
+    # The series and the verdicts survive the off switch. Pairs grow as the square
+    # of symbols, so a cold scanner has to rotate through thousands of them before
+    # it can say anything tradeable, and everything downstream waits on that.
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+
+    pair_store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    pair_schedule = CheckpointSchedule(int(context.number("pair_state_checkpoint_interval")))
+    # The settings that give the stored series their meaning. A window of a
+    # different length, or judged against a different gap bound, describes a
+    # different stretch of market -- restoring across such a change would be
+    # testing one span while reporting another.
+    pair_settings = {
+        "cointegration_window_length": float(context.number("cointegration_window_length")),
+        "price_series_maximum_gap_seconds": float(
+            context.number("price_series_maximum_gap_seconds")
+        ),
+        "price_gap_patience_multiple": float(context.number("price_gap_patience_multiple")),
+    }
+    write_pair_checkpoint = restore_and_arm_checkpoint(
+        pair_store, pair_schedule, PART_ID, CHECKPOINT_COMPONENT, finder, pair_settings
+    )
+
     pairs_per_tick = int(context.number("cointegration_pairs_tested_per_tick"))
     symbols_by_venue: dict[str, set[str]] = {}
     rotation: list[tuple[str, str, str]] = []
@@ -393,4 +490,5 @@ def start_part(context) -> int:
         emit_health=context.emit_health,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        write_checkpoint=write_pair_checkpoint,
     )

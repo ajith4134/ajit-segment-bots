@@ -24,7 +24,11 @@ from __future__ import annotations
 
 import pathlib
 
-from runtime.durable_state import CheckpointSchedule, DurableStateStore
+from runtime.durable_state import (
+    CheckpointSchedule,
+    DurableStateStore,
+    restore_and_arm_checkpoint,
+)
 from runtime.trading_types import Lot, LotBook, exact_quantity
 
 # A checkpoint is JSON and JSON keys are strings, so the (venue, symbol) pair is
@@ -106,19 +110,4 @@ def restore_and_arm_lot_checkpoint(context, part_id: str, component: str, holder
     # is a change the store must notice rather than quietly reinterpret.
     settings = {"remembered_fill_ids": float(context.number("remembered_fill_ids"))}
 
-    restoration = store.restore(part_id, component, settings)
-    if restoration.was_restored:
-        holder.standing.restored_symbols = holder.restore_from_checkpoint(restoration.state)
-    holder.standing.checkpoint_verdict = restoration.verdict
-
-    def write_checkpoint(observations: int) -> None:
-        if not schedule.is_due(observations):
-            return
-        store.save(part_id, component, holder.read_checkpoint_state(), settings)
-        schedule.record_written(observations)
-
-    # Written once at start, before any fill. A file saying "nothing open, as of
-    # this time" is what lets a board tell a part that has never run from one
-    # holding nothing (Rule 8).
-    write_checkpoint(0)
-    return write_checkpoint
+    return restore_and_arm_checkpoint(store, schedule, part_id, component, holder, settings)
