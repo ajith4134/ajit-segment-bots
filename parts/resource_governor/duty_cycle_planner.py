@@ -145,6 +145,12 @@ def start_part(context) -> int:
     import datetime
     import time as _time
 
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch, LatestByKey
 
     market_data = Batch(read=context.bus.reader("market-data"))
@@ -162,7 +168,7 @@ def start_part(context) -> int:
     def read_activity():
         # Counted per (hour, day) as messages arrive; handed over as totals so
         # far, which the planner keeps as the latest figure for that hour.
-        for item in market_data.payloads():
+        for item in trades_in(market_data.payloads()):
             when = datetime.datetime.fromtimestamp(item.venue_time_ns / 1e9, datetime.UTC)
             if first_day[0] is None:
                 first_day[0] = when.date()

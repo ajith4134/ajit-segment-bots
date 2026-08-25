@@ -327,6 +327,35 @@ LIVE_SPINE = (
     "forecast-ensembler",
     "forecast-scorer",
     "model-drift-monitor",
+    # ---- phase 7: the rest of the learning loop, 2026-08-25 ----------------
+    # Six of these can act on what is already running; the rest name their own
+    # phase and refuse. forecast-trust-learner is what forecast-ensembler has
+    # been refusing for want of a trusted member, and sample-weight-assigner is
+    # one of the two things kronos-finetuner needs before it can load a model at
+    # all -- the other, retrain-request, waits on intelligence (12).
+    #
+    # A learned part that never sees an outcome is a part that never learns, and
+    # every one of these closes a loop from what the system did back to what it
+    # will do next.
+    "label-builder",
+    "reward-shaper",
+    "sample-weight-assigner",
+    "slippage-learner",
+    "exit-timing-learner",
+    "forecast-trust-learner",
+    "instruction-performance-tracker",
+    "regret-tracker",
+    "bot-scorekeeper",
+    # This order is a chain and not a preference: the scheduler asks for a
+    # retrain, the registry keeps the version that produced, the tracker
+    # attributes to that version, and the scorer scores what the tracker
+    # attributed.
+    "retrain-scheduler",
+    "model-registry",
+    "feature-attribution-tracker",
+    "feature-reliability-scorer",
+    "champion-challenger-gate",
+    "edge-graduation-gate",
     # Last, after every part whose conclusions it writes down.
     "learning-recorder",
 )

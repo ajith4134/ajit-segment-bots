@@ -171,6 +171,23 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         # The second loop through the same accuracy: which model size to run is
         # chosen from how well the sizes themselves have been forecasting.
         "kronos-size-selector",
+        # The learning loops proper, closed 2026-08-25 with phase 7. Each reads a
+        # judgement built from what it itself produced, which is what makes it a
+        # learning loop rather than a pipeline:
+        #
+        #   the ensembler weighs forecasts by a trust learned from how its own
+        #   combinations turned out;
+        "forecast-ensembler",
+        #   the forecaster serves whichever model version the gate chose, and the
+        #   gate chooses from how the served version performed;
+        "kronos-forecaster",
+        #   the arbiter forms intents, those become trades, the trades become a
+        #   scorecard, and the scorecard is what graduates the bot whose maturity
+        #   the arbiter reads;
+        "opinion-arbiter",
+        #   and the sizer's own orders produce the fills the slippage it sizes
+        #   against is learned from.
+        "position-sizer",
     }
 
     for part_id, inputs in consumes.items():

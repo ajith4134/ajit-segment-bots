@@ -178,6 +178,12 @@ def start_part(context) -> int:
     reported as unconvertible rather than assumed to be one-for-one -- an assumed
     rate is a profit figure with an invented number in it.
     """
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch
 
     closed_trades = Batch(read=context.bus.reader("closed-trade"))
@@ -212,7 +218,7 @@ def start_part(context) -> int:
         # is the honest answer until something sizes capital per position.
         allotments.payloads()
         fills.payloads()
-        trades.payloads()
+        trades_in(trades.payloads())
         bases.payloads()
         return tuple((trade, quote_currency) for trade in closed_trades.payloads())
 

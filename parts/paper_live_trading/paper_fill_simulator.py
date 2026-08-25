@@ -636,6 +636,12 @@ def start_part(context) -> int:
     and neither is running, so an order with neither is filled at the last price and
     the fill says which it used.
     """
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch, LatestByKey, LatestValue
 
     requests = Batch(read=context.bus.reader("order-request"))
@@ -655,7 +661,7 @@ def start_part(context) -> int:
     maximum_decision_drift = context.number("maximum_decision_price_drift")
 
     def read_orders(simulator):
-        for trade in trades.payloads():
+        for trade in trades_in(trades.payloads()):
             last_price[(trade.venue_id, trade.symbol)] = trade.price
         for jump in jumps.payloads():
             simulator.observe_feed_jump(jump.venue_id, jump.symbol)

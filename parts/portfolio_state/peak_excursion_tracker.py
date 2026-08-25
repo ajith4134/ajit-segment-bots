@@ -190,6 +190,12 @@ def start_part(context) -> int:
     trade readable afterwards: without it, a trade that ran to +3% and closed at
     -1% and a trade that went straight to -1% are the same row.
     """
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch
 
     positions = Batch(read=context.bus.reader("position"))
@@ -208,7 +214,7 @@ def start_part(context) -> int:
         bases.payloads()
         prices = tuple(
             (trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns)
-            for trade in trades.payloads()
+            for trade in trades_in(trades.payloads())
         )
         return tuple(positions.payloads()), prices
 

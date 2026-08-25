@@ -284,6 +284,12 @@ def start_part(context) -> int:
     no premium to observe the forecaster forecasts nothing and its standing
     says so: a blueprint gap (RL-062), not a forecast of zero funding.
     """
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch
 
     trades = Batch(read=context.bus.reader("market-data"))
@@ -294,7 +300,7 @@ def start_part(context) -> int:
     )
 
     def read_premiums(_forecaster):
-        trades.payloads()
+        trades_in(trades.payloads())
         return ()
 
     def publish(items) -> None:

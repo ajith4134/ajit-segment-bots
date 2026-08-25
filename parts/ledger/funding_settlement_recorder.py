@@ -219,6 +219,12 @@ def start_part(context) -> int:
     blueprint edit that declares where a settlement comes from, not a rate
     read from a type this part does not consume.
     """
+    # `market-data` carries trades AND candles: venue-trade-stream-reader
+    # publishes the first, ccxt-venue-reader the second, and both have always
+    # declared it. This part wants trades and now says so, rather than assuming
+    # the wire holds only what it happens to want -- a part that dies on an
+    # unexpected shape is a part the wiring can kill.
+    from runtime.market_data_stream import trades_in
     from runtime.input_assembly import Batch
     import pathlib as _pathlib
 
@@ -244,7 +250,7 @@ def start_part(context) -> int:
 
     def read_positions_and_funding():
         seen = tuple(positions.payloads())
-        market_data.payloads()
+        trades_in(market_data.payloads())
         recorder.standing.positions_held_without_a_funding_source += sum(
             1 for position in seen if not position.is_flat
         )
