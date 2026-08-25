@@ -73,6 +73,8 @@ class ModelStanding:
     refused_views_disagree: int = 0
     refused_nothing_usable: int = 0
     labels_trained_on: int = 0
+    checkpoints_written: int = 0
+    checkpoint_verdict: str | None = None
     retrains: int = 0
     champion_swaps: int = 0
     live_model: str = CHAMPION
@@ -291,6 +293,65 @@ class TailFollowConvictionModel:
     def model(self, name: str) -> OnlineLogisticModel:
         return self._models[name]
 
+    # -- what survives a restart ----------------------------------------------
+    #
+    # None of this existed until 2026-08-25. `start_part` asked
+    # `hasattr(model, "state")` and `hasattr(model, "restore_state")` before
+    # checkpointing, both were false, and so **this bot's model has never been
+    # saved and never been restored**: every restart began again from the prior,
+    # and the guard that hid it read like caution. The bull bot has had these
+    # since its checkpoint was built; this is the same shape, so a reader who
+    # knows one knows the other.
+
+    def learned_settings(self) -> dict:
+        """The settings that give the stored coefficients their meaning.
+
+        The champion's, because both models are built from the same settings and a
+        divergence between them would be a bug in this class rather than a state a
+        checkpoint should try to express.
+        """
+        return self._models[CHAMPION].learned_settings()
+
+    def state(self) -> dict:
+        """Both models, which one is live, what it has trained on, and its calibration.
+
+        The calibrators are stored with the models because a restored model whose
+        calibration was dropped states probabilities it has no record for -- which
+        is the one thing calibration exists to prevent, and it would come back
+        overconfident at exactly the size the size hint scales with.
+        """
+        return {
+            "live": self._live,
+            "models": {name: model.state() for name, model in self._models.items()},
+            "labels_trained_on": self.standing.labels_trained_on,
+            "trained_by_source": dict(self.standing.by_source),
+            "calibrators": {
+                source: calibrator.state() for source, calibrator in self._calibrators.items()
+            },
+        }
+
+    def restore_state(self, state: dict) -> None:
+        for name, stored in state["models"].items():
+            if name not in self._models:
+                raise ValueError(
+                    f"the checkpoint holds a model named {name!r} that this part does not run"
+                )
+            self._models[name].restore_state(stored)
+        live = state["live"]
+        if live not in self._models:
+            raise ValueError(f"the checkpoint names {live!r} live and this part does not hold it")
+        self._live = live
+        self.standing.live_model = live
+        self.standing.labels_trained_on = int(state["labels_trained_on"])
+        self.standing.by_source = dict(state.get("trained_by_source", {}))
+        for source, stored in state.get("calibrators", {}).items():
+            self._calibrator_for(source).restore_state(stored)
+
+    @property
+    def training_observations(self) -> int:
+        """How many labelled outcomes the live model has been trained on."""
+        return self._models[self._live].observations
+
 
 def describe_follow_conviction(model: TailFollowConvictionModel) -> dict:
     return {
@@ -303,6 +364,8 @@ def describe_follow_conviction(model: TailFollowConvictionModel) -> dict:
         "refused_because_views_disagree": model.standing.refused_views_disagree,
         "refused_nothing_usable": model.standing.refused_nothing_usable,
         "labels_trained_on": model.standing.labels_trained_on,
+        "checkpoints_written": model.standing.checkpoints_written,
+        "checkpoint_verdict": model.standing.checkpoint_verdict,
         "trained_by_source": dict(sorted(model.standing.by_source.items())),
         "retrains": model.standing.retrains,
         "champion_swaps": model.standing.champion_swaps,
@@ -376,13 +439,13 @@ def start_part(context) -> int:
     )
     store = LearnedStateStore(pathlib.Path(str(context.setting("learned_state_root").value)).expanduser())
     store.root.mkdir(parents=True, exist_ok=True)
-    if hasattr(model, "learned_settings") and hasattr(model, "restore_state"):
-        restoration = store.restore(PART_ID, "conviction", model.learned_settings())
-        if restoration.was_restored:
-            try:
-                model.restore_state(restoration.state)
-            except (KeyError, TypeError, ValueError):
-                pass
+    # No hasattr guard: it was here until 2026-08-25, both attributes were
+    # missing, and the guard turned "this bot never remembers anything" into a
+    # silent no-op that looked like caution.
+    restoration = store.restore(PART_ID, "conviction", model.learned_settings())
+    if restoration.was_restored:
+        model.restore_state(restoration.state)
+    model.standing.checkpoint_verdict = restoration.verdict
     schedule = CheckpointSchedule(int(context.number("learned_state_checkpoint_interval")))
     remembered: dict[tuple[str, str], object] = {}
 
@@ -431,11 +494,11 @@ def start_part(context) -> int:
     def publish(convictions) -> None:
         if convictions:
             publish_convictions(convictions)
-        if hasattr(model, "state") and hasattr(model, "training_observations"):
-            observations = model.training_observations
-            if schedule.is_due(observations):
-                store.save(PART_ID, "conviction", model.state(), model.learned_settings())
-                schedule.record_written(observations)
+        observations = model.training_observations
+        if schedule.is_due(observations):
+            store.save(PART_ID, "conviction", model.state(), model.learned_settings())
+            schedule.record_written(observations)
+            model.standing.checkpoints_written += 1
 
     return run_tail_follow_conviction_model(
         model=model,

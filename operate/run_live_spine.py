@@ -509,6 +509,100 @@ LIVE_SPINE = (
     "forecast-bias-weigher",
     "exploration-pair-opener",
     "brain-self-reflector",
+    # The bull bot's own two stragglers, which its bear twin has had since it
+    # started: the weight learner and the watcher on an open position's thesis.
+    "bull-setup-weight-learner",
+    "bull-position-invalidation-watcher",
+    # The execution path, started 2026-08-25 (phase 11). **Nothing here places a
+    # live order.** money-mode says paper, so order-destination-router sends every
+    # order to the paper book and the router only ever sees one destined for a
+    # venue; and no key exists, so a live order would be refused by name with
+    # REFUSED_NO_KEY, which is the state this part was built to report. What the
+    # phase buys is that the path exists and is observed rather than assumed.
+    "venue-rate-budgeter",
+    "ccxt-order-router",
+    "venue-order-status-translator",
+    "order-reject-classifier",
+    "order-not-found-debouncer",
+    "order-resubmitter",
+    "order-state-poller",
+    "resting-order-cancel-policy",
+    "limit-price-walker",
+    "venue-balance-reader",
+    "venue-position-reader",
+    # The last risk part: it turns a bounded order into an execution schedule, a
+    # plan rather than orders, so it adds nothing to the order path it reads.
+    "participation-capped-order-splitter",
+    # The guard on real money. It publishes the full limit while the segment is on
+    # paper and judges nothing; live, it is what refuses until the bots have
+    # graduated. Started now rather than with the live switch, because a guard
+    # first started at the moment it must refuse is a guard nobody has watched.
+    "live-switch-guard",
+    # Intelligence, started 2026-08-25 (phase 12's first half). Nothing here
+    # trades: they read what happened and say what it means -- the clusters the
+    # exposure limiter needs, the refutation battery an edge has to survive, and
+    # the critics that judge decisions after the fact.
+    "correlation-cluster-mapper",
+    "cross-segment-exposure-watch",
+    "cross-segment-signal-bridge",
+    "cross-segment-lesson-bridge",
+    "regime-break-detector",
+    "turbulence-index-gauge",
+    "market-anomaly-detector",
+    "market-event-reader",
+    "open-web-reader",
+    "edge-decay-tracker",
+    "trial-count-accountant",
+    "counterfactual-replayer",
+    "causal-refutation-battery",
+    "decision-quality-critic",
+    "abstention-coverage-auditor",
+    "forgetting-auditor",
+    "self-model-reporter",
+    "idea-generator",
+    # Hypothesis, the other half of phase 12: where the system proposes its own
+    # edges. loss-inverter turns a losing trade into the hypothesis for the
+    # opposite one, and nothing reaches the scanner without surviving the battery.
+    "symbolic-hypothesis-miner",
+    "loss-inverter",
+    "hypothesis-deduplicator",
+    "hypothesis-regime-tagger",
+    "hypothesis-ranker",
+    "power-estimator",
+    "hypothesis-falsifier",
+    "hypothesis-mutator",
+    "expectancy-decomposer",
+    "instruction-writer",
+    "instruction-retirer",
+    # Knowledge, phase 13's unblocked half: the three tiers of memory. None of
+    # these needs a provider key -- the parts that do are llm-foundation's, and
+    # they stay off until the operator has one.
+    "symbol-profile-store",
+    "episodic-trade-store",
+    "episode-embedder",
+    "semantic-fact-store",
+    "contradiction-detector",
+    "fact-provenance-tracker",
+    "procedural-playbook",
+    "regime-memory-store",
+    "knowledge-graph-linker",
+    "knowledge-pruner",
+    "knowledge-snapshot-versioner",
+    "forgetting-curve-scheduler",
+    "instruction-archive",
+    # Backtesting, phase 15's first half. RL-071 is absolute and unaffected: a
+    # replay proves an instruction before the scanner is told to watch for it,
+    # and no trading decision and no live learning is ever made from one.
+    "historical-bar-store",
+    "walk-forward-splitter",
+    "lookahead-auditor",
+    "intra-bar-fill-sequencer",
+    "fill-volume-capper",
+    "execution-cost-model",
+    "instruction-replayer",
+    "backtest-scorer",
+    "live-vs-replay-reconciler",
+    "instruction-promotion-gate",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked

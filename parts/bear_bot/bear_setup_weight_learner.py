@@ -336,7 +336,14 @@ def start_part(context) -> int:
             if getattr(scorecard, "bot", None) == BOT:
                 learner.observe_scorecard(scorecard)
         for card in instruction_cards.payloads():
-            learner.observe_instruction_scorecard(card.instruction_id, card.instruction_id, card.wins, card.trades)
+            # The average result per trade, which this learner weights each
+            # observation by and the bull twin does not take at all. The call was
+            # copied from that twin and left it out, so the first instruction
+            # scorecard to arrive would have crashed this part.
+            average = card.realised / card.trades if card.trades else 0.0
+            learner.observe_instruction_scorecard(
+                card.instruction_id, card.instruction_id, card.wins, card.trades, average
+            )
 
     def tick() -> None:
         read_scorecards(learner)

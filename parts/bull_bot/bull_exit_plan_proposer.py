@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
 from runtime.bot_opinion import LONG, ExitPlan, ExitTarget
+from runtime.knowledge_types import TICK_SIZE
 from runtime.part_declaration import PartDeclaration
 # Defined once, in the substrate. They were defined here and again in the
 # peer bot's proposer, and the bus pickles -- so a profile produced against
@@ -562,7 +563,13 @@ def start_part(context) -> int:
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for profile in profiles.payloads():
-            proposer.observe_symbol_profile(profile)
+            # The tick size off the profile's closed key set, not the profile
+            # itself: a stop that is not on a tick is not a stop the venue takes,
+            # and handing the whole bundle where a float was expected crashed this
+            # part the hour symbol-profile-store first ran.
+            tick_size = profile.value_of(TICK_SIZE)
+            if tick_size is not None and tick_size > 0:
+                proposer.observe_symbol_profile(profile.venue_id, profile.symbol, tick_size)
         for excursion in excursions.payloads():
             proposer.observe_excursion_profile(excursion)
         for horizon in horizons.payloads():

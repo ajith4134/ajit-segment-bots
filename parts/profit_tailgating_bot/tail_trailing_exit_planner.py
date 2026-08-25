@@ -36,6 +36,7 @@ from runtime.price_frames import levels_in
 from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import LONG, SHORT, ExitPlan, ExitTarget
 from runtime.learned_estimator import Estimate, QuantileEstimator
+from runtime.knowledge_types import TICK_SIZE
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -405,7 +406,11 @@ def start_part(context) -> int:
                     trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
         for profile in profiles.payloads():
-            step = (profile.fields or {}).get("price_increment") if isinstance(profile.fields, dict) else None
+            # `tick-size`, from the closed key set a profile's fields are filed
+            # under. It was read as "price_increment" -- a key no profile has ever
+            # carried -- and the fields hold ProfileField objects rather than
+            # floats, so this never observed a step and never said so.
+            step = profile.value_of(TICK_SIZE)
             if step:
                 planner.observe_symbol_profile(profile.venue_id, profile.symbol, float(step))
         for counterfactual in counterfactuals.payloads():

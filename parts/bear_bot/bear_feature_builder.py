@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
 from runtime.bot_opinion import FeatureVector
+from runtime.knowledge_types import TYPICAL_SPREAD
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -85,6 +86,10 @@ class SymbolObservations:
     book: tuple | None = None
     funding_rate: float | None = None
     funding_forecast: float | None = None
+    # What this symbol's spread usually is, from its profile. Used only when no
+    # book snapshot has arrived: the spread now is unknown then, and the spread it
+    # usually has is a fact about the symbol rather than about this moment.
+    typical_spread: float | None = None
 
 
 class BearFeatureBuilder:
@@ -142,6 +147,12 @@ class BearFeatureBuilder:
     def observe_funding_forecast(self, venue_id: str, symbol: str, forecast: float) -> None:
         self._observations_for(venue_id, symbol).funding_forecast = forecast
 
+    def observe_symbol_profile(self, venue_id: str, symbol: str, typical_spread: float) -> None:
+        """This symbol's usual spread. The bull builder has had one since it was
+        written; this part had no method at all, and the call crashed it the hour
+        symbol-profile-store first ran."""
+        self._observations_for(venue_id, symbol).typical_spread = typical_spread
+
     def build(self, candidate) -> FeatureVector:
         self.standing.vectors_built += 1
         key = (candidate.venue_id, candidate.symbol)
@@ -197,7 +208,13 @@ class BearFeatureBuilder:
         if observations.book is None:
             self.standing.books_absent += 1
             record("offer_side_imbalance", None, "no book snapshot")
-            record("spread_fraction", None, "no book snapshot")
+            if observations.typical_spread is None:
+                record("spread_fraction", None, "no book snapshot")
+            else:
+                record(
+                    "spread_fraction", observations.typical_spread,
+                    "symbol-profile: what this symbol's spread usually is, not the spread now",
+                )
             record("squeeze_room", None, "no book snapshot")
         else:
             bids, asks = observations.book
@@ -401,7 +418,12 @@ def start_part(context) -> int:
         for book in books.payloads():
             builder.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
         for profile in profiles.payloads():
-            builder.observe_symbol_profile(profile)
+            # A symbol-profile is a bundle of measured fields under a closed key
+            # set, not a number. Passing the bundle where a float was expected
+            # crashed this part the hour symbol-profile-store first ran.
+            typical_spread = profile.value_of(TYPICAL_SPREAD)
+            if typical_spread is not None:
+                builder.observe_symbol_profile(profile.venue_id, profile.symbol, typical_spread)
         for forecast in funding.payloads():
             builder.observe_funding_forecast(forecast)
         return candidates.payloads()

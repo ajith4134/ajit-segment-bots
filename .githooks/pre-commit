@@ -29,3 +29,13 @@ python3 "$repo_root/dashboard/check_contracts.py" || {
   echo "fix the read, or the producer, or use --no-verify and say why."
   exit 1
 }
+
+# The other half of the same class: a call an object cannot answer. Four parts
+# crashed on one within a minute of symbol-profile-store first running, each
+# passing a whole payload where a venue, a symbol and a number were wanted.
+"$repo_root/.venv/bin/python" "$repo_root/dashboard/check_part_calls.py" || {
+  echo ""
+  echo "commit refused: a part calls its own object with arguments it cannot take."
+  echo "fix the call, or the method, or use --no-verify and say why."
+  exit 1
+}

@@ -76,7 +76,9 @@ def test_a_declaration_loaded_from_the_blueprint_matches_what_the_blueprint_says
     # RL-067: what is built matches the diagrams. A part's real consumes and
     # produces equal what features.json declares, or the probe in Task 14 fails.
     declaration = load_declaration_from_blueprint("kline-window-builder")
-    assert declaration.consumes == ("market-data",)
+    # `candle` since 2026-08-25: market-data carried trades, candles and books at
+    # once, and the first candle crashed a part that reads a trade's sequence.
+    assert declaration.consumes == ("candle",)
     assert "part-health" in declaration.produces
 
 

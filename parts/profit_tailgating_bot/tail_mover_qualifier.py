@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from runtime.price_frames import levels_in
 from runtime.bot_opinion import FROM_A_SCANNER_MOVE, LONG, FollowCandidate
 from runtime.learned_estimator import QuantileEstimator
+from runtime.knowledge_types import TYPICAL_SPREAD
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -335,7 +336,15 @@ def start_part(context) -> int:
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
             )
         for profile in profiles.payloads():
-            qualifier.observe_symbol_profile(profile.venue_id, profile.symbol, round_trip)
+            # Fees plus what it costs to cross this symbol's spread twice. The
+            # fee alone is the same number for every symbol, which makes a profile
+            # this part consumes change nothing -- and the spread is the half of
+            # the round trip that differs between a major and a thin listing.
+            spread = profile.value_of(TYPICAL_SPREAD)
+            qualifier.observe_symbol_profile(
+                profile.venue_id, profile.symbol,
+                round_trip + (2.0 * spread if spread is not None else 0.0),
+            )
         for weight in weights.payloads():
             qualifier.observe_setup_weight(weight.detector, weight.weight)
         return tuple(candidates.payloads())

@@ -228,9 +228,12 @@ def start_part(context) -> int:
     def read_transfers():
         flows.payloads()
         for trade in levels_in(trades.payloads()):
+            # The price frame is read for the symbol it names, which is how an
+            # asset moving on-chain is matched to the contract that trades it.
+            # A `hasattr(detector, "observe_price")` guard stood here until
+            # 2026-08-25 around a method this detector has never had -- always
+            # false, so it never ran, and it read as though the price mattered.
             symbol_of[(trade.venue_id, trade.symbol.removesuffix("USDT"))] = trade.symbol
-            if hasattr(detector, "observe_price"):
-                detector.observe_price(trade.venue_id, trade.symbol, trade.price)
         requests = []
         for transfer in transfers.payloads():
             venue_id = transfer.to_venue_id

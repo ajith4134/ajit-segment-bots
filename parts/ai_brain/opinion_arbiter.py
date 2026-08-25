@@ -458,10 +458,19 @@ def start_part(context) -> int:
             arbiter.observe_forecast_bias(bias)
         for alert in breaks.payloads():
             arbiter.observe_regime_break(alert.regime, alert.has_broken)
-        for competence in competences.payloads():
-            arbiter.observe_competence(competence.venue_id, competence.symbol, competence)
-        for coverage in coverages.payloads():
-            arbiter.observe_coverage(coverage.venue_id, coverage.symbol, coverage)
+        # A competence-map is the whole map, not one entry, and each entry carries
+        # its own measured number. Both of these read the payload as though it
+        # were the number itself until 2026-08-25: the map crashed this part on
+        # the first one that arrived, and the coverage report -- an object, always
+        # truthy, never a fraction -- would have compared as one against the
+        # minimum and refused every symbol the auditor had ever reported on.
+        for mapped in competences.payloads():
+            for entry in mapped.entries:
+                if entry.competence is not None:
+                    arbiter.observe_competence(entry.venue_id, entry.symbol, entry.competence)
+        for report in coverages.payloads():
+            if report.coverage is not None:
+                arbiter.observe_coverage(report.venue_id, report.symbol, report.coverage)
 
         regime_by_symbol = regimes.mapping()
         ruling_by_symbol = rulings.mapping()
