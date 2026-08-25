@@ -9,10 +9,20 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, FLAT, LONG, SHORT, ClosedTrade, Lot, LotBook
+from runtime.trading_types import (
+    BUY,
+    FLAT,
+    LONG,
+    SHORT,
+    ClosedTrade,
+    Lot,
+    LotBook,
+    exact_quantity,
+)
 
 PART_ID = "position-close-detector"
 
@@ -52,7 +62,7 @@ class PositionCloseDetector:
         self._direction: dict[tuple[str, str], str] = {}
         self._realised: dict[tuple[str, str], float] = {}
         self._fees: dict[tuple[str, str], float] = {}
-        self._entered_quantity: dict[tuple[str, str], float] = {}
+        self._entered_quantity: dict[tuple[str, str], Decimal] = {}
         self._entry_cost: dict[tuple[str, str], float] = {}
         self._opened_at: dict[tuple[str, str], int] = {}
         self._excursion: dict[tuple[str, str], tuple[float, float]] = {}
@@ -74,33 +84,42 @@ class PositionCloseDetector:
         fill_direction = LONG if fill.side == BUY else SHORT
         self._fees[key] = self._fees.get(key, 0.0) + fill.fee
 
+        # Exact from here down. Every quantity comparison below decides whether a
+        # round trip is over, and a float that missed flat by 9e-18 left the
+        # position open forever and the trade unscoreable.
+        filled = exact_quantity(fill.quantity)
+
         if direction in (FLAT, fill_direction):
             if direction == FLAT:
                 self._opened_at[key] = fill.filled_at_ns
                 self._realised[key] = 0.0
-                self._entered_quantity[key] = 0.0
+                self._entered_quantity[key] = exact_quantity(0)
                 self._entry_cost[key] = 0.0
             self._direction[key] = fill_direction
-            self._entered_quantity[key] = self._entered_quantity.get(key, 0.0) + fill.quantity
-            self._entry_cost[key] = self._entry_cost.get(key, 0.0) + fill.quantity * fill.price
-            book.add(Lot(fill.quantity, fill.price, fill.filled_at_ns, fill.fee))
+            self._entered_quantity[key] = self._entered_quantity.get(key, exact_quantity(0)) + filled
+            self._entry_cost[key] = self._entry_cost.get(key, 0.0) + float(filled) * fill.price
+            book.add(Lot(filled, fill.price, fill.filled_at_ns, fill.fee))
             self.standing.open_symbols = sum(1 for b in self._books.values() if b.lots)
             return None
 
-        closing = min(fill.quantity, book.total_quantity)
+        closing = min(filled, book.total_quantity)
         taken = book.take(closing)
+        # Prices are floats, so the gain is computed as one -- a profit is a
+        # measurement, not a count, and pretending otherwise would give it a
+        # precision it does not have.
         gain = sum(
-            (fill.price - lot.price) * used if direction == LONG else (lot.price - fill.price) * used
+            (fill.price - lot.price) * float(used) if direction == LONG
+            else (lot.price - fill.price) * float(used)
             for lot, used in taken
         )
         self._realised[key] = self._realised.get(key, 0.0) + gain
 
-        if book.total_quantity > 0:
+        if not book.is_flat:
             self.standing.partial_closes += 1
             return None
 
         trade = self._close(key, fill, direction)
-        remaining = fill.quantity - closing
+        remaining = filled - closing
         if remaining > 0:
             self.standing.reversals += 1
             self._direction[key] = fill_direction
@@ -108,7 +127,7 @@ class PositionCloseDetector:
             self._realised[key] = 0.0
             self._fees[key] = 0.0
             self._entered_quantity[key] = remaining
-            self._entry_cost[key] = remaining * fill.price
+            self._entry_cost[key] = float(remaining) * fill.price
             book.add(Lot(remaining, fill.price, fill.filled_at_ns, 0.0))
         else:
             self._direction[key] = FLAT
@@ -126,13 +145,16 @@ class PositionCloseDetector:
         """
         best, worst = self._excursion.get(key, (None, None))
         self.standing.trades_closed += 1
-        entered = self._entered_quantity.get(key, 0.0)
-        entry_price = self._entry_cost.get(key, 0.0) / entered if entered else fill.price
+        entered = self._entered_quantity.get(key, exact_quantity(0))
+        entry_price = self._entry_cost.get(key, 0.0) / float(entered) if entered else fill.price
         return ClosedTrade(
             venue_id=fill.venue_id,
             symbol=fill.symbol,
             direction=direction,
-            quantity=entered,
+            # Float at the edge. The book counts exactly; `closed-trade` is read by
+            # twenty closed-trade-decoding parts that multiply this against prices,
+            # and handing them a Decimal would raise in every one of them.
+            quantity=float(entered),
             entry_price=entry_price,
             exit_price=fill.price,
             realised_pnl=self._realised[key],

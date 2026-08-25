@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, FLAT, LONG, SHORT, Lot, LotBook
+from runtime.trading_types import BUY, FLAT, LONG, SHORT, Lot, LotBook, exact_quantity
 
 PART_ID = "cost-basis-tracker"
 
@@ -76,19 +76,24 @@ class CostBasisTracker:
         direction = self._direction.get(key, FLAT)
         fill_direction = LONG if fill.side == BUY else SHORT
 
+        # Exact from here down. A quantity that stayed a float would make
+        # `book.is_flat` below miss by a fraction of an atom and leave the
+        # direction set to a side that is no longer held.
+        filled = exact_quantity(fill.quantity)
+
         if direction in (FLAT, fill_direction):
             self._direction[key] = fill_direction
-            book.add(Lot(fill.quantity, fill.price, fill.filled_at_ns, fill.fee))
+            book.add(Lot(filled, fill.price, fill.filled_at_ns, fill.fee))
             return self.read(fill.venue_id, fill.symbol)
 
-        remaining = fill.quantity - book.total_quantity
-        book.take(min(fill.quantity, book.total_quantity))
+        remaining = filled - book.total_quantity
+        book.take(min(filled, book.total_quantity))
         if remaining > 0:
             self.standing.reversals += 1
             self._direction[key] = fill_direction
             book.lots.clear()
             book.add(Lot(remaining, fill.price, fill.filled_at_ns, 0.0))
-        elif book.total_quantity == 0:
+        elif book.is_flat:
             self._direction[key] = FLAT
         return self.read(fill.venue_id, fill.symbol)
 
@@ -99,7 +104,10 @@ class CostBasisTracker:
             venue_id=venue_id,
             symbol=symbol,
             direction=self._direction.get(key, FLAT),
-            quantity=book.total_quantity,
+            # Float at the edge: the book counts exactly, but `cost-basis` is read
+            # by parts that multiply it against prices, and a Decimal would raise
+            # in every one of them rather than being quietly wrong.
+            quantity=float(book.total_quantity),
             average_price=book.average_price,
             fees_paid=self._fees.get(key, 0.0),
             lots_open=len(book.lots),

@@ -7,6 +7,7 @@ live here rather than in whichever part happened to define one first.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 BUY = "buy"
 SELL = "sell"
@@ -223,14 +224,54 @@ class ClosedTrade:
         return (self.closed_at_ns - self.opened_at_ns) / 1e9
 
 
+def exact_quantity(value) -> Decimal:
+    """A quantity as the decimal the venue meant, not the binary float nearest it.
+
+    The boundary where a quantity stops being a float and starts being exact.
+    Every quantity entering a lot book goes through here, and this is why:
+
+        1.0 - 0.99  ==  0.010000000000000009      in float
+        1.0 - 0.99  ==  0.01                      through here
+
+    A position closed in slices used to leave that 9e-18 behind. `total_quantity`
+    stayed above zero, the book never reached flat, and no closed trade was ever
+    emitted -- a position open forever and a round trip nothing could score.
+
+    `Decimal(str(value))` and not `Decimal(value)`, which is the whole trick.
+    `Decimal(0.99)` reproduces the float's exact binary value, all fifty-odd
+    digits of it, and carries the error in rather than leaving it outside.
+    `str()` gives the shortest decimal that round-trips to the same float, which
+    for any quantity a venue can express *is* the number the venue said.
+
+    So the error is not tolerated with an epsilon -- there is no threshold here
+    to tune, and none of RL-061's numeric literals to justify. It is not created.
+    """
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
 @dataclass(frozen=True)
 class Lot:
-    """One parcel of a position, kept so partial closes resolve oldest-first."""
+    """One parcel of a position, kept so partial closes resolve oldest-first.
 
-    quantity: float
+    The quantity is a `Decimal` and the price is not, deliberately. A quantity is
+    counted in the venue's own steps and has to subtract exactly; a price is
+    measured, and carrying it as a decimal would dress an approximation up as an
+    exact number. `exact_quantity` is the door quantities come through.
+    """
+
+    quantity: Decimal
     price: float
     opened_at_ns: int
     fee: float = 0.0
+
+    def __post_init__(self) -> None:
+        # A float that slipped in would reintroduce exactly the residue this type
+        # exists to prevent, and would do it silently -- every operation below
+        # still works on floats, just wrongly. Converted at the door instead.
+        if not isinstance(self.quantity, Decimal):
+            object.__setattr__(self, "quantity", exact_quantity(self.quantity))
 
 
 @dataclass
@@ -247,10 +288,15 @@ class LotBook:
     def add(self, lot: Lot) -> None:
         self.lots.append(lot)
 
-    def take(self, quantity: float) -> list[tuple[Lot, float]]:
-        """Consume `quantity` from the oldest lots, returning what each gave up."""
-        taken: list[tuple[Lot, float]] = []
-        remaining = quantity
+    def take(self, quantity) -> list[tuple[Lot, Decimal]]:
+        """Consume `quantity` from the oldest lots, returning what each gave up.
+
+        Exact throughout. A lot is dropped when it gave up all of itself, and
+        `used == lot.quantity` is a decimal comparison that is true when the lot
+        is actually empty rather than nearly empty.
+        """
+        taken: list[tuple[Lot, Decimal]] = []
+        remaining = exact_quantity(quantity)
         while remaining > 0 and self.lots:
             lot = self.lots[0]
             used = min(lot.quantity, remaining)
@@ -263,12 +309,20 @@ class LotBook:
         return taken
 
     @property
-    def total_quantity(self) -> float:
-        return sum(lot.quantity for lot in self.lots)
+    def total_quantity(self) -> Decimal:
+        """What the book still holds, exactly. Zero here means flat, and means it."""
+        return sum((lot.quantity for lot in self.lots), Decimal(0))
+
+    @property
+    def is_flat(self) -> bool:
+        """Nothing held. An exact test, with no tolerance to get wrong."""
+        return self.total_quantity == 0
 
     @property
     def average_price(self) -> float | None:
+        """The weighted entry, as a float, because a price is measured not counted."""
         total = self.total_quantity
         if total <= 0:
             return None
-        return sum(lot.quantity * lot.price for lot in self.lots) / total
+        weighted = sum(float(lot.quantity) * lot.price for lot in self.lots)
+        return weighted / float(total)

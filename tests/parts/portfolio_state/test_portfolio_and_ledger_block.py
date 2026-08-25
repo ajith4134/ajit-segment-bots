@@ -186,6 +186,65 @@ def test_reaching_flat_emits_the_round_trip():
     assert trade.holding_seconds == pytest.approx(2.0)
 
 
+def test_a_round_trip_closed_in_slices_reaches_flat_and_emits_its_trade():
+    """The defect: 1.0 sold as 0.99 then 0.01 never reached flat.
+
+    `1.0 - 0.99` is `0.010000000000000009` in float, so the book held 9e-18 back,
+    `total_quantity` stayed above zero, and no closed trade was ever emitted. The
+    position stayed open forever and the round trip could never be scored.
+    """
+    detector = PositionCloseDetector()
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    assert detector.observe_fill(fill("f2", SELL, 110.0, 0.99, at=2)) is None
+    trade = detector.observe_fill(fill("f3", SELL, 110.0, 0.01, at=3))
+    assert trade is not None, "the round trip never reached flat"
+    assert trade.quantity == pytest.approx(1.0)
+    assert trade.entry_price == pytest.approx(100.0)
+    assert trade.realised_pnl == pytest.approx(10.0)
+
+
+def test_a_position_dribbled_out_in_ten_slices_still_closes():
+    detector = PositionCloseDetector()
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    trade = None
+    for index in range(10):
+        trade = detector.observe_fill(fill(f"x{index}", SELL, 110.0, 0.1, at=2 + index))
+    assert trade is not None, "ten slices never summed back to the position"
+    assert trade.quantity == pytest.approx(1.0)
+    assert trade.realised_pnl == pytest.approx(10.0)
+
+
+def test_exits_mirroring_ragged_entry_fills_cancel_exactly():
+    """The shape production actually makes, and why float quantities are safe here.
+
+    An entry split by participation-capped-order-splitter arrives as ragged
+    slices, and exit-order-chainer chains an exit for each fill's own quantity.
+    So the same values go into the book and come back out, and in decimal they
+    cancel exactly however ugly they are. This pins that property, because it is
+    the reason `Fill.quantity` can stay a float while the book counts exactly.
+    """
+    ragged = [0.3, 0.3, 0.3, 0.07, 0.03]
+    detector = PositionCloseDetector()
+    for index, size in enumerate(ragged):
+        detector.observe_fill(fill(f"in{index}", BUY, 100.0, size, at=1 + index))
+    trade = None
+    for index, size in enumerate(ragged):
+        trade = detector.observe_fill(fill(f"out{index}", SELL, 110.0, size, at=20 + index))
+    assert trade is not None, "a ragged round trip never reached flat"
+    assert trade.quantity == pytest.approx(sum(ragged))
+    assert trade.entry_price == pytest.approx(100.0)
+
+
+def test_a_cost_basis_returns_to_flat_when_a_position_is_closed_in_slices():
+    tracker = CostBasisTracker()
+    tracker.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
+    tracker.observe_fill(fill("f2", SELL, 110.0, 0.99, at=2))
+    tracker.observe_fill(fill("f3", SELL, 110.0, 0.01, at=3))
+    basis = tracker.read(VENUE, SYMBOL)
+    assert basis.direction == FLAT
+    assert basis.quantity == pytest.approx(0.0)
+
+
 def test_the_round_trip_is_priced_by_what_it_entered_not_by_its_last_slice():
     """Same round trip, sold in one slice or in two: the same entry and quantity.
 
