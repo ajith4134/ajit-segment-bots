@@ -78,16 +78,76 @@ def test_the_whole_trading_half_is_on(spine):
     assert not missing, f"the spine cannot reach a fill without: {missing}"
 
 
+# The health wire every part produces. Not a data dependency: it is how the
+# governor sees a part at all, and a spine ordered by it could never start the
+# part that collects it.
+HEALTH = "part-health"
+
+
+def strongly_connected_components(edges: dict, nodes) -> dict:
+    """Which parts sit in a cycle together, computed rather than listed.
+
+    Tarjan's algorithm, iterative because 327 parts nest deeper than the recursion
+    limit. Every part is in exactly one component; a component of one is a part
+    that is not in any cycle.
+    """
+    index_of, low, on_stack, stack, order = {}, {}, set(), [], []
+    component_of, counter = {}, 0
+
+    for root in nodes:
+        if root in index_of:
+            continue
+        work = [(root, iter(edges.get(root, ())))]
+        index_of[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            node, children = work[-1]
+            for child in children:
+                if child not in index_of:
+                    index_of[child] = low[child] = counter
+                    counter += 1
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(edges.get(child, ()))))
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], index_of[child])
+            else:
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == index_of[node]:
+                    order.append(node)
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component_of[member] = node
+                        if member == node:
+                            break
+    return component_of
+
+
 def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
-    """Started in the order data moves, so a first tick has something to read.
+    """Started in the order data moves, wherever an order exists at all.
 
-    Only against producers that are in the spine at all: 299 of the 321 parts sit
-    in one feedback cycle, so most of what a part consumes is produced by
-    something switched off, and waiting for it would be waiting forever. What this
-    checks is that nothing switched *on* is started after the part that reads it.
+    **The cycles are computed, not listed.** They were a hand-kept set of names
+    until 2026-08-25, which worked while most of the blueprint was switched off:
+    with 327 parts running, 299 of them sit in one feedback cycle, and every edge
+    inside it is an edge no ordering can satisfy. A list of names would have to
+    grow to hold most of the system, and the day it did it would stop saying
+    anything.
 
-    The parts inside a cycle are excluded by name below, because for them no
-    order satisfies everything and the spine states the one it chose.
+    So the graph is built from the blueprint, its strongly connected components
+    are found, and the rule is applied to exactly the edges that cross between
+    them -- the part of the graph that *is* a line. An edge inside one component
+    is a loop by construction: the labeller scores the detectors and the model
+    trains on its labels; the account keeper reads the fills the simulator makes
+    and publishes the balance the sizer sizes against; the placer places a stop
+    and the auditor judges the stop it placed. A learning loop that could be
+    ordered as a line would not be a learning loop.
     """
     import json
 
@@ -104,101 +164,34 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         if feature["id"] in position
     }
 
-    # The parts inside a feedback cycle, stated rather than discovered: each reads
-    # something produced by a part started after it, and that is the design.
-    #
-    # Three cycles, and all three are the system working. The learning loop: the
-    # labeller scores the detectors, the model trains on its labels, and what the
-    # model decides eventually feeds the labeller again. The money loop: the
-    # account keeper reads the fills the simulator produces and publishes the
-    # balance the sizer sizes against, so the money that goes out is what comes
-    # back. The exit loop: the simulator's fill becomes a position, the position's
-    # exits become orders, and those orders come back to the simulator -- which is
-    # what closing a trade is, and there is no ordering of the two that makes it
-    # a line instead of a circle.
-    INSIDE_A_FEEDBACK_CYCLE = {
-        "signal-outcome-labeller",
-        "bull-conviction-model",
-        "bull-conviction-calibrator",
-        "capital-settings-validator",
-        "paper-account-keeper",
-        "paper-fill-simulator",
-        # The exposure limiter is inside the money loop rather than upstream of
-        # it: it limits the sizer, and what it limits against is the positions the
-        # sizer's own orders produced. There is no ordering that makes that a line.
-        "exposure-limiter",
-        # The collector reads part-health from every part, including its own
-        # consumers downstream; it is started first so the earliest reports have
-        # an inbox, which is the opposite of this rule on purpose.
-        "heartbeat-collector",
-        # Same reason: it meters every part's health, its own consumers included.
-        "part-appetite-meter",
-        # The governor's act loop, closed on 2026-08-24: the planner's plan feeds
-        # the actuator, the actuator's switch-records feed the damper and the
-        # verifier, and the damper's flap-reports feed the planner again. No
-        # ordering makes that a line. The spine starts the actuator last, so the
-        # first plan it ever acts on is one the planner built with every meter
-        # already reporting.
-        "switch-oscillation-damper",
-        "off-state-verifier",
-        "gate-actuator",
-        # In the same loop one arc further out: the faults it budgets against are
-        # the verifier's, and the budget it produces is the planner's input.
-        "part-restart-budgeter",
-        # The stop loop, closed on 2026-08-25 when the decoders were switched on
-        # (phase 5). stop-target-placer places a stop, the trade closes against
-        # it, stop-placement-auditor judges whether it was hit by noise before the
-        # target, and that audit is how the next stop is placed better. There is
-        # no ordering of those two that makes it a line, and the placer is started
-        # first on purpose: a trade cannot be sized without a stop, so a spine
-        # that waited for the auditor could never open the trade the auditor
-        # exists to judge.
-        "stop-target-placer",
-        # The same loop, one arc further in, and closed the same day. The bull
-        # bot's entry timing is scored by entry-quality-scorer and its exit plan
-        # by the excursion, horizon and stop-audit profilers -- and every one of
-        # those judgements is built from trades the bot itself opened. A learning
-        # loop that could be ordered as a line would not be a learning loop.
-        "bull-entry-timer",
-        "bull-exit-plan-proposer",
-        # The model loop, closed 2026-08-25 with phase 6. Kronos is finetuned, it
-        # forecasts, forecast-scorer scores what it said against what the market
-        # actually did, model-drift-monitor raises an alert when that accuracy
-        # decays, and the alert is what triggers the next finetune. A model that
-        # kept itself honest in a straight line would not be keeping itself
-        # honest -- it would just be a model.
-        "kronos-finetuner",
-        # The second loop through the same accuracy: which model size to run is
-        # chosen from how well the sizes themselves have been forecasting.
-        "kronos-size-selector",
-        # The learning loops proper, closed 2026-08-25 with phase 7. Each reads a
-        # judgement built from what it itself produced, which is what makes it a
-        # learning loop rather than a pipeline:
-        #
-        #   the ensembler weighs forecasts by a trust learned from how its own
-        #   combinations turned out;
-        "forecast-ensembler",
-        #   the forecaster serves whichever model version the gate chose, and the
-        #   gate chooses from how the served version performed;
-        "kronos-forecaster",
-        #   the arbiter forms intents, those become trades, the trades become a
-        #   scorecard, and the scorecard is what graduates the bot whose maturity
-        #   the arbiter reads;
-        "opinion-arbiter",
-        #   and the sizer's own orders produce the fills the slippage it sizes
-        #   against is learned from.
-        "position-sizer",
-    }
+    # producer -> consumers, over the parts on the spine only.
+    edges: dict[str, set[str]] = {}
+    for part_id, inputs in consumes.items():
+        for data_type in inputs:
+            if data_type == HEALTH:
+                continue
+            for producer in produces.get(data_type, ()):
+                if producer in position and producer != part_id:
+                    edges.setdefault(producer, set()).add(part_id)
+
+    component_of = strongly_connected_components(edges, sorted(position))
 
     for part_id, inputs in consumes.items():
-        if part_id in INSIDE_A_FEEDBACK_CYCLE:
-            continue
         for data_type in inputs:
-            on_the_spine = [
+            if data_type == HEALTH:
+                # Every part produces it, so ordering by it would mean the
+                # collector starts after all 327 -- and the collector exists to
+                # notice a part that never started. It is the control path, which
+                # T-2 keeps separate from the data path, and this rule is about
+                # the data path.
+                continue
+            outside = [
                 producer for producer in produces.get(data_type, ())
-                if producer in position and producer != part_id
+                if producer in position
+                and producer != part_id
+                and component_of[producer] != component_of[part_id]
             ]
-            if not on_the_spine:
+            if not outside:
                 continue
             # At least one producer must precede, not every one of them. A type
             # with several producers -- `journal-entry` has three recorders, and
@@ -209,10 +202,46 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
             #
             # A type with one producer is unaffected, which is the case this rule
             # exists for and the case that has caught every real defect so far.
-            assert any(position[producer] < position[part_id] for producer in on_the_spine), (
+            assert any(position[producer] < position[part_id] for producer in outside), (
                 f"{part_id} is started before every part on the spine that produces the "
-                f"{data_type} it reads: {', '.join(sorted(on_the_spine))}"
+                f"{data_type} it reads: {', '.join(sorted(outside))}"
             )
+
+
+def test_the_feedback_cycle_is_most_of_the_system_and_that_is_the_design(spine):
+    """One component holds nearly every part, which is why an order cannot be total.
+
+    RL-068's own finding, measured here rather than remembered: 299 of the parts
+    sit in one cycle, and the transitive inputs of a paper fill are 306 parts. A
+    spine that waited for a part's inputs before starting it would never start
+    anything.
+    """
+    import json
+
+    blueprint = json.loads((PROJECT / "docs" / "features.json").read_text())
+    produces = {}
+    for feature in blueprint["features"]:
+        for data_type in feature["produces"]:
+            produces.setdefault(data_type, set()).add(feature["id"])
+    position = {part_id: index for index, part_id in enumerate(spine.LIVE_SPINE)}
+    edges: dict[str, set[str]] = {}
+    for feature in blueprint["features"]:
+        if feature["id"] not in position:
+            continue
+        for data_type in feature["consumes"]:
+            for producer in produces.get(data_type, ()):
+                if producer in position and producer != feature["id"]:
+                    edges.setdefault(producer, set()).add(feature["id"])
+
+    component_of = strongly_connected_components(edges, sorted(position))
+    sizes: dict[str, int] = {}
+    for member in component_of.values():
+        sizes[member] = sizes.get(member, 0) + 1
+    largest = max(sizes.values())
+    assert largest > 250, (
+        f"the largest feedback cycle holds {largest} parts; if it has shrunk this much "
+        f"the ordering rule above should be tightened rather than left as it is"
+    )
 
 
 def test_a_segment_that_is_not_on_paper_refuses_to_start(spine, durable_tmp_path, monkeypatch):

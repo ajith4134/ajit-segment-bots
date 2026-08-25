@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.autonomy_types import PartFault
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -28,10 +29,23 @@ RELEASED = "released"
 STILL_HOLDING = "still-holding"
 UNVERIFIABLE = "unverifiable"
 
+# The two severities this part can report, from the shared vocabulary. A part
+# that will not let go needs restarting; a reading nobody could take does not.
+STALLED = "stalled"
+DEGRADED = "degraded"
+
 
 @dataclass(frozen=True)
-class PartFault:
-    """A part that was switched off and did not let go."""
+class OffStateReading:
+    """What one switched-off part was still holding when it was looked at.
+
+    This part's own reading, kept beside the fault rather than instead of it. It
+    was published *as* a `part-fault` until 2026-08-25 -- a second type on a wire
+    `runtime.autonomy_types.PartFault` already defines -- and
+    unattended-run-warden, which reads a fault's `kind`, crashed on the first one
+    this part produced. One wire, one shape: the fault that travels is the shared
+    type, and this is what went into it.
+    """
 
     part_id: str
     verdict: str
@@ -73,6 +87,7 @@ class OffStateVerifier:
         self._monotonic = monotonic
         self._now_ns = now_ns
         self._switched_off: dict[str, float] = {}
+        self._readings: dict[str, OffStateReading] = {}
         self.standing = VerifierStanding()
 
     def observe_switch_record(self, record) -> None:
@@ -125,7 +140,16 @@ class OffStateVerifier:
         return tuple(faults)
 
     def _fault(self, part_id, verdict, memory, cpu, elapsed, reason) -> PartFault:
-        return PartFault(
+        """The shared fault type, carrying this part's reading in its detail.
+
+        `severity` is `stalled` for a part still holding resources after being
+        switched off, because that is precisely what the warden's
+        `needs_restarting` is for: the part did not let go and something has to
+        make it. An unverifiable reading is a `degraded` fault instead -- not
+        being able to see whether a part let go is a fault about the measurement,
+        and restarting on it would restart a part that may be perfectly off.
+        """
+        reading = OffStateReading(
             part_id=part_id,
             verdict=verdict,
             memory_bytes_still_held=memory,
@@ -134,6 +158,24 @@ class OffStateVerifier:
             reason=reason,
             observed_at_ns=self._now_ns(),
         )
+        self._readings[part_id] = reading
+        return PartFault(
+            part_id=part_id,
+            kind=verdict,
+            detail=reason,
+            first_seen_at_ns=self._now_ns(),
+            observations=1,
+            # Loud, not silent: the part was switched off and is still costing
+            # something, which every meter can see.
+            is_silent=False,
+            severity=STALLED if verdict == STILL_HOLDING else DEGRADED,
+            reason=reason,
+            detected_at_ns=self._now_ns(),
+        )
+
+    def reading_for(self, part_id: str) -> OffStateReading | None:
+        """What this part last measured for one switched-off part."""
+        return self._readings.get(part_id)
 
 
 def describe_verification(verifier: OffStateVerifier) -> dict:

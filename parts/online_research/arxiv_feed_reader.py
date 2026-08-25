@@ -63,6 +63,10 @@ REVISED = "a-newer-version-of-a-paper-already-held"
 NO_IDENTIFIER = "no-versioned-identifier-to-pin-it-to"
 RATE_LIMITED = "rate-limited"
 FETCH_FAILED = "fetch-failed"
+# No search is installed on this box. Its own state, not FETCH_FAILED: a fetch
+# that failed says the search was tried and did not answer, and a reader with no
+# search never tried. The two need different fixes and one of them is not a fault.
+NO_SEARCH = "no-search-is-installed-on-this-machine"
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,7 @@ class FeedReaderStanding:
     without_identifier: int = 0
     nothing_matched: int = 0
     rate_limited: int = 0
+    refused_no_search: int = 0
     failures: int = 0
     fetched_without_a_gap: int = 0
 
@@ -141,7 +146,17 @@ class ArxivFeedReader:
     def fetch_for(self, gap) -> PaperRead:
         self.standing.fetches_attempted += 1
         if self._search is None:
-            raise RuntimeError("no search is installed")
+            # Refused by name rather than raised. This part's own docstring says
+            # "every gap is answered FETCH_FAILED by name and nothing is fetched",
+            # and the code raised instead -- so the first skill-gap to arrive took
+            # the part off the air on 2026-08-25 rather than reporting a state.
+            self.standing.refused_no_search += 1
+            return self._read(
+                getattr(gap, "gap_id", None), NO_SEARCH, None, None, None, None,
+                "no search is installed on this machine, so nothing can be fetched. "
+                "install_search is the one way one gets in, and the fetch budget "
+                "applies from then",
+            )
 
         if gap is None:
             self.standing.fetched_without_a_gap += 0
@@ -287,6 +302,7 @@ def describe_feed_reading(reader: ArxivFeedReader) -> dict:
         "rejected_without_identifier": reader.standing.without_identifier,
         "nothing_matched": reader.standing.nothing_matched,
         "rate_limited": reader.standing.rate_limited,
+        "refused_no_search_installed": reader.standing.refused_no_search,
         "failures": reader.standing.failures,
         "subscribes_to_a_category": False,
         "judges_whether_a_paper_is_correct": False,

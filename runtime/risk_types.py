@@ -22,6 +22,12 @@ from dataclasses import dataclass
 # limiter has not reported yet" must never be the same value.
 NO_RISK_ALLOWED = 0.0
 
+# A limit with no symbols named applies to every symbol. Named rather than left
+# as an empty tuple's meaning: "this limit is about the whole book" and "this
+# limit is about a list that happens to be empty" would otherwise be the same
+# value, and the second is how a symbol-scoped halt becomes a total one.
+EVERY_SYMBOL: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True)
 class RiskLimit:
@@ -38,10 +44,28 @@ class RiskLimit:
     reason: str
     is_binding: bool
     decided_at_ns: int
+    # Which symbols this limit is about. Empty means every symbol, which is what
+    # a drawdown or a margin call is about; a halt raised over an anomaly on two
+    # symbols is about those two. Added 2026-08-25, after trading-halt-decider
+    # halted a symbol-scoped anomaly and halt-enforcer -- which had nowhere to put
+    # the scope -- zeroed the whole segment's risk. Nine thousand consecutive
+    # zero limits, over two symbols out of a hundred.
+    symbols: tuple[str, ...] = EVERY_SYMBOL
 
     @property
     def forbids_new_risk(self) -> bool:
         return self.fraction_of_allotment <= NO_RISK_ALLOWED
+
+    def applies_to(self, symbol: str | None) -> bool:
+        """Whether this limit binds the symbol being sized.
+
+        A limit with no symbols binds everything. A symbol-scoped limit binds only
+        its own -- and it binds a caller that names no symbol too, because a sizer
+        that cannot say what it is sizing cannot be told the limit does not apply.
+        """
+        if not self.symbols:
+            return True
+        return symbol is None or symbol in self.symbols
 
 
 def tightest_limit(limits, now_ns=time.time_ns) -> RiskLimit:

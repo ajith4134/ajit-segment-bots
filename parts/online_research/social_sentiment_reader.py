@@ -50,6 +50,9 @@ TOO_QUIET = "too-few-posts-to-be-a-crowd"
 LOOKS_COORDINATED = "a-few-accounts-produced-most-of-the-posts"
 NO_BASELINE = "this-symbol-has-no-history-to-measure-change-against"
 READ_FAILED = "read-failed"
+# No forum reader is installed on this box. Its own state, not READ_FAILED: a
+# read that failed was tried, and this was not. The two need different fixes.
+NO_READER = "no-forum-reader-is-installed-on-this-machine"
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,7 @@ class SentimentRead:
 @dataclass
 class SentimentStanding:
     reads_attempted: int = 0
+    refused_no_reader: int = 0
     reads_succeeded: int = 0
     too_quiet: int = 0
     coordinated_readings: int = 0
@@ -123,7 +127,16 @@ class SocialSentimentReader:
     def read(self, symbol: str) -> SentimentRead:
         self.standing.reads_attempted += 1
         if self._read_forum is None:
-            raise RuntimeError("no forum reader is installed")
+            # Refused by name rather than raised. Raising took this part off the
+            # air on the first symbol it was asked about, one minute after phase
+            # 14 started it -- and every other reader in this block answers the
+            # same condition with a state.
+            self.standing.refused_no_reader += 1
+            return self._read(
+                symbol, NO_READER, None, None, 0.0,
+                "no forum reader is installed on this machine, so nothing can be read. "
+                "install_reader is the one way one gets in",
+            )
 
         try:
             posts, source_reference, was_complete = self._read_forum(symbol)
@@ -215,6 +228,7 @@ def describe_sentiment_reading(reader: SocialSentimentReader) -> dict:
         "readings_that_look_coordinated": reader.standing.coordinated_readings,
         "readings_without_a_baseline": reader.standing.without_a_baseline,
         "failures": reader.standing.failures,
+        "refused_no_reader_installed": reader.standing.refused_no_reader,
         "symbols_with_a_baseline": reader.standing.symbols_with_a_baseline,
         "converts_sentiment_into_a_direction": False,
         "uses_one_neutral_point_for_every_symbol": False,

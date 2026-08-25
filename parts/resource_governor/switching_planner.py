@@ -46,8 +46,21 @@ PLANS_ABSENT_BEFORE_START = 2
 # Reasons a part is switched, in the order they beat each other. First match
 # wins, so the list is the policy: a flapping part is held even if capacity
 # would allow it, and a reservation floor beats a hog report.
-OFF_REASONS = ("memory-exhaustion-imminent", "hog-under-contention", "io-starvation", "outside-duty-cycle")
+OFF_REASONS = (
+    "memory-exhaustion-imminent", "hog-under-contention", "io-starvation", "outside-duty-cycle",
+    # A conservation plan says what to stop while the runway is short, in the
+    # order that costs the least. It reached this part as a candidate to *start*
+    # until 2026-08-25 -- the list of parts to stop, handed to the wrong half of
+    # the plan -- and it crashed before it could act on that, because a
+    # ConservationPlan is one object and the code iterated it as a list of ids.
+    "conserving-a-short-runway",
+)
 ON_REASONS = ("reserved-floor", "admitted", "capacity-available")
+
+
+def part_id_of(item) -> str:
+    """The part an ask is about, whether it arrived as an id or as the ask itself."""
+    return item if isinstance(item, str) else item.part_id
 
 
 @dataclass(frozen=True)
@@ -88,8 +101,10 @@ class GovernorInputs:
     memory_forecast: object | None = None
     io_pressure: object | None = None
     admitted_parts: tuple = ()
-    replacement_plan: tuple = ()
-    conservation_plan: tuple = ()
+    # The plan objects themselves, not lists of part ids: a ReplacementPlan names
+    # one part and its steps, and a ConservationPlan names what to stop.
+    replacement_plan: object | None = None
+    conservation_plan: object | None = None
     running_parts: tuple = ()
     current_hour: int | None = None
 
@@ -220,6 +235,12 @@ class SwitchingPlanner:
         duty = inputs.duty_cycles.get(part_id)
         if duty is not None and inputs.current_hour is not None and inputs.current_hour not in duty.allowed_hours:
             return OFF_REASONS[3]
+        plan = inputs.conservation_plan
+        if plan is not None and part_id in plan.parts_to_stop and part_id not in reserved:
+            # Never a part the plan itself names as one that must keep running:
+            # the plan is ordered so nothing protecting capital is in the list,
+            # and a reserved part is the governor's own floor under that.
+            return OFF_REASONS[4]
         return None
 
     def _candidates_to_start(self, inputs) -> tuple[str, ...]:
@@ -236,13 +257,21 @@ class SwitchingPlanner:
         was slowest to its first metering sweep (symbol-catalogue-reader,
         fetching two venues' catalogues, at 13:00:16 on 2026-08-24).
         """
-        candidates = list(inputs.admitted_parts) + list(inputs.restart_requests)
+        # Part ids, not the objects that name them: a restart request and an
+        # admitted part each carry a part_id, and putting the objects themselves
+        # in this list made the plan sort RestartRequests against each other --
+        # which raises, because nothing says which of two requests is smaller.
+        candidates = [part_id_of(item) for item in inputs.admitted_parts]
+        candidates += [part_id_of(item) for item in inputs.restart_requests]
         candidates += [
             r.part_id
             for r in inputs.reservations
             if r.state == "honoured" and r.part_id in self._ever_seen_running
         ]
-        candidates += list(inputs.replacement_plan) + list(inputs.conservation_plan)
+        if inputs.replacement_plan is not None:
+            # The part being replaced is the one to start: a replacement plan is
+            # how a faulty part is swapped without a gap in between.
+            candidates.append(inputs.replacement_plan.part_id)
         seen, ordered = set(), []
         for part_id in candidates:
             if part_id not in seen:
@@ -351,8 +380,8 @@ def start_part(context) -> int:
             memory_forecast=memory_forecast.value(),
             io_pressure=io_pressure.value(),
             admitted_parts=admitted_parts.payloads(),
-            replacement_plan=replacement_plan.value() or (),
-            conservation_plan=conservation_plan.value() or (),
+            replacement_plan=replacement_plan.value(),
+            conservation_plan=conservation_plan.value(),
             # What is running is what is reporting its own usage. The planner never
             # asks the launcher: a part that asked the substrate who else exists
             # would know the circuit, which is exactly what T-4 forbids.

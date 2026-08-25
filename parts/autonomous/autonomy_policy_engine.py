@@ -299,9 +299,14 @@ def start_part(context) -> int:
         envelope = envelopes.value()
         if envelope is not None:
             engine.observe_envelope(envelope)
-        for entry in competences.payloads():
-            if entry.competence is not None:
-                engine.observe_competence(entry.symbol, entry.competence, entry.trades)
+        for mapped in competences.payloads():
+            # A competence-map is the whole map; its entries are the per-symbol
+            # records. Read as one entry until 2026-08-25, it crashed this part on
+            # the first map that arrived -- the same defect, on the same wire, that
+            # opinion-arbiter hit the same hour.
+            for entry in mapped.entries:
+                if entry.competence is not None:
+                    engine.observe_competence(entry.symbol, entry.competence, entry.trades)
         requests = []
         for intent in intents.payloads():
             if intent.action == STAND_ASIDE:

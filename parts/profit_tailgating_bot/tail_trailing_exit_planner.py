@@ -416,7 +416,21 @@ def start_part(context) -> int:
         for counterfactual in counterfactuals.payloads():
             planner.observe_exit_counterfactual(counterfactual)
         for profile in excursions.payloads():
-            planner.observe_retracement_profile(profile)
+            # An excursion-profile is not a retracement profile, and this part
+            # handed one straight to a method that reads
+            # `normal_retracement_fraction` -- a field ExcursionProfile has never
+            # had. What it does carry is `adverse_excursion`: how far a call that
+            # came right went against itself first, which is exactly how much a
+            # winner gives back before continuing, measured from real trades.
+            planner.observe_retracement_profile(
+                RetracementProfile(
+                    venue_id=profile.venue_id,
+                    symbol=profile.symbol,
+                    normal_retracement_fraction=profile.adverse_excursion,
+                    moves_observed=profile.trades_observed,
+                    is_fitted=profile.is_fitted,
+                )
+            )
         return tuple((candidate, None) for candidate in candidates.payloads())
 
     def publish(items) -> None:

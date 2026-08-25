@@ -67,6 +67,12 @@ class Heartbeat:
     # and nothing read one, so a part that had started refusing every decision was
     # indistinguishable from a part with nothing to decide.
     standing: tuple[tuple[str, float], ...] = ()
+    # What actually travelled: per data type, how many messages this part received
+    # and published. The table is where the coverage probe reads them, because
+    # RL-072 asks whether a part is exchanging its declared data and the only
+    # thing measurable before this was whether both ends were alive.
+    messages_received: tuple[tuple[str, int], ...] = ()
+    messages_published: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_healthy(self) -> bool:
@@ -212,6 +218,14 @@ class HeartbeatCollector:
                         (str(name), float(value))
                         for name, value in getattr(health, "standing", ()) or ()
                     ),
+                    messages_received=tuple(
+                        (str(data_type), int(count))
+                        for data_type, count in getattr(health, "messages_received", ()) or ()
+                    ),
+                    messages_published=tuple(
+                        (str(data_type), int(count))
+                        for data_type, count in getattr(health, "messages_published", ()) or ()
+                    ),
                     reason=reason,
                 )
             )
@@ -304,6 +318,8 @@ def heartbeat_table_as_document(table: HeartbeatTable, standing: CollectorStandi
                 "input_loss": list(beat.input_loss),
                 "input_loss_since_previous": list(beat.input_loss_since_previous),
                 "standing": dict(beat.standing),
+                "messages_received": dict(beat.messages_received),
+                "messages_published": dict(beat.messages_published),
                 "reason": beat.reason,
             }
             for beat in table.heartbeats

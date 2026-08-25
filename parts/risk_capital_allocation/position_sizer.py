@@ -458,7 +458,10 @@ def start_part(context) -> int:
     # not be able to raise a limit another one lowered.
     limits = LatestByKey(
         read=context.bus.reader("risk-limit"),
-        key_of=lambda limit: limit.limiter,
+        # By limiter *and* scope: one limiter can hold a limit on the whole book
+        # and another on the two symbols a halt was raised over, and keying on the
+        # limiter alone would let the second overwrite the first.
+        key_of=lambda limit: (limit.limiter, limit.symbols),
     )
     timed = Batch(read=context.bus.reader("timed-intent"))
 
@@ -483,10 +486,21 @@ def start_part(context) -> int:
         every_limit = limits.mapping()
 
         balance = balance_by_segment.get(segment)
-        binding = min(
-            (limit.fraction_of_allotment for limit in every_limit.values()),
-            default=None,
-        )
+
+        def binding_limit_for(symbol: str | None) -> float | None:
+            """The smallest fraction any limiter allows for this symbol.
+
+            Per symbol since 2026-08-25: a limit carries the symbols it is about,
+            and a halt raised over an anomaly on two symbols used to zero the risk
+            on all hundred. A limiter that says nothing about a symbol must not be
+            able to stop it.
+            """
+            applying = [
+                limit.fraction_of_allotment
+                for limit in every_limit.values()
+                if limit.applies_to(symbol)
+            ]
+            return min(applying) if applying else None
 
         sizable = []
         for intent in intents.payloads():
@@ -509,6 +523,7 @@ def start_part(context) -> int:
 
             entry_price = entry_price_for(plan, instrument)
             stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
+            binding = binding_limit_for(intent.symbol)
             if entry_price is None or stop_price is None or balance is None or binding is None:
                 continue
             sizable.append(

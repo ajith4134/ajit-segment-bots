@@ -73,6 +73,15 @@ class PartHealth:
     # refusing every decision looked identical to a part with nothing to decide.
     # Numbers only, and capped: see countable_standing.
     standing: tuple[tuple[str, float], ...] = ()
+    # How many messages of each declared type this part has actually received and
+    # published, as (type, count) pairs, zeros omitted. Carried because RL-072's
+    # own words are that a part is done when it has been "observed running and
+    # **exchanging its declared data** with a real neighbour" -- and until
+    # 2026-08-25 the only thing measurable from outside was whether both ends were
+    # alive. That reported 4,993 of 4,993 wires carrying within a minute of the
+    # last block starting, which is a claim nobody had measured.
+    messages_received: tuple[tuple[str, int], ...] = ()
+    messages_published: tuple[tuple[str, int], ...] = ()
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:

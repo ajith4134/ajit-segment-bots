@@ -486,6 +486,28 @@ class PartBus:
             if inbox.standing.messages_lost
         }
 
+    def messages_received(self) -> tuple[tuple[str, int], ...]:
+        """Per consumed type, how many messages actually arrived. Zeros omitted.
+
+        The measured half of RL-072: a wire carries when something travelled on
+        it, which is a different claim from both of its ends being alive.
+        """
+        return tuple(
+            (data_type, inbox.standing.messages_received)
+            for data_type, inbox in sorted(self._inboxes.items())
+            if inbox.standing.messages_received
+        )
+
+    def messages_published(self) -> tuple[tuple[str, int], ...]:
+        """Per produced type, how many messages this part actually sent."""
+        sent = []
+        for data_type, standing in sorted(self._publisher.standing.items()):
+            counts = standing.outcome_counts()
+            total = sum(counts.values())
+            if total:
+                sent.append((data_type, total))
+        return tuple(sent)
+
     def standing(self) -> dict:
         """Everything the board needs about this part's wiring, all of it measured."""
         return {

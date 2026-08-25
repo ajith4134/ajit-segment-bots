@@ -106,6 +106,10 @@ class DeciderStanding:
     by_cause: dict = field(default_factory=dict)
     times_closing_was_permitted_during_a_halt: int = 0
     times_it_halted_on_a_missing_input: int = 0
+    # A runway tier that is restrictive because nothing was measured, which is not
+    # a reason to stop trading. Counted so "this never halts on runway" is a
+    # number rather than an assumption.
+    times_an_unmeasured_tier_was_not_a_halt: int = 0
 
 
 class TradingHaltDecider:
@@ -150,8 +154,20 @@ class TradingHaltDecider:
         else:
             self._anomalous.discard(symbol)
 
-    def observe_survival_tier(self, tier: str) -> None:
+    _tier_is_measured = True
+
+    def observe_survival_tier(self, tier: str, is_measured: bool = True) -> None:
+        """The runway tier, and whether anything was measured to arrive at it.
+
+        The two are separate because the tier with nothing measured is the most
+        restrictive one by design, and that restriction is about **spending money
+        with a provider**. This box has no provider configured at all, so an
+        unmeasured tier here says nothing about whether the bots may trade -- and
+        reading it as NO_RUNWAY would halt paper trading permanently over an API
+        budget that does not exist, which is RL-005 inverted.
+        """
         self._tier = tier
+        self._tier_is_measured = is_measured
 
     def decide(self) -> HaltDecision:
         self.standing.decisions += 1
@@ -173,7 +189,10 @@ class TradingHaltDecider:
         if self._anomalous:
             causes.append(MARKET_ANOMALY)
         if self._tier in (CRITICAL, SHUTDOWN):
-            causes.append(NO_RUNWAY)
+            if self._tier_is_measured:
+                causes.append(NO_RUNWAY)
+            else:
+                self.standing.times_an_unmeasured_tier_was_not_a_halt += 1
 
         if not causes:
             if self._was_halted:
@@ -254,6 +273,9 @@ def describe_halting(decider: TradingHaltDecider) -> dict:
         "times_it_halted_on_a_missing_input": (
             decider.standing.times_it_halted_on_a_missing_input
         ),
+        "times_an_unmeasured_tier_was_not_a_halt": (
+            decider.standing.times_an_unmeasured_tier_was_not_a_halt
+        ),
         "halt_causes": list(HALT_CAUSES),
         "requires_consensus_to_halt": False,
         "issues_a_halt_with_no_clearing_condition": False,
@@ -315,7 +337,7 @@ def start_part(context) -> int:
             decider.observe_exposure_view(is_known=not view.unmeasured_pairs)
         tier = tiers.value()
         if tier is not None:
-            decider.observe_survival_tier(tier.tier)
+            decider.observe_survival_tier(tier.tier, getattr(tier, "is_measured", True))
         for outage in outages.payloads():
             decider.observe_outage(outage.venue_id, outage.is_dangerous)
         for alert in breaks.payloads():

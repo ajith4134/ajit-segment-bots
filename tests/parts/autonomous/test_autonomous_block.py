@@ -1143,3 +1143,36 @@ def test_the_same_notice_is_recorded_once():
     subject.notice("binance-kline-schema", BREAKING, "renamed", "notice://1")
     outcome = subject.notice("binance-kline-schema", BREAKING, "renamed", "notice://1")
     assert outcome.state.startswith("already")
+
+
+# ---- an unmeasured runway is not an emergency (2026-08-25) -------------------
+
+def test_an_unmeasured_survival_tier_does_not_halt_trading():
+    """SHUTDOWN because nothing was measured is not SHUTDOWN because it ran out.
+
+    survival-tier-monitor reports the most restrictive tier when nothing has been
+    measured, which is right: assuming runway nobody counted is how a system finds
+    out it is out of money by stopping. But the runway it measures is a **provider
+    budget**, and this box has no provider configured at all -- so reading that as
+    NO_RUNWAY would have halted paper trading permanently the moment the
+    autonomous block started, which is RL-005 inverted.
+    """
+    from runtime.autonomy_types import SHUTDOWN
+
+    decider = TradingHaltDecider(now_ns=Clock())
+    decider.observe_exposure_view(is_known=True)
+    decider.observe_survival_tier(SHUTDOWN, is_measured=False)
+    decision = decider.decide()
+    assert not decision.halt.is_halted
+    assert decider.standing.times_an_unmeasured_tier_was_not_a_halt == 1
+
+
+def test_a_measured_shutdown_tier_still_halts_trading():
+    from runtime.autonomy_types import SHUTDOWN
+
+    decider = TradingHaltDecider(now_ns=Clock())
+    decider.observe_exposure_view(is_known=True)
+    decider.observe_survival_tier(SHUTDOWN, is_measured=True)
+    decision = decider.decide()
+    assert decision.halt.is_halted
+    assert "not-enough-resource" in " ".join(decision.halt.causes)

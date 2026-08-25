@@ -225,6 +225,10 @@ class SurvivalTierMonitor:
                 tier=tier, binding_resource=binding, fraction_remaining=fraction,
                 seconds_to_exhaustion=runway, reason=reason,
                 measured_at_ns=self._now_ns(),
+                # Carried on the tier itself so a reader does not have to know
+                # this part's state vocabulary to tell a measured emergency from
+                # an unmeasured one.
+                is_measured=state != NOT_MEASURED,
             ),
             previous_tier=previous, held_by_hysteresis=held, reason=reason,
             measured_at_ns=self._now_ns(),

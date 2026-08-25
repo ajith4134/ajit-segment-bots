@@ -123,6 +123,13 @@ class SurvivalTier:
     seconds_to_exhaustion: float | None
     reason: str
     measured_at_ns: int
+    # Whether anything was actually measured. The tier with nothing measured is
+    # SHUTDOWN on purpose -- assuming runway nobody counted is how a system finds
+    # out it is out of money by stopping -- but "the most restrictive tier because
+    # we know" and "the most restrictive tier because we do not" are different
+    # facts, and a reader that cannot tell them apart treats an unconfigured
+    # provider as an emergency (Rule 8).
+    is_measured: bool = True
 
     @property
     def permits_discretionary_work(self) -> bool:

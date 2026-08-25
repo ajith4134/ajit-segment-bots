@@ -602,8 +602,11 @@ def test_a_part_still_holding_memory_is_faulted():
     check.observe_switch_record(switch_record("clinging"))
     clock.now += 6
     faults = check.verify([usage("clinging", cpu=0.5, memory=500_000_000)])
-    assert len(faults) == 1 and faults[0].verdict == STILL_HOLDING
-    assert faults[0].memory_bytes_still_held == 500_000_000
+    assert len(faults) == 1 and faults[0].kind == STILL_HOLDING
+    # `stalled` is what makes the warden's needs_restarting true: the part was
+    # switched off and did not let go, and something has to make it.
+    assert faults[0].severity == "stalled"
+    assert check.reading_for("clinging").memory_bytes_still_held == 500_000_000
 
 
 def test_nothing_is_judged_before_the_grace_period():
@@ -630,7 +633,12 @@ def test_an_unreadable_part_is_unverifiable_not_healthy():
     check.observe_switch_record(switch_record("opaque"))
     clock.now += 6
     faults = check.verify([usage("opaque", measured=False)])
-    assert faults[0].verdict == UNVERIFIABLE
+    # The shared PartFault since 2026-08-25: this part published its own type on
+    # part-fault, and unattended-run-warden -- which reads a fault's kind --
+    # crashed on the first one. The reading it made is still its own, beside it.
+    assert faults[0].kind == UNVERIFIABLE
+    assert faults[0].severity == "degraded", "a reading nobody could take is not a restart"
+    assert check.reading_for("opaque").verdict == UNVERIFIABLE
     assert check.standing.unverifiable == 1
 
 

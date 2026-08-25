@@ -99,6 +99,7 @@ LIVE_SPINE = (
     "hog-detector",
     "io-pressure-meter",
     "memory-pressure-forecaster",
+    "failing-part-detector",
     "part-restart-budgeter",
     "switch-oscillation-damper",
     "resource-reservation-ledger",
@@ -108,6 +109,9 @@ LIVE_SPINE = (
     # reader writes the tape and publishes market-data.
     "symbol-catalogue-reader",
     "stream-budget-planner",
+    # Which venues are refusing us, before the readers that ask a venue's standing
+    # before opening a stream to it.
+    "ban-signal-detector",
     "venue-trade-stream-reader",
     # The quote half of the feed, added 2026-08-24. A trade is what the venue
     # printed and is what the tape keeps; a quote is what a symbol is worth right
@@ -190,7 +194,6 @@ LIVE_SPINE = (
     "feed-jump-detector",
     "feed-coverage-auditor",
     "cross-venue-price-consolidator",
-    "ban-signal-detector",
     "venue-pool-rotator",
     "api-key-pool-rotator",
     "kline-window-builder",
@@ -258,8 +261,11 @@ LIVE_SPINE = (
     "tail-setup-weight-learner",
     "tail-mover-qualifier",
     "tail-winner-selector",
+    "leaderboard-reader",
+    "onchain-position-reader",
     "tail-copy-selector",
     "tail-move-remaining-estimator",
+    "social-sentiment-reader",
     "tail-crowding-detector",
     "tail-follow-conviction-model",
     "tail-trailing-exit-planner",
@@ -280,6 +286,11 @@ LIVE_SPINE = (
     "main-account-settings-reader",
     "capital-allotment-reader",
     "capital-settings-validator",
+    # The journal of what changed, started with the readers rather than with the
+    # desk: it writes journal-entry, and the decoders read journal entries. RL-055
+    # makes this journal the only source for the board's "when did this last
+    # change", so it must be up before anything reads one.
+    "capital-settings-change-recorder",
     # Before usdt-pnl-accountant, which states every result in USDT (RL-028)
     # and needs the rate to convert a non-USDT quote at all.
     "paper-currency-converter",
@@ -419,17 +430,9 @@ LIVE_SPINE = (
     "stop-frequency-breaker",
     "margin-liquidation-watch",
     "profit-lock",
-    # The last two limiters, added 2026-08-25 to finish the risk block. Both
-    # publish risk_allowed_fraction_when_clear -- one -- while they have nothing
-    # to act on, so neither narrows anything until something produces a halt or a
-    # venue announcement. Running them now is what makes the wire exist before
-    # the first halt rather than after it.
-    "halt-enforcer",
-    "event-risk-limiter",
     # The desk. capital-settings-change-recorder matters beyond its own block:
     # RL-055 makes its journal the ONLY place the board's "when did this last
     # change" may come from -- never the file's mtime, never git log.
-    "capital-settings-change-recorder",
     "capital-utilisation-meter",
     "allocation-conservation-checker",
     "live-balance-divergence-watch",
@@ -466,6 +469,7 @@ LIVE_SPINE = (
     # segments that earned it, from realised USDT rather than from a forecast.
     "allocation-rebalance-proposer",
     # Last, after every part whose conclusions it writes down.
+    "ablation-harness",
     "learning-recorder",
     # The ledger's other half: what the operator and the governor did, and the
     # check that the chain nobody can rewrite has not been rewritten.
@@ -477,13 +481,39 @@ LIVE_SPINE = (
     # build and check the page rather than publish it -- publishing is a URL
     # outside this repository and stays a person's action.
     "probe-runner",
+    "human-override-reader",
+    "trading-halt-decider",
+    "market-anomaly-detector",
     "alert-raiser",
+    "ccxt-order-router",
     "clock-skew-monitor",
     "fund-conservation-auditor",
+    "self-model-reporter",
+    "decision-cost-accountant",
+    "prompt-evaluator",
     "board-snapshot-builder",
     "board-publisher",
     "stale-board-watch",
-    "ablation-harness",
+    # Online research (phase 14). Nothing here fetches on its own: each reader
+    # takes its fetcher by injection and answers FETCH_FAILED by name until one is
+    # installed, so starting them makes the path exist without opening this box to
+    # the open web by default.
+    "exchange-announcement-reader",
+    "options-flow-reader",
+    "onchain-flow-aggregator",
+    "whale-transfer-reader",
+    "arxiv-feed-reader",
+    "github-strategy-miner",
+    "edge-comparator",
+    "strategy-decoder",
+    "trader-record-verifier",
+    "copy-latency-estimator",
+    "copy-worthiness-scorer",
+    # The procedural tier of memory, before the detectors that read its rules:
+    # a rule applied by rule is the one thing a detector must not have to wait
+    # for, and this part sat after every one of them until the spine's own
+    # ordering test said so.
+    "procedural-playbook",
     # The scanner's detectors, started 2026-08-25 (the rest of phase 3's block).
     # Each is one way a symbol becomes interesting, and every one of them has
     # been written and tested and never once run against the live feed.
@@ -520,14 +550,15 @@ LIVE_SPINE = (
     # REFUSED_NO_KEY, which is the state this part was built to report. What the
     # phase buys is that the path exists and is observed rather than assumed.
     "venue-rate-budgeter",
-    "ccxt-order-router",
+    # The parts that decide what an order should be, before the router that sends
+    # it: a cancel, a reprice and a poll are all things the router reads.
+    "resting-order-cancel-policy",
+    "limit-price-walker",
+    "order-state-poller",
     "venue-order-status-translator",
     "order-reject-classifier",
     "order-not-found-debouncer",
     "order-resubmitter",
-    "order-state-poller",
-    "resting-order-cancel-policy",
-    "limit-price-walker",
     "venue-balance-reader",
     "venue-position-reader",
     # The last risk part: it turns a bounded order into an execution schedule, a
@@ -546,10 +577,11 @@ LIVE_SPINE = (
     "cross-segment-exposure-watch",
     "cross-segment-signal-bridge",
     "cross-segment-lesson-bridge",
+    # What the calendar says is coming, before the detector that reads a scheduled
+    # event as one reason a regime broke.
+    "market-event-reader",
     "regime-break-detector",
     "turbulence-index-gauge",
-    "market-anomaly-detector",
-    "market-event-reader",
     "open-web-reader",
     "edge-decay-tracker",
     "trial-count-accountant",
@@ -558,37 +590,37 @@ LIVE_SPINE = (
     "decision-quality-critic",
     "abstention-coverage-auditor",
     "forgetting-auditor",
-    "self-model-reporter",
     "idea-generator",
-    # Hypothesis, the other half of phase 12: where the system proposes its own
-    # edges. loss-inverter turns a losing trade into the hypothesis for the
-    # opposite one, and nothing reaches the scanner without surviving the battery.
-    "symbolic-hypothesis-miner",
-    "loss-inverter",
-    "hypothesis-deduplicator",
-    "hypothesis-regime-tagger",
-    "hypothesis-ranker",
-    "power-estimator",
-    "hypothesis-falsifier",
-    "hypothesis-mutator",
-    "expectancy-decomposer",
-    "instruction-writer",
-    "instruction-retirer",
+    # What a person said, before every part that obeys it. It is the highest
+    # precedence halt there is, and a halt enforcer started before the part that
+    # reads the override would enforce every other reason first.
+    # The last two limiters, added 2026-08-25 to finish the risk block. Both
+    # publish risk_allowed_fraction_when_clear -- one -- while they have nothing
+    # to act on, so neither narrows anything until something produces a halt or a
+    # venue announcement. Running them now is what makes the wire exist before
+    # the first halt rather than after it.
+    "halt-enforcer",
+    "event-risk-limiter",
     # Knowledge, phase 13's unblocked half: the three tiers of memory. None of
     # these needs a provider key -- the parts that do are llm-foundation's, and
     # they stay off until the operator has one.
     "symbol-profile-store",
-    "episodic-trade-store",
+    # The embedder before the store that reads its embeddings: an episode is
+    # keyed on the market condition that was observed, and the key is what the
+    # store files it under.
     "episode-embedder",
+    "episodic-trade-store",
+    # Before the fact store, which reads the confidence it schedules a recheck
+    # against: the store was started first and had nothing to age its facts by.
+    "forgetting-curve-scheduler",
     "semantic-fact-store",
     "contradiction-detector",
+    "community-chat-reader",
     "fact-provenance-tracker",
-    "procedural-playbook",
     "regime-memory-store",
     "knowledge-graph-linker",
     "knowledge-pruner",
     "knowledge-snapshot-versioner",
-    "forgetting-curve-scheduler",
     "instruction-archive",
     # Backtesting, phase 15's first half. RL-071 is absolute and unaffected: a
     # replay proves an instruction before the scanner is told to watch for it,
@@ -603,6 +635,101 @@ LIVE_SPINE = (
     "backtest-scorer",
     "live-vs-replay-reconciler",
     "instruction-promotion-gate",
+    # The LLM foundation, started 2026-08-25 (phase 13). None of it
+    # needs a provider key: these are the parts that assemble context, render a
+    # prompt from a versioned template, enforce the shape of a reply, keep the
+    # golden cases and gate a promotion. The two parts that would spend money are
+    # llm-services', and they refuse by name while no key exists.
+    "prompt-registry",
+    "prompt-template-author",
+    "prompt-renderer",
+    "structured-output-enforcer",
+    "context-assembler",
+    "retrieval-index",
+    "retrieval-querier",
+    "retrieval-quality-scorer",
+    "knowledge-embedder",
+    "golden-case-keeper",
+    "prompt-drift-monitor",
+    "prompt-promotion-gate",
+    "part-token-budgeter",
+    # The LLM services. metered-api-caller and subscription-session-caller
+    # are the two parts in this system that could spend money on a provider, and
+    # docs/secrets.md records no provider: they run and refuse, which is the state
+    # they were built to report, and paid-spend-ledger stays at zero for a reason
+    # it can name.
+    "llm-backpressure-gauge",
+    "llm-model-picker",
+    "llm-request-router",
+    "llm-response-cache",
+    "local-model-caller",
+    "metered-api-caller",
+    "subscription-session-caller",
+    "subscription-quota-watch",
+    "paid-spend-ledger",
+    "ground-truth-snapshot-builder",
+    # Skills, phase 13's third quarter: the procedural tier of memory that is
+    # applied by rule and never searched. The distillers and readers need a source
+    # to distil, and no fetcher is installed on this box, so they idle honestly.
+    "skill-loader",
+    "skill-version-keeper",
+    "skill-provenance-stamper",
+    "skill-composer",
+    "skill-conflict-detector",
+    # The readers that produce a source document, before the distiller that reads
+    # one: a skill is distilled from something, and a distiller with nothing to
+    # distil is the same shape as one whose sources have not started yet.
+    "source-ingester",
+    "book-and-paper-fetcher",
+    "video-lecture-reader",
+    "skill-distiller",
+    "skill-gap-finder",
+    "skill-scorer",
+    "skill-tester",
+    "skill-refresher",
+    # The index last of the skill parts: it reads a skill, a conflict, a version,
+    # a provenance stamp and a backtest, and every one of those is produced by a
+    # part above it.
+    "skill-index",
+    # Hypothesis, the other half of phase 12: where the system proposes its own
+    # edges. loss-inverter turns a losing trade into the hypothesis for the
+    # opposite one, and nothing reaches the scanner without surviving the battery.
+    "symbolic-hypothesis-miner",
+    "loss-inverter",
+    "hypothesis-deduplicator",
+    "hypothesis-regime-tagger",
+    "hypothesis-ranker",
+    "power-estimator",
+    "hypothesis-falsifier",
+    "hypothesis-mutator",
+    "expectancy-decomposer",
+    "instruction-writer",
+    "instruction-retirer",
+    # Autonomous, started last on purpose 2026-08-25 (phase 15's second half).
+    # Nothing should be able to propose a part for this system until every other
+    # block has been observed running, and part-admission-gate is the part that
+    # admits one. It needs a proposed part to admit, part-author needs a validated
+    # LLM output to write one, and no provider is configured -- so the gate exists
+    # and admits nothing, which is the honest state rather than an empty one.
+    #
+    # trading-halt-decider halts on any one cause and an unmeasured runway is not
+    # one since today: the runway it reads is a provider budget, this box has no
+    # provider, and reading that as NO_RUNWAY would have stopped paper trading
+    # permanently the minute this block started.
+    "folded-circuit-view",
+    "no-progress-detector",
+    "unattended-run-warden",
+    "venue-outage-rider",
+    "survival-tier-monitor",
+    "conservation-planner",
+    "autonomy-boundary",
+    "autonomy-policy-engine",
+    "capability-gap-finder",
+    "upstream-improvement-watch",
+    "part-author",
+    "part-admission-gate",
+    "part-replacement-planner",
+    "self-modification-journal",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked

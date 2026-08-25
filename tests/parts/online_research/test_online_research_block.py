@@ -1188,3 +1188,27 @@ def test_a_finding_names_what_would_refute_it():
     subject = a_miner()
     mined = subject.mine(an_idea(), (a_mechanism(),), ())
     assert "recorded data" in mined.findings[0].would_be_refuted_by
+
+
+def test_a_gap_with_no_search_installed_is_refused_by_name_not_raised():
+    """The part's own docstring promised a state and the code raised.
+
+    On 2026-08-25 the first skill-gap to reach it took the part off the air, one
+    minute after phase 14 started it. A reader with no search never tried, which
+    is a different fact from a fetch that was tried and failed -- and the two need
+    different fixes.
+    """
+    from parts.online_research.arxiv_feed_reader import NO_SEARCH, ArxivFeedReader
+
+    class Gap:
+        gap_id = "gap-1"
+        query = "microstructure"
+        is_worth_fetching_against = True
+
+    reader = ArxivFeedReader(
+        fetches_per_window=2, window_seconds=60.0, minimum_word_overlap=1,
+    )
+    read = reader.fetch_for(Gap())
+    assert read.state == NO_SEARCH
+    assert reader.standing.refused_no_search == 1
+    assert "install_search" in read.reason

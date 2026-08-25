@@ -1126,3 +1126,47 @@ def test_a_plan_with_no_reference_price_keeps_its_absolute_exits_and_says_so():
     assert exits.stop_price == pytest.approx(98.0)
     assert chainer.standing.exits_from_the_decision_price == 1
     assert chainer.standing.exits_repriced_onto_the_fill == 0
+
+
+# ---- a halt's scope reaches the sizer (2026-08-25) ---------------------------
+
+def test_a_symbol_scoped_halt_zeroes_only_those_symbols():
+    """Two anomalous symbols out of a hundred stopped every trade for an hour.
+
+    trading-halt-decider narrows a halt to the symbols it was raised over, and
+    halt-enforcer had nowhere to put that: it published one zero limit for the
+    whole segment. The scope travels on the limit now, and position-sizer applies
+    a limit only to the symbols it is about.
+    """
+    from parts.risk_capital_allocation.halt_enforcer import HaltEnforcer, TRADING_HALT
+
+    enforcer = HaltEnforcer(allowed_fraction_when_clear=1.0)
+    enforcer.raise_halt(TRADING_HALT, "ZECUSDT,ENAUSDT", "an anomaly on two symbols")
+    limit = enforcer.read_limit()
+
+    assert limit.fraction_of_allotment == 0.0
+    assert limit.symbols == ("ZECUSDT", "ENAUSDT")
+    assert limit.applies_to("ZECUSDT")
+    assert not limit.applies_to("BTCUSDT")
+    assert enforcer.standing.symbol_scoped_limits_issued == 1
+
+
+def test_a_halt_over_everything_still_stops_every_symbol():
+    from parts.risk_capital_allocation.halt_enforcer import HaltEnforcer, TRADING_HALT
+
+    enforcer = HaltEnforcer(allowed_fraction_when_clear=1.0)
+    enforcer.raise_halt(TRADING_HALT, "everything", "the exposure view is not reporting")
+    limit = enforcer.read_limit()
+
+    assert limit.symbols == ()
+    assert limit.applies_to("BTCUSDT")
+    assert enforcer.standing.symbol_scoped_limits_issued == 0
+
+
+def test_a_scope_that_cannot_be_read_binds_everything():
+    """Narrowing on a guess is how a halt stops protecting what it was raised over."""
+    from parts.risk_capital_allocation.halt_enforcer import HaltEnforcer, TRADING_HALT
+
+    enforcer = HaltEnforcer(allowed_fraction_when_clear=1.0)
+    enforcer.raise_halt(TRADING_HALT, "", "a source that named no scope")
+    assert enforcer.read_limit().applies_to("BTCUSDT")

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.risk_types import NO_RISK_ALLOWED, RiskLimit
+from runtime.risk_types import EVERY_SYMBOL, NO_RISK_ALLOWED, RiskLimit
 
 PART_ID = "halt-enforcer"
 
@@ -57,10 +57,32 @@ class Halt:
 @dataclass
 class EnforcerStanding:
     halts_raised: int = 0
+    # Limits that zeroed only the symbols a halt was actually about. Counted
+    # apart from the total, because "the whole book is stopped" and "two symbols
+    # are stopped" are the two facts an operator most needs to tell apart.
+    symbol_scoped_limits_issued: int = 0
     halts_released: int = 0
     limits_issued: int = 0
     zero_limits_issued: int = 0
     active: dict = field(default_factory=dict)
+
+
+# What a halt's scope says when it is about the whole book rather than a list of
+# symbols. The decider's own word, matched here rather than guessed at.
+EVERYTHING = "everything"
+
+
+def symbols_in_scope(scope: str) -> tuple[str, ...]:
+    """The symbols a halt is about, or none at all when it is about everything.
+
+    A scope this part cannot parse is treated as everything: an unreadable scope
+    is not a reason to narrow a halt, and narrowing on a guess is how a halt stops
+    protecting what it was raised over.
+    """
+    if not scope or scope == EVERYTHING:
+        return EVERY_SYMBOL
+    named = tuple(part.strip() for part in scope.split(",") if part.strip())
+    return named or EVERY_SYMBOL
 
 
 class HaltEnforcer:
@@ -96,18 +118,30 @@ class HaltEnforcer:
         return removed
 
     def read_limit(self) -> RiskLimit:
-        """Zero while anything is halting, with the highest-precedence reason named."""
+        """Zero while anything is halting, with the highest-precedence reason named.
+
+        **The halt's scope travels with the limit.** A halt names what it is about
+        -- "everything", or the symbols an anomaly was seen on -- and this part had
+        nowhere to put that: it zeroed the segment's whole risk whatever the scope
+        said. On 2026-08-25 two anomalous symbols out of a hundred stopped every
+        trade the system could make, and the only trace was a counter of zero
+        limits issued.
+        """
         self.standing.limits_issued += 1
         for kind in PRECEDENCE:
             halt = self._halts.get(kind)
             if halt is not None:
                 self.standing.zero_limits_issued += 1
+                symbols = symbols_in_scope(halt.source)
+                if symbols:
+                    self.standing.symbol_scoped_limits_issued += 1
                 return RiskLimit(
                     limiter=PART_ID,
                     fraction_of_allotment=NO_RISK_ALLOWED,
                     reason=f"{kind} from {halt.source}: {halt.reason}",
                     is_binding=True,
                     decided_at_ns=self._now_ns(),
+                    symbols=symbols,
                 )
         return RiskLimit(
             limiter=PART_ID,
@@ -135,6 +169,7 @@ def describe_halts(enforcer: HaltEnforcer) -> dict:
         "halts_released": enforcer.standing.halts_released,
         "limits_issued": enforcer.standing.limits_issued,
         "zero_limits_issued": enforcer.standing.zero_limits_issued,
+        "symbol_scoped_limits_issued": enforcer.standing.symbol_scoped_limits_issued,
     }
 
 
