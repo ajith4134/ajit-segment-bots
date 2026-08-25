@@ -1,0 +1,37 @@
+[Unit]
+# A real public URL for the board, without opening an inbound port.
+#
+# cloudflared dials *out* to Cloudflare and they proxy back down that
+# connection, so the firewall is untouched and port 22 stays the only thing
+# listening on this box. This is the quick-tunnel form: free, no account, and
+# the URL is random.
+#
+# What that means, stated rather than assumed: the URL is unguessable but
+# public and uncontrolled -- anyone holding it can read the board. What is
+# readable is which parts are running and what their counters say. No
+# credential is on the page, and no route can write anything.
+#
+# The URL CHANGES every time this restarts, because a quick tunnel is issued a
+# fresh random hostname each time -- on reboot, on a network blip, on any
+# restart at all. operate/read_board_url.sh reads the current one out of this
+# unit's journal rather than remembering it, because a URL written to a file
+# once would be confidently wrong the first time that happened. A URL that
+# never changes needs a named tunnel, which needs a Cloudflare account and a
+# browser login only the operator can perform.
+Description=ajit-segment-bots board public tunnel (cloudflared quick tunnel)
+After=network-online.target ajit-board.service
+Wants=network-online.target
+Requires=ajit-board.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8787
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

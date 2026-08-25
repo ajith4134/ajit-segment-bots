@@ -1,0 +1,29 @@
+[Unit]
+# The live part board's API and frontend, on loopback only.
+#
+# Loopback is deliberate: this box listens on port 22 and nothing else, and it
+# should stay that way. Reaching the board from outside is the tunnel unit's
+# job (ajit-board-tunnel.service), which makes an outbound connection rather
+# than opening an inbound port. Two units rather than one so the board can run
+# for an SSH-forwarded look with nothing exposed at all.
+#
+# Read-only by construction: every route is a GET and the process only reads
+# the heartbeat table, the blueprint and the built frontend. It cannot place an
+# order, and it holds no credential.
+Description=ajit-segment-bots part board API (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ajit-segment-bots
+ExecStart=%h/ajit-segment-bots/.venv/bin/python %h/ajit-segment-bots/dashboard/part_health_api.py --port 8787
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

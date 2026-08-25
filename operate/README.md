@@ -120,3 +120,49 @@ both phase 1 venues, the 30 highest-volume symbols on each, trades only.
 Candles, the book, and everything else in `docs/superpowers/plans/2026-08-21-market-data-feed.md`
 are still to come. A symbol that is not in the top 30 is captured by nobody, and
 that is a decision recorded in settings rather than an oversight.
+
+## The live board, and its public link
+
+    systemctl --user status ajit-board          # the API and frontend, loopback only
+    systemctl --user status ajit-board-tunnel   # the public URL
+    operate/read_board_url.sh                   # what that URL is right now
+
+Two units rather than one. `ajit-board` serves
+`dashboard/part_health_api.py` on `127.0.0.1:8787` and nothing else, so the
+board can be watched over an SSH forward with nothing exposed:
+
+    ssh -L 8787:localhost:8787 <this box>   # then open http://localhost:8787
+
+`ajit-board-tunnel` is what makes it reachable from outside. It runs a
+cloudflared **quick tunnel**, which dials *out* to Cloudflare and lets them
+proxy back down that connection — the firewall is untouched and port 22 stays
+the only thing listening here. Free, and it needs no Cloudflare account.
+
+**The URL changes on every restart.** A quick tunnel is issued a fresh random
+hostname each time cloudflared starts: on reboot, on a network blip, on any
+restart at all. That is why `read_board_url.sh` reads it out of the unit's
+journal instead of a file — a remembered URL would be confidently wrong the
+first time the tunnel bounced, which is worse than not having one. A stable URL
+needs a *named* tunnel, which needs a Cloudflare account and a browser login
+only the operator can do.
+
+**What is exposed, stated rather than assumed.** The URL is unguessable but
+public and uncontrolled: anyone holding it can read the board. What they can
+read is which parts are running and what their counters say. Every route is a
+`GET`, the process only reads the heartbeat table, the blueprint and the built
+frontend, it holds no credential, and nothing on it can place an order. To stop
+publishing entirely:
+
+    systemctl --user disable --now ajit-board-tunnel
+
+which leaves `ajit-board` running for the SSH-forwarded view.
+
+### Proving it draws
+
+    dashboard/web/verify_live_board_renders.sh https://<the-url>/
+
+Never trust a green `npm run build` for this. The checker mounts the page in a
+real Chromium, waits for a **second** poll so a rate actually exists, opens a
+block, opens a part, asserts its counters are on screen, and fails on any
+console error. It is separate from `verify_board_renders.sh` because that one
+waits for `networkidle`, which never fires on a page that polls forever.
