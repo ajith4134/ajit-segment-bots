@@ -265,8 +265,26 @@ tunnel that dials *out* — no inbound port, port 22 stays the only thing
 listening. **The URL changes on every restart**, so it is read from the tunnel's
 journal rather than remembered.
 
-Two views over the same probes. *How far built* is the rung ladder. *What it is
-doing* is new: every part's live standing counters with a **measured** rate,
+**Four views.** *What it is doing* — every part's live standing counters with a
+**measured** rate. *Trading* — open positions from the checkpoint
+`position-close-detector` restores from, marked against the tape per held symbol,
+and closed trades from a bounded tail of the position journal (net, not gross: a
+board showing gross calls a fee-eaten loser a winner). *Server load* — CPU,
+memory, load and disk from `/proc` and `statvfs`, plus what each running part
+costs, joined from the spine's supervisor log to `/proc/<pid>`. *How far built* —
+the rung ladder.
+
+Two decisions on that last one worth not undoing: busy **excludes iowait**,
+because counting it reports 100% CPU on a machine asleep waiting for a disk; and
+memory is total minus **MemAvailable**, not MemFree, because free memory on a busy
+Linux box is near zero by design.
+
+`build_trade_board.py` still streams both journals end to end and still takes ten
+minutes. That is right for a page built once and wrong for a view meant to be
+refreshed, which is why `/api/trades` reads two small things instead — and says
+in the panel that its rows are the recent ones, never all of them.
+
+The live rate is the same idea throughout:
 taken as a delta between two heartbeat tables the serving process actually
 observed. Three-valued on purpose — `WORKING` is a counter that moved, `IDLE` is
 every counter holding still (a finding, not a fault), `NOT MEASURED` is no rate
@@ -299,9 +317,23 @@ the door they come through. `Decimal(str(x))`, never `Decimal(x)` — the latter
 carries the float's error in. `LotBook.is_flat` is `== 0` exactly, so there is no
 tolerance to tune and no numeric literal to justify under RL-061.
 
-**Still memory-only, and it costs something measurable:** the cointegration
-scanner's pair statistics. Every restart makes it re-learn from nothing, and the
-bot cannot trade until it has.
+`cointegration-pair-finder` keeps its price series and its verdicts too, under
+`pair_state_checkpoint_interval` observations rather than every fill — a lot book
+changes 40 times an hour and losing one costs a round trip, while a price series
+changes hundreds of times a second and losing a second of it costs nothing.
+Measured across a restart: 100 series and 214 verdicts back, 263 cointegrated
+pairs where a cold start is at zero.
+
+Each window carries its own last observation time, so the gap across a restart is
+**measured** rather than assumed continuous — without it the first price after an
+outage sits beside the last one before it and reads as an instant move, which is
+exactly the shape a detector fires on. A window restored under a different length
+or gap bound is refused rather than reinterpreted.
+
+**Still memory-only:** `spread-reversion-detector`'s per-pair spread history, and
+the bull feature builder's own windows. After a restart the arbiter stands aside
+until conviction is back, which is what actually delays the first trade — the
+scanner is no longer the bottleneck it was.
 
 ## Wiring explorer
 
