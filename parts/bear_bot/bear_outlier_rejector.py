@@ -31,6 +31,11 @@ from dataclasses import dataclass, field
 
 from runtime.bot_opinion import OutOfDistributionFlag
 from runtime.online_learner import RunningMoments
+from runtime.learned_state import (
+    STARTED_COLD_UNREADABLE,
+    CheckpointSchedule,
+    LearnedStateStore,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -56,6 +61,13 @@ SQUEEZE_SHAPED = "squeeze-shaped: thin offer side with rising volatility"
 @dataclass
 class RejectorStanding:
     vectors_judged: int = 0
+    # Whether this part started with the normals it had learned before, or cold.
+    # A cold start is what makes every vector unjudgeable, and it is exactly the
+    # fact a restart hides.
+    checkpoint_verdict: str | None = None
+    checkpoint_detail: str | None = None
+    checkpoint_saved_at_ns: int | None = None
+    checkpoints_written: int = 0
     flagged: int = 0
     unjudgeable_vectors: int = 0
     squeeze_shaped: int = 0
@@ -229,6 +241,49 @@ class BearOutlierRejector:
             flagged_at_ns=self._now_ns(),
         )
 
+
+    # -- what survives a restart ----------------------------------------------
+    #
+    # None of this existed until 2026-08-25, and the cost was measured on the
+    # live spine: after each restart this part had a learned normal for 3 of its
+    # features, judged every vector unjudgeable for want of the rest, and
+    # bear-conviction-model refused every candidate it was handed as out of
+    # distribution. The bot could not form an opinion at all until the normals
+    # had been relearned -- and every restart put it back to three.
+
+    def learned_settings(self) -> dict:
+        """The settings the stored moments were learned under.
+
+        The half-life above all: moments decayed at one rate and read at another
+        describe a spread nothing ever observed, so `runtime.learned_state`
+        refuses the checkpoint rather than restoring it.
+        """
+        return {
+            "half_life_observations": self._half_life,
+            "minimum_observations": self._minimum,
+        }
+
+    def state(self) -> dict:
+        return {
+            "moments": {name: moments.state() for name, moments in self._moments.items()},
+            "vectors_judged": self.standing.vectors_judged,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        for name, stored in state["moments"].items():
+            self._moment_for(name).restore_state(stored)
+        self.standing.vectors_judged = int(state.get("vectors_judged", 0))
+
+    @property
+    def training_observations(self) -> int:
+        """How many observations the best-observed feature has.
+
+        The most, not the total: the checkpoint is due when this part has learned
+        something new, and a total over features would make one busy feature look
+        like progress across all of them.
+        """
+        return max((moments.count for moments in self._moments.values()), default=0)
+
     def _moment_for(self, name: str) -> RunningMoments:
         moments = self._moments.get(name)
         if moments is None:
@@ -249,6 +304,35 @@ class BearOutlierRejector:
         )
 
 
+COMPONENT = "normals"
+
+
+def restore_or_start_cold(rejector: BearOutlierRejector, store, part_id: str = PART_ID) -> None:
+    """Adopt the previous process's normals, or record why this one starts cold.
+
+    Never raises past a part's start: a checkpoint that cannot be adopted is a
+    reason to learn again, not a reason to refuse to run -- and the reason goes on
+    the standing, because "this bot started cold and will refuse everything for an
+    hour" is exactly what a restart otherwise hides.
+    """
+    restoration = store.restore(part_id, COMPONENT, rejector.learned_settings())
+    rejector.standing.checkpoint_saved_at_ns = restoration.saved_at_ns
+    if not restoration.was_restored:
+        rejector.standing.checkpoint_verdict = restoration.verdict
+        rejector.standing.checkpoint_detail = restoration.detail
+        return
+    try:
+        rejector.restore_state(restoration.state)
+    except (KeyError, TypeError, ValueError) as refusal:
+        rejector.standing.checkpoint_verdict = STARTED_COLD_UNREADABLE
+        rejector.standing.checkpoint_detail = (
+            f"{restoration.detail}, but it could not be adopted: {refusal}"
+        )
+        return
+    rejector.standing.checkpoint_verdict = restoration.verdict
+    rejector.standing.checkpoint_detail = restoration.detail
+
+
 def describe_rejection(rejector: BearOutlierRejector) -> dict:
     return {
         "part_id": PART_ID,
@@ -266,15 +350,19 @@ def describe_rejection(rejector: BearOutlierRejector) -> dict:
 def run_bear_outlier_rejector(
     rejector: BearOutlierRejector, control_socket, read_vectors, publish_flags,
     health_interval_seconds: float, emit_health,
+    checkpoint=None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    """`checkpoint` is called with the rejector whenever it may be worth storing."""
     def tick() -> None:
         flags = []
         for vector in read_vectors():
             flags.append(rejector.judge(vector))
             rejector.observe_vector(vector)
         publish_flags(tuple(flags))
+        if checkpoint is not None:
+            checkpoint(rejector)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -295,21 +383,43 @@ def start_part(context) -> int:
     which makes every reading look ordinary. The part's own tick already does them
     in that order; this only has to hand it the vectors.
     """
+    import pathlib
+
     from runtime.input_assembly import Batch
 
     vectors = Batch(read=context.bus.reader("bear-feature-vector"))
     publish_flags = context.bus.publisher_for("bear-feature-out-of-distribution-flag")
+    rejector = BearOutlierRejector(
+        deviation_threshold=context.number("bear_outlier_deviation_threshold"),
+        minimum_observations=int(context.number("bear_outlier_minimum_observations")),
+        half_life_observations=context.number("bear_outlier_half_life_observations"),
+        maximum_unjudgeable_fraction=context.number("bear_outlier_maximum_unjudgeable_fraction"),
+        dangerous_side_threshold=context.number("bear_outlier_dangerous_side_threshold"),
+        squeeze_room_deviation=context.number("bear_squeeze_room_deviation"),
+        rising_volatility_deviation=context.number("bear_rising_volatility_deviation"),
+    )
+    # What normal looks like, carried across restarts since 2026-08-25. Without
+    # it this part began every process with nothing learned, judged every vector
+    # unjudgeable for want of a normal to compare it against, and
+    # bear-conviction-model refused every candidate as out of distribution.
+    store = LearnedStateStore(
+        pathlib.Path(str(context.setting("learned_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    restore_or_start_cold(rejector, store)
+    schedule = CheckpointSchedule(int(context.number("learned_state_checkpoint_interval")))
+
+    def checkpoint(rejector: BearOutlierRejector) -> None:
+        observations = rejector.training_observations
+        if not schedule.is_due(observations):
+            return
+        store.save(PART_ID, COMPONENT, rejector.state(), rejector.learned_settings())
+        schedule.record_written(observations)
+        rejector.standing.checkpoints_written += 1
 
     return run_bear_outlier_rejector(
-        rejector=BearOutlierRejector(
-            deviation_threshold=context.number("bear_outlier_deviation_threshold"),
-            minimum_observations=int(context.number("bear_outlier_minimum_observations")),
-            half_life_observations=context.number("bear_outlier_half_life_observations"),
-            maximum_unjudgeable_fraction=context.number("bear_outlier_maximum_unjudgeable_fraction"),
-            dangerous_side_threshold=context.number("bear_outlier_dangerous_side_threshold"),
-            squeeze_room_deviation=context.number("bear_squeeze_room_deviation"),
-            rising_volatility_deviation=context.number("bear_rising_volatility_deviation"),
-        ),
+        rejector=rejector,
+        checkpoint=checkpoint,
         control_socket=context.control_socket,
         read_vectors=vectors.payloads,
         publish_flags=publish_flags,

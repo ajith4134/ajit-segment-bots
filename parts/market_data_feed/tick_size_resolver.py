@@ -68,12 +68,23 @@ class TickSizeResolver:
         if increment and increment > 0:
             self._declared[(venue_id, symbol)] = increment
 
-    def observe_book(self, venue_id: str, symbol: str, bids: list[float], asks: list[float]) -> None:
-        """Record the spacings between adjacent levels on both sides."""
+    def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
+        """Record the spacings between adjacent levels on both sides.
+
+        A level is `(price, quantity)`, which is what BookUpdate carries and what
+        this read as a bare price until 2026-08-25 -- so the first real book took
+        this part off the air subtracting one tuple from another. The quantity is
+        deliberately dropped: a tick size is about where prices may sit, and a
+        level with no size on it sits on a tick exactly like a level with size.
+        """
         self.standing.books_seen += 1
         self._known_symbols.add((venue_id, symbol))
+        prices_of = lambda levels: [
+            float(level[0]) if isinstance(level, (tuple, list)) else float(level)
+            for level in levels
+        ]
         spacings = []
-        for side in (sorted(bids, reverse=True), sorted(asks)):
+        for side in (sorted(prices_of(bids), reverse=True), sorted(prices_of(asks))):
             for nearer, further in zip(side, side[1:]):
                 spacing = abs(round(further - nearer, 12))
                 if spacing > 0:

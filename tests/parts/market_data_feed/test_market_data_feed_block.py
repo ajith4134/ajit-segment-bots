@@ -425,3 +425,24 @@ def test_coverage_lapses_when_a_stream_goes_quiet_past_the_window():
     report = auditor.audit_symbol("BTCUSDT")
     assert report.state == UNCOVERED
     assert report.silent_venues == ("binance-usdm",)
+
+
+def test_a_book_level_is_a_price_and_a_quantity():
+    """BookUpdate carries `(price, quantity)` pairs, and this read bare prices.
+
+    The first real book to reach it on 2026-08-25 -- the day anything planned a
+    book stream at all -- took the part off the air subtracting one tuple from
+    another. The quantity is dropped on purpose: a tick size is about where
+    prices may sit, and a level with no size sits on a tick like any other.
+    """
+    from runtime.venues.venue_adapter import BookUpdate
+
+    resolver = TickSizeResolver(minimum_observations=2)
+    book = BookUpdate(
+        venue_id="binance-usdm", symbol="BTCUSDT",
+        bids=((100.00, 1.0), (99.99, 2.0), (99.98, 3.0)),
+        asks=((100.01, 1.0), (100.02, 2.0)),
+        is_snapshot=True, venue_time_ns=1, sequence=1,
+    )
+    resolver.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
+    assert resolver.resolve("binance-usdm", "BTCUSDT").increment == pytest.approx(0.01)

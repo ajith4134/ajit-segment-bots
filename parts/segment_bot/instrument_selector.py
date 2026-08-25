@@ -32,6 +32,7 @@ longer than that window to absorb it, however cheap its carry.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 from collections import Counter
@@ -148,6 +149,9 @@ class InstrumentChoice:
 class SelectorStanding:
     intents_seen: int = 0
     chosen: int = 0
+    liquidity_grades_seen: int = 0
+    instruments_repriced_by_a_grade: int = 0
+    implied_vol_surfaces_seen: int = 0
     by_kind: dict = field(default_factory=dict)
     by_refusal: dict = field(default_factory=dict)
     unbuilt_segment_wins: dict = field(default_factory=dict)
@@ -209,6 +213,11 @@ class InstrumentSelector:
         self._deciding_at_ns = now_ns()
         self._deciding_about: tuple[str, str] = ("", "")
         self._listed: dict[tuple[str, str], list] = {}
+        # A grade that arrived before any listing for its symbol, and the options
+        # market's own surface. Both are held rather than dropped: a measurement
+        # thrown away because it arrived early is a measurement nobody made.
+        self._held_grades: dict[tuple[str, str], object] = {}
+        self._surfaces: dict[tuple[str, str], object] = {}
         self.standing = SelectorStanding()
 
     def observe_listed_instrument(self, instrument: ListedInstrument) -> None:
@@ -220,6 +229,9 @@ class InstrumentSelector:
         ]
         listed.append(instrument)
         self._listed[key] = listed
+        held = self._held_grades.pop(key, None)
+        if held is not None:
+            self._apply_grade(key, held)
 
     def carry_over(self, instrument: ListedInstrument, horizon_seconds: float) -> float | None:
         """What holding this instrument for the intent's horizon costs, as a fraction.
@@ -250,6 +262,55 @@ class InstrumentSelector:
             held = min(1.0, horizon_seconds / instrument.seconds_to_expiry)
             return instrument.premium_fraction * (1.0 - math.sqrt(1.0 - held))
         return None
+
+    def observe_liquidity_grade(self, grade) -> None:
+        """What it costs to trade this symbol at the bot's size, measured just now.
+
+        A grade is not a listing: it says what an existing instrument costs to get
+        into and out of, so it *updates* what this part already holds rather than
+        adding an entry. It was handed straight to `observe_listed_instrument`
+        until 2026-08-25 -- which reads a contract symbol a LiquidityGrade has
+        never carried -- and took this part off the air on the first grade
+        liquidity-grader ever published.
+        """
+        self.standing.liquidity_grades_seen += 1
+        key = (grade.venue_id, grade.symbol)
+        listed = self._listed.get(key)
+        if not listed:
+            # Nothing listed for this symbol yet. Held, so the next listing that
+            # arrives is priced with what the market actually costs rather than
+            # with the catalogue's silence.
+            self._held_grades[key] = grade
+            return
+        self._apply_grade(key, grade)
+
+    def _apply_grade(self, key, grade) -> None:
+        listed = self._listed.get(key)
+        if not listed:
+            return
+        self._listed[key] = [
+            dataclasses.replace(
+                instrument,
+                round_trip_cost_fraction=(
+                    grade.round_trip_cost_fraction
+                    if grade.round_trip_cost_fraction is not None
+                    else instrument.round_trip_cost_fraction
+                ),
+            )
+            for instrument in listed
+        ]
+        self.standing.instruments_repriced_by_a_grade += 1
+
+    def observe_implied_vol_surface(self, surface) -> None:
+        """The options market's own prices, kept for the segment that trades them.
+
+        Futures carry no premium, and this segment is futures (RL-050), so the
+        surface is counted and held rather than applied: an option's premium comes
+        off it when the options bot exists, and inventing a premium for a
+        perpetual would be a number with nothing behind it.
+        """
+        self.standing.implied_vol_surfaces_seen += 1
+        self._surfaces[(surface.venue_id, surface.underlying)] = surface
 
     def observe_price(self, venue_id: str, symbol: str, price: float, observed_at_ns: int) -> None:
         """The last trade for a symbol, kept so a choice carries the price it was
@@ -629,6 +690,9 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "part_id": PART_ID,
         "built_segments": list(selector._built_segments),
         "intents_seen": selector.standing.intents_seen,
+        "liquidity_grades_seen": selector.standing.liquidity_grades_seen,
+        "instruments_repriced_by_a_grade": selector.standing.instruments_repriced_by_a_grade,
+        "implied_vol_surfaces_seen": selector.standing.implied_vol_surfaces_seen,
         "chosen": selector.standing.chosen,
         "chosen_by_kind": dict(sorted(selector.standing.by_kind.items())),
         "refused_by_reason": dict(sorted(selector.standing.by_refusal.items())),
@@ -720,8 +784,10 @@ def start_part(context) -> int:
         # `observe_listed_instrument` keys on the contract symbol and overwrites.
         for listed in universe.payloads():
             selector.observe_listed_symbol(listed)
-        for instrument in list(surfaces.payloads()) + list(grades.payloads()):
-            selector.observe_listed_instrument(instrument)
+        for surface in surfaces.payloads():
+            selector.observe_implied_vol_surface(surface)
+        for grade in grades.payloads():
+            selector.observe_liquidity_grade(grade)
         for trade in levels_in(trades.payloads()):
             # The venue's own time for the print, not this part's clock: how old a
             # price is has to be measured from when the market made it.
