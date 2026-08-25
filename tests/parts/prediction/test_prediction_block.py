@@ -719,9 +719,10 @@ def test_a_reader_with_no_staleness_bound_is_refused():
 
 # ---- volatility-feature-builder ---------------------------------------------
 
-def a_vol_builder(short=5, long=20, minimum=5):
+def a_vol_builder(short=5, medium=10, long=20, minimum=5):
     return VolatilityFeatureBuilder(
-        short_window=short, long_window=long, minimum_observations=minimum
+        short_window=short, medium_window=medium, long_window=long,
+        minimum_observations=minimum,
     )
 
 
@@ -790,7 +791,9 @@ def test_the_implied_premium_appears_when_a_surface_exists():
 
 def test_one_window_cannot_tell_rising_volatility_from_falling():
     with pytest.raises(ValueError):
-        VolatilityFeatureBuilder(short_window=20, long_window=20, minimum_observations=5)
+        VolatilityFeatureBuilder(
+            short_window=20, medium_window=20, long_window=20, minimum_observations=5
+        )
 
 
 # ---- realised-vol-regressor -------------------------------------------------

@@ -48,7 +48,11 @@ PART_DECLARATION = PartDeclaration(
 
 FEATURE_NAMES = (
     "close_to_close_short",
+    "close_to_close_medium",
     "close_to_close_long",
+    "downside_volatility",
+    "jump_volatility",
+    "volatility_of_volatility",
     "volatility_ratio_short_to_long",
     "parkinson",
     "garman_klass",
@@ -92,6 +96,7 @@ class VolatilityFeatureBuilder:
     def __init__(
         self,
         short_window: int,
+        medium_window: int,
         long_window: int,
         minimum_observations: int,
         now_ns=time.time_ns,
@@ -102,6 +107,12 @@ class VolatilityFeatureBuilder:
                 "that is low and rising; the two must differ"
             )
         self._short = short_window
+        # HAR's middle leg. One short and one long window can say whether
+        # volatility is rising or falling; they cannot say whether it is doing so
+        # steadily or in a spike, which is what a third horizon separates.
+        # Different participants act on different horizons, and that is the whole
+        # reason the heterogeneous form beats any single window.
+        self._medium = medium_window
         self._long = long_window
         self._minimum = minimum_observations
         self._now_ns = now_ns
@@ -130,8 +141,38 @@ class VolatilityFeatureBuilder:
         candles = list(window.candles)
         short_return = self._close_to_close(candles[-self._short :])
         long_return = self._close_to_close(candles[-self._long :])
+        medium_return = self._close_to_close(candles[-self._medium :])
         record("close_to_close_short", short_return, f"{self._short}-candle closes")
+        record("close_to_close_medium", medium_return, f"{self._medium}-candle closes")
         record("close_to_close_long", long_return, f"{self._long}-candle closes")
+
+        # Volatility that came from falling, separated from volatility that came
+        # from rising. Close-to-close is symmetric and cannot tell them apart, and
+        # a symbol whose movement is nearly all sell-offs is not the same trade as
+        # one moving the same amount in both directions.
+        record(
+            "downside_volatility",
+            self._downside_volatility(candles[-self._long :]),
+            "semi-deviation of negative returns only",
+        )
+        # Volatility that arrived in jumps, separated from volatility that
+        # diffused. Bipower variation is built from adjacent absolute returns, so
+        # a single large move contributes to realised variance and barely to
+        # bipower -- the difference is what jumped. Parkinson and Garman-Klass use
+        # the range and neither separates the two.
+        record(
+            "jump_volatility",
+            self._jump_volatility(candles[-self._long :]),
+            "realised less bipower variation, as a deviation",
+        )
+        # How steady the volatility itself is. A symbol sitting at 40% and one
+        # travelling from 20% to 60% have the same mean and are not the same risk,
+        # and nothing else here can tell them apart.
+        record(
+            "volatility_of_volatility",
+            self._volatility_of_volatility(candles[-self._long :]),
+            f"spread of rolling {self._short}-candle realised volatility",
+        )
         record(
             "volatility_ratio_short_to_long",
             None if not short_return or not long_return else short_return / long_return,
@@ -192,6 +233,77 @@ class VolatilityFeatureBuilder:
             candles_used=len(candles),
             built_at_ns=self._now_ns(),
         )
+
+    def _log_returns(self, candles) -> list[float]:
+        """The one definition of a return in this part, used by every estimator."""
+        return [
+            math.log(later.close / earlier.close)
+            for earlier, later in zip(candles, candles[1:])
+            if earlier.close > 0 and later.close > 0
+        ]
+
+    def _downside_volatility(self, candles) -> float | None:
+        """The deviation of the falls alone, in the same units as close-to-close.
+
+        Squared negative returns only, as the semivariance is defined. Divided by
+        the count of *all* returns rather than of the negative ones: the question
+        is how much of this symbol's movement came from falling, and dividing by
+        the falls alone would report a symbol that fell once as violently
+        downside-volatile.
+        """
+        if len(candles) < self._minimum:
+            return None
+        returns = self._log_returns(candles)
+        if len(returns) < 2:
+            return None
+        falls = sum(value * value for value in returns if value < 0)
+        return math.sqrt(falls / len(returns))
+
+    def _jump_volatility(self, candles) -> float | None:
+        """What realised variance holds that bipower variation does not.
+
+        `RV = Sum(r^2)` counts every move including a single violent one.
+        `BV = (pi/2) * Sum(|r_i| * |r_i-1|)` multiplies adjacent returns, so an
+        isolated jump has a small neighbour and contributes little. The
+        difference is the jump component, floored at zero because the estimator
+        is noisy and a negative jump variance is an artefact rather than a fact.
+
+        Returned as a deviation rather than a variance, so it is in the same units
+        as every other feature here. The source this comes from reports it as a
+        variance alongside features that are deviations; that inconsistency is not
+        worth reproducing in a regressor's inputs.
+        """
+        if len(candles) < self._minimum:
+            return None
+        returns = self._log_returns(candles)
+        if len(returns) < 3:
+            return None
+        realised = sum(value * value for value in returns)
+        bipower = (math.pi / 2.0) * sum(
+            abs(earlier) * abs(later) for earlier, later in zip(returns, returns[1:])
+        )
+        return math.sqrt(max(realised - bipower, 0.0) / len(returns))
+
+    def _volatility_of_volatility(self, candles) -> float | None:
+        """The spread of realised volatility measured over rolling sub-windows.
+
+        Rolled at the short window across the long one, so it needs no setting of
+        its own: what counts as a short measurement is already the operator's
+        answer, and inventing a second one would be a number with no provenance
+        (RL-061).
+        """
+        if len(candles) < self._minimum:
+            return None
+        estimates = []
+        for start in range(0, len(candles) - self._short + 1):
+            estimate = self._close_to_close(candles[start : start + self._short])
+            if estimate is not None:
+                estimates.append(estimate)
+        if len(estimates) < 2:
+            return None
+        mean = sum(estimates) / len(estimates)
+        variance = sum((value - mean) ** 2 for value in estimates) / (len(estimates) - 1)
+        return math.sqrt(variance)
 
     def _close_to_close(self, candles) -> float | None:
         """The standard deviation of log returns -- the textbook estimator."""
@@ -296,6 +408,7 @@ def start_part(context) -> int:
     publish_feature_sets = context.bus.publisher_for("vol-feature-set")
     builder = VolatilityFeatureBuilder(
         short_window=int(context.number("vol_feature_short_window")),
+        medium_window=int(context.number("vol_feature_medium_window")),
         long_window=int(context.number("vol_feature_long_window")),
         minimum_observations=int(context.number("vol_feature_minimum_observations")),
     )

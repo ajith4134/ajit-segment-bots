@@ -54,6 +54,18 @@ REQUIRED_FEATURES = ("close_to_close_short", "close_to_close_long")
 OPTIONAL_FEATURES = (
     "parkinson", "garman_klass", "volatility_ratio_short_to_long",
     "implied_over_realised", "largest_gap_fraction",
+    # Added 2026-08-25 from the volatility reel's ten-feature specification
+    # (docs/research/instagram-2026-08-20.md section 1), which this system had
+    # implemented as six. Each separates something the others cannot: whether the
+    # movement came from falling rather than rising, whether it arrived in jumps
+    # rather than by diffusing, whether the volatility itself is steady or
+    # travelling, and HAR's middle horizon between the short and the long.
+    #
+    # Optional rather than required, like every feature here except the two the
+    # regression cannot exist without: a symbol whose window is too short to
+    # support one is a symbol with a smaller model, not a refusal.
+    "close_to_close_medium", "downside_volatility", "jump_volatility",
+    "volatility_of_volatility",
 )
 
 
