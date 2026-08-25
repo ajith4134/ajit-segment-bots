@@ -172,7 +172,27 @@ LIVE_SPINE = (
     # continuously, and only `k.x` on Binance and `confirm` on Bybit say which
     # update is the terminal one for that minute. A window built from partial
     # minutes is wrong in a way nothing downstream detects.
+    # Held off the spine for 40 minutes on 2026-08-25 while the tape it had been
+    # corrupting was repaired: this part and venue-trade-stream-reader both
+    # appended to {venue}/{symbol}/{day}.blob, each counting its own blob
+    # position, so from 12:45 every index offset for 108 symbols pointed into the
+    # other writer's payloads. The tape is per stream kind now and a second writer
+    # on one file is refused by an flock, so candles land in {day}.candle.blob.
     "ccxt-venue-reader",
+    # The rest of the feed, started 2026-08-25. The book reader records the
+    # shallow book on its own per-kind tape and is what finally gives the bots'
+    # feature builders the order-book-snapshot they have been counting as absent
+    # since they were written. The three watchers read the feed rather than add
+    # to it; the rotator and the key pool publish nothing until a REST fetch path
+    # exists and say so on their standing (RL-062).
+    "order-book-reader",
+    "feed-gap-detector",
+    "feed-jump-detector",
+    "feed-coverage-auditor",
+    "cross-venue-price-consolidator",
+    "ban-signal-detector",
+    "venue-pool-rotator",
+    "api-key-pool-rotator",
     "kline-window-builder",
     "implied-vol-reader",
     "funding-rate-forecaster",
@@ -211,10 +231,49 @@ LIVE_SPINE = (
     "bull-entry-timer",
     "bull-exit-plan-proposer",
     "bull-opinion-composer",
+    # The bear half, started 2026-08-25 (phase 9). The same shape as the bull
+    # bot and the opposite side, and the first time opinion-arbiter has two
+    # opinions to resolve rather than one to apply its sole-opinion penalty to.
+    # Ordered as the bull bot is: the weight learner and the setup filter first,
+    # because a candidate no filter has weighted is a candidate nothing has an
+    # opinion about, then features, then conviction, then the plan.
+    "bear-setup-weight-learner",
+    "bear-setup-filter",
+    "bear-feature-builder",
+    "bear-outlier-rejector",
+    "bear-conviction-model",
+    "bear-conviction-calibrator",
+    "bear-entry-timer",
+    "bear-exit-plan-proposer",
+    "bear-opinion-composer",
+    # Watches an open position for the thesis that opened it breaking. It reads
+    # positions rather than the bot's own state, so it is started with the bot
+    # rather than with the trading half.
+    "bear-position-invalidation-watcher",
+    # The third bot, started 2026-08-25 (phase 10): it follows a move already
+    # under way instead of predicting one. Three sources of a follow candidate --
+    # this system's own winners, a qualified mover off the scanner, and a copied
+    # external position -- and one detector whose whole job is to refuse the ones
+    # everybody is already in.
+    "tail-setup-weight-learner",
+    "tail-mover-qualifier",
+    "tail-winner-selector",
+    "tail-copy-selector",
+    "tail-move-remaining-estimator",
+    "tail-crowding-detector",
+    "tail-follow-conviction-model",
+    "tail-trailing-exit-planner",
+    "tail-opinion-composer",
     # The decision. One bot means one opinion, and the arbiter's sole-opinion
     # penalty is what says so in the intent rather than the intent pretending
     # three bots agreed.
     "opinion-arbiter",
+    # How large this intent should be relative to a normal one, from the bots'
+    # own calibrated conviction and how many of them agreed. Added to the spine
+    # 2026-08-25: position-sizer has declared this input since the trading half
+    # was wired and nothing has ever produced one, so every trade so far was
+    # sized at the full risk budget whatever the conviction behind it.
+    "size-hint-writer",
     # The settings the money comes from, read before anything is sized against
     # them. The validator is what the bounds gate refuses without: a bound checked
     # against settings nobody verified is a bound with no authority behind it.
@@ -247,6 +306,14 @@ LIVE_SPINE = (
     # phase may reach.
     "order-idempotency-stamper",
     "order-destination-router",
+    # The three parts that make a paper fill resemble a live one, started
+    # 2026-08-25: a fill priced by walking the real book rather than at the touch,
+    # an order held for the latency a venue actually costs, and a position that
+    # can be liquidated. The value of this whole block is that paper results
+    # predict live ones, and each of these is one way that prediction breaks.
+    "book-walk-fill-pricer",
+    "order-latency-simulator",
+    "paper-liquidation-simulator",
     "paper-fill-simulator",
     # Closing the position. A fill becomes a held position, the exits are chained
     # to it the instant it fills, and both rest in the paper book until a live
@@ -352,6 +419,13 @@ LIVE_SPINE = (
     "stop-frequency-breaker",
     "margin-liquidation-watch",
     "profit-lock",
+    # The last two limiters, added 2026-08-25 to finish the risk block. Both
+    # publish risk_allowed_fraction_when_clear -- one -- while they have nothing
+    # to act on, so neither narrows anything until something produces a halt or a
+    # venue announcement. Running them now is what makes the wire exist before
+    # the first halt rather than after it.
+    "halt-enforcer",
+    "event-risk-limiter",
     # The desk. capital-settings-change-recorder matters beyond its own block:
     # RL-055 makes its journal the ONLY place the board's "when did this last
     # change" may come from -- never the file's mtime, never git log.
@@ -393,6 +467,48 @@ LIVE_SPINE = (
     "allocation-rebalance-proposer",
     # Last, after every part whose conclusions it writes down.
     "learning-recorder",
+    # The ledger's other half: what the operator and the governor did, and the
+    # check that the chain nobody can rewrite has not been rewritten.
+    "control-recorder",
+    "journal-integrity-checker",
+    # Observability, started 2026-08-25. Nothing here decides anything: the probe
+    # runner keeps each measurement beside the command that produced it, the
+    # alert raiser deduplicates what a person should look at, and the board parts
+    # build and check the page rather than publish it -- publishing is a URL
+    # outside this repository and stays a person's action.
+    "probe-runner",
+    "alert-raiser",
+    "clock-skew-monitor",
+    "fund-conservation-auditor",
+    "board-snapshot-builder",
+    "board-publisher",
+    "stale-board-watch",
+    "ablation-harness",
+    # The scanner's detectors, started 2026-08-25 (the rest of phase 3's block).
+    # Each is one way a symbol becomes interesting, and every one of them has
+    # been written and tested and never once run against the live feed.
+    "liquidity-grader",
+    "momentum-burst-detector",
+    "mean-reversion-detector",
+    "funding-skew-detector",
+    "liquidation-cascade-detector",
+    "volatility-gap-detector",
+    "whale-flow-detector",
+    "sentiment-shift-detector",
+    "universal-symbol-sweeper",
+    "watch-condition-compiler",
+    # The brain's remaining parts. opinion-conflict-resolver is the one that has
+    # been waiting for phase 9: with a bear bot running there are finally two
+    # opinions to resolve rather than one to pass through.
+    "opinion-conflict-resolver",
+    "devils-advocate",
+    "premortem-writer",
+    "intent-explainer",
+    "intent-timing-gate",
+    "bot-weight-sampler",
+    "forecast-bias-weigher",
+    "exploration-pair-opener",
+    "brain-self-reflector",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked

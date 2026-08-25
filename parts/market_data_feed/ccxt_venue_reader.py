@@ -43,7 +43,7 @@ PART_ID = "ccxt-venue-reader"
 PART_DECLARATION = PartDeclaration(
     part_id="ccxt-venue-reader",
     consumes=("stream-plan", "venue-standing"),
-    produces=("market-data", "part-health"),
+    produces=("candle", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
@@ -139,7 +139,7 @@ def start_part(context) -> int:
     The same shape as venue-trade-stream-reader's, one stream kind apart: the
     plan says which venues carry candles, a recorder per venue writes the tape,
     and every candle update in a recorded payload goes onto the bus as
-    market-data, normalised once by the adapter (spec 2.2) with the venue's own
+    candle, normalised once by the adapter (spec 2.2) with the venue's own
     closed flag on it. A consumer that wants only finished bars filters on the
     flag; this part does not decide that for it.
     """
@@ -150,7 +150,7 @@ def start_part(context) -> int:
     settings = context.settings[RUNTIME_SCOPE]
     adapters = {adapter.venue_id: adapter for adapter in load_captured_venue_adapters(settings)}
     tape_root = pathlib.Path(str(settings.entries["tape_root"].value)).expanduser()
-    publish_candles = context.bus.publisher_for("market-data")
+    publish_candles = context.bus.publisher_for("candle")
     plans = LatestValue(read=context.bus.reader("stream-plan"))
     # venue-standing is declared and read so a withheld venue is not reconnected
     # to; the recorder itself backs off on the connection, and the standing is

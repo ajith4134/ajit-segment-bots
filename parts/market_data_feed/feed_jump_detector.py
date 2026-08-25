@@ -16,7 +16,7 @@ PART_ID = "feed-jump-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="feed-jump-detector",
-    consumes=("market-data",),
+    consumes=("candle",),
     produces=("feed-jump", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -166,7 +166,7 @@ def run_feed_jump_detector(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    market-data carries trades and candle updates alike; this part reads the
+    `candle` carries candles only since 2026-08-25; this part reads the
     candles and only the closed ones, since a jump is a closed bar's open
     against the previous closed bar's close and an open bar has no close yet.
     A trade on the same type is not an error, it is simply not a candle.
@@ -174,7 +174,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
     from runtime.venues.venue_adapter import NormalisedCandle
 
-    updates = Batch(read=context.bus.reader("market-data"))
+    updates = Batch(read=context.bus.reader("candle"))
     publish_jumps = context.bus.publisher_for("feed-jump")
     detector = FeedJumpDetector(
         jump_threshold_increments=context.number("feed_jump_threshold_increments"),

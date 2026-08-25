@@ -1,9 +1,27 @@
 """The tape: what a venue actually sent, kept so it can be re-read years later.
 
-Two files per venue, symbol and UTC day (spec section 2.2):
+Two files per venue, symbol, UTC day **and stream kind** (spec section 2.2):
 
-    {root}/{venue}/{symbol}/{YYYY-MM-DD}.index   fixed-width records, memmap-able
-    {root}/{venue}/{symbol}/{YYYY-MM-DD}.blob    the raw venue payloads, end to end
+    {root}/{venue}/{symbol}/{YYYY-MM-DD}.index          trades, memmap-able
+    {root}/{venue}/{symbol}/{YYYY-MM-DD}.blob           the raw venue payloads
+    {root}/{venue}/{symbol}/{YYYY-MM-DD}.candle.index   one file per other kind
+    {root}/{venue}/{symbol}/{YYYY-MM-DD}.candle.blob
+
+**The stream kind is in the path since 2026-08-25, and it is there because it was
+not.** A record carries its own kind, so one file per symbol was the design --
+and a file has one writer only if one *process* writes it. `ccxt-venue-reader`
+started with phase 6 that afternoon and appended candles to the same blob
+`venue-trade-stream-reader` was appending trades to. Each holds its own byte
+counter, so from that minute every index offset pointed into the other writer's
+bytes: 218,027 of 218,116 records for one symbol were unreadable, and offsets in
+the index ran *backwards*. Nothing detected it -- the parts were healthy, the
+board was green, and the corruption was only visible to something that tried to
+parse a payload.
+
+Trades keep the bare name so three days of captured history stay exactly where
+every reader already looks; every other kind is suffixed. The asymmetry is the
+price of not rewriting an irreplaceable corpus, and it is stated here rather than
+discovered.
 
 The index is a fixed numpy dtype so a reader can memmap it and binary-search the
 time column without parsing anything. The blob holds the bytes exactly as they
@@ -28,6 +46,7 @@ from __future__ import annotations
 
 import datetime as _datetime
 import enum
+import fcntl
 import pathlib
 import time
 
@@ -38,6 +57,16 @@ from runtime.storage_facts import require_durable_directory
 
 INDEX_SUFFIX = ".index"
 BLOB_SUFFIX = ".blob"
+# Beside each index, held for as long as a process is appending to that tape.
+WRITER_LOCK_SUFFIX = ".writing"
+
+
+class TapeAlreadyBeingWritten(RuntimeError):
+    """A second process tried to append to a tape another one already holds."""
+
+
+class TapeKindRefused(ValueError):
+    """A record of one stream kind was handed to a tape writer for another."""
 
 # The day a record belongs to is decided by when we received it, in UTC. Venue
 # clocks disagree with each other and with ours, so partitioning on their
@@ -130,12 +159,29 @@ def day_of_timestamp_ns(received_at_ns: int) -> str:
     return _datetime.datetime.fromtimestamp(seconds, _datetime.UTC).strftime(DAY_FORMAT)
 
 
+def tape_stem_for(day: str, stream_kind: StreamKind) -> str:
+    """The file stem for one day of one kind.
+
+    TRADE keeps the bare day, because that is where every reader and three days of
+    captured history already are. Every other kind is suffixed with its own name,
+    so two parts recording two kinds of the same symbol write two files.
+    """
+    if stream_kind is StreamKind.TRADE:
+        return day
+    return f"{day}.{stream_kind.name.lower()}"
+
+
 def tape_paths_for(
-    root: pathlib.Path, venue: str, symbol: str, day: str
+    root: pathlib.Path,
+    venue: str,
+    symbol: str,
+    day: str,
+    stream_kind: StreamKind = StreamKind.TRADE,
 ) -> tuple[pathlib.Path, pathlib.Path]:
-    """Where one venue's one symbol's one day lives."""
+    """Where one venue's one symbol's one day of one stream kind lives."""
     directory = pathlib.Path(root) / venue / symbol
-    return directory / f"{day}{INDEX_SUFFIX}", directory / f"{day}{BLOB_SUFFIX}"
+    stem = tape_stem_for(day, stream_kind)
+    return directory / f"{stem}{INDEX_SUFFIX}", directory / f"{stem}{BLOB_SUFFIX}"
 
 
 class TapeWriter:
@@ -152,11 +198,14 @@ class TapeWriter:
         venue: str,
         symbol: str,
         writeback_interval_bytes: int,
+        stream_kind: StreamKind = StreamKind.TRADE,
     ) -> None:
         self._root = pathlib.Path(root)
         self._venue = venue
         self._symbol = symbol
+        self._stream_kind = stream_kind
         self._writeback_interval_bytes = writeback_interval_bytes
+        self._lock_handle = None
         self._open_day: str | None = None
         self._index_writer: CacheReleasingWriter | None = None
         self._blob_writer: CacheReleasingWriter | None = None
@@ -185,6 +234,13 @@ class TapeWriter:
         if day != self._open_day:
             self._roll_to_day(day)
 
+        if stream_kind is not self._stream_kind:
+            raise TapeKindRefused(
+                f"a {stream_kind.name} record was handed to a {self._stream_kind.name} tape "
+                f"writer for {self._venue}/{self._symbol}. One file, one kind, one writer: "
+                f"two writers on one blob each count their own bytes, and every offset after "
+                f"the first interleave points into the other writer's payloads."
+            )
         offset = self._blob_position
         self._blob_writer.append(payload)
         self._blob_position += len(payload)
@@ -210,6 +266,35 @@ class TapeWriter:
         if self._index_writer is not None:
             self._index_writer.force_writeback()
 
+    def _take_the_writer_lock(self, index_path: pathlib.Path) -> None:
+        """One writer per file, enforced by the kernel rather than by convention.
+
+        The kind in the path stops the two writers that collided on 2026-08-25.
+        This stops the next pair: any second process appending to the same tape is
+        refused at open, loudly, instead of silently interleaving its bytes into
+        someone else's offsets. An advisory flock is released when the process
+        dies however it dies, which is what a part being SIGKILLed needs.
+        """
+        lock_path = index_path.with_suffix(WRITER_LOCK_SUFFIX)
+        handle = open(lock_path, "w")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as refusal:
+            handle.close()
+            raise TapeAlreadyBeingWritten(
+                f"another process is already writing {index_path}. Two writers on one tape "
+                f"file each count their own blob position, so every index offset after the "
+                f"first interleaved append points at the wrong bytes -- and nothing detects "
+                f"it until something tries to parse a payload."
+            ) from refusal
+        self._release_the_writer_lock()
+        self._lock_handle = handle
+
+    def _release_the_writer_lock(self) -> None:
+        if self._lock_handle is not None:
+            self._lock_handle.close()  # closing releases the flock
+            self._lock_handle = None
+
     def close(self) -> None:
         if self._blob_writer is not None:
             self._blob_writer.close()
@@ -217,12 +302,16 @@ class TapeWriter:
         if self._index_writer is not None:
             self._index_writer.close()
             self._index_writer = None
+        self._release_the_writer_lock()
         self._open_day = None
 
     def _roll_to_day(self, day: str) -> None:
         self.close()
-        index_path, blob_path = tape_paths_for(self._root, self._venue, self._symbol, day)
+        index_path, blob_path = tape_paths_for(
+            self._root, self._venue, self._symbol, day, self._stream_kind
+        )
         index_path.parent.mkdir(parents=True, exist_ok=True)
+        self._take_the_writer_lock(index_path)
         # Resuming a day already on disk: the blob continues where it left off, and
         # any torn tail in the index is dropped first so the next record cannot be
         # written after a half-record.

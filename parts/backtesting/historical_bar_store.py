@@ -38,7 +38,7 @@ PART_ID = "historical-bar-store"
 
 PART_DECLARATION = PartDeclaration(
     part_id="historical-bar-store",
-    consumes=("market-data",),
+    consumes=("candle",),
     produces=("historical-window", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -259,7 +259,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
     from runtime.venues.venue_adapter import NormalisedCandle
 
-    updates = Batch(read=context.bus.reader("market-data"))
+    updates = Batch(read=context.bus.reader("candle"))
     publish_windows = context.bus.publisher_for("historical-window")
     interval = context.number("backtest_bar_interval")
     store = HistoricalBarStore(interval_seconds=interval)

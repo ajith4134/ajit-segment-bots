@@ -35,7 +35,7 @@ PART_ID = "kline-window-builder"
 
 PART_DECLARATION = PartDeclaration(
     part_id="kline-window-builder",
-    consumes=("market-data",),
+    consumes=("candle",),
     produces=("kline-window", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -276,7 +276,7 @@ def run_kline_window_builder(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Candles arrive on market-data from the candle reader with the venue's
+    Candles arrive on `candle` from the candle reader with the venue's
     closed flag; a window is rebuilt and published for a symbol when a
     closed candle lands on it.
     """
@@ -284,7 +284,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
     from runtime.venues.venue_adapter import NormalisedCandle
 
-    updates = Batch(read=context.bus.reader("market-data"))
+    updates = Batch(read=context.bus.reader("candle"))
     publish_windows = context.bus.publisher_for("kline-window")
     builder = KlineWindowBuilder(
         interval=str(context.setting("candle_interval").value),

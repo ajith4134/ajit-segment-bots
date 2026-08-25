@@ -40,7 +40,7 @@ PART_ID = "ground-truth-snapshot-builder"
 
 PART_DECLARATION = PartDeclaration(
     part_id="ground-truth-snapshot-builder",
-    consumes=("market-data",),
+    consumes=("market-data", "order-book-snapshot"),
     produces=("verified-snapshot", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -270,9 +270,14 @@ def start_part(context) -> int:
     fail for facts nothing here could measure.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+    from runtime.venues.venue_adapter import NormalisedTrade
 
     market = Batch(read=context.bus.reader("market-data"))
+    # The book comes off the book's own wire since 2026-08-25. It was read out of
+    # market-data by isinstance, and no BookUpdate has ever travelled there --
+    # order-book-reader has always published order-book-snapshot -- so the bid and
+    # ask half of every snapshot this part built was unreachable code.
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
     publish_snapshots = context.bus.publisher_for("verified-snapshot")
     builder = GroundTruthSnapshotBuilder(maximum_staleness_seconds=context.number("feed_coverage_window"))
     books_seen: set[tuple[str, str]] = set()
@@ -280,15 +285,18 @@ def start_part(context) -> int:
     def read_requests(_builder):
         touched: set[tuple[str, str]] = set()
         for item in market.payloads():
-            key = (item.venue_id, item.symbol)
-            if isinstance(item, NormalisedTrade):
-                builder.observe_fact(item.venue_id, item.symbol, LAST_TRADE, item.price, item.venue_time_ns)
-                touched.add(key)
-            elif isinstance(item, BookUpdate) and item.bids and item.asks:
-                builder.observe_fact(item.venue_id, item.symbol, BID, float(item.bids[0][0]), item.venue_time_ns)
-                builder.observe_fact(item.venue_id, item.symbol, ASK, float(item.asks[0][0]), item.venue_time_ns)
-                books_seen.add(key)
-                touched.add(key)
+            if not isinstance(item, NormalisedTrade):
+                continue
+            builder.observe_fact(item.venue_id, item.symbol, LAST_TRADE, item.price, item.venue_time_ns)
+            touched.add((item.venue_id, item.symbol))
+        for book in books.payloads():
+            if not (book.bids and book.asks):
+                continue
+            key = (book.venue_id, book.symbol)
+            builder.observe_fact(book.venue_id, book.symbol, BID, float(book.bids[0][0]), book.venue_time_ns)
+            builder.observe_fact(book.venue_id, book.symbol, ASK, float(book.asks[0][0]), book.venue_time_ns)
+            books_seen.add(key)
+            touched.add(key)
         return tuple(
             (venue_id, symbol, (LAST_TRADE, BID, ASK) if (venue_id, symbol) in books_seen else (LAST_TRADE,))
             for venue_id, symbol in sorted(touched)

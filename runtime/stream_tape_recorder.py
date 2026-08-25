@@ -181,7 +181,14 @@ class StreamTapeRecorder:
         writer = self._writers.get(symbol)
         if writer is None:
             writer = TapeWriter(
-                self._tape_root, self._adapter.venue_id, symbol, self._writeback_interval_bytes
+                self._tape_root,
+                self._adapter.venue_id,
+                symbol,
+                self._writeback_interval_bytes,
+                # The kind this recorder was built for, so two recorders of two
+                # kinds write two files. They shared one until 2026-08-25 and each
+                # counted its own blob position into it.
+                stream_kind=self._stream_kind,
             )
             self._writers[symbol] = writer
         return writer

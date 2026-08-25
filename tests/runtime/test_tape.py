@@ -8,6 +8,7 @@ tested against the real captured tape (RL-063).
 """
 
 import os
+import pathlib
 import signal
 import subprocess
 import sys
@@ -48,8 +49,8 @@ def tape_root(durable_tmp_path):
     return resolve_tape_root(durable_tmp_path / "tape")
 
 
-def _paths(root):
-    return tape_paths_for(root, VENUE, SYMBOL, DAY)
+def _paths(root, stream_kind=StreamKind.TRADE):
+    return tape_paths_for(root, VENUE, SYMBOL, DAY, stream_kind)
 
 
 def test_a_record_round_trips_with_its_raw_payload_unchanged(tape_root):
@@ -171,10 +172,12 @@ def test_a_tape_root_whose_pages_are_memory_is_refused(tmp_path):
 
 def test_a_record_the_venue_gave_no_sequence_or_timestamp_for_says_so(tape_root):
     """Absent is its own value, distinguishable from present-and-small (Rule 8)."""
-    with TapeWriter(tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL) as writer:
+    with TapeWriter(
+        tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL, stream_kind=StreamKind.BOOK
+    ) as writer:
         writer.append(StreamKind.BOOK, b"{}", received_at_ns=NOON_NS)
 
-    index_path, _ = _paths(tape_root)
+    index_path, _ = _paths(tape_root, StreamKind.BOOK)
     record = read_tape_index(index_path)[0]
     assert record["sequence"] == NOT_SENT
     assert record["venue_time_ns"] == NOT_SENT
@@ -315,3 +318,72 @@ def test_a_kill_with_no_flush_costs_at_most_the_message_in_flight(tape_root):
     for record in index:
         assert int(record["blob_offset"]) + int(record["blob_length"]) <= blob_size
         assert read_payload(blob_path, record) == payload
+
+
+def test_two_kinds_of_the_same_symbol_are_two_files(tape_root):
+    """One file, one kind, one writer.
+
+    ccxt-venue-reader appended candles to the blob venue-trade-stream-reader was
+    appending trades to on 2026-08-25. Each held its own byte counter, so from
+    that minute every index offset pointed into the other writer's payloads:
+    218,027 of 218,116 records for one symbol were unreadable, and the offsets in
+    the index ran backwards. The parts stayed healthy and every board stayed green.
+    """
+    with TapeWriter(tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL) as trades:
+        trades.append(StreamKind.TRADE, b'{"trade":1}', received_at_ns=NOON_NS)
+        with TapeWriter(
+            tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL, stream_kind=StreamKind.CANDLE
+        ) as candles:
+            candles.append(StreamKind.CANDLE, b'{"candle":1}', received_at_ns=NOON_NS)
+            trades.append(StreamKind.TRADE, b'{"trade":2}', received_at_ns=NOON_NS + 1)
+
+    trade_index, trade_blob = _paths(tape_root)
+    candle_index, candle_blob = _paths(tape_root, StreamKind.CANDLE)
+    assert trade_index != candle_index
+
+    trade_records = read_tape_index(trade_index)
+    assert [read_payload(trade_blob, record) for record in trade_records] == [
+        b'{"trade":1}', b'{"trade":2}'
+    ]
+    candle_records = read_tape_index(candle_index)
+    assert [read_payload(candle_blob, record) for record in candle_records] == [b'{"candle":1}']
+
+
+def test_a_second_writer_on_one_tape_is_refused_rather_than_interleaved(tape_root):
+    """The kind in the path stopped that pair; this stops the next one."""
+    from runtime.tape import TapeAlreadyBeingWritten
+
+    script = (
+        "import sys;"
+        "sys.path.insert(0, %r);"
+        "from runtime.tape import StreamKind, TapeWriter;"
+        "writer = TapeWriter(%r, %r, %r, %d);"
+        "writer.append(StreamKind.TRADE, b'held', received_at_ns=%d);"
+        "print('holding', flush=True);"
+        "sys.stdin.readline()"
+    ) % (
+        str(pathlib.Path(__file__).resolve().parents[2]),
+        str(tape_root), VENUE, SYMBOL, WRITEBACK_INTERVAL, NOON_NS,
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "holding"
+        with pytest.raises(TapeAlreadyBeingWritten):
+            TapeWriter(tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL).append(
+                StreamKind.TRADE, b"second", received_at_ns=NOON_NS + 1
+            )
+    finally:
+        holder.stdin.write("\n")
+        holder.stdin.flush()
+        holder.wait(timeout=10)
+
+
+def test_a_record_of_the_wrong_kind_is_refused_by_its_writer(tape_root):
+    from runtime.tape import TapeKindRefused
+
+    with TapeWriter(tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL) as writer:
+        with pytest.raises(TapeKindRefused):
+            writer.append(StreamKind.CANDLE, b'{"candle":1}', received_at_ns=NOON_NS)

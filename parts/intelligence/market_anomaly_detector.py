@@ -40,7 +40,7 @@ PART_ID = "market-anomaly-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="market-anomaly-detector",
-    consumes=("market-data", "feed-gap", "consolidated-price", "feed-coverage"),
+    consumes=("market-data", "feed-gap", "consolidated-price", "feed-coverage", "order-book-snapshot"),
     produces=("market-anomaly", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -306,9 +306,14 @@ def start_part(context) -> int:
     the consolidated price's contributor count.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+    from runtime.venues.venue_adapter import NormalisedTrade
 
     market = Batch(read=context.bus.reader("market-data"))
+    # Since 2026-08-25 the book has its own wire here. It was picked out of
+    # market-data by isinstance and no book has ever travelled there, so the
+    # crossed-book and wide-spread anomalies this part exists to catch were
+    # unreachable.
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
     gaps = Batch(read=context.bus.reader("feed-gap"))
     consolidated = Batch(read=context.bus.reader("consolidated-price"))
     coverage = Batch(read=context.bus.reader("feed-coverage"))
@@ -333,9 +338,13 @@ def start_part(context) -> int:
                 detector.observe_price(item.venue_id, item.symbol, item.price, item.venue_time_ns)
                 detector.observe_volume(item.venue_id, item.symbol, item.price * item.quantity)
                 touched.add((item.venue_id, item.symbol))
-            elif isinstance(item, BookUpdate) and item.bids and item.asks:
-                detector.observe_book(item.venue_id, item.symbol, float(item.bids[0][0]), float(item.asks[0][0]))
-                touched.add((item.venue_id, item.symbol))
+        for book in books.payloads():
+            if not (book.bids and book.asks):
+                continue
+            detector.observe_book(
+                book.venue_id, book.symbol, float(book.bids[0][0]), float(book.asks[0][0])
+            )
+            touched.add((book.venue_id, book.symbol))
         for price in consolidated.payloads():
             detector.observe_consolidated_price(price.symbol, price.price, len(price.contributing_venues))
         return tuple(sorted(touched))

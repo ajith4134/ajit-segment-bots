@@ -42,7 +42,7 @@ PART_ID = "symbol-profile-store"
 
 PART_DECLARATION = PartDeclaration(
     part_id="symbol-profile-store",
-    consumes=("market-data", "semantic-fact"),
+    consumes=("market-data", "semantic-fact", "order-book-snapshot"),
     produces=("symbol-profile", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -297,9 +297,10 @@ def start_part(context) -> int:
     venue and symbol touched in a tick is rebuilt.
     """
     from runtime.input_assembly import Batch
-    from runtime.venues.venue_adapter import BookUpdate, NormalisedTrade
+    from runtime.venues.venue_adapter import NormalisedTrade
 
     market = Batch(read=context.bus.reader("market-data"))
+    books = Batch(read=context.bus.reader("order-book-snapshot"))
     facts = Batch(read=context.bus.reader("semantic-fact"))
     publish_profiles = context.bus.publisher_for("symbol-profile")
     store = SymbolProfileStore(
@@ -312,14 +313,20 @@ def start_part(context) -> int:
 
     def read_market(_store):
         touched: set[tuple[str, str]] = set()
+        # The spread comes off the book's own wire since 2026-08-25. It was taken
+        # out of market-data by isinstance and no book has ever travelled there,
+        # so every profile this part wrote carried a spread of zero -- a symbol
+        # that costs nothing to cross, which is the one thing no symbol is.
+        for book in books.payloads():
+            if not (book.bids and book.asks):
+                continue
+            bid, ask = float(book.bids[0][0]), float(book.asks[0][0])
+            mid = (bid + ask) / 2
+            if mid > 0:
+                last_spread[(book.venue_id, book.symbol)] = (ask - bid) / mid
         for item in market.payloads():
             key = (item.venue_id, item.symbol)
-            if isinstance(item, BookUpdate) and item.bids and item.asks:
-                bid, ask = float(item.bids[0][0]), float(item.asks[0][0])
-                mid = (bid + ask) / 2
-                if mid > 0:
-                    last_spread[key] = (ask - bid) / mid
-            elif isinstance(item, NormalisedTrade) and item.price > 0:
+            if isinstance(item, NormalisedTrade) and item.price > 0:
                 previous = last_price.get(key)
                 last_price[key] = item.price
                 if previous is None or previous <= 0:

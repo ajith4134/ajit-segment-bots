@@ -1546,7 +1546,7 @@
     {
       "id": "market-data",
       "name": "market data",
-      "description": "Live prices, trades and book for every symbol, normalised across venues."
+      "description": "One trade, as a venue printed it, normalised across venues. Trades only: candles are `candle` and the book is `order-book-snapshot`, split out on 2026-08-25 after one wire carrying three shapes crashed a reader of one of them."
     },
     {
       "id": "entry-candidate",
@@ -3144,6 +3144,11 @@
       "description": "Every symbol's latest best bid and ask on one venue, each with the moment the venue stamped it, published on a fixed cadence rather than per quote.",
       "origin": "proposed",
       "added": "2026-08-24"
+    },
+    {
+      "id": "candle",
+      "name": "candle",
+      "description": "One OHLCV bar for one symbol at one interval, with the venue's own flag for whether the bar is closed. Split from market-data on 2026-08-25: that type carried trades, candles and books at once, and the minute candles began flowing on it feed-gap-detector -- which reads a trade's sequence number -- crashed every two seconds. A candle is a summary of many trades and shares no field with one."
     }
   ],
   "features": [
@@ -3153,7 +3158,7 @@
       "role": "shape live market data into the fixed candlestick window the model expects",
       "category": "prediction",
       "consumes": [
-        "market-data"
+        "candle"
       ],
       "produces": [
         "kline-window",
@@ -3672,7 +3677,7 @@
         "venue-standing"
       ],
       "produces": [
-        "market-data",
+        "candle",
         "part-health"
       ],
       "switchable": true,
@@ -5103,7 +5108,7 @@
       "role": "keep the recorded history a replay reads from",
       "category": "backtesting",
       "consumes": [
-        "market-data"
+        "candle"
       ],
       "produces": [
         "historical-window",
@@ -5776,7 +5781,8 @@
         "market-data",
         "feed-gap",
         "consolidated-price",
-        "feed-coverage"
+        "feed-coverage",
+        "order-book-snapshot"
       ],
       "produces": [
         "market-anomaly",
@@ -5990,7 +5996,8 @@
       "category": "knowledge",
       "consumes": [
         "market-data",
-        "semantic-fact"
+        "semantic-fact",
+        "order-book-snapshot"
       ],
       "produces": [
         "symbol-profile",
@@ -8113,7 +8120,7 @@
       "role": "flag a candle whose open does not meet the prior close, so a stop in the gap still counts as crossed",
       "category": "market-data-feed",
       "consumes": [
-        "market-data"
+        "candle"
       ],
       "produces": [
         "feed-jump",
@@ -8335,7 +8342,8 @@
       "role": "render the latest bars plus a fixed indicator set deterministically, so an LLM part is told numbers instead of inventing them",
       "category": "llm-services",
       "consumes": [
-        "market-data"
+        "market-data",
+        "order-book-snapshot"
       ],
       "produces": [
         "verified-snapshot",
