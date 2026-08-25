@@ -43,6 +43,8 @@ for path in (str(PROJECT), str(HERE)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from capital_settings_writer import EDITABLE, REFUSED_FROM_THE_BOARD  # noqa: E402
+
 NOT_MEASURED = "NOT MEASURED"
 
 # What the operator is entitled to see and change, per scope. Named rather than
@@ -81,6 +83,8 @@ class SettingView:
     previous_value: object
     change_count: int
     moves_real_money: bool
+    is_editable: bool
+    not_editable_reason: str
 
     def as_dict(self) -> dict:
         age = None
@@ -100,6 +104,8 @@ class SettingView:
             "previous_value": self.previous_value,
             "change_count": self.change_count,
             "moves_real_money": self.moves_real_money,
+            "is_editable": self.is_editable,
+            "not_editable_reason": self.not_editable_reason,
         }
 
 
@@ -204,6 +210,11 @@ def build_capital_settings_view() -> dict:
                 previous_value=latest.get("previous_value") if latest else None,
                 change_count=len(moved),
                 moves_real_money=name in MOVES_REAL_MONEY,
+                # Asked of the writer rather than restated here. Two lists of
+                # what may be edited would drift, and the one that drifted
+                # would be this one -- the board is not where that answer lives.
+                is_editable=(scope, name) in EDITABLE and name not in REFUSED_FROM_THE_BOARD,
+                not_editable_reason=reason_not_editable(scope, name),
             ).as_dict())
 
         scopes.append({"scope": scope, "ok": True, "proof": f"{root_of(document)}", "settings": views})
@@ -211,12 +222,25 @@ def build_capital_settings_view() -> dict:
     return {
         "scopes": scopes,
         "journal": journal_provenance,
-        "editable": False,
+        "editable": True,
         "editable_reason": (
-            "this board reads the settings and does not write them yet; the write "
-            "path is password-gated, validated and journalled, and is built separately"
+            "a change is password-gated, rate-limited, checked against the same "
+            "contradictions capital-settings-validator refuses to trade under, and "
+            "journalled by capital-settings-change-recorder on its next read"
         ),
     }
+
+
+def reason_not_editable(scope: str, name: str) -> str:
+    """Why a setting has no input beside it, said rather than left blank."""
+    if name in REFUSED_FROM_THE_BOARD:
+        return (
+            "changed on the server, not from here. RL-005 makes paper-first the "
+            "method, and a public URL is not where a segment starts trading real money"
+        )
+    if (scope, name) not in EDITABLE:
+        return "not one of the capital settings this board may change"
+    return ""
 
 
 def root_of(document) -> str:

@@ -316,3 +316,50 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
   font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
   color: #D48A54; border: 1px solid #D48A54; text-transform: uppercase;
 }
+
+/* The edit path. Held apart visually from everything else on the board, because
+   everything else only reports and this one changes what the bot does. */
+.password-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+  padding: 11px 15px;
+}
+.password-bar label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.password-input {
+  background: var(--sunk); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text); padding: 6px 9px; font-size: 12px; min-width: 260px;
+}
+.password-input:focus { outline: none; border-color: var(--accent); }
+.password-note { color: var(--faint); font-size: 10px; }
+
+.edit-cell { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 250px; }
+.edit-cell > b { min-width: 62px; text-align: right; }
+.edit-input {
+  background: var(--sunk); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text); padding: 3px 7px; font-size: 11px; width: 84px;
+}
+.edit-input:focus { outline: none; border-color: var(--accent); }
+.edit-input:disabled { opacity: 0.4; }
+.edit-save {
+  background: none; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
+  font: 500 10px/1 inherit; padding: 5px 9px; cursor: pointer;
+}
+.edit-save:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.edit-save:disabled { opacity: 0.35; cursor: default; }
+/* A setting the board may not change says so rather than showing a dead box. */
+.locked {
+  font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
+  color: var(--faint); border: 1px solid var(--border); border-radius: 3px;
+  padding: 1px 5px; text-transform: uppercase;
+}
+.edit-result {
+  flex-basis: 100%; font-size: 10px; line-height: 1.5; color: #D45B54;
+  background: var(--sunk); border-radius: 3px; padding: 5px 8px; white-space: normal;
+}
+.edit-result.edit-ok { color: #57D9A3; }
+.edit-guard {
+  font: 500 8.5px/1 "IBM Plex Mono", monospace; text-transform: uppercase;
+  letter-spacing: 0.06em; border: 1px solid currentColor; border-radius: 3px;
+  padding: 1px 4px; margin-right: 6px;
+}
+.edit-fault { margin-top: 3px; color: var(--muted); }

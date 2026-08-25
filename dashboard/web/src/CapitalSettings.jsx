@@ -1,21 +1,25 @@
-// CapitalSettings — the numbers the operator sets, and when each last moved.
+// CapitalSettings — the numbers the operator sets, and the guarded way to change them.
 //
 // RL-040, RL-041, RL-051 and RL-053 are the operator's to decide: the paper
 // balance, what one trade may commit at least and at most, and the leverage
 // ceiling the bot chooses under. RL-055 says the board shows them and when they
 // last changed, and `docs/settings-schema.md` names the only legal source for the
-// second half — capital-settings-change-recorder's journal, never the file's
-// mtime and never git log.
+// second half — capital-settings-change-recorder's journal, never the file's mtime
+// and never git log.
 //
-// Read-only today, and it says so rather than showing inputs that do nothing. The
-// write path is password-gated, rate-limited, validated by
-// capital-settings-validator and journalled, and a board that offered a text box
-// before any of that existed would be teaching the operator a gesture that is not
-// yet safe.
+// **The password is held in memory and nowhere else.** Not localStorage, not a
+// cookie: this page is served from a public URL, and a password kept on the
+// viewer's machine outlives the person who typed it. Reloading the page asks
+// again, which is the correct amount of inconvenience for a form that can move
+// capital limits.
 //
-// A setting whose change has never been journalled reads NOT MEASURED, not
-// "never changed". Those are different facts and the journal is what separates
-// them.
+// **A refusal is shown exactly as the server phrased it**, with which guard
+// stopped it. An operator told only "no" cannot tell a typo from a lockout from a
+// contradiction — and the operator is the person most likely to be refused.
+//
+// **Nothing here decides what may be edited.** The server marks each setting, and
+// this renders the mark. Two lists of what is editable would drift, and the one
+// that drifted would be this one.
 import { useEffect, useRef, useState } from 'react'
 
 const POLL_MS = 10000
@@ -23,6 +27,7 @@ const POLL_MS = 10000
 export function useSettings() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const alive = useRef(true)
 
   useEffect(() => {
@@ -37,9 +42,9 @@ export function useSettings() {
     load()
     const timer = setInterval(load, POLL_MS)
     return () => { alive.current = false; clearInterval(timer) }
-  }, [])
+  }, [reloadKey])
 
-  return { settings: data, settingsError: error }
+  return { settings: data, settingsError: error, reloadSettings: () => setReloadKey((k) => k + 1) }
 }
 
 function whenChanged(setting) {
@@ -65,7 +70,75 @@ function whenChanged(setting) {
 
 const READABLE = (name) => name.replace(/_/g, ' ')
 
-export default function CapitalSettings({ settings, settingsError }) {
+function ValueCell({ setting, password, onChanged }) {
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+
+  if (!setting.is_editable) {
+    return (
+      <div className="edit-cell">
+        <b className="mono">{String(setting.value)}</b>
+        <span className="locked" title={setting.not_editable_reason}>locked</span>
+      </div>
+    )
+  }
+
+  const submit = () => {
+    if (!draft.trim() || busy) return
+    setBusy(true)
+    setResult(null)
+    fetch('/api/settings/change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        password,
+        scope: setting.scope,
+        setting: setting.name,
+        value: draft.trim(),
+      }),
+    })
+      .then((r) => r.json())
+      .then((answer) => {
+        setResult(answer)
+        setBusy(false)
+        if (answer.accepted) { setDraft(''); onChanged() }
+      })
+      .catch((e) => { setResult({ accepted: false, guard: 'network', reason: String(e) }); setBusy(false) })
+  }
+
+  return (
+    <div className="edit-cell">
+      <b className="mono">{String(setting.value)}</b>
+      <input
+        className="edit-input mono"
+        value={draft}
+        placeholder="new"
+        disabled={!password || busy}
+        title={password ? '' : 'enter the board password above first'}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+      />
+      <button className="edit-save" disabled={!password || !draft.trim() || busy} onClick={submit}>
+        {busy ? '…' : 'set'}
+      </button>
+      {result && (
+        <div className={`edit-result${result.accepted ? ' edit-ok' : ''}`}>
+          {/* The server's own words, and which guard stopped it. A caller told
+              only "no" cannot tell a typo from a lockout from a contradiction. */}
+          <span className="edit-guard">{result.guard}</span> {result.reason}
+          {(result.faults || []).map((fault) => (
+            <div className="edit-fault" key={fault}>{fault}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function CapitalSettings({ settings, settingsError, reloadSettings }) {
+  const [password, setPassword] = useState('')
+
   if (settingsError && !settings) {
     return (
       <div className="banner warn">
@@ -79,12 +152,30 @@ export default function CapitalSettings({ settings, settingsError }) {
   return (
     <>
       <div className="banner">
-        <b>These are yours to set, and this board only shows them.</b> They are edited
-        in the settings file on the server. Every value below is what the parts are
-        actually reading right now, and “last changed” comes from{' '}
+        <b>These are yours to set.</b> Every value below is what the parts are actually
+        reading right now, and “last changed” comes from{' '}
         <code>capital-settings-change-recorder</code>’s journal — never the file’s
         timestamp, which says when it was <em>saved</em> and not when anything began
-        acting on it.
+        acting on it. A change is refused unless it passes the same checks{' '}
+        <code>capital-settings-validator</code> applies, because a settings file that
+        contradicts itself zeroes the risk limit rather than trading on a guess.
+      </div>
+
+      <div className="password-bar">
+        <label htmlFor="board-password">board password</label>
+        <input
+          id="board-password"
+          className="password-input mono"
+          type="password"
+          value={password}
+          placeholder="required to change anything"
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <span className="password-note">
+          {/* Not localStorage, not a cookie. This page is public, and a password
+              kept on the viewer's machine outlives the person who typed it. */}
+          held in this tab only — reloading asks again
+        </span>
       </div>
 
       {settings.scopes.map((scope) => (
@@ -93,6 +184,8 @@ export default function CapitalSettings({ settings, settingsError }) {
             <h3>{scope.scope === 'main-account' ? 'Main account' : `Segment — ${scope.scope}`}</h3>
             <div className="trade-panel-figures mono">
               <span>{scope.settings.length} setting(s)</span>
+              <span className="sep">·</span>
+              <span>{scope.settings.filter((s) => s.is_editable).length} changeable here</span>
             </div>
           </div>
 
@@ -103,7 +196,7 @@ export default function CapitalSettings({ settings, settingsError }) {
               <table className="trade-table">
                 <thead>
                   <tr>
-                    <th>setting</th><th className="n">value</th><th>unit</th>
+                    <th>setting</th><th>value</th><th>unit</th>
                     <th>last changed</th><th>why it is set that way</th>
                   </tr>
                 </thead>
@@ -112,14 +205,15 @@ export default function CapitalSettings({ settings, settingsError }) {
                     <tr key={setting.name} className={setting.moves_real_money ? 'row-real-money' : undefined}>
                       <td className="sym">
                         {READABLE(setting.name)}
-                        {/* RL-005: paper first. A setting that can put real money on
-                            the market is not the same kind of thing as one that
-                            bounds a paper trade, and the board says so. */}
                         {setting.moves_real_money && (
-                          <span className="chip-real-money">decides real money</span>
+                          <span className="chip-real-money" title={setting.not_editable_reason}>
+                            decides real money
+                          </span>
                         )}
                       </td>
-                      <td className="n mono"><b>{String(setting.value)}</b></td>
+                      <td>
+                        <ValueCell setting={setting} password={password} onChanged={reloadSettings} />
+                      </td>
                       <td className="faint mono">{setting.unit}</td>
                       <td className="mono">{whenChanged(setting)}</td>
                       <td className="setting-note">{setting.note}</td>

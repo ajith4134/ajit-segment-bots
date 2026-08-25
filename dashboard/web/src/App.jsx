@@ -50,7 +50,7 @@ export default function App() {
   const { activity, activityError } = useActivity()
   const { machine, machineError } = useMachine()
   const { trades, tradesError } = useTrades()
-  const { settings, settingsError } = useSettings()
+  const { settings, settingsError, reloadSettings } = useSettings()
   const [view, setView] = useState('live')
   const [tab, setTab] = useState('overview')
 
@@ -128,7 +128,7 @@ export default function App() {
       ) : view === 'machine' ? (
         <MachineLoad machine={machine} machineError={machineError} />
       ) : view === 'settings' ? (
-        <CapitalSettings settings={settings} settingsError={settingsError} />
+        <CapitalSettings settings={settings} settingsError={settingsError} reloadSettings={reloadSettings} />
       ) : (
         <>
           <div className="banner">{describeProgress(counts, totals)}</div>
