@@ -406,8 +406,19 @@ def start_part(context) -> int:
 
     def read_intents():
         for cluster_map in maps.payloads():
+            # The map carries clusters, each with the price the crowd would be
+            # forced out at; the placer wants those prices. Reading a
+            # `cluster_prices` field the type has never had crashed this part on
+            # the first map it was ever handed -- liquidation-cluster-mapper only
+            # started producing on 2026-08-25, so the mistake had never run.
+            if not cluster_map.is_usable:
+                # An unmapped map has nothing to move clear of, and its clusters
+                # would be a guess wearing the shape of a measurement.
+                continue
             placer.set_liquidation_clusters(
-                cluster_map.venue_id, cluster_map.symbol, cluster_map.cluster_prices
+                cluster_map.venue_id,
+                cluster_map.symbol,
+                tuple(cluster.price for cluster in cluster_map.clusters),
             )
         for profile in excursions.payloads():
             # Only a fitted profile carries a number. An unfitted one reports
@@ -457,7 +468,11 @@ def start_part(context) -> int:
                 "symbol": intent.symbol,
                 "side": BUY if intent.is_long else SELL,
                 "entry_price": entry_price,
-                "volatility_forecast": getattr(forecast, "expected_move_fraction", None),
+                # `expected_volatility` is the field VolatilityForecast carries.
+                # This read `expected_move_fraction`, which it has never had, so
+                # the getattr default meant every stop was sized as though no
+                # forecast existed -- silently, because a default is not an error.
+                "volatility_forecast": getattr(forecast, "expected_volatility", None),
                 "target_price": targets[0] if targets else None,
                 "proposed_stop_distance_fraction": plan.risk_fraction,
             })

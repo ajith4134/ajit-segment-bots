@@ -236,6 +236,9 @@ class PartLauncher:
         # Which part may ask for a switch, decided by contract rather than by name:
         # whoever the blueprint says turns a switch-plan into switch-records.
         self._switch_actuator_part_id = find_switch_actuator(load_blueprint())
+        # The last dead process per part, so its exit code survives being
+        # forgotten from _running and a restart can say how the last one ended.
+        self._last_exit: dict[str, LaunchedPart] = {}
         self._switch_service: SwitchService | None = None
 
     def open_switch_service(self, stop_deadline_seconds: float, backlog: int) -> SwitchService:
@@ -421,10 +424,29 @@ class PartLauncher:
             except FileNotFoundError:
                 pass
 
+    def read_exit_code(self, part_id: str) -> int | None:
+        """How a part that is no longer running ended, or None if it still is.
+
+        A supervisor that records only *that* a part restarted cannot tell a
+        crash from a kill from a clean exit, and a part crash-looping thirteen
+        times a minute looks the same in the log as one being cycled deliberately.
+        Negative values are signals: -9 is SIGKILL, -11 a segfault. 1 is an
+        uncaught exception, which is the case worth reading a traceback for.
+        """
+        launched = self._running.get(part_id) or self._last_exit.get(part_id)
+        if launched is None:
+            return None
+        if launched.is_running:
+            return None
+        return launched.process.exitcode
+
     def _forget_if_dead(self, part_id: str) -> None:
         launched = self._running.get(part_id)
         if launched is not None and not launched.is_running:
             launched.governor_control_socket.close()
+            # Kept, not dropped: the exit code is the only thing that says how it
+            # died, and forgetting it is why a crash loop was unreadable.
+            self._last_exit[part_id] = launched
             self._running.pop(part_id, None)
             if not launched.is_bounded:
                 self.standing.unbounded -= 1

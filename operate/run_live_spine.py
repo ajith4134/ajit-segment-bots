@@ -152,6 +152,25 @@ LIVE_SPINE = (
     # cadence -- a reader comparing a price against a quote must not be handed one
     # of them sampled more often than the other.
     "quote-level-sampler",
+    # ---- phase 6a: what the forecasts are built from, 2026-08-25 -----------
+    # Placed here, with the samplers, because everything downstream reads them:
+    # bull-feature-builder wants the funding forecast, instrument-selector wants
+    # the implied-vol surface, and luck-skill-separator cannot tell luck from
+    # skill without knowing how much the market was moving.
+    #
+    # Volatility is the one quantity in trading that is genuinely forecastable --
+    # returns are close to unpredictable and their magnitude is not, because
+    # volatility clusters. That is why this is a regression and not a
+    # classification: sizing needs a number, not a direction.
+    "kline-window-builder",
+    "implied-vol-reader",
+    "funding-rate-forecaster",
+    "order-flow-state-encoder",
+    "flow-entropy-meter",
+    "volatility-feature-builder",
+    "realised-vol-regressor",
+    "entropy-magnitude-forecaster",
+    "liquidation-cluster-mapper",
     # Noticing. The only path in the blueprint from market-data to an
     # entry-candidate without a playbook-rule, which the learning loop cannot build
     # until trades have happened.
@@ -280,6 +299,23 @@ LIVE_SPINE = (
     # bus and died with the process that drew it, so a board had nothing on disk
     # to show and a part started tomorrow could learn nothing from today
     # (docs/proposals/a-conclusion-nobody-records-is-a-conclusion-nobody-has.md).
+    # ---- phase 6b: the model, and the loop that keeps it honest ------------
+    # This is a cycle by construction and is exempted as one: the model is
+    # finetuned, it forecasts, forecast-scorer scores what it said against what
+    # the market did, model-drift-monitor raises an alert when that accuracy
+    # decays, and the alert is what triggers the next finetune. kronos-size-selector
+    # closes a second loop, choosing which model size to run from the accuracy the
+    # sizes themselves produced.
+    #
+    # Kronos-large (499.2M) is not open-source, which is why choosing a size is a
+    # part at all rather than a setting.
+    "kronos-size-selector",
+    "kronos-finetuner",
+    "kronos-forecaster",
+    "forecast-distribution-gate",
+    "forecast-ensembler",
+    "forecast-scorer",
+    "model-drift-monitor",
     # Last, after every part whose conclusions it writes down.
     "learning-recorder",
 )
@@ -548,11 +584,17 @@ def main(argv: list[str]) -> int:
                 if not policy.may_start(part_id, now):
                     continue
                 wait = policy.record_restart(part_id, now)
+                # Read before the restart replaces it. Without this the log said a
+                # part restarted and never how the last one ended, so a part
+                # crash-looping thirteen times a minute was indistinguishable from
+                # one being cycled on purpose -- and undiagnosable either way.
+                last_exit_code = launcher.read_exit_code(part_id)
                 try:
                     launched = launcher.start(part_id)
                     record(
                         {
                             "event": "part-restarted",
+                            "last_exit_code": last_exit_code,
                             "part_id": part_id,
                             "pid": launched.process.pid,
                             "restarts": policy.restarts[part_id],

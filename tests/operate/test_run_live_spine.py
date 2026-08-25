@@ -161,6 +161,16 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         # loop that could be ordered as a line would not be a learning loop.
         "bull-entry-timer",
         "bull-exit-plan-proposer",
+        # The model loop, closed 2026-08-25 with phase 6. Kronos is finetuned, it
+        # forecasts, forecast-scorer scores what it said against what the market
+        # actually did, model-drift-monitor raises an alert when that accuracy
+        # decays, and the alert is what triggers the next finetune. A model that
+        # kept itself honest in a straight line would not be keeping itself
+        # honest -- it would just be a model.
+        "kronos-finetuner",
+        # The second loop through the same accuracy: which model size to run is
+        # chosen from how well the sizes themselves have been forecasting.
+        "kronos-size-selector",
     }
 
     for part_id, inputs in consumes.items():
