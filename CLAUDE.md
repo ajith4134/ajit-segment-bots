@@ -50,11 +50,55 @@ Given by the user; `docs/goal.md` is the source of truth and records what was
 actually said. Rulings RL-046..057 (in `~/trading-system/docs/rulings.json`,
 injected at session start) refine it.
 
-## Where the project stands — 2026-08-20, RL-057
+## Where the project stands — 2026-08-25, every part running
 
-**Design phase closed. Implementation starts.** The blueprint is
-`docs/features.json`: 321 parts in 27 blocks, every contract holding
-(`python3 dashboard/check_contracts.py`). Build against it; do not redesign it.
+**All 327 parts are on the live spine and 27 of 27 blocks are on.** Phases 5
+through 15 of `docs/superpowers/plans/2026-08-25-phases-5-to-15.md` are started:
+closed-trade decoding, prediction, the learning loops, risk and the capital desk,
+the bear bot, the tailgater, the execution path, intelligence, hypothesis,
+knowledge, backtesting, the LLM blocks, online research, and autonomous last on
+purpose.
+
+**Read the coverage number carefully, because it has two halves** (RL-072,
+`python3 dashboard/measure_diagram_coverage.py`):
+
+    parts running     327 of 327
+    wires carrying   ~4,000 of 4,993   a message has actually travelled
+    wires wired up    4,993 of 4,993   both ends are running
+
+The second was the only thing this probe measured until 2026-08-25, and it read
+100% within a minute of the last block starting. The bus has always counted every
+message a part receives and publishes; those counts ride on health into the
+heartbeat table now, and the first figure is the one RL-072 asks for. The rest of
+the wires are downstream of a trade the bots have not yet taken, or need a
+provider key nobody has installed.
+
+**Two checkers run in the pre-commit hook beside `check_contracts.py`, and both
+exist because of defects that could not appear until a producer first ran:**
+
+    python3 dashboard/check_payload_reads.py   a field a producer does not carry
+    python3 dashboard/check_part_calls.py      a call an object cannot answer
+
+Between them they found 29 defects on the day they were written, several of them
+parts that had never done anything: an exposure limiter that observed every
+position at zero, a live-money guard judging three of its four tests against
+getattr defaults, a size hint that had never changed a size, a fine-tuned model
+that could never be loaded, a proven instruction that could never be compiled.
+**A wire with one name and several payload shapes defeats both checks** — that is
+what `market-data` was (trades, candles and books), and splitting `candle` out is
+what stopped a candle crashing a reader of trades.
+
+**The tape is per stream kind since 2026-08-25, and a second writer is refused by
+an flock.** `ccxt-venue-reader` and `venue-trade-stream-reader` appended to one
+blob for four hours, each counting its own byte position; 20.3 million records
+across 108 files had offsets pointing into the other writer's payloads.
+`operate/repair_interleaved_tape.py` recovered 20,282,413 of them, verified
+record by record against the venue's own reading of the bytes, and kept the
+damaged files as `{day}.interleaved.*`.
+
+The blueprint is `docs/features.json`: 327 parts in 27 blocks, every contract
+holding (`python3 dashboard/check_contracts.py`). Build against it; do not
+redesign it.
 
 - **Build order (RL-050): futures segment bot first, fully.** Spot and options
   stay skeleton — blocks declared, placeholders, no working code — until futures
@@ -130,6 +174,14 @@ second print.
 **Do not stop it without a reason, and never leave it stopped.** History accrues
 only in real time: every other part can be built against a tape that exists, and
 an hour not captured is gone permanently.
+
+**A crashing part's traceback is in the user journal, not in `ajit-spine`'s.**
+Every part is placed in its own systemd scope, so journald files its output under
+that scope rather than under the service. `journalctl --user -u ajit-spine` shows
+the supervisor's restart counter climbing and nothing else, which cost two hours
+of diagnosis on 2026-08-25. The traceback is in:
+
+    journalctl --user --since "-10min" | grep -B 30 Error
 
     operate/README.md          how to start, stop, and see what it has captured
     operate/ajit-spine.service       the systemd user unit the spine runs under
