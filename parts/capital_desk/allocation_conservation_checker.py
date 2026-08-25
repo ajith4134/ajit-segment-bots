@@ -123,6 +123,20 @@ class AllocationConservationChecker:
             )
             return headroom, ()
 
+        if not self._allocations:
+            # A balance has arrived and no allocation has. That is not an account
+            # with nothing allocated -- it is an account this part has not finished
+            # hearing about, and the two arrive on different ticks. Saying "most of
+            # the account is unallocated" here raised exactly one false alarm on
+            # 2026-08-25, on the first check of the run, before any segment had
+            # reported (Rule 8: absence of evidence is its own state, not a finding).
+            headroom = self._headroom(
+                balance, total, NO_BALANCE,
+                "a main balance has been read and no segment has reported an "
+                "allocation yet; nothing can be said about headroom until one has",
+            )
+            return headroom, ()
+
         if remaining < 0:
             self.standing.over_allocations += 1
             self.standing.worst_overrun = max(self.standing.worst_overrun, -remaining)

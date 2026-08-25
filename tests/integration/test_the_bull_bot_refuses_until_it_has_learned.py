@@ -370,8 +370,11 @@ def test_the_labeller_turns_real_candidates_into_real_labels(
         for part_id in running:
             assert wait_for_address(next(iter(wiring[part_id].inboxes.values())))
 
-        deadline = time.monotonic() + PATIENCE_SECONDS
+        started_at = time.monotonic()
+        deadline = started_at + PATIENCE_SECONDS
         position = 0
+        replayed = 0
+        batches = 0
         while time.monotonic() < deadline and not seen:
             batch = todays_trades[position : position + REPLAY_BATCH]
             position += REPLAY_BATCH
@@ -384,11 +387,26 @@ def test_the_labeller_turns_real_candidates_into_real_labels(
             feed.publish("market-data", arriving_now(batch))
             time.sleep(REPLAY_PAUSE_SECONDS)
             seen.extend(labels.drain())
+            replayed += len(batch)
+            batches += 1
     finally:
         labels.close()
         feed.close()
 
-    assert seen, "no training label was produced from real candidates and real prices"
+    # The failure says what it measured, not only that it failed. This test does
+    # real work in real time -- parts must find a cointegrated pair, fire a
+    # candidate, and see sixty seconds of prices resolve it -- so it is sensitive
+    # to how loaded the machine is. It failed twice on 2026-08-25 in the full
+    # suite while passing alone and passing with all 342 integration tests, on a
+    # box also running a 127-part spine. Without these numbers the next person
+    # cannot tell a starved replay from a stalled one.
+    assert seen, (
+        f"no training label was produced from real candidates and real prices: "
+        f"replayed {replayed:,} trade(s) in {batches:,} batch(es) over "
+        f"{time.monotonic() - started_at:.0f}s of a {PATIENCE_SECONDS:.0f}s budget. "
+        f"Zero labels with a full replay behind it means the detectors never fired; "
+        f"a short replay means the machine could not keep up"
+    )
     label = seen[0].payload
     assert seen[0].producer_part_id == "signal-outcome-labeller"
     assert label.detector == "spread-reversion-detector"

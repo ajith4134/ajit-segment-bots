@@ -221,6 +221,9 @@ LIVE_SPINE = (
     "main-account-settings-reader",
     "capital-allotment-reader",
     "capital-settings-validator",
+    # Before usdt-pnl-accountant, which states every result in USDT (RL-028)
+    # and needs the rate to convert a non-USDT quote at all.
+    "paper-currency-converter",
     "money-mode-reader",
     # Which instrument carries the intent, and at what price and increment. The
     # selector prices the venue's own funding against the intent's horizon, which
@@ -327,6 +330,35 @@ LIVE_SPINE = (
     "forecast-ensembler",
     "forecast-scorer",
     "model-drift-monitor",
+    # ---- phase 8: risk, capital, and the operator's own numbers ------------
+    # The block that decides how much money a decision may use, and the desk that
+    # holds the numbers the operator sets. Every capital ruling lands here.
+    #
+    # Three enablers first, because each unblocks a limiter that has nothing to
+    # limit without it: what a position would be liquidated at, what capital an
+    # order has already reserved, and how far equity has fallen from its peak.
+    # leverage-selector is RL-041 and RL-053 made mechanical: the operator sets a
+    # ceiling and the bot chooses under it per trade from volatility and funding.
+    # A ceiling nothing chooses under is a setting, not a decision. First here,
+    # because liquidation-price-tracker computes against the leverage it chose.
+    "leverage-selector",
+    "liquidation-price-tracker",
+    "fund-lock-ledger",
+    "drawdown-episode-tracker",
+    # The brakes. Each emits its own risk-limit and the sizer takes the smallest,
+    # so a brake that is off does not weaken the others -- it simply stops being
+    # one of the votes.
+    "drawdown-breaker",
+    "stop-frequency-breaker",
+    "margin-liquidation-watch",
+    "profit-lock",
+    # The desk. capital-settings-change-recorder matters beyond its own block:
+    # RL-055 makes its journal the ONLY place the board's "when did this last
+    # change" may come from -- never the file's mtime, never git log.
+    "capital-settings-change-recorder",
+    "capital-utilisation-meter",
+    "allocation-conservation-checker",
+    "live-balance-divergence-watch",
     # ---- phase 7: the rest of the learning loop, 2026-08-25 ----------------
     # Six of these can act on what is already running; the rest name their own
     # phase and refuse. forecast-trust-learner is what forecast-ensembler has
@@ -356,6 +388,9 @@ LIVE_SPINE = (
     "feature-reliability-scorer",
     "champion-challenger-gate",
     "edge-graduation-gate",
+    # Reads the scorecard the keeper above builds: allocation moves toward the
+    # segments that earned it, from realised USDT rather than from a forecast.
+    "allocation-rebalance-proposer",
     # Last, after every part whose conclusions it writes down.
     "learning-recorder",
 )

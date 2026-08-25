@@ -87,6 +87,9 @@ class CapitalSettingsChangeRecorder:
         # Each setting's recorded history, kept here rather than read back out
         # of the journal: a journal with a sink retains nothing in memory.
         # Bounded by how often the operator actually edits a settings file.
+        # Built by _record and handed on by take_journal_entries. Held rather
+        # than returned from observe, because the two answer different questions.
+        self._entries_pending: list = []
         self._history: dict[tuple[str, str], list[dict]] = {}
         self.standing = RecorderStanding()
 
@@ -119,9 +122,23 @@ class CapitalSettingsChangeRecorder:
                 is_first_reading=first,
             )
             changes.append(change)
-            self._record(change)
+            self._entries_pending.append(self._record(change))
 
         return tuple(changes)
+
+    def take_journal_entries(self) -> tuple:
+        """The journal entries this recorder has made and not yet handed on.
+
+        `observe` returns SettingChange because that is what a caller reasoning
+        about a setting wants to read. What travels on `journal-entry` is a
+        JournalEntry, which `_record` has always built and which was being
+        discarded: the part declared `produces: journal-entry` and published
+        SettingChange, so every consumer that reads an entry's `payload` --
+        entry-quality-scorer, trade-episode-encoder, trade-replay-verifier --
+        crash-looped the moment this part was first switched on (2026-08-25).
+        """
+        pending, self._entries_pending = tuple(self._entries_pending), []
+        return pending
 
     def _record(self, change: SettingChange) -> JournalEntry:
         if change.is_first_reading:
@@ -180,10 +197,12 @@ def run_capital_settings_change_recorder(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        changes = []
         for scope, settings in read_settings():
-            changes.extend(recorder.observe(scope, settings))
-        publish_entries(tuple(changes))
+            recorder.observe(scope, settings)
+        # The entries, not the changes. This part produces `journal-entry`, and a
+        # producer that publishes a different shape than it declares breaks every
+        # consumer of that type rather than only itself.
+        publish_entries(recorder.take_journal_entries())
 
     return run_part(
         declaration=PART_DECLARATION,
