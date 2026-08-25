@@ -150,6 +150,14 @@ function ClosedTrades({ closed }) {
               <span className="faint">{summary.fees_paid?.toFixed(2)} in fees</span>
             </>
           )}
+          {summary.untrusted_count > 0 && (
+            <>
+              <span className="sep">·</span>
+              <span className="unmeasured">
+                {summary.untrusted_count} not counted — recorded before the entry-price fix
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -170,8 +178,20 @@ function ClosedTrades({ closed }) {
             </thead>
             <tbody>
               {trades.map((t, index) => (
-                <tr key={`${t.closed_at_ns}-${t.symbol}-${index}`}>
-                  <td className="sym">{t.symbol}</td>
+                <tr
+                  key={`${t.closed_at_ns}-${t.symbol}-${index}`}
+                  className={t.is_trusted === false ? 'row-untrusted' : undefined}
+                  title={t.is_trusted === false
+                    ? `not counted: ${t.trust_reason}. This row's entry price and quantity were computed by code that has since been fixed.`
+                    : undefined}
+                >
+                  <td className="sym">
+                    {t.symbol}
+                    {/* Shown and marked, never hidden. Dropping the row would be
+                        quietly editing the record; showing it unmarked would be
+                        presenting fiction as measurement. */}
+                    {t.is_trusted === false && <span className="chip-untrusted">before fix</span>}
+                  </td>
                   <td style={{ color: t.direction === 'short' ? '#D48A54' : '#4DA3FF' }}>
                     {t.direction || '—'}
                   </td>

@@ -284,3 +284,13 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
 .trade-table tbody tr:hover { background: #161C27; }
 .trade-table .sym { font-weight: 600; }
 .trade-table .faint { color: var(--faint); }
+
+/* A closed trade whose entry price was computed by code since fixed. Dimmed and
+   chipped rather than hidden: removing it would edit the record, and showing it
+   unmarked would present fiction as measurement. */
+.trade-table tr.row-untrusted { opacity: 0.45; }
+.chip-untrusted {
+  margin-left: 7px; padding: 1px 5px; border-radius: 3px;
+  font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
+  color: #6E5B2E; border: 1px solid #6E5B2E; text-transform: uppercase;
+}

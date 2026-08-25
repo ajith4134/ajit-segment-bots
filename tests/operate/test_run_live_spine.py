@@ -145,6 +145,22 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         # In the same loop one arc further out: the faults it budgets against are
         # the verifier's, and the budget it produces is the planner's input.
         "part-restart-budgeter",
+        # The stop loop, closed on 2026-08-25 when the decoders were switched on
+        # (phase 5). stop-target-placer places a stop, the trade closes against
+        # it, stop-placement-auditor judges whether it was hit by noise before the
+        # target, and that audit is how the next stop is placed better. There is
+        # no ordering of those two that makes it a line, and the placer is started
+        # first on purpose: a trade cannot be sized without a stop, so a spine
+        # that waited for the auditor could never open the trade the auditor
+        # exists to judge.
+        "stop-target-placer",
+        # The same loop, one arc further in, and closed the same day. The bull
+        # bot's entry timing is scored by entry-quality-scorer and its exit plan
+        # by the excursion, horizon and stop-audit profilers -- and every one of
+        # those judgements is built from trades the bot itself opened. A learning
+        # loop that could be ordered as a line would not be a learning loop.
+        "bull-entry-timer",
+        "bull-exit-plan-proposer",
     }
 
     for part_id, inputs in consumes.items():

@@ -218,18 +218,40 @@ def attach_live_prices(positions: list[dict]) -> None:
         )
 
 
+def read_trustworthy_after_ns() -> int | None:
+    """The operator's boundary for a closed trade worth believing, or None."""
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+        return int(document.read_value("closed_trades_trustworthy_after_ns"))
+    except Exception:
+        return None
+
+
 def read_closed_trades() -> tuple[list[dict], dict]:
     """Recent round trips, from the end of the position journal."""
+    from runtime.closed_trade_trust import judge_closed_trade
+
     journal = read_state_directory() / "journal.position-recorder.sqlite"
     tail = read_journal_tail(journal, "closed-trade", CLOSED_TRADE_TAIL_BYTES)
+    boundary = read_trustworthy_after_ns()
 
     trades = []
     for entry in tail.entries[-MOST_CLOSED_TRADES:]:
         payload = entry.get("payload") or {}
         realised = payload.get("realised_pnl")
         fees = payload.get("fees_paid")
+        # Shown, never hidden, and never silently. Ten of these rows carry an entry
+        # price the market never printed, and a board that dropped them would be
+        # quietly editing the record while a board that showed them unmarked would
+        # be presenting fiction as measurement. Marked is the only honest third
+        # option (Rule 8).
+        verdict = judge_closed_trade(payload.get("closed_at_ns"), boundary)
         trades.append(
             {
+                "is_trusted": verdict.is_trusted,
+                "trust_reason": verdict.reason,
                 "venue_id": payload.get("venue_id"),
                 "symbol": payload.get("symbol"),
                 "direction": payload.get("direction"),
@@ -265,13 +287,23 @@ def read_closed_trades() -> tuple[list[dict], dict]:
 
 
 def summarise_closed(trades: list[dict]) -> dict:
-    """What the shown trades add up to. Said of the shown ones, never of all time."""
-    scored = [t for t in trades if t["net_pnl"] is not None]
+    """What the shown trades add up to. Said of the shown ones, never of all time.
+
+    Totalled over the trusted rows only. A net figure that included trades whose
+    entry price never happened would be an arithmetic answer to a question nobody
+    asked, and it would move whenever one of those rows scrolled into the window.
+    """
+    scored = [t for t in trades if t["net_pnl"] is not None and t.get("is_trusted", True)]
+    untrusted = len([t for t in trades if not t.get("is_trusted", True)])
     if not scored:
-        return {"count": 0, "net_pnl": None, "wins": 0, "win_rate": None, "fees_paid": None}
+        return {
+            "count": 0, "untrusted_count": untrusted, "net_pnl": None,
+            "wins": 0, "win_rate": None, "fees_paid": None,
+        }
     wins = [t for t in scored if t["net_pnl"] > 0]
     return {
         "count": len(scored),
+        "untrusted_count": len([t for t in trades if not t.get("is_trusted", True)]),
         "net_pnl": sum(t["net_pnl"] for t in scored),
         "gross_pnl": sum(t["realised_pnl"] for t in scored),
         "fees_paid": sum(t["fees_paid"] for t in scored),

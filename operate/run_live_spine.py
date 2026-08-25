@@ -224,11 +224,57 @@ LIVE_SPINE = (
     "exit-order-chainer",
     "stop-order-manager",
     "position-close-detector",
+    # Funding, booked as its own idempotent event rather than folded into a fill.
+    # Added for phase 5: pnl-attributor splits a closed trade into direction,
+    # timing, size, fees, slippage and funding, and without this it is a splitter
+    # missing one of its terms -- which on a perpetual is not a rounding error.
+    # Before the accountant, which reads the funding-settlement it produces.
+    "funding-settlement-recorder",
     "usdt-pnl-accountant",
     # The record. Without it a fill happened and nothing can say what decided it,
     # and a position closed with nothing to say what it was worth.
     "trade-lifecycle-recorder",
     "position-recorder",
+    # ---- phase 5: closed-trade decoding, 2026-08-25 -------------------------
+    # 115 round trips had closed and nothing had scored one. Every part here
+    # reads `closed-trade` and `peak-excursion`, both already produced and
+    # journalled, which is what makes this the block whose whole input was
+    # already live.
+    #
+    # They are switched on together on purpose. Most of what they need, they
+    # produce for each other -- `trade-episode` alone has eight readers -- so
+    # starting them one at a time would be starting each into an empty inbox.
+    # The ones that still refuse name their phase: volatility-forecast is 6,
+    # regime-break-alert and correlation-cluster are 12, symbol-profile is 13.
+    # A part that refuses for a stated reason is the finding, not the failure.
+    #
+    # Every one of them refuses a trade recorded before
+    # closed_trades_trustworthy_after_ns: ten of the trades already on this
+    # machine carry an entry price the market never printed, and a decoder
+    # trained on those learns stop placement from prices that never existed.
+    "near-miss-recorder",
+    "entry-quality-scorer",
+    "stop-placement-auditor",
+    "trade-replay-verifier",
+    "pnl-attributor",
+    "regime-transition-tagger",
+    "trade-cluster-detector",
+    "luck-skill-separator",
+    "shortfall-decomposer",
+    "exit-counterfactual-replayer",
+    # The keystone, started after its producers and before its readers: it
+    # consumes six things the parts above make, and eight parts read the
+    # `trade-episode` it produces.
+    "trade-episode-encoder",
+    "sequence-pattern-miner",
+    "exploration-pair-decoder",
+    "excursion-profiler",
+    "exit-quality-scorer",
+    "holding-horizon-profiler",
+    "loss-cause-classifier",
+    "winner-pattern-miner",
+    "trade-narrative-writer",
+    "lesson-extractor",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked
