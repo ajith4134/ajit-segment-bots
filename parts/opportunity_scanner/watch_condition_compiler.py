@@ -34,7 +34,7 @@ PART_ID = "watch-condition-compiler"
 
 PART_DECLARATION = PartDeclaration(
     part_id="watch-condition-compiler",
-    consumes=("proven-instruction", "retired-instruction"),
+    consumes=("proven-instruction", "retired-instruction", "opportunity-instruction"),
     produces=("watch-condition", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -242,29 +242,41 @@ def start_part(context) -> int:
     Retirements are applied as they arrive. A proven instruction arrives
     carrying its id and its runs, not the measurement, comparison and
     threshold a condition is compiled from; those live on the
-    opportunity-instruction this part does not consume. Each such arrival is
-    counted on the standing as proven without a body, and nothing is
-    compiled from it -- a condition invented from an id would watch for
-    nothing the instruction said. The known measurements are the shared
-    vocabulary in runtime.sweep_measurements, which the sweeper computes.
+    opportunity-instruction, which this part consumes since 2026-08-25 and
+    joins on the id both sides carry. A verdict whose instruction has not
+    arrived is still counted as proven without a body and nothing is compiled
+    from it -- a condition invented from an id would watch for nothing the
+    instruction said. The known measurements are the shared vocabulary in
+    runtime.sweep_measurements, which the sweeper computes.
     """
-    from runtime.input_assembly import Batch
+    from runtime.input_assembly import Batch, LatestByKey
     from runtime.sweep_measurements import KNOWN_MEASUREMENTS
 
     proven = Batch(read=context.bus.reader("proven-instruction"))
+    instructions = LatestByKey(
+        read=context.bus.reader("opportunity-instruction"),
+        key_of=lambda instruction: instruction.instruction_id,
+    )
     retired = Batch(read=context.bus.reader("retired-instruction"))
     publish_conditions = context.bus.publisher_for("watch-condition")
     compiler = WatchConditionCompiler(known_measurements=KNOWN_MEASUREMENTS)
 
     def read_instructions():
         bodies = []
-        for instruction in proven.payloads():
-            body = getattr(instruction, "body", None)
+        body_by_id = instructions.mapping()
+        for verdict in proven.payloads():
+            # A verdict names the instruction it is about; the body is the
+            # instruction itself, joined on the id both sides carry. Until
+            # 2026-08-25 the body was read off the verdict through a getattr
+            # default -- ProvenInstruction has never had one -- so every proven
+            # instruction was counted as bodyless and no condition was ever
+            # compiled from one.
+            body = body_by_id.get(verdict.instruction_id)
             if body is None:
                 compiler.standing.proven_without_a_body += 1
                 continue
             bodies.append({
-                "instruction_id": instruction.instruction_id,
+                "instruction_id": verdict.instruction_id,
                 "measurement": body.measurement, "comparison": body.comparison,
                 "threshold": body.threshold, "direction": body.direction,
                 "expectation": body.expectation, "horizon_seconds": body.horizon_seconds,

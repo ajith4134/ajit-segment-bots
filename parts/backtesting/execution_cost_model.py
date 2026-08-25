@@ -324,13 +324,23 @@ def start_part(context) -> int:
                 model.observe_shortfall(key[0], key[1], breakdown, breakdown.quantity * breakdown.achieved_price)
         jobs = []
         for profile in profiles.payloads():
-            typical = getattr(profile, "typical_cost_fraction", None)
-            if typical is not None:
-                jobs.append({
-                    "venue_id": profile.venue_id, "symbol": profile.symbol,
-                    "half_spread_fraction": typical / 2.0, "impact_fraction": typical / 2.0,
-                    "participation": getattr(profile, "participation", 0.0) or 0.0,
-                })
+            # `typical_cost` is already a fraction -- slippage-learner is given a
+            # cost fraction per fill. It was read as `typical_cost_fraction` and as
+            # `participation`, neither of which the producer has ever carried, so
+            # no learned profile has ever reached this model and every estimate it
+            # made came from its priors.
+            day_volume = volume.get((profile.venue_id, profile.symbol), 0.0)
+            jobs.append({
+                "venue_id": profile.venue_id,
+                "symbol": profile.symbol,
+                "half_spread_fraction": profile.typical_cost / 2.0,
+                "impact_fraction": profile.typical_cost / 2.0,
+                # Participation is the band's notional against the day's volume,
+                # which is the shape impact is fitted in. Zero when the volume is
+                # unknown: an unknown participation is not a small one, and the
+                # model's own prior is what answers then.
+                "participation": profile.band_notional / day_volume if day_volume > 0 else 0.0,
+            })
         return tuple(jobs)
 
     def read_requests():

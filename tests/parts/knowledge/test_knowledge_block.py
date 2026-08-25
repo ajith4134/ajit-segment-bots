@@ -351,18 +351,32 @@ def test_a_new_listing_is_a_state_rather_than_something_to_infer():
 
 # ---- instruction-archive ----------------------------------------------------
 
-class ArchivableInstruction:
-    def __init__(self, instruction_id="i-1", family="f-1", trials=3, threshold=-2.0):
-        self.instruction_id = instruction_id
-        self.hypothesis_id = f"{family}:h"
-        self.family = family
-        self.measurement = "z_score"
-        self.comparison = "below"
-        self.threshold = threshold
-        self.regime_tag = "trending"
-        self.written_at_ns = 1_000
-        self.trials_in_family = trials
-        self.reason = "written"
+def ArchivableInstruction(instruction_id="i-1", family="f-1", trials=3, threshold=-2.0):
+    """A real OpportunityInstruction, not a stub with the fields this test needs.
+
+    It was a stub until 2026-08-25, and a stub is free to carry any field: the
+    archive dropped `horizon_seconds` on the floor and hypothesis-mutator read it
+    back through a getattr default, and no test could see either half.
+    """
+    from runtime.learning_types import OpportunityInstruction
+
+    return OpportunityInstruction(
+        instruction_id=instruction_id,
+        hypothesis_id=f"{family}:h",
+        measurement="z_score",
+        comparison="below",
+        threshold=threshold,
+        direction="long",
+        expectation="reverts",
+        horizon_seconds=300.0,
+        regime_tag="trending",
+        retire_when="hit-rate-below-0.4",
+        required_sample_size=30,
+        trials_in_family=trials,
+        evidence={},
+        reason="written",
+        written_at_ns=1_000,
+    )
 
 
 def test_the_archive_never_removes_anything():

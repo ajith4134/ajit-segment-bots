@@ -314,7 +314,7 @@ def start_part(context) -> int:
             offers.append({
                 "venue_id": key[0], "symbol": key[1], "key": FUNDING_INTERVAL,
                 "value": (int(settled_at) - previous) / 1e9, "source": FROM_MEASUREMENT,
-                "source_reference": f"journal:{getattr(entry, 'sequence', getattr(entry, 'entry_id', ''))}",
+                "source_reference": f"journal:{entry.sequence}",
                 "observations": settlements_seen[key],
             })
         return tuple(offers)

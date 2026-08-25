@@ -310,14 +310,20 @@ def start_part(context) -> int:
 
     def read_trades():
         for cluster in clusters.payloads():
-            members = getattr(cluster, "members", None) or getattr(cluster, "symbols", ())
-            group = getattr(cluster, "cluster_id", None) or getattr(cluster, "group", "")
-            for symbol in members:
-                detector.observe_correlation_group(symbol, str(group))
-            pairs = getattr(cluster, "correlations", None)
-            if isinstance(pairs, dict):
-                for (left, right), value in pairs.items():
-                    detector.observe_correlation(left, right, float(value))
+            # Read off the fields CorrelationCluster carries. Until 2026-08-25 the
+            # group was `cluster_id or group`, and it carries neither -- so every
+            # symbol was filed under the empty string, which made every clustered
+            # symbol a member of one nameless group.
+            for symbol in cluster.symbols:
+                detector.observe_correlation_group(symbol, cluster.name)
+            # The one measured pair a cluster publishes. The rest of the cluster is
+            # known only by membership, which `correlation_between` already answers
+            # with the minimum -- so the weakest pair is the only number here that
+            # is a measurement rather than an assumption, and it is the one that
+            # decides whether the cluster holds together at all.
+            if cluster.weakest_pair and cluster.weakest_correlation is not None:
+                left, right = cluster.weakest_pair
+                detector.observe_correlation(left, right, float(cluster.weakest_correlation))
         for trade in closed.payloads():
             recent.append((closed_trade_id(trade), trade))
         return tuple(recent)

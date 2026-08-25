@@ -293,7 +293,10 @@ def start_part(context) -> int:
         for announcement in announcements.payloads():
             symbols = getattr(announcement, "symbols", ())
             subject = ",".join(symbols) if symbols else announcement.venue_id
-            headline = getattr(announcement, "headline", None) or getattr(announcement, "title", "")
+            # `headline` and nothing else: the alternative read here named a field
+            # `VenueAnnouncement` has never carried, which is a fallback that could
+            # only ever have returned its default.
+            headline = announcement.headline
             register_scheduled_or_announced(subject, announcement.effective_at_ns, headline)
         for anomaly in anomalies.payloads():
             if anomaly.is_anomalous:

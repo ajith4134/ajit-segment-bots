@@ -30,6 +30,7 @@ import math
 import time
 from dataclasses import dataclass, field
 
+from runtime.forecast_types import TrainingStatistics
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -49,20 +50,6 @@ WINDOW_UNLIKE_TRAINING = "the-window-is-unlike-the-training-data"
 VOLATILITY_UNLIKE_TRAINING = "the-window's-volatility-is-outside-what-this-model-was-trained-through"
 FORECAST_LARGER_THAN_ANY_SEEN = "the-forecast-is-larger-than-any-move-in-the-training-data"
 NO_TRAINING_STATISTICS = "no-training-statistics-were-recorded-for-this-model"
-
-
-@dataclass(frozen=True)
-class TrainingStatistics:
-    """What a finetuned model was actually trained through. Recorded, never assumed."""
-
-    model_name: str
-    symbols: tuple
-    mean_return: float
-    return_deviation: float
-    mean_volatility: float
-    volatility_deviation: float
-    largest_absolute_move: float
-    windows: int
 
 
 @dataclass(frozen=True)
@@ -287,9 +274,12 @@ def start_part(context) -> int:
 
     def read_windows_and_forecasts(_gate):
         for model in models.payloads():
-            statistics = getattr(model, "training_statistics", None)
-            if statistics is not None:
-                gate.observe_training_statistics(statistics)
+            # Every fine-tuned model carries the distribution it was trained
+            # through since 2026-08-25. It was read through a getattr default from
+            # a field FinetunedModel did not have, so no statistics ever arrived
+            # and every forecast was flagged NO_TRAINING_STATISTICS -- the right
+            # answer, for the wrong reason, forever.
+            gate.observe_training_statistics(model.training_statistics)
         by_symbol = windows.mapping()
         pairs = []
         for forecast in forecasts.payloads():

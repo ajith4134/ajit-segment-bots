@@ -62,6 +62,11 @@ SHRUNK_TO_FIT = "shrunk-to-fit"
 # so a pathological input cannot loop.
 FEE_SOLVE_PASSES = 8
 
+# The whole of the risk the binding limit allows. A size hint scales what may be
+# risked and cannot scale past it: the quantity solved above is already the
+# largest whose loss at the stop stays inside the limit.
+FULL_RISK_BUDGET = 1.0
+
 
 @dataclass(frozen=True)
 class SizedOrder:
@@ -100,6 +105,9 @@ class SizerStanding:
     refused_too_small: int = 0
     refused_no_increment: int = 0
     refused_no_free_capital: int = 0
+    # Hints asking for more than the risk limit allows, which are clipped to it.
+    # A hint the desk could not honour is a fact about the brain that wrote it.
+    hints_above_the_risk_ceiling: int = 0
     # Orders the risk budget would have allowed and the free balance would not.
     # Counted apart from the shrinks risk caused: a bot cut short by its own
     # committed capital is a bot that needs fewer orders in flight, and a bot cut
@@ -137,7 +145,7 @@ class PositionSizer:
         quantity_increment: float,
         minimum_quantity: float,
         maximum_quantity: float | None = None,
-        size_hint: float | None = None,
+        size_multiple: float | None = None,
         free_capital: float | None = None,
         intent_id: str = "",
     ) -> SizedOrder:
@@ -185,8 +193,20 @@ class PositionSizer:
                 break
             quantity = next_quantity
 
-        if size_hint is not None and size_hint > 0:
-            quantity = min(quantity, size_hint)
+        if size_multiple is not None and size_multiple > 0:
+            # A hint is a multiple of a normal size, not a quantity. It was read as
+            # a quantity from a field SizeHint has never carried until 2026-08-25,
+            # so `getattr(hint, "quantity", None)` returned None on every intent
+            # and no conviction has ever changed a size -- the silent half of the
+            # same defect that crashed this part on locked-allocation.
+            #
+            # Clipped at one, and the clipping is counted rather than hidden: the
+            # quantity above is already the largest the risk limit allows, so a
+            # hint of 2x is a hint to breach it. Conviction may size a trade down
+            # inside the limit and may never size it past one.
+            if size_multiple > FULL_RISK_BUDGET:
+                self.standing.hints_above_the_risk_ceiling += 1
+            quantity *= min(size_multiple, FULL_RISK_BUDGET)
         if maximum_quantity is not None:
             quantity = min(quantity, maximum_quantity)
 
@@ -362,6 +382,7 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "refused_too_small": sizer.standing.refused_too_small,
         "refused_no_price_increment": sizer.standing.refused_no_increment,
         "refused_no_free_capital": sizer.standing.refused_no_free_capital,
+        "hints_above_the_risk_ceiling": sizer.standing.hints_above_the_risk_ceiling,
         "shrunk_by_free_capital": sizer.standing.shrunk_by_free_capital,
         "largest_risk_taken": sizer.standing.largest_risk_taken,
         "intents_that_stood_aside": sizer.standing.stood_aside,
@@ -515,7 +536,10 @@ def start_part(context) -> int:
                     "price_increment": getattr(increment, "increment", None),
                     "quantity_increment": quantity_increment,
                     "minimum_quantity": quantity_increment,
-                    "size_hint": getattr(hint, "quantity", None),
+                    # Read off the field SizeHint carries, not through a getattr
+                    # default: a default is what let this read return None on every
+                    # intent for three days without anything reporting it.
+                    "size_multiple": hint.multiple_of_normal if hint is not None else None,
                     "free_capital": free_capital,
                 }
             )

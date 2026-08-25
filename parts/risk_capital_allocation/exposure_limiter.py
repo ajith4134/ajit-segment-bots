@@ -28,7 +28,7 @@ PART_ID = "exposure-limiter"
 
 PART_DECLARATION = PartDeclaration(
     part_id="exposure-limiter",
-    consumes=("position", "exposure-view", "correlation-cluster", "trade-cluster"),
+    consumes=("position", "exposure-view", "correlation-cluster", "trade-cluster", "account-balance"),
     produces=("risk-limit", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -45,6 +45,11 @@ UNCLUSTERED = "unclustered"
 class ExposureStanding:
     positions_seen: int = 0
     limits_issued: int = 0
+    # Positions seen before any balance had arrived. Their exposure is unknown, not
+    # zero: counted here so a limiter that has never been able to measure anything
+    # says so, rather than publishing a full limit that looks like a measurement.
+    positions_without_a_balance: int = 0
+    allotment: float | None = None
     binding_by_cap: dict = field(default_factory=dict)
     largest_cluster_share: float = 0.0
     clusters_known: int = 0
@@ -73,17 +78,52 @@ class ExposureLimiter:
         self._per_cluster = maximum_per_cluster_fraction
         self._now_ns = now_ns
         self._exposure: dict[tuple[str, str], float] = {}
+        # What each position is worth, kept beside the fraction so a change of
+        # allotment re-measures the book rather than reinterpreting old fractions.
+        self._notional: dict[tuple[str, str], float] = {}
+        self._allotment: float | None = None
         self._cluster_of: dict[str, str] = {}
         self.standing = ExposureStanding()
 
-    def observe_position(self, venue_id: str, symbol: str, exposure_fraction: float) -> None:
-        """One position's exposure as a fraction of the segment's allotment."""
+    def set_allotment(self, allotment: float) -> None:
+        """What the caps are fractions of. Every position already seen is re-measured.
+
+        Re-measured rather than left: the caps are fractions, so a book worth 400
+        against an allotment of 10,000 is a different exposure the moment the
+        allotment changes, and holding the old fraction would cap against a balance
+        the account no longer has.
+        """
+        if allotment <= 0:
+            return
+        self.standing.allotment = allotment
+        self._allotment = allotment
+        self._exposure = {
+            key: notional / allotment for key, notional in self._notional.items() if notional > 0
+        }
+
+    def observe_position(self, venue_id: str, symbol: str, notional: float) -> None:
+        """One position's exposure, as what it is worth at what it cost.
+
+        Given a notional rather than a fraction, because the producer of `position`
+        publishes a quantity and an entry price and has never published a fraction.
+        This part read one through a `getattr(position, "exposure_fraction", 0.0)`
+        default until 2026-08-25, so every position was observed at zero, the sum
+        of the book was zero, and the limit published was the full per-position cap
+        on every tick since the part first ran.
+        """
         self.standing.positions_seen += 1
         key = (venue_id, symbol)
-        if exposure_fraction <= 0:
+        if notional <= 0:
+            self._notional.pop(key, None)
             self._exposure.pop(key, None)
-        else:
-            self._exposure[key] = exposure_fraction
+            return
+        self._notional[key] = notional
+        if self._allotment is None:
+            # Not recorded as an exposure of zero: an unmeasurable position is
+            # absent from the book rather than free, and the count says so.
+            self.standing.positions_without_a_balance += 1
+            return
+        self._exposure[key] = notional / self._allotment
 
     def set_correlation_cluster(self, symbol: str, cluster: str) -> None:
         """Which cluster a symbol belongs to, from the correlation part upstream."""
@@ -163,6 +203,8 @@ def describe_exposure(limiter: ExposureLimiter) -> dict:
         "clusters_known": limiter.standing.clusters_known,
         "largest_cluster_share": limiter.standing.largest_cluster_share,
         "unclustered_symbols_seen": limiter.standing.unclustered_symbols,
+        "positions_without_a_balance": limiter.standing.positions_without_a_balance,
+        "allotment": limiter.standing.allotment,
     }
 
 
@@ -197,13 +239,18 @@ def start_part(context) -> int:
     per-position fraction, which is the correct answer to "how much may I risk"
     when nothing is at risk yet.
     """
-    from runtime.input_assembly import Batch
+    from runtime.input_assembly import Batch, LatestByKey
 
     positions = Batch(read=context.bus.reader("position"))
+    balances = LatestByKey(
+        read=context.bus.reader("account-balance"),
+        key_of=lambda balance: balance.segment,
+    )
     views = Batch(read=context.bus.reader("exposure-view"))
     clusters = Batch(read=context.bus.reader("correlation-cluster"))
     trade_clusters = Batch(read=context.bus.reader("trade-cluster"))
     publish_limit = context.bus.publisher_for("risk-limit")
+    segment = str(context.setting("segment_id").value)
 
     def read_exposure(limiter):
         # Exposure views and clusters are drained so a slow reader cannot fill an
@@ -212,9 +259,14 @@ def start_part(context) -> int:
         views.payloads()
         clusters.payloads()
         trade_clusters.payloads()
+        balance = balances.mapping().get(segment)
+        if balance is not None:
+            limiter.set_allotment(balance.equity)
         for position in positions.payloads():
             limiter.observe_position(
-                position.venue_id, position.symbol, getattr(position, "exposure_fraction", 0.0)
+                position.venue_id,
+                position.symbol,
+                abs(position.quantity) * position.average_entry_price,
             )
 
     return run_exposure_limiter(

@@ -16,3 +16,16 @@ python3 "$repo_root/dashboard/check_contracts.py" || {
   echo "fix the registry, or use --no-verify and say why in the commit message."
   exit 1
 }
+
+# The contract checker proves a wire exists. This proves what travels on it has
+# the shape the reader expects. Added 2026-08-25, after a field that had never
+# existed on its producer's type took position-sizer off the air for two hours
+# and no board said anything -- the third defect of that exact shape in one day.
+# Roughly eight seconds: it imports all 327 parts, which is what makes it able to
+# see a type imported from runtime rather than declared beside its publisher.
+"$repo_root/.venv/bin/python" "$repo_root/dashboard/check_payload_reads.py" || {
+  echo ""
+  echo "commit refused: a part reads a field no producer of that data type carries."
+  echo "fix the read, or the producer, or use --no-verify and say why."
+  exit 1
+}

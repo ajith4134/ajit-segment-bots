@@ -300,7 +300,7 @@ def start_part(context) -> int:
             payload = entry.payload if isinstance(entry.payload, dict) else {}
             text = payload.get("narrative") or payload.get("text")
             if text:
-                texts.append(("journal-entry", f"journal:{getattr(entry, 'sequence', getattr(entry, 'entry_id', ''))}", str(text)))
+                texts.append(("journal-entry", f"journal:{entry.sequence}", str(text)))
         for skill in skills.payloads():
             body = "\n".join(str(section) for section in skill.sections)
             texts.append(("skill", skill.source_reference or skill.skill_id, f"{skill.title}\n{body}"))

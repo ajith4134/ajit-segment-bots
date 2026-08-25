@@ -63,6 +63,12 @@ class SlippageProfile:
     venue_id: str
     symbol: str
     size_band: str
+    # The band's boundary in notional, beside the label. The label is for a human
+    # and cannot be parsed back into a number without agreeing on a format, and a
+    # reader that parses a label is a reader that breaks when the format changes.
+    # execution-cost-model fits impact against participation -- notional over the
+    # day's volume -- so it needs the number and not the words.
+    band_notional: float
     order_kind: str
     condition: str
     state: str
@@ -146,6 +152,18 @@ class SlippageLearner:
             if notional <= band:
                 return f"<= {band:,.0f}"
         return f"> {self._size_bands[-1]:,.0f}"
+
+    def band_notional_for(self, band: str) -> float:
+        """The band's boundary as a number, for a reader that has arithmetic to do.
+
+        The open-ended top band is reported at its lower boundary: an order above
+        it has no upper bound to name, and reporting infinity would make every
+        participation estimate one.
+        """
+        for boundary in self._size_bands:
+            if band == f"<= {boundary:,.0f}":
+                return float(boundary)
+        return float(self._size_bands[-1])
 
     def observe_fill(
         self, venue_id: str, symbol: str, notional: float, order_kind: str,
@@ -240,6 +258,7 @@ class SlippageLearner:
             venue_id=venue_id,
             symbol=symbol,
             size_band=band,
+            band_notional=self.band_notional_for(band),
             order_kind=order_kind,
             condition=condition,
             state=state,

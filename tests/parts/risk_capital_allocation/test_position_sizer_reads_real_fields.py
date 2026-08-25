@@ -19,6 +19,8 @@ rather than in a live process.
 
 from __future__ import annotations
 
+import pytest
+
 from parts.portfolio_state.fund_lock_ledger import LOCKED, RELEASED, LockedAllocation
 from parts.risk_capital_allocation.position_sizer import free_capital_from_locks
 
@@ -108,3 +110,40 @@ def test_a_free_balance_too_small_to_trade_is_its_own_refusal():
     assert refused.outcome == REFUSED_NO_FREE_CAPITAL
     assert refused.quantity == 0.0
     assert "free at" in refused.reason
+
+
+def test_a_size_hint_is_a_multiple_and_not_a_quantity():
+    """The field the sizer defaulted away from, pinned on the producer's own type."""
+    from runtime.trade_intent import SizeHint
+
+    assert not hasattr(SizeHint, "quantity")
+    assert "multiple_of_normal" in SizeHint.__dataclass_fields__
+
+
+def test_a_conviction_below_normal_sizes_the_trade_down():
+    full = size_with(free_capital=None)
+    half = sizer().size(
+        venue_id="binance-usdm", symbol="BTCUSDT", side="buy", entry_price=100.0,
+        stop_price=99.0, allotment=10_000.0, risk_limit_fraction=0.01, leverage=1.0,
+        price_increment=0.01, quantity_increment=0.001, minimum_quantity=0.001,
+        size_multiple=0.5,
+    )
+    assert half.quantity == pytest.approx(full.quantity * 0.5, rel=1e-3)
+
+
+def test_a_hint_above_the_risk_ceiling_is_clipped_and_counted():
+    """Conviction may size down inside the limit; it may not size past it."""
+    one = sizer()
+    full = one.size(
+        venue_id="binance-usdm", symbol="BTCUSDT", side="buy", entry_price=100.0,
+        stop_price=99.0, allotment=10_000.0, risk_limit_fraction=0.01, leverage=1.0,
+        price_increment=0.01, quantity_increment=0.001, minimum_quantity=0.001,
+    )
+    hinted = one.size(
+        venue_id="binance-usdm", symbol="BTCUSDT", side="buy", entry_price=100.0,
+        stop_price=99.0, allotment=10_000.0, risk_limit_fraction=0.01, leverage=1.0,
+        price_increment=0.01, quantity_increment=0.001, minimum_quantity=0.001,
+        size_multiple=2.0,
+    )
+    assert hinted.quantity == full.quantity
+    assert one.standing.hints_above_the_risk_ceiling == 1

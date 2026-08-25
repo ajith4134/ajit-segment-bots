@@ -252,3 +252,70 @@ def unavailable_forecast(
         reason=reason,
         forecast_at_ns=now_ns(),
     )
+
+
+@dataclass(frozen=True)
+class TrainingStatistics:
+    """What a finetuned model was actually trained through. Measured, never assumed.
+
+    Lives here rather than beside its reader because both sides need it: the
+    finetuner is the only part that saw the training windows, and the
+    distribution gate is the part that judges a live window against them. It was
+    declared inside `forecast-distribution-gate` until 2026-08-25 and nothing ever
+    produced one, so the gate flagged every forecast as unjudgeable -- which was
+    the honest answer to a question nobody was answering.
+    """
+
+    model_name: str
+    symbols: tuple
+    mean_return: float
+    return_deviation: float
+    mean_volatility: float
+    volatility_deviation: float
+    largest_absolute_move: float
+    windows: int
+
+
+def deviation_of(values: tuple, mean: float) -> float:
+    """The sample standard deviation, or zero when one value cannot have one."""
+    if len(values) < 2:
+        return 0.0
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
+
+
+def measure_training_statistics(model_name: str, windows: tuple) -> TrainingStatistics:
+    """The distribution a set of training windows actually covers.
+
+    Per window rather than per candle, because that is the shape the gate compares
+    against: it takes one live window's mean return and its realised volatility,
+    and asks how many deviations from training each one is. Statistics gathered
+    per candle would answer a different question and read as though they answered
+    this one.
+    """
+    means: list[float] = []
+    volatilities: list[float] = []
+    largest = 0.0
+    symbols: set[str] = set()
+
+    for window in windows:
+        symbols.add(window.symbol)
+        returns = window.returns
+        if not returns:
+            continue
+        mean = sum(returns) / len(returns)
+        means.append(mean)
+        volatilities.append(deviation_of(tuple(returns), mean))
+        largest = max(largest, max(abs(value) for value in returns))
+
+    mean_return = sum(means) / len(means) if means else 0.0
+    mean_volatility = sum(volatilities) / len(volatilities) if volatilities else 0.0
+    return TrainingStatistics(
+        model_name=model_name,
+        symbols=tuple(sorted(symbols)),
+        mean_return=mean_return,
+        return_deviation=deviation_of(tuple(means), mean_return),
+        mean_volatility=mean_volatility,
+        volatility_deviation=deviation_of(tuple(volatilities), mean_volatility),
+        largest_absolute_move=largest,
+        windows=len(windows),
+    )

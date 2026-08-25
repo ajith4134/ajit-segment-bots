@@ -39,7 +39,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="instruction-replayer",
     consumes=(
         "opportunity-instruction", "walk-forward-split", "cost-estimate",
-        "fill-sequence", "fillable-size",
+        "fill-sequence", "fillable-size", "historical-window",
     ),
     produces=("backtest-run", "part-health"),
     resource_class="compute-bound",
@@ -329,11 +329,18 @@ def start_part(context) -> int:
     for its symbol, with the cost model, the volume cap and the fill
     sequence the other backtesting parts publish.
 
-    A split names where it cuts and not the bars it cuts; the bars are on
-    historical-window, which this part is not given. Until a blueprint edit
-    gives it the window -- or the split carries one -- every split arrives
-    without bars and is counted as such on the standing (RL-062); nothing is
-    replayed against bars it does not have.
+    A split names where it cuts and not the bars it cuts. The bars are on
+    `historical-window`, which this part consumes since 2026-08-25: an outcome
+    names the `window_id` it split, and that is the window's own id, so the two
+    halves join on a number both sides already carry. A split whose window has
+    not arrived is still counted rather than dropped -- the bars may not have been
+    built yet, and replaying against bars that are missing is what this block
+    exists to prevent.
+
+    `walk-forward-split` carries a `SplitOutcome`: a window id, a state, and a
+    **tuple** of splits. Reading each payload as one split -- which this part did
+    until 2026-08-25 -- takes `split_id` and `test_from_ns` off the wrapper, and
+    neither is there.
     """
     from runtime.input_assembly import Batch, LatestByKey
 
@@ -345,7 +352,10 @@ def start_part(context) -> int:
     publish_runs = context.bus.publisher_for("backtest-run")
     replayer = InstructionReplayer()
     quantity = context.number("replay_quantity")
-    windows_by_split: dict[str, object] = {}
+    windows = LatestByKey(
+        read=context.bus.reader("historical-window"),
+        key_of=lambda window: window.window_id,
+    )
 
     def cost_of(venue_id, symbol, notional):
         estimate = estimates.mapping().get((venue_id, symbol))
@@ -385,18 +395,24 @@ def start_part(context) -> int:
 
     def read_jobs():
         jobs = []
-        for split in splits.payloads():
-            window = getattr(split, "window", None)
-            if window is not None:
-                windows_by_split[split.split_id] = window
+        window_by_id = windows.mapping()
+        for outcome in splits.payloads():
+            window = window_by_id.get(outcome.window_id)
             if window is None:
-                replayer.standing.splits_without_bars += 1
+                # One count per split, not per outcome: the standing answers "how
+                # many replays did not happen", and an outcome is several.
+                replayer.standing.splits_without_bars += len(outcome.splits) or 1
                 continue
-            for instruction in instructions.mapping().values():
-                jobs.append({
-                    "instruction_id": instruction.instruction_id, "split": split, "window": window,
-                    "decide": decide_for(instruction), "quantity": quantity, "is_out_of_sample": True,
-                })
+            for split in outcome.splits:
+                for instruction in instructions.mapping().values():
+                    jobs.append({
+                        "instruction_id": instruction.instruction_id,
+                        "split": split,
+                        "window": window,
+                        "decide": decide_for(instruction),
+                        "quantity": quantity,
+                        "is_out_of_sample": True,
+                    })
         return tuple(jobs)
 
     def publish(item) -> None:

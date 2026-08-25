@@ -395,7 +395,13 @@ def start_part(context) -> int:
                 model.observe_learning_reward(reward.detector, reward.reward)
         for choice in champions.payloads():
             if getattr(choice, "model_name", None) == PART_ID:
-                model.apply_champion_choice(getattr(choice, "chosen", "champion"))
+                # `promotes` rather than the decision string: the gate decides
+                # between "promote-the-challenger" and "keep-the-champion", and this
+                # part holds roles named "champion" and "challenger". Passing the
+                # gate's own word through raises ValueError here, because it is not
+                # a role -- one vocabulary translated at the boundary, not two
+                # vocabularies hoping to match (T-5).
+                model.apply_champion_choice("challenger" if choice.promotes else "champion")
         for request in retrains.payloads():
             if request.model_name == PART_ID and request.state == "scheduled":
                 model.apply_retrain_request("challenger")

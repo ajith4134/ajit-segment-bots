@@ -130,8 +130,11 @@ def guard(trades=30, days=7.0, drawdown=0.2):
     )
 
 
-def graduated_bot(bot_id="bull", trades=100, result=500.0, drawdown=0.1, days=30.0):
-    return BotMaturity(bot_id, trades, result, drawdown, days)
+def graduated_bot(bot_id="bull", trades=100, result=500.0, drawdown=0.1, days=30.0,
+                  mature_in=("trending",)):
+    # `mature_in` carries the fifth test, added 2026-08-25: a bot whose edge has
+    # graduated in no regime has an account record and no reason for it.
+    return BotMaturity(bot_id, trades, result, drawdown, days, mature_in)
 
 
 def test_paper_mode_needs_no_graduation():
@@ -880,3 +883,47 @@ def test_an_entry_is_routed_as_a_market_order_not_a_limit():
         "wait for the market to fall to that stop"
     )
     assert request.stop_price == 97.0
+
+
+# ---- live-switch-guard reads the record it judges (2026-08-25) ---------------
+
+def test_a_bot_mature_in_no_regime_does_not_graduate():
+    """The fifth test: an account record with no edge behind it is not evidence."""
+    subject = guard(trades=30, days=7.0, drawdown=0.2)
+    subject.observe_paper_maturity(graduated_bot(mature_in=()))
+    verdict = subject.judge("bull")
+    assert verdict.verdict == NOT_GRADUATED
+    assert any("graduated in no regime" in failure for failure in verdict.failures)
+
+
+def test_the_net_result_is_taken_after_costs():
+    """A strategy profitable before fees is not profitable."""
+    subject = guard(trades=1, days=0.5, drawdown=1.0)
+    subject.observe_bot_trades("bull", 1)
+    subject.observe_edge_maturity("bull", "trending", True)
+    subject.observe_closed_trade(realised_pnl=100.0, fees_paid=140.0, opened_at_ns=0, closed_at_ns=1)
+    verdict = subject.judge("bull")
+    assert verdict.maturity.net_result_after_costs == -40.0
+    assert verdict.verdict == NOT_GRADUATED
+
+
+def test_days_traded_is_the_span_of_the_trades_seen():
+    day = 86_400 * 1_000_000_000
+    subject = guard(trades=1, days=3.0, drawdown=1.0)
+    subject.observe_closed_trade(1.0, 0.0, opened_at_ns=day, closed_at_ns=2 * day)
+    subject.observe_closed_trade(1.0, 0.0, opened_at_ns=5 * day, closed_at_ns=6 * day)
+    assert subject.days_traded == 5.0
+
+
+def test_the_worst_drawdown_is_the_deepest_seen_and_not_the_latest():
+    """A recovery does not erase the fall a human would have turned off during."""
+    subject = guard(trades=1, days=0.5, drawdown=0.2)
+    subject.observe_drawdown(0.4)
+    subject.observe_drawdown(0.05)
+    subject.observe_bot_trades("bull", 5)
+    subject.observe_edge_maturity("bull", "trending", True)
+    assert subject.judge("bull").maturity.worst_drawdown_fraction == 0.4
+
+
+def test_a_bot_with_no_record_at_all_is_refused_as_such():
+    assert guard().judge("nobody").verdict == NO_RECORD

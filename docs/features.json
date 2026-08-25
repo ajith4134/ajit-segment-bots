@@ -5192,7 +5192,8 @@
         "walk-forward-split",
         "cost-estimate",
         "fill-sequence",
-        "fillable-size"
+        "fillable-size",
+        "historical-window"
       ],
       "produces": [
         "backtest-run",
@@ -5427,7 +5428,10 @@
       "category": "paper-live-trading",
       "consumes": [
         "money-mode",
-        "bot-maturity"
+        "bot-maturity",
+        "bot-scorecard",
+        "closed-trade",
+        "drawdown-episode"
       ],
       "produces": [
         "risk-limit",
@@ -5452,7 +5456,8 @@
       "category": "opportunity-scanner",
       "consumes": [
         "proven-instruction",
-        "retired-instruction"
+        "retired-instruction",
+        "opportunity-instruction"
       ],
       "produces": [
         "watch-condition",
@@ -6659,7 +6664,8 @@
         "position",
         "exposure-view",
         "correlation-cluster",
-        "trade-cluster"
+        "trade-cluster",
+        "account-balance"
       ],
       "produces": [
         "risk-limit",

@@ -33,6 +33,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.forecast_types import TrainingStatistics, measure_training_statistics
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -75,6 +76,10 @@ class FinetunedModel:
     epochs: int
     tokenizer_was_refitted: bool
     artefact_path: str
+    # The distribution this artefact was trained through, measured from the
+    # windows themselves. Carried on the model rather than published separately
+    # so a model and the statistics it was judged against cannot drift apart.
+    training_statistics: TrainingStatistics
     trained_at_ns: int
 
     @property
@@ -210,8 +215,9 @@ class KronosFinetuner:
         duration = self._monotonic() - started
         self.standing.longest_run_seconds = max(self.standing.longest_run_seconds, duration)
 
+        name = f"kronos-finetuned-{self._now_ns()}"
         model = FinetunedModel(
-            name=f"kronos-finetuned-{self._now_ns()}",
+            name=name,
             base_model=getattr(self._trainer, "base_model", "kronos"),
             trained_on_symbols=tuple(sorted({window.symbol for window in training})),
             training_windows=len(training),
@@ -221,6 +227,11 @@ class KronosFinetuner:
             epochs=self._epochs,
             tokenizer_was_refitted=tokenizer_refitted,
             artefact_path=artefact_path,
+            # Measured here because this is the only part that saw the training
+            # windows. forecast-distribution-gate judges every live window against
+            # them, and until 2026-08-25 nothing produced them at all -- so that
+            # gate flagged every forecast as unjudgeable and was right to.
+            training_statistics=measure_training_statistics(name, tuple(training)),
             trained_at_ns=self._now_ns(),
         )
 

@@ -199,8 +199,21 @@ def test_nothing_halting_permits_trading():
 
 # ---- exposure-limiter --------------------------------------------------------
 
+# The allotment every exposure test measures against. Stated once: the limiter's
+# caps are fractions of it, and since 2026-08-25 the part is given a notional and
+# divides -- so a test that means "a tenth of the book" says so at one place.
+EXPOSURE_ALLOTMENT = 10_000.0
+
+
 def exposure(per_position=0.2, total=0.6, per_cluster=0.3):
-    return ExposureLimiter(per_position, total, per_cluster)
+    limiter = ExposureLimiter(per_position, total, per_cluster)
+    limiter.set_allotment(EXPOSURE_ALLOTMENT)
+    return limiter
+
+
+def hold(subject, symbol, fraction_of_allotment):
+    """One position worth that fraction of the allotment, at what it cost."""
+    subject.observe_position(VENUE, symbol, fraction_of_allotment * EXPOSURE_ALLOTMENT)
 
 
 def test_ten_correlated_positions_are_one_position():
@@ -208,7 +221,7 @@ def test_ten_correlated_positions_are_one_position():
     subject = exposure(per_position=0.2, total=0.9, per_cluster=0.3)
     for index in range(3):
         subject.set_correlation_cluster(f"ALT{index}USDT", "majors")
-        subject.observe_position(VENUE, f"ALT{index}USDT", 0.1)
+        hold(subject, f"ALT{index}USDT", 0.1)
     subject.set_correlation_cluster("ALT9USDT", "majors")
     assert subject.read_limit("ALT9USDT").fraction_of_allotment == pytest.approx(0.0)
 
@@ -217,21 +230,21 @@ def test_an_uncorrelated_symbol_still_has_room():
     subject = exposure(per_position=0.2, total=0.9, per_cluster=0.3)
     for index in range(3):
         subject.set_correlation_cluster(f"ALT{index}USDT", "majors")
-        subject.observe_position(VENUE, f"ALT{index}USDT", 0.1)
+        hold(subject, f"ALT{index}USDT", 0.1)
     subject.set_correlation_cluster("GOLDUSDT", "metals")
     assert subject.read_limit("GOLDUSDT").fraction_of_allotment > 0
 
 
 def test_an_unclustered_symbol_is_its_own_cluster_not_assumed_independent():
     subject = exposure(per_cluster=0.3)
-    subject.observe_position(VENUE, "LONEUSDT", 0.3)
+    hold(subject, "LONEUSDT", 0.3)
     assert subject.read_limit("LONEUSDT").fraction_of_allotment == pytest.approx(0.0)
 
 
 def test_total_exposure_binds_before_any_single_position_does():
     subject = exposure(per_position=0.2, total=0.5, per_cluster=1.0)
     for index in range(5):
-        subject.observe_position(VENUE, f"S{index}", 0.1)
+        hold(subject, f"S{index}", 0.1)
     assert subject.read_limit().fraction_of_allotment == pytest.approx(0.0)
 
 

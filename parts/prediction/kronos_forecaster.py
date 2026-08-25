@@ -87,6 +87,12 @@ class ForecasterStanding:
     refused_short_window: int = 0
     refused_no_accelerator: int = 0
     champion_swaps: int = 0
+    # Fine-tuned models that arrived and could not be turned into weights, because
+    # no loader is installed on this machine. Counted rather than ignored: a model
+    # trained and never loaded is a forecast this part could have made and did not,
+    # and it is a different fact from never having been sent one.
+    finetuned_models_without_a_loader: int = 0
+    finetuned_models_loaded: int = 0
     paths_sampled: int = 0
     slowest_forecast_seconds: float = 0.0
     live_model: str = CHAMPION
@@ -121,15 +127,47 @@ class KronosForecaster:
         self._monotonic = monotonic
         self._now_ns = now_ns
         self._models: dict[str, LoadedModel] = {}
+        self._loader = None
         self._live = CHAMPION
         self._accelerator_granted = True
         self.standing = ForecasterStanding()
+
+    def install_loader(self, loader) -> None:
+        """Give this part the one thing that can turn an artefact into weights.
+
+        `loader(artefact_path, name)` returns a LoadedModel or None. Injected the
+        same way kronos-finetuner is given its trainer, and for the same reason:
+        no Kronos weights exist on this machine, and a part that pretended
+        otherwise would forecast from nothing.
+        """
+        self._loader = loader
 
     def load_model(self, role: str, model: LoadedModel) -> None:
         """Install real weights under a role. Nothing here creates a model."""
         if role not in (CHAMPION, CHALLENGER):
             raise ValueError(f"{role!r} is not a role this part holds")
         self._models[role] = model
+
+    def load_finetuned_model(self, finetuned) -> bool:
+        """Take a fine-tuned model off the wire and install it as the challenger.
+
+        `finetuned-model` carries an artefact path, which is where the weights are;
+        it has never carried the weights themselves. This part read
+        `getattr(model, "loaded", None)` until 2026-08-25, so no fine-tuned model
+        could ever be installed -- and, being a getattr default, the read could not
+        fail either. It is the silent half of the shape defect that crashed
+        position-sizer the same day.
+        """
+        if self._loader is None:
+            self.standing.finetuned_models_without_a_loader += 1
+            return False
+        weights = self._loader(finetuned.artefact_path, finetuned.name)
+        if weights is None:
+            self.standing.finetuned_models_without_a_loader += 1
+            return False
+        self.load_model(CHALLENGER, weights)
+        self.standing.finetuned_models_loaded += 1
+        return True
 
     def apply_champion_choice(self, chosen: str) -> None:
         if chosen not in (CHAMPION, CHALLENGER):
@@ -251,6 +289,8 @@ def describe_forecasting(forecaster: KronosForecaster) -> dict:
     return {
         "part_id": PART_ID,
         "live_role": forecaster.standing.live_model,
+        "finetuned_models_loaded": forecaster.standing.finetuned_models_loaded,
+        "finetuned_models_without_a_loader": forecaster.standing.finetuned_models_without_a_loader,
         "live_model": None if model is None else model.name,
         "model_is_loaded": model is not None,
         "forecasts_requested": forecaster.standing.forecasts_requested,
@@ -311,13 +351,17 @@ def start_part(context) -> int:
 
     def read_windows_and_choices(_forecaster):
         for model in models.payloads():
-            loaded = getattr(model, "loaded", None)
-            if loaded is not None:
-                forecaster.load_model("challenger", loaded)
+            forecaster.load_finetuned_model(model)
         choices.payloads()
         for choice in champions.payloads():
             if getattr(choice, "model_name", None) == PART_ID:
-                forecaster.apply_champion_choice(getattr(choice, "decision", "champion"))
+                # `promotes` rather than the decision string: the gate decides
+                # between "promote-the-challenger" and "keep-the-champion", and this
+                # part holds roles named "champion" and "challenger". Passing the
+                # gate's own word through raises ValueError here, because it is not
+                # a role -- one vocabulary translated at the boundary, not two
+                # vocabularies hoping to match (T-5).
+                forecaster.apply_champion_choice(CHALLENGER if choice.promotes else CHAMPION)
         for slot in slots.payloads():
             if getattr(slot, "part_id", None) == PART_ID:
                 forecaster.set_accelerator_slot(getattr(slot, "state", "") == "granted")

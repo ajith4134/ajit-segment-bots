@@ -301,9 +301,13 @@ def start_part(context) -> int:
             if card.is_measured:
                 mutator.observe_outcome(card.instruction_id.split("@")[0], card.expectancy is not None and card.expectancy > 0)
         for miss in near_misses.payloads():
-            value = getattr(miss, "reference_price", None)
-            if value is not None:
-                mutator.observe_near_miss(getattr(miss, "why_not_taken", ""), float(value), getattr(miss, "would_have_worked", False))
+            # `was_a_mistake_to_skip` is the episode's own verdict. It was read as
+            # `would_have_worked` until 2026-08-25 -- a field NearMissEpisode has
+            # never carried -- so every near miss was observed as one this system
+            # was right to skip, which is the answer that teaches it nothing.
+            mutator.observe_near_miss(
+                miss.why_not_taken, float(miss.reference_price), miss.was_a_mistake_to_skip
+            )
         by_id = histories.mapping()
         jobs = []
         for item in retired.payloads():
@@ -315,7 +319,7 @@ def start_part(context) -> int:
             parent = ParentInstruction(
                 instruction_id=item.instruction_id, family=history.family, measurement=history.measurement,
                 comparison=history.comparison, threshold=history.threshold,
-                horizon_seconds=float(getattr(history, "horizon_seconds", 0.0) or context.number("mean_reversion_horizon")),
+                horizon_seconds=history.horizon_seconds,
                 regime_tag=history.regime_tag, trades=item.trades_at_retirement,
                 hit_rate=(history.realised > 0) * 1.0 if history.trades else 0.0, was_retired=True,
             )

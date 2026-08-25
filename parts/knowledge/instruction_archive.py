@@ -65,6 +65,12 @@ class InstructionHistory:
     measurement: str
     comparison: str
     threshold: float
+    # The horizon the instruction was written to act over. Kept because a
+    # mutation of a retired instruction is the same claim over a different
+    # threshold, and an instruction replayed over the wrong horizon is a
+    # different claim entirely -- hypothesis-mutator read it here and the
+    # archive did not record it until 2026-08-25.
+    horizon_seconds: float
     regime_tag: str | None
     events: tuple
     written_at_ns: int
@@ -128,6 +134,7 @@ class InstructionArchive:
             "measurement": instruction.measurement,
             "comparison": instruction.comparison,
             "threshold": instruction.threshold,
+            "horizon_seconds": instruction.horizon_seconds,
             "regime_tag": instruction.regime_tag,
             "written_at_ns": instruction.written_at_ns,
             "retired_at_ns": None,
@@ -204,6 +211,7 @@ class InstructionArchive:
             instruction_id=instruction_id,
             family=record["family"],
             measurement=record["measurement"],
+            horizon_seconds=record["horizon_seconds"],
             comparison=record["comparison"],
             threshold=record["threshold"],
             regime_tag=record["regime_tag"],
