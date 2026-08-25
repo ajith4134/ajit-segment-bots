@@ -6,6 +6,7 @@ import BlockPanel from './BlockPanel.jsx'
 import LiveBoard from './LiveBoard.jsx'
 import MachineLoad from './MachineLoad.jsx'
 import TradingView from './TradingView.jsx'
+import CapitalSettings, { useSettings } from './CapitalSettings.jsx'
 import { useMachine, useTrades } from './useMachine.js'
 
 const LADDER = ['DECLARED', 'IMPLEMENTED', 'TESTED', 'RUNNING']
@@ -49,6 +50,7 @@ export default function App() {
   const { activity, activityError } = useActivity()
   const { machine, machineError } = useMachine()
   const { trades, tradesError } = useTrades()
+  const { settings, settingsError } = useSettings()
   const [view, setView] = useState('live')
   const [tab, setTab] = useState('overview')
 
@@ -104,6 +106,9 @@ export default function App() {
         <button className={`view${view === 'machine' ? ' active' : ''}`} onClick={() => setView('machine')}>
           Server load
         </button>
+        <button className={`view${view === 'settings' ? ' active' : ''}`} onClick={() => setView('settings')}>
+          Capital settings
+        </button>
         <button className={`view${view === 'build' ? ' active' : ''}`} onClick={() => setView('build')}>
           How far built
         </button>
@@ -122,6 +127,8 @@ export default function App() {
         <TradingView trades={trades} tradesError={tradesError} />
       ) : view === 'machine' ? (
         <MachineLoad machine={machine} machineError={machineError} />
+      ) : view === 'settings' ? (
+        <CapitalSettings settings={settings} settingsError={settingsError} />
       ) : (
         <>
           <div className="banner">{describeProgress(counts, totals)}</div>

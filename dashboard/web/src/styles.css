@@ -306,3 +306,13 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
 .piece-residual b { color: #C08A3E; }
 .piece-broken { outline: 1px solid #D45B54; border-radius: 3px; padding: 0 3px; }
 .piece-broken b { color: #D45B54; }
+
+/* Capital settings. A setting that can put real money on the market is not the
+   same kind of thing as one that bounds a paper trade, and the row says so. */
+.setting-note { color: var(--faint); font-size: 10px; line-height: 1.5; white-space: normal; max-width: 620px; }
+.trade-table tr.row-real-money { background: #1A1410; }
+.chip-real-money {
+  margin-left: 7px; padding: 1px 5px; border-radius: 3px;
+  font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
+  color: #D48A54; border: 1px solid #D48A54; text-transform: uppercase;
+}

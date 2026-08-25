@@ -17,6 +17,7 @@ and `mode` says whether the whole payload came from a live probe or a frozen sna
     GET /api/activity  what every reporting part is doing now, and how fast
     GET /api/machine   what this server is spending: cpu, memory, disk, per part
     GET /api/trades    what the bot holds and what it has closed
+    GET /api/settings  the capital settings, and when each last changed (RL-055)
     GET /api/blueprint the design only, no measurement
     GET /            the built frontend from web/dist, when it exists
 """
@@ -45,6 +46,7 @@ from completion import (  # noqa: E402
     block_completion,
     part_is_measured_complete,
 )
+from capital_settings_view import build_capital_settings_view  # noqa: E402
 from machine_load import MachineLoadReader  # noqa: E402
 from measured_cache import MeasuredCache  # noqa: E402
 from part_activity import ActivityReader, summarise_block_activity  # noqa: E402
@@ -245,6 +247,10 @@ BOARD_CACHE = MeasuredCache(
 TRADES_CACHE = MeasuredCache(
     refresh=build_trade_payload, fresh_for_seconds=TRADES_FRESH_FOR_SECONDS
 )
+# The settings change when the operator changes them, which is rarely, and the
+# journal behind the 'last changed' answer only grows. Short enough that an edit
+# shows up while the operator is still looking at the page.
+SETTINGS_CACHE = MeasuredCache(refresh=build_capital_settings_view, fresh_for_seconds=5.0)
 
 
 class BoardHandler(BaseHTTPRequestHandler):
@@ -273,6 +279,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/trades":
             self._send_json(TRADES_CACHE.read())
+            return
+        if route == "/api/settings":
+            self._send_json(SETTINGS_CACHE.read())
             return
         if route == "/api/blueprint":
             self._send_json(build_blueprint_payload())
