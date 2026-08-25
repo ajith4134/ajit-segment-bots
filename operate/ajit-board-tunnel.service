@@ -20,8 +20,17 @@
 # browser login only the operator can perform.
 Description=ajit-segment-bots board public tunnel (cloudflared quick tunnel)
 After=network-online.target ajit-board.service
-Wants=network-online.target
-Requires=ajit-board.service
+# Wants, never Requires. Requires ties this unit's lifecycle to the board's, so
+# every board restart -- every deploy -- tore the tunnel down with it and a quick
+# tunnel issues a fresh random hostname each time it starts. That is how the URL
+# handed to the operator went dead twice in one afternoon while the board itself
+# was healthy the whole time.
+#
+# cloudflared retries the origin on its own, so a board that goes away for a few
+# seconds is a few seconds of 502 rather than a new address. The tunnel outliving
+# the thing it proxies is the correct shape here: the address is the valuable
+# part, and it is the part that cannot be recovered once it changes.
+Wants=network-online.target ajit-board.service
 
 [Service]
 Type=simple
