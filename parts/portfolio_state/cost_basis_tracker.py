@@ -6,10 +6,29 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.durable_state import RESTORED
+from runtime.lot_book_checkpoint import (
+    book_key_of,
+    book_key_text,
+    books_as_documents,
+    books_from_documents,
+    restore_and_arm_lot_checkpoint,
+)
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, FLAT, LONG, SHORT, Lot, LotBook, exact_quantity
+from runtime.trading_types import (
+    BUY,
+    FLAT,
+    LONG,
+    SHORT,
+    Lot,
+    LotBook,
+    RecentFillIds,
+    exact_quantity,
+)
 
 PART_ID = "cost-basis-tracker"
+
+CHECKPOINT_COMPONENT = "lots"
 
 PART_DECLARATION = PartDeclaration(
     part_id="cost-basis-tracker",
@@ -41,6 +60,8 @@ class CostBasisStanding:
     duplicates_ignored: int = 0
     symbols_tracked: int = 0
     reversals: int = 0
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
 
 
 class CostBasisTracker:
@@ -54,20 +75,45 @@ class CostBasisTracker:
     is a short of 2 opened at the sell price, not a long at some blended figure.
     """
 
-    def __init__(self, now_ns=time.time_ns) -> None:
+    def __init__(self, now_ns=time.time_ns, remembered_fill_ids: int = 5000) -> None:
         self._now_ns = now_ns
         self._books: dict[tuple[str, str], LotBook] = {}
         self._direction: dict[tuple[str, str], str] = {}
         self._fees: dict[tuple[str, str], float] = {}
-        self._seen_fills: set[str] = set()
+        self._remembered_fill_ids = int(remembered_fill_ids)
+        self._seen_fills = RecentFillIds(self._remembered_fill_ids)
         self.standing = CostBasisStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """The open lots, so a basis is not forgotten when the process ends.
+
+        Quantities as strings: `json` has no decimal, and a float round-trip would
+        restore the binary approximation `exact_quantity` exists to keep out.
+        """
+        return {
+            "books": books_as_documents(self._books),
+            "direction": {book_key_text(k): v for k, v in self._direction.items()},
+            "fees": {book_key_text(k): v for k, v in self._fees.items()},
+            "seen_fills": self._seen_fills.as_list(),
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Rebuild the open lots. Returns how many symbols came back."""
+        self._books = books_from_documents(state.get("books"))
+        self._direction = {book_key_of(k): v for k, v in (state.get("direction") or {}).items()}
+        self._fees = {book_key_of(k): float(v) for k, v in (state.get("fees") or {}).items()}
+        self._seen_fills = RecentFillIds(
+            self._remembered_fill_ids, state.get("seen_fills") or ()
+        )
+        self.standing.symbols_tracked = len(self._books)
+        return len(self._books)
 
     def observe_fill(self, fill) -> CostBasis:
         key = (fill.venue_id, fill.symbol)
         if fill.fill_id in self._seen_fills:
             self.standing.duplicates_ignored += 1
             return self.read(fill.venue_id, fill.symbol)
-        self._seen_fills.add(fill.fill_id)
+        self._seen_fills.remember(fill.fill_id)
         self.standing.fills_seen += 1
 
         book = self._books.setdefault(key, LotBook())
@@ -125,6 +171,14 @@ def describe_cost_basis(tracker: CostBasisTracker) -> dict:
         "duplicates_ignored": tracker.standing.duplicates_ignored,
         "symbols_tracked": tracker.standing.symbols_tracked,
         "reversals": tracker.standing.reversals,
+        "restored_symbols": tracker.standing.restored_symbols,
+        # `countable_standing` carries numbers only, so the verdict travels as
+        # one: 1 restored, 0 started cold. Which *kind* of cold stays in the
+        # string below for logs and tests -- a board that sees 0 restored
+        # symbols and 0 here knows it started cold, which is the fact that
+        # must never be mistaken for "nothing was open" (Rule 8).
+        "checkpoint_restored": 1.0 if tracker.standing.checkpoint_verdict == RESTORED else 0.0,
+        "checkpoint_verdict": tracker.standing.checkpoint_verdict,
     }
 
 
@@ -133,11 +187,18 @@ def run_cost_basis_tracker(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
+        observed = 0
         for fill in read_fills():
+            observed += 1
             tracker.observe_fill(fill)
         publish_cost_basis(tracker.read_all())
+        # After publishing: a checkpoint written first would record a basis no
+        # reader had been handed yet.
+        if observed and write_checkpoint is not None:
+            write_checkpoint(tracker.standing.fills_seen)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -164,8 +225,15 @@ def start_part(context) -> int:
     fills = Batch(read=context.bus.reader("fill"))
     publish_cost_basis = context.bus.publisher_for("cost-basis")
 
+    tracker = CostBasisTracker(
+        remembered_fill_ids=int(context.number("remembered_fill_ids"))
+    )
+    write_checkpoint = restore_and_arm_lot_checkpoint(
+        context, PART_ID, CHECKPOINT_COMPONENT, tracker
+    )
+
     return run_cost_basis_tracker(
-        tracker=CostBasisTracker(),
+        tracker=tracker,
         control_socket=context.control_socket,
         read_fills=fills.payloads,
         publish_cost_basis=publish_cost_basis,
@@ -173,4 +241,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        write_checkpoint=write_checkpoint,
     )

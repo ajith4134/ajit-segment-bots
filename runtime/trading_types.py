@@ -6,6 +6,7 @@ live here rather than in whichever part happened to define one first.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -222,6 +223,50 @@ class ClosedTrade:
     @property
     def holding_seconds(self) -> float:
         return (self.closed_at_ns - self.opened_at_ns) / 1e9
+
+
+class RecentFillIds:
+    """The fill ids recently seen, so a venue re-sending one cannot count twice.
+
+    Bounded, and the bound is the point. An unbounded set is free in memory for a
+    day and not free in a checkpoint: the lot books are written on every fill, so
+    a set that only grows makes the write cost grow with it and the total work
+    quadratic. At the observed rate a year of ids is megabytes rewritten per fill.
+
+    Bounded is also *correct*, not merely cheap. What this guards against is a
+    venue re-delivering a fill, which happens within seconds. An id old enough to
+    fall out of the window is an id no venue is going to send again.
+
+    Oldest out first, so the window is the most recent N ids and not whichever N
+    a set happened to keep.
+    """
+
+    def __init__(self, capacity: int, seen=()) -> None:
+        if capacity < 1:
+            raise ValueError("a fill-id memory below one would de-duplicate nothing")
+        self._capacity = int(capacity)
+        self._order: deque[str] = deque(maxlen=self._capacity)
+        self._seen: set[str] = set()
+        for fill_id in seen:
+            self.remember(fill_id)
+
+    def __contains__(self, fill_id: str) -> bool:
+        return fill_id in self._seen
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+    def remember(self, fill_id: str) -> None:
+        if fill_id in self._seen:
+            return
+        if len(self._order) == self._capacity and self._order:
+            self._seen.discard(self._order[0])
+        self._order.append(fill_id)
+        self._seen.add(fill_id)
+
+    def as_list(self) -> list[str]:
+        """Oldest first, so restoring preserves which ids are closest to falling out."""
+        return list(self._order)
 
 
 def exact_quantity(value) -> Decimal:

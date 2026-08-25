@@ -12,6 +12,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from runtime.part_declaration import PartDeclaration
+from runtime.durable_state import RESTORED
+from runtime.lot_book_checkpoint import (
+    book_key_of,
+    book_key_text,
+    books_as_documents,
+    books_from_documents,
+    restore_and_arm_lot_checkpoint,
+)
 from runtime.part_process import run_part
 from runtime.trading_types import (
     BUY,
@@ -21,10 +29,14 @@ from runtime.trading_types import (
     ClosedTrade,
     Lot,
     LotBook,
+    RecentFillIds,
     exact_quantity,
 )
 
 PART_ID = "position-close-detector"
+
+# One checkpoint per part per component; this part keeps exactly one thing.
+CHECKPOINT_COMPONENT = "positions"
 
 PART_DECLARATION = PartDeclaration(
     part_id="position-close-detector",
@@ -43,6 +55,11 @@ class DetectorStanding:
     partial_closes: int = 0
     reversals: int = 0
     open_symbols: int = 0
+    # Not counters: what happened to the checkpoint at start. On the board these
+    # separate a part that has never run from one that came back holding nothing.
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
+
 
 
 class PositionCloseDetector:
@@ -56,7 +73,7 @@ class PositionCloseDetector:
     at the same instant, so neither is lost.
     """
 
-    def __init__(self, now_ns=time.time_ns) -> None:
+    def __init__(self, now_ns=time.time_ns, remembered_fill_ids: int = 5000) -> None:
         self._now_ns = now_ns
         self._books: dict[tuple[str, str], LotBook] = {}
         self._direction: dict[tuple[str, str], str] = {}
@@ -66,8 +83,58 @@ class PositionCloseDetector:
         self._entry_cost: dict[tuple[str, str], float] = {}
         self._opened_at: dict[tuple[str, str], int] = {}
         self._excursion: dict[tuple[str, str], tuple[float, float]] = {}
-        self._seen_fills: set[str] = set()
+        self._remembered_fill_ids = int(remembered_fill_ids)
+        self._seen_fills = RecentFillIds(self._remembered_fill_ids)
         self.standing = DetectorStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """Everything needed to carry an unfinished round trip into the next process.
+
+        Quantities are written as **strings**, not numbers. `json` has no decimal:
+        writing `Decimal("0.01")` as a float and reading it back would restore the
+        binary approximation and reintroduce exactly the residue `exact_quantity`
+        exists to prevent -- a position that could never reach flat, rebuilt by the
+        thing meant to save it.
+
+        The standing counters are deliberately absent. They count what *this
+        process* has seen, and a restored count would make `fills_seen` mean
+        something other than what it says. `open_symbols` is recomputed from the
+        restored books, because that one is a fact about the books rather than
+        about the process.
+        """
+        return {
+            "books": books_as_documents(self._books),
+            "direction": {book_key_text(k): v for k, v in self._direction.items()},
+            "realised": {book_key_text(k): v for k, v in self._realised.items()},
+            "fees": {book_key_text(k): v for k, v in self._fees.items()},
+            "entered_quantity": {book_key_text(k): str(v) for k, v in self._entered_quantity.items()},
+            "entry_cost": {book_key_text(k): v for k, v in self._entry_cost.items()},
+            "opened_at": {book_key_text(k): v for k, v in self._opened_at.items()},
+            "excursion": {book_key_text(k): list(v) for k, v in self._excursion.items()},
+            "seen_fills": self._seen_fills.as_list(),
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Rebuild the open round trips. Returns how many symbols came back."""
+        self._books = books_from_documents(state.get("books"))
+        self._direction = {book_key_of(k): v for k, v in (state.get("direction") or {}).items()}
+        self._realised = {book_key_of(k): float(v) for k, v in (state.get("realised") or {}).items()}
+        self._fees = {book_key_of(k): float(v) for k, v in (state.get("fees") or {}).items()}
+        self._entered_quantity = {
+            book_key_of(k): exact_quantity(v) for k, v in (state.get("entered_quantity") or {}).items()
+        }
+        self._entry_cost = {book_key_of(k): float(v) for k, v in (state.get("entry_cost") or {}).items()}
+        self._opened_at = {book_key_of(k): int(v) for k, v in (state.get("opened_at") or {}).items()}
+        self._excursion = {
+            book_key_of(k): (v[0], v[1]) for k, v in (state.get("excursion") or {}).items()
+        }
+        # The window is this process's setting, not the one the checkpoint was
+        # written under: an operator who narrowed it means it to apply now.
+        self._seen_fills = RecentFillIds(
+            self._remembered_fill_ids, state.get("seen_fills") or ()
+        )
+        self.standing.open_symbols = sum(1 for b in self._books.values() if b.lots)
+        return self.standing.open_symbols
 
     def observe_excursion(self, venue_id: str, symbol: str, best: float, worst: float) -> None:
         self._excursion[(venue_id, symbol)] = (best, worst)
@@ -75,7 +142,7 @@ class PositionCloseDetector:
     def observe_fill(self, fill) -> ClosedTrade | None:
         if fill.fill_id in self._seen_fills:
             return None
-        self._seen_fills.add(fill.fill_id)
+        self._seen_fills.remember(fill.fill_id)
         self.standing.fills_seen += 1
 
         key = (fill.venue_id, fill.symbol)
@@ -174,6 +241,17 @@ def describe_closes(detector: PositionCloseDetector) -> dict:
         "partial_closes": detector.standing.partial_closes,
         "reversals": detector.standing.reversals,
         "open_symbols": detector.standing.open_symbols,
+        # What survived the last off switch, and why -- so a board can tell a part
+        # that came back holding four positions from one that came back cold
+        # because its checkpoint was unreadable (Rule 8).
+        "restored_symbols": detector.standing.restored_symbols,
+        # `countable_standing` carries numbers only, so the verdict travels as
+        # one: 1 restored, 0 started cold. Which *kind* of cold stays in the
+        # string below for logs and tests -- a board that sees 0 restored
+        # symbols and 0 here knows it started cold, which is the fact that
+        # must never be mistaken for "nothing was open" (Rule 8).
+        "checkpoint_restored": 1.0 if detector.standing.checkpoint_verdict == RESTORED else 0.0,
+        "checkpoint_verdict": detector.standing.checkpoint_verdict,
     }
 
 
@@ -182,6 +260,7 @@ def run_position_close_detector(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
         """One batch of closed trades per tick, for the same reason.
@@ -189,11 +268,18 @@ def run_position_close_detector(
         A publisher takes an iterable; a single ClosedTrade is not one.
         """
         closed = []
+        observed = 0
         for fill in read_fills():
+            observed += 1
             trade = detector.observe_fill(fill)
             if trade is not None:
                 closed.append(trade)
         publish_closed_trade(tuple(closed))
+        # After publishing, not before. A checkpoint written first would promise a
+        # closed trade that no reader had been handed, and a crash between the two
+        # would lose the trade while the books said it was already over.
+        if observed and write_checkpoint is not None:
+            write_checkpoint(detector.standing.fills_seen)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -205,6 +291,7 @@ def run_position_close_detector(
         tick_floor_seconds=tick_floor_seconds,
         read_standing=lambda: describe_closes(detector),
     )
+
 
 
 def start_part(context) -> int:
@@ -242,7 +329,13 @@ def start_part(context) -> int:
         positions.payloads()
         return tuple(fills.payloads())
 
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(
+        remembered_fill_ids=int(context.number("remembered_fill_ids"))
+    )
+    write_checkpoint = restore_and_arm_lot_checkpoint(
+        context, PART_ID, CHECKPOINT_COMPONENT, detector
+    )
+
     return run_position_close_detector(
         detector=detector,
         control_socket=context.control_socket,
@@ -252,4 +345,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        write_checkpoint=write_checkpoint,
     )

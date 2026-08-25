@@ -138,8 +138,10 @@ def isolated_settings(durable_tmp_path):
     redirected = {
         "journal_path": durable_tmp_path / "journal.jsonl",
         "learned_state_root": durable_tmp_path / "learned",
+        "position_state_root": durable_tmp_path / "positions",
     }
     (durable_tmp_path / "learned").mkdir(parents=True, exist_ok=True)
+    (durable_tmp_path / "positions").mkdir(parents=True, exist_ok=True)
 
     runtime_settings = settings_root / "runtime.toml"
     lines = runtime_settings.read_text().splitlines()

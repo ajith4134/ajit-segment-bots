@@ -84,10 +84,14 @@ def isolated_settings(tmp_path_factory):
     redirected = {
         "journal_path": base / "journal.jsonl",
         "learned_state_root": base / "learned",
+        # A lot book is durable state too, and one this test must not write into
+        # the operator's real positions -- the assertion below is what caught it.
+        "position_state_root": base / "positions",
         "heartbeat_table_path": base / "heartbeat-table.json",
         "tape_root": base / "tape",
     }
     (base / "learned").mkdir()
+    (base / "positions").mkdir()
     (base / "tape").mkdir()
 
     runtime_settings = settings_root / "runtime.toml"
