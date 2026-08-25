@@ -85,6 +85,17 @@ class MeasuredCache:
             self._measurements += 1
             return self._stamped(payload)
 
+    def expire(self) -> None:
+        """Forget the measurement, so the next read takes a fresh one.
+
+        Called after something changes the thing being measured. Without it the
+        page that just edited a setting reads the cached old value back and the
+        edit appears not to have happened -- which is worse than a refusal,
+        because a refusal is visible.
+        """
+        with self._lock:
+            self._measured_at_ns = None
+
     def _stamped(self, payload: dict) -> dict:
         """The payload with its own age attached, never without it."""
         stamped = dict(payload or {})

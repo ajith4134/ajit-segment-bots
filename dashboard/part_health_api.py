@@ -18,6 +18,7 @@ and `mode` says whether the whole payload came from a live probe or a frozen sna
     GET /api/machine   what this server is spending: cpu, memory, disk, per part
     GET /api/trades    what the bot holds and what it has closed
     GET /api/settings  the capital settings, and when each last changed (RL-055)
+    POST /api/settings/change  edit one setting -- password, rate limit, validate, write
     GET /api/blueprint the design only, no measurement
     GET /            the built frontend from web/dist, when it exists
 """
@@ -46,7 +47,14 @@ from completion import (  # noqa: E402
     block_completion,
     part_is_measured_complete,
 )
+from board_password import check_password, is_password_set  # noqa: E402
 from capital_settings_view import build_capital_settings_view  # noqa: E402
+from capital_settings_writer import (  # noqa: E402
+    AttemptLimiter,
+    judge_change,
+    read_current_values,
+    write_setting,
+)
 from machine_load import MachineLoadReader  # noqa: E402
 from measured_cache import MeasuredCache  # noqa: E402
 from part_activity import ActivityReader, summarise_block_activity  # noqa: E402
@@ -252,6 +260,15 @@ TRADES_CACHE = MeasuredCache(
 # shows up while the operator is still looking at the page.
 SETTINGS_CACHE = MeasuredCache(refresh=build_capital_settings_view, fresh_for_seconds=5.0)
 
+# One limiter for the process, not one per connection. An attacker opening a
+# fresh connection per guess would otherwise reset the delay every time, which
+# is exactly the hole a naive rate limit leaves.
+PASSWORD_DOOR = AttemptLimiter()
+
+# The largest body this endpoint will read. A write takes three short fields;
+# anything larger is not a settings change and is refused before it is parsed.
+LONGEST_CHANGE_BODY_BYTES = 4096
+
 
 class BoardHandler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -310,6 +327,110 @@ class BoardHandler(BaseHTTPRequestHandler):
             )
             return
         self._send(404, b"not found", "text/plain; charset=utf-8")
+
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server's required name
+        """The only route that changes anything. Guarded in this order, deliberately.
+
+        Password, then rate limit, then allowlist, then validation, then write.
+        Each refusal says which guard stopped it, because a caller told only "no"
+        cannot tell a typo from a lockout from a contradiction -- and the operator
+        is the person most likely to be refused.
+        """
+        if self.path.split("?", 1)[0] != "/api/settings/change":
+            self._send(404, b"not found", "text/plain; charset=utf-8")
+            return
+
+        if not is_password_set():
+            self._send_json({
+                "accepted": False,
+                "guard": "password",
+                "reason": (
+                    "no board password has been set on this machine, so nothing may be "
+                    "changed from here. Set one with dashboard/board_password.py"
+                ),
+            })
+            return
+
+        # Before reading the body: a blocked door does not get to spend work.
+        if PASSWORD_DOOR.is_blocked():
+            self._send_json({
+                "accepted": False,
+                "guard": "rate-limit",
+                "reason": (
+                    f"too many failed attempts; wait "
+                    f"{PASSWORD_DOOR.seconds_remaining():.0f}s. The wait doubles each "
+                    f"time, because a password is weak against a machine allowed to "
+                    f"guess without limit"
+                ),
+                "seconds_remaining": PASSWORD_DOOR.seconds_remaining(),
+            })
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > LONGEST_CHANGE_BODY_BYTES:
+            self._send_json({
+                "accepted": False, "guard": "request",
+                "reason": "a settings change is three short fields; this body is not one",
+            })
+            return
+
+        try:
+            request = json.loads(self.rfile.read(length))
+        except (ValueError, UnicodeDecodeError):
+            self._send_json({"accepted": False, "guard": "request", "reason": "the body is not JSON"})
+            return
+
+        verdict = check_password(str(request.get("password", "")))
+        if not verdict.is_correct:
+            wait = PASSWORD_DOOR.record_failure()
+            self._send_json({
+                "accepted": False, "guard": "password",
+                # Never says whether the password was close, long enough, or the
+                # right shape. Every wrong password gets the same sentence.
+                "reason": f"the password was refused; the next attempt is allowed in {wait:.0f}s",
+                "seconds_remaining": wait,
+            })
+            return
+        PASSWORD_DOOR.record_success()
+
+        scope = str(request.get("scope", ""))
+        name = str(request.get("setting", ""))
+        wanted = request.get("value")
+
+        judged = judge_change(scope, name, wanted, read_current_values())
+        if not judged.is_accepted:
+            self._send_json({
+                "accepted": False, "guard": "validation",
+                "reason": judged.reason, "faults": list(judged.faults),
+            })
+            return
+
+        try:
+            written = write_setting(scope, name, float(wanted), changed_by="the board")
+        except Exception as refusal:
+            # A refusal here means the file was not in the shape the writer needs,
+            # and it is reported rather than half-applied.
+            self._send_json({
+                "accepted": False, "guard": "write",
+                "reason": f"the settings file was not changed: {refusal}",
+            })
+            return
+
+        # The cache must not keep serving the old value to the page that just
+        # changed it -- an edit that appears not to have happened is worse than
+        # one that is refused.
+        SETTINGS_CACHE.expire()
+        self._send_json({
+            "accepted": True,
+            "guard": "written",
+            "reason": (
+                f"{scope}.{name} is now {wanted}. capital-settings-change-recorder "
+                f"journals it on its next read, which is where the board's "
+                f"'last changed' comes from"
+            ),
+            "path": str(written),
+        })
 
     def log_message(self, fmt: str, *args) -> None:
         """Quiet by default. The board is watched, not tailed."""
