@@ -14,7 +14,15 @@
 // carried in the payload and rendered, never inferred.
 import { useEffect, useRef, useState } from 'react'
 
-const POLL_MS = 5000
+// The board payload measures the filesystem for all 327 parts and takes about
+// eleven seconds to produce. Polling it every five started a new scan before the
+// last had finished; the requests piled up, the server saturated, and Cloudflare
+// answered HTTP 524 while every part underneath was healthy.
+//
+// The server now caches it, so this poll is cheap either way -- but the interval is
+// still set above the measurement's own cost rather than below it, because a
+// client that asks faster than the truth can change is asking for nothing.
+const POLL_MS = 30000
 
 export function useBoard() {
   const frozen = typeof window !== 'undefined' ? window.__BOARD_SNAPSHOT__ : null

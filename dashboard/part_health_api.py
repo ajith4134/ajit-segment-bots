@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +46,7 @@ from completion import (  # noqa: E402
     part_is_measured_complete,
 )
 from machine_load import MachineLoadReader  # noqa: E402
+from measured_cache import MeasuredCache  # noqa: E402
 from part_activity import ActivityReader, summarise_block_activity  # noqa: E402
 from trade_activity import build_trade_activity  # noqa: E402
 from render_blueprint import find_contract_violations, load_feature_registry  # noqa: E402
@@ -56,6 +58,18 @@ BUILT_RUNGS = (IMPLEMENTED, TESTED, RUNNING)
 # has to be compared against something this process actually saw. Per-request
 # readers would each hold one sample and no rate would ever exist.
 ACTIVITY_READER = ActivityReader()
+
+# How long a measurement of the *code* may be reused. The board payload scans the
+# filesystem for all 327 parts and takes about eleven seconds; the shape it
+# describes changes on deploy, not between two polls a second apart. Without this
+# the frontend's five-second poll started a new eleven-second scan before the last
+# had finished, the server saturated, and Cloudflare answered the operator HTTP 524
+# while every part underneath was healthy.
+BOARD_FRESH_FOR_SECONDS = 30.0
+# The trades payload marks every held symbol against the tape, so its cost grows
+# with open positions rather than with the universe. Short window: a position can
+# open at any moment and a board minutes behind on that is worse than a slow one.
+TRADES_FRESH_FOR_SECONDS = 5.0
 # Same reason: a CPU percentage is a difference between two /proc/stat readings,
 # and the second one needs a first one this process actually took.
 MACHINE_READER = MachineLoadReader()
@@ -218,6 +232,16 @@ def build_blueprint_payload() -> dict:
     }
 
 
+# Defined here, after the builders they wrap. Module level so the measurement is
+# shared by every request this process serves rather than per connection.
+BOARD_CACHE = MeasuredCache(
+    refresh=lambda: build_board_payload("live"), fresh_for_seconds=BOARD_FRESH_FOR_SECONDS
+)
+TRADES_CACHE = MeasuredCache(
+    refresh=build_trade_payload, fresh_for_seconds=TRADES_FRESH_FOR_SECONDS
+)
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -234,7 +258,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         route = self.path.split("?", 1)[0]
 
         if route == "/api/board":
-            self._send_json(build_board_payload("live"))
+            self._send_json(BOARD_CACHE.read())
             return
         if route == "/api/activity":
             self._send_json(build_activity_payload())
@@ -243,7 +267,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send_json(build_machine_payload())
             return
         if route == "/api/trades":
-            self._send_json(build_trade_payload())
+            self._send_json(TRADES_CACHE.read())
             return
         if route == "/api/blueprint":
             self._send_json(build_blueprint_payload())
@@ -278,7 +302,28 @@ class BoardHandler(BaseHTTPRequestHandler):
         return
 
 
+def warm_caches() -> None:
+    """Take the expensive measurements once before the first request arrives.
+
+    Without this the first visitor pays the full scan -- about ten seconds of
+    filesystem work while they look at a blank page and decide the board is
+    broken. Warming is done in the foreground on purpose: a server that is
+    listening before it can answer is a server that returns 524 to whoever knocks
+    first, which is exactly the failure this whole path was fixed for.
+    """
+    for name, cache in (("board", BOARD_CACHE), ("trades", TRADES_CACHE)):
+        started = time.monotonic()
+        try:
+            cache.read()
+            print(f"warmed {name} in {time.monotonic() - started:.1f}s")
+        except Exception as failure:
+            # A cold cache is recoverable; refusing to start is not. The route will
+            # measure on demand and the failure will be visible there.
+            print(f"could not warm {name}: {failure}")
+
+
 def serve_board(port: int) -> None:
+    warm_caches()
     server = ThreadingHTTPServer(("127.0.0.1", port), BoardHandler)
     print(f"board API on http://127.0.0.1:{port}/api/board")
     print(f"frontend {'from ' + str(DIST) if DIST.exists() else 'NOT BUILT - see README'}")
