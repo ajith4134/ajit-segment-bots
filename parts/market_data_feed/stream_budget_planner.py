@@ -492,7 +492,21 @@ def start_part(context) -> int:
         # the tape keeps; a quote is what the symbol is worth right now and is
         # what a decision is sized against. A symbol that has not traded has only
         # the second, which is the whole reason this kind was added.
-        stream_kinds=(StreamKind.TRADE, StreamKind.QUOTE),
+        #
+        # Candles added 2026-08-25 with phase 6, and their absence was the reason
+        # the whole prediction block ran and produced nothing. The chain is one
+        # line long: this planner planned no candle stream, so ccxt-venue-reader
+        # had nothing to subscribe to, so no NormalisedCandle ever reached
+        # kline-window-builder -- which filters market-data for exactly that --
+        # so no window, no vol-feature-set, no volatility forecast, and
+        # stop-target-placer sized every stop it has ever placed as though no
+        # forecast existed.
+        #
+        # Cost measured before adding rather than assumed: 50 symbols a venue is
+        # 100 more subscriptions and about 100 more tape files, against a
+        # RLIMIT_NOFILE soft limit of 524,288 on this box and 203 descriptors in
+        # use. The descriptor ceiling is not what bounds this.
+        stream_kinds=(StreamKind.TRADE, StreamKind.QUOTE, StreamKind.CANDLE),
         open_file_headroom=int(context.number("open_file_headroom")),
         candle_interval=settings.entries["candle_interval"].value,
         book_depth_levels=int(context.number("book_depth_levels")),

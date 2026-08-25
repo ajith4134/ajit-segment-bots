@@ -162,6 +162,17 @@ LIVE_SPINE = (
     # returns are close to unpredictable and their magnitude is not, because
     # volatility clusters. That is why this is a regression and not a
     # classification: sizing needs a number, not a direction.
+    # The candle feed. Without it every part below has an empty inbox, because
+    # kline-window-builder filters market-data for candles and the trade reader
+    # publishes trades -- so the whole prediction chain sat running and idle on
+    # 2026-08-25 with nothing to build a window from.
+    #
+    # The closed flag is why this is its own reader rather than candles derived
+    # from the trade stream: both venues push updates to the *current* candle
+    # continuously, and only `k.x` on Binance and `confirm` on Bybit say which
+    # update is the terminal one for that minute. A window built from partial
+    # minutes is wrong in a way nothing downstream detects.
+    "ccxt-venue-reader",
     "kline-window-builder",
     "implied-vol-reader",
     "funding-rate-forecaster",

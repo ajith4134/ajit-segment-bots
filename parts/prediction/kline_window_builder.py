@@ -72,6 +72,11 @@ class BuilderStanding:
     complete_windows: int = 0
     open_candles_excluded: int = 0
     gaps_found: int = 0
+    # A window that is simply not full yet. Held apart from a window with a
+    # hole in it: one needs time and the other needs the feed looked at, and a
+    # board that called the first the second would send someone hunting a
+    # missing candle that never existed.
+    windows_still_filling: int = 0
     aggregations_refused: int = 0
     symbols_tracked: int = 0
     by_interval: dict = field(default_factory=dict)
@@ -152,6 +157,11 @@ class KlineWindowBuilder:
         )
         if window.is_complete:
             self.standing.complete_windows += 1
+        elif not gaps:
+            # Short, not holed. 64 one-minute candles is 64 minutes of running,
+            # and for the first hour after a start every window is legitimately
+            # incomplete with nothing wrong anywhere.
+            self.standing.windows_still_filling += 1
         return window
 
     def aggregate(self, venue_id: str, symbol: str, group_size: int, length: int) -> KlineWindow:
@@ -222,7 +232,16 @@ def describe_window_building(builder: KlineWindowBuilder) -> dict:
         "candles_observed": builder.standing.candles_observed,
         "windows_built": builder.standing.windows_built,
         "complete_windows": builder.standing.complete_windows,
-        "windows_with_a_gap": builder.standing.windows_built - builder.standing.complete_windows,
+        # Only windows that actually have a hole. This used to be every window
+        # that was not complete, so on 2026-08-25 it read 300 windows with a gap
+        # while gaps_found was 0 -- the windows were six minutes into needing
+        # sixty-four, and nothing was missing at all.
+        "windows_with_a_gap": (
+            builder.standing.windows_built
+            - builder.standing.complete_windows
+            - builder.standing.windows_still_filling
+        ),
+        "windows_still_filling": builder.standing.windows_still_filling,
         "open_candles_excluded": builder.standing.open_candles_excluded,
         "gaps_found": builder.standing.gaps_found,
         "aggregations_refused_for_a_missing_candle": builder.standing.aggregations_refused,
