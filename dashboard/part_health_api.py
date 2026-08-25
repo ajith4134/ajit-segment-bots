@@ -13,7 +13,8 @@ Honesty is per part, never global -- the lesson from the user's own board, where
 unless it is. Here each part carries its own `rung` and the `proof` that produced it,
 and `mode` says whether the whole payload came from a live probe or a frozen snapshot.
 
-    GET /api/board     the whole measured state
+    GET /api/board     the whole measured state: every part's rung and its proof
+    GET /api/activity  what every reporting part is doing now, and how fast
     GET /api/blueprint the design only, no measurement
     GET /            the built frontend from web/dist, when it exists
 """
@@ -41,10 +42,16 @@ from completion import (  # noqa: E402
     block_completion,
     part_is_measured_complete,
 )
+from part_activity import ActivityReader, summarise_block_activity  # noqa: E402
 from render_blueprint import find_contract_violations, load_feature_registry  # noqa: E402
 
 DIST = HERE / "web" / "dist"
 BUILT_RUNGS = (IMPLEMENTED, TESTED, RUNNING)
+
+# One reader for the process, because a rate needs two observations and the second
+# has to be compared against something this process actually saw. Per-request
+# readers would each hold one sample and no rate would ever exist.
+ACTIVITY_READER = ActivityReader()
 
 
 def summarise_block_state(rungs: list[str]) -> str:
@@ -144,6 +151,33 @@ def build_board_payload(mode: str = "live") -> dict:
     }
 
 
+def build_activity_payload() -> dict:
+    """What every reporting part is doing, and how fast, with nothing else in it.
+
+    Split from the board payload deliberately. The board measures the filesystem
+    for every part's rung, which is far too expensive to poll at the rate live
+    behaviour changes; this reads one small file. So the shape is polled slowly
+    and the behaviour is polled quickly, and neither has to pay for the other.
+    """
+    activities, provenance = ACTIVITY_READER.read_activity()
+    registry = load_feature_registry()
+    block_of = {f["id"]: f.get("category", "") for f in registry.features}
+
+    by_block: dict[str, list] = {}
+    for activity in activities:
+        by_block.setdefault(block_of.get(activity.part_id, ""), []).append(activity)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "provenance": provenance,
+        "parts": {a.part_id: a.as_dict() for a in activities},
+        "blocks": {
+            category["id"]: summarise_block_activity(by_block.get(category["id"], []))
+            for category in registry.categories
+        },
+    }
+
+
 def build_blueprint_payload() -> dict:
     """The design with no measurement in it, for anything that only needs the shape."""
     registry = load_feature_registry()
@@ -173,6 +207,9 @@ class BoardHandler(BaseHTTPRequestHandler):
 
         if route == "/api/board":
             self._send_json(build_board_payload("live"))
+            return
+        if route == "/api/activity":
+            self._send_json(build_activity_payload())
             return
         if route == "/api/blueprint":
             self._send_json(build_blueprint_payload())

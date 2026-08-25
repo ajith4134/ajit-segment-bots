@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useBoard } from './useBoard.js'
+import { useActivity } from './useActivity.js'
 import { RUNGS, rung } from './theme.js'
 import BlockPanel from './BlockPanel.jsx'
+import LiveBoard from './LiveBoard.jsx'
 
 const LADDER = ['DECLARED', 'IMPLEMENTED', 'TESTED', 'RUNNING']
 const OFF_LADDER = ['FAILING', 'NOT MEASURED']
@@ -15,8 +17,34 @@ function Stat({ label, value, color }) {
   )
 }
 
+// The headline sentence is derived from the counts, never written beside them. A
+// hand-written line goes stale silently while the numbers under it move -- this one
+// said "this project is a blueprint, described not written" while 59 parts were
+// running and a million records were on the tape.
+function describeProgress(counts, totals) {
+  const running = counts.RUNNING || 0
+  const declared = counts.DECLARED || 0
+  if (running) {
+    return (
+      <>
+        <b>{running} of {totals.parts} parts are RUNNING</b> — reporting a live heartbeat right
+        now. {declared > 0 && <>{declared} are still DECLARED: in the blueprint, no code. </>}
+        Nothing is ever inferred upward — a part is only past DECLARED when a file naming it exists.
+      </>
+    )
+  }
+  return (
+    <>
+      <b>{declared} of {totals.parts} parts are DECLARED.</b> Nothing is reporting a heartbeat, so
+      no part on this board is running. Cells climb as code lands, and nothing is ever inferred upward.
+    </>
+  )
+}
+
 export default function App() {
   const { data, error, mode } = useBoard()
+  const { activity, activityError } = useActivity()
+  const [view, setView] = useState('live')
   const [tab, setTab] = useState('overview')
 
   const partsByBlock = useMemo(() => {
@@ -46,8 +74,10 @@ export default function App() {
     <div className="app">
       <header className="top">
         <div className="brand">
-          <h1>Segment Bots — Part Board</h1>
-          <small>{totals.blocks} blocks · {totals.parts} parts · every cell traces to a probe that ran</small>
+          <h1>Segment Bots</h1>
+          <small>
+            {totals.blocks} foundation blocks · {totals.parts} parts · every number traces to a probe that ran
+          </small>
         </div>
         <div className="mode">
           {/* A snapshot presented as live is a lie with a timestamp available. */}
@@ -59,11 +89,14 @@ export default function App() {
         </div>
       </header>
 
-      <div className="banner">
-        <b>{counts.DECLARED} of {totals.parts} parts are DECLARED.</b> This project is a
-        blueprint: described, not written. Cells climb as code lands, and nothing is ever
-        inferred upward — a part is only past DECLARED when a file naming it exists.
-      </div>
+      <nav className="views">
+        <button className={`view${view === 'live' ? ' active' : ''}`} onClick={() => setView('live')}>
+          What it is doing
+        </button>
+        <button className={`view${view === 'build' ? ' active' : ''}`} onClick={() => setView('build')}>
+          How far built
+        </button>
+      </nav>
 
       {!contract.ok && (
         <div className="banner warn">
@@ -72,51 +105,62 @@ export default function App() {
         </div>
       )}
 
-      <section className="stats">
-        <Stat label="blocks" value={totals.blocks} />
-        <Stat label="parts" value={totals.parts} />
-        <Stat label="data types" value={totals.data_types} />
-        <Stat label="built" value={`${pct}%`} color={rung(built ? 'IMPLEMENTED' : 'DECLARED').color} />
-        <Stat label="failing" value={counts.FAILING} color={counts.FAILING ? RUNGS.FAILING.color : undefined} />
-      </section>
+      {view === 'live' ? (
+        <LiveBoard data={data} activity={activity} activityError={activityError} />
+      ) : (
+        <>
+          <div className="banner">{describeProgress(counts, totals)}</div>
 
-      <section className="legend">
-        {[...LADDER, ...OFF_LADDER].map((name) => (
-          <div className="legend-row" key={name} style={{ opacity: counts[name] ? 1 : 0.55 }}>
-            <span className="swatch" style={{ background: rung(name).color }} />
-            <b>{name}</b>
-            <span className="legend-meaning">{rung(name).meaning}</span>
-            <span className="legend-count">{counts[name] ?? 0}</span>
+          <section className="stats">
+            <Stat label="blocks" value={totals.blocks} />
+            <Stat label="parts" value={totals.parts} />
+            <Stat label="data types" value={totals.data_types} />
+            <Stat label="built" value={`${pct}%`} color={rung(built ? 'IMPLEMENTED' : 'DECLARED').color} />
+            <Stat label="failing" value={counts.FAILING} color={counts.FAILING ? RUNGS.FAILING.color : undefined} />
+          </section>
+
+          <section className="legend">
+            {[...LADDER, ...OFF_LADDER].map((name) => (
+              <div className="legend-row" key={name} style={{ opacity: counts[name] ? 1 : 0.55 }}>
+                <span className="swatch" style={{ background: rung(name).color }} />
+                <b>{name}</b>
+                <span className="legend-meaning">{rung(name).meaning}</span>
+                <span className="legend-count">{counts[name] ?? 0}</span>
+              </div>
+            ))}
+          </section>
+
+          <nav className="tabs">
+            <button className={`tab${tab === 'overview' ? ' active' : ''}`} onClick={() => setTab('overview')}>
+              All blocks
+            </button>
+            {blocks.map((b) => (
+              <button
+                key={b.id}
+                className={`tab${tab === b.id ? ' active' : ''}`}
+                style={{ borderColor: tab === b.id ? rung(b.state).color : undefined }}
+                onClick={() => setTab(b.id)}
+              >
+                <span className="tab-dot" style={{ background: rung(b.state).color }} />
+                {b.name}
+              </button>
+            ))}
+          </nav>
+
+          <div className="grid">
+            {shown.map((b) => (
+              <BlockPanel key={b.id} block={b} parts={partsByBlock[b.id] || []} />
+            ))}
           </div>
-        ))}
-      </section>
-
-      <nav className="tabs">
-        <button className={`tab${tab === 'overview' ? ' active' : ''}`} onClick={() => setTab('overview')}>
-          All blocks
-        </button>
-        {blocks.map((b) => (
-          <button
-            key={b.id}
-            className={`tab${tab === b.id ? ' active' : ''}`}
-            style={{ borderColor: tab === b.id ? rung(b.state).color : undefined }}
-            onClick={() => setTab(b.id)}
-          >
-            <span className="tab-dot" style={{ background: rung(b.state).color }} />
-            {b.name}
-          </button>
-        ))}
-      </nav>
-
-      <div className="grid">
-        {shown.map((b) => (
-          <BlockPanel key={b.id} block={b} parts={partsByBlock[b.id] || []} />
-        ))}
-      </div>
+        </>
+      )}
 
       <footer>
         <div>served by dashboard/part_health_api.py · blueprint source docs/features.json</div>
-        <div>click any cell for its role, its proof, and the data it reads and writes</div>
+        <div>
+          live behaviour read from the heartbeat table heartbeat-collector writes — the same file
+          the part monitor and the trade board read
+        </div>
       </footer>
     </div>
   )
