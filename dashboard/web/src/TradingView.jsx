@@ -136,13 +136,21 @@ function OpenPositions({ open }) {
 // own docstring calls a large residual the most useful thing it produces: it says
 // the model of where PnL comes from is missing something, and a board showing the
 // pieces without it would present an incomplete reconciliation as a complete one.
+// The key pnl-attributor files the residual under, from runtime/trade_decoding_types.py
+// (FROM_UNEXPLAINED). Named once so the two places that treat it specially agree.
+const RESIDUAL_COMPONENT = 'unexplained'
+
 function Attribution({ attribution }) {
   if (!attribution) {
     return <em className="unmeasured" title="learning-recorder has not journalled an attribution for this trade">not attributed</em>
   }
   const { components, residual, reconciles } = attribution
   const pieces = Object.entries(components || {})
-    .filter(([, value]) => value)
+    // The residual is one of the components AND is reported on its own, so listing
+    // it here too printed "unexplained" twice on the first live attribution. It is
+    // dropped from the list rather than from the cell: it gets its own rendering
+    // below, with its own colour and the warning when the pieces do not add up.
+    .filter(([name, value]) => value && name !== RESIDUAL_COMPONENT)
     .sort((a, z) => Math.abs(z[1]) - Math.abs(a[1]))
 
   return (
