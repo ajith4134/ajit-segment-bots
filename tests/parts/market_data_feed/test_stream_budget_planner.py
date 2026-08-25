@@ -251,3 +251,48 @@ def test_the_description_carries_the_machine_it_was_planned_against(adapters, ha
     assert description["hardware"]["measured_at_ns"] == hardware.measured_at_ns
     assert description["open_file_limit"] == read_open_file_limit()
     assert description["connections"] == sum(description["connections_by_venue"].values())
+
+
+def test_the_book_is_planned_only_for_the_busiest_symbols(adapters, hardware):
+    """The one stream kind capped below the universe, and why.
+
+    Nothing planned a book stream until 2026-08-25, so order-book-reader
+    subscribed to nothing and the bots' feature builders counted every vector
+    incomplete for want of one -- which left the outlier rejector unable to judge
+    any of them and the conviction model refusing every candidate it was handed.
+
+    Capped because a depth stream pushes a ladder every hundred milliseconds
+    whether or not anything trades: at the full universe it is more tape per day
+    than the trades this system exists to keep.
+    """
+    budget = plan(
+        adapters, hardware, symbols_per_venue=30,
+        kinds=(StreamKind.TRADE, StreamKind.BOOK), book_symbols_per_venue=10,
+    )
+    requests = [r for assignment in budget.plan.connections for r in assignment.requests]
+    for venue_id in adapters:
+        venue_requests = [
+            r for assignment in budget.plan.connections if assignment.venue_id == venue_id
+            for r in assignment.requests
+        ]
+        books = [r for r in venue_requests if r.stream_kind is StreamKind.BOOK]
+        trades = [r for r in venue_requests if r.stream_kind is StreamKind.TRADE]
+        assert len(trades) == 30, f"{venue_id}: every symbol keeps its trade stream"
+        assert len(books) == 10, f"{venue_id}: the book is capped"
+        assert [r.symbol for r in books] == [f"SYM{n}USDT" for n in range(10)], (
+            "the cap keeps the universe's own order, which is by volume"
+        )
+    assert requests
+
+
+def test_a_book_cap_above_the_universe_plans_every_symbol(adapters, hardware):
+    budget = plan(
+        adapters, hardware, symbols_per_venue=4,
+        kinds=(StreamKind.BOOK,), book_symbols_per_venue=10,
+    )
+    for venue_id in adapters:
+        books = [
+            r for assignment in budget.plan.connections if assignment.venue_id == venue_id
+            for r in assignment.requests
+        ]
+        assert len(books) == 4

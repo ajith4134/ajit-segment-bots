@@ -103,7 +103,7 @@ class PartContext:
         """What `run_part` waits on, so the part wakes on data and not only on time."""
         return self.bus.input_descriptors
 
-    def emit_health(self, health: PartHealth) -> None:
+    def emit_health(self, health: PartHealth) -> PartHealth:
         """Publish one health report, carrying what this part's inputs lost.
 
         The loss rides on health rather than having a channel of its own: health is
@@ -111,23 +111,24 @@ class PartContext:
         tick corrupts their answer -- a part that lost input and said nothing would
         be reporting an answer it cannot support.
         """
-        self.bus.publish(
-            HEALTH_TYPE,
-            [
-                PartHealth(
-                    part_id=health.part_id,
-                    state=health.state,
-                    rate_ratio=health.rate_ratio,
-                    staleness_seconds=health.staleness_seconds,
-                    observed_at_ns=health.observed_at_ns,
-                    refused_control_frame=health.refused_control_frame,
-                    input_loss=tuple(sorted(self.bus.input_loss().items())),
-                    standing=health.standing,
-                    messages_received=self.bus.messages_received(),
-                    messages_published=self.bus.messages_published(),
-                )
-            ],
+        reported = PartHealth(
+            part_id=health.part_id,
+            state=health.state,
+            rate_ratio=health.rate_ratio,
+            staleness_seconds=health.staleness_seconds,
+            observed_at_ns=health.observed_at_ns,
+            refused_control_frame=health.refused_control_frame,
+            input_loss=tuple(sorted(self.bus.input_loss().items())),
+            standing=health.standing,
+            messages_received=self.bus.messages_received(),
+            messages_published=self.bus.messages_published(),
         )
+        self.bus.publish(HEALTH_TYPE, [reported])
+        # Returned as well as published, because one part observes its own report:
+        # heartbeat-collector never receives its own message (wiring rule 1), and
+        # observing the caller's plain health instead left the collector as the one
+        # row in its own table with no message counts on it.
+        return reported
 
     def close(self) -> None:
         self.bus.close()

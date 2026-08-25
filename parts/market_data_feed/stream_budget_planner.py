@@ -161,6 +161,7 @@ def _requests_for_kind(
     symbols: Sequence[CapturableSymbol],
     candle_interval: str,
     book_depth_levels: int,
+    book_symbols_per_venue: int | None = None,
 ) -> tuple[StreamRequest, ...]:
     """One request per symbol, for every stream kind including quotes.
 
@@ -185,6 +186,16 @@ def _requests_for_kind(
     """
     if not symbols:
         return ()
+    # The book is the one kind that is capped below the universe, and the cap is
+    # about bytes rather than about descriptors. A depth stream pushes a fresh
+    # ladder every hundred milliseconds where a trade stream pushes only when
+    # somebody trades: at 50 symbols a venue that is an order of magnitude more
+    # tape than everything else this system records put together, on a disk that
+    # holds the only copy of three days of trades. So the busiest symbols get a
+    # book and the rest do not, and which symbols those are is the universe's own
+    # ordering -- the same one symbol-catalogue-reader ranks by volume.
+    if stream_kind is StreamKind.BOOK and book_symbols_per_venue is not None:
+        symbols = symbols[:book_symbols_per_venue]
     return tuple(
         StreamRequest(
             stream_kind=stream_kind,
@@ -204,6 +215,7 @@ def plan_stream_budget(
     open_file_headroom: int,
     candle_interval: str,
     book_depth_levels: int,
+    book_symbols_per_venue: int | None = None,
     venues_withheld: Sequence[str] = (),
     open_file_limit: int | None = None,
 ) -> StreamBudget:
@@ -238,6 +250,7 @@ def plan_stream_budget(
                 stream_kind=stream_kind,
                 symbols=symbols,
                 candle_interval=candle_interval,
+                book_symbols_per_venue=book_symbols_per_venue,
                 book_depth_levels=book_depth_levels,
             )
         ]
@@ -321,6 +334,7 @@ def run_stream_budget_planner(
     open_file_headroom: int,
     candle_interval: str,
     book_depth_levels: int,
+    book_symbols_per_venue: int,
     publish_plan,
     health_interval_seconds: float,
     emit_health,
@@ -353,6 +367,7 @@ def run_stream_budget_planner(
                 open_file_headroom=open_file_headroom,
                 candle_interval=candle_interval,
                 book_depth_levels=book_depth_levels,
+                book_symbols_per_venue=book_symbols_per_venue,
                 venues_withheld=read_venues_withheld(),
             )
         except PlanRefused as refusal:
@@ -506,10 +521,26 @@ def start_part(context) -> int:
         # 100 more subscriptions and about 100 more tape files, against a
         # RLIMIT_NOFILE soft limit of 524,288 on this box and 203 descriptors in
         # use. The descriptor ceiling is not what bounds this.
-        stream_kinds=(StreamKind.TRADE, StreamKind.QUOTE, StreamKind.CANDLE),
+        #
+        # The book added 2026-08-25, and its absence had the same shape as the
+        # candles': nothing planned a book stream, so order-book-reader subscribed
+        # to nothing, so no order-book-snapshot ever reached the bots' feature
+        # builders -- which counted 56 of 56 vectors incomplete for want of one,
+        # left the outlier rejector unable to judge any of them, and made
+        # bull-conviction-model refuse every candidate it was ever handed. The
+        # whole bull chain ran and formed no opinion, all the way from a detector
+        # that had found 70 candidates.
+        #
+        # Capped below the universe, unlike every other kind: a depth stream
+        # pushes a ladder every hundred milliseconds whether or not anything
+        # trades, and 50 symbols a venue of that is more tape per day than the
+        # trades this system exists to keep. book_symbols_per_venue is the named
+        # bound, and its note carries the arithmetic.
+        stream_kinds=(StreamKind.TRADE, StreamKind.QUOTE, StreamKind.CANDLE, StreamKind.BOOK),
         open_file_headroom=int(context.number("open_file_headroom")),
         candle_interval=settings.entries["candle_interval"].value,
         book_depth_levels=int(context.number("book_depth_levels")),
+        book_symbols_per_venue=int(context.number("book_symbols_per_venue")),
         publish_plan=publish_plan,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,

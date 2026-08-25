@@ -407,8 +407,7 @@ def start_part(context) -> int:
         # would be the one part missing from its own table -- and the table is
         # where the boards read what is alive. It observes its own report as it
         # sends it.
-        context.emit_health(health)
-        collector.observe_health(health)
+        collector.observe_health(context.emit_health(health))
 
     return run_heartbeat_collector(
         collector=collector,

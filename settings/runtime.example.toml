@@ -3794,3 +3794,8 @@ note  = "operator, 2026-08-24: written before captured_symbol_count was first ra
 value = 1.0
 unit  = "standard deviations of the pair's own spread"
 note  = "operator, 2026-08-24: how far a fired spread must come back before the pair may produce a fresh candidate. Crossing alone was not enough: measured at 100 symbols per venue, spreads wiggling across the 2.0 firing threshold re-fired 25,880 candidates in twenty-five minutes -- each one the same episode announced again. One standard deviation is the point at which the reversion the candidate predicted has substantially happened: the spread is back inside its own ordinary range, so the next stretch from there is a new opportunity rather than the tail of the old one. Must sit inside spread_reversion_z_threshold; the detector refuses it otherwise."
+
+[book_symbols_per_venue]
+value = 10
+unit  = "symbols"
+note  = "operator's standing cap applied by Claude, 2026-08-25: how many of each venue's symbols carry a depth-book stream. Ten, and it is the only stream kind capped below the 50-symbol universe -- because the book is the only one that pushes whether or not anything happens. A trade stream is silent in a quiet symbol; a partial-depth stream sends a fresh ladder every 100ms regardless, so 50 symbols a venue would be roughly 500 messages a second of book against the 1,500 a second of trades across both venues, and it would land on the same disk that holds the only copy of the tape. Ten a venue is what the bots actually need: the feature builders want a spread and an imbalance for the symbol they are about to trade, and the busiest ten are where the scanner's candidates come from. Raise it only with a measured bytes-per-day figure beside it."
