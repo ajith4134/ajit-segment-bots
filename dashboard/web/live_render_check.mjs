@@ -63,7 +63,11 @@ if (await page.locator('.part-row-open').count()) {
 // Every view must draw. The live view is one of four, not a replacement for the
 // others, and a tab that renders nothing is the failure this check exists to catch.
 await page.locator('.view').nth(1).click()          // Trading
-await page.waitForTimeout(2500)
+// Waited for, not slept through. The trades payload reads the tape per held
+// position and can take seconds on a cold cache; a fixed sleep caught the loading
+// state and reported a render failure for a page that was working.
+await page.waitForSelector('.trade-panel', { timeout: 60000 }).catch(() => {})
+await page.waitForTimeout(500)
 const tradePanels = await page.locator('.trade-panel').count()
 const tradeRows = await page.locator('.trade-table tbody tr').count()
 const tradeEmpty = await page.locator('.trade-empty').count()

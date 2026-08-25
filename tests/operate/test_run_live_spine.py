@@ -167,12 +167,25 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
         if part_id in INSIDE_A_FEEDBACK_CYCLE:
             continue
         for data_type in inputs:
-            for producer in produces.get(data_type, ()):
-                if producer in position and producer != part_id:
-                    assert position[producer] < position[part_id], (
-                        f"{part_id} is started before {producer}, which produces the "
-                        f"{data_type} it reads"
-                    )
+            on_the_spine = [
+                producer for producer in produces.get(data_type, ())
+                if producer in position and producer != part_id
+            ]
+            if not on_the_spine:
+                continue
+            # At least one producer must precede, not every one of them. A type
+            # with several producers -- `journal-entry` has three recorders, and
+            # `part-health` has every part -- is satisfied for a reader the moment
+            # one of them is up; which producer's messages a given reader actually
+            # needs is not something consumes/produces can express, so requiring
+            # all of them asserts more than the blueprint says.
+            #
+            # A type with one producer is unaffected, which is the case this rule
+            # exists for and the case that has caught every real defect so far.
+            assert any(position[producer] < position[part_id] for producer in on_the_spine), (
+                f"{part_id} is started before every part on the spine that produces the "
+                f"{data_type} it reads: {', '.join(sorted(on_the_spine))}"
+            )
 
 
 def test_a_segment_that_is_not_on_paper_refuses_to_start(spine, durable_tmp_path, monkeypatch):
@@ -248,3 +261,38 @@ def test_every_input_a_running_part_declares_has_a_producer_on_the_spine(spine):
         assert "market-data" not in missing, (
             f"{part_id} reads market-data and nothing on this spine publishes it"
         )
+
+
+def test_the_ordering_rule_still_catches_a_single_producer_inversion():
+    """The relaxation above must not have made the rule toothless.
+
+    "At least one producer" is weaker than "every producer", and the weakening is
+    only safe because a type with one producer is unaffected. That is the case
+    every real defect has fallen into -- usdt-pnl-accountant started before
+    funding-settlement-recorder on 2026-08-25, and funding-settlement has exactly
+    one producer -- so this pins that such an inversion is still a failure.
+    """
+    import json
+
+    blueprint = json.loads((PROJECT / "docs" / "features.json").read_text())
+    produces = {}
+    for feature in blueprint["features"]:
+        for data_type in feature["produces"]:
+            produces.setdefault(data_type, []).append(feature["id"])
+
+    single = [t for t, makers in produces.items() if len(makers) == 1]
+    assert "funding-settlement" in single, (
+        "funding-settlement gained a second producer; this test's premise needs rechecking"
+    )
+
+    # An inverted spine of exactly that shape must be rejected by the same rule.
+    inverted = ("usdt-pnl-accountant", "funding-settlement-recorder")
+    position = {part_id: index for index, part_id in enumerate(inverted)}
+    consumer = next(f for f in blueprint["features"] if f["id"] == "usdt-pnl-accountant")
+    assert "funding-settlement" in consumer["consumes"]
+
+    on_the_spine = [p for p in produces["funding-settlement"] if p in position]
+    assert on_the_spine == ["funding-settlement-recorder"]
+    assert not any(
+        position[p] < position["usdt-pnl-accountant"] for p in on_the_spine
+    ), "the rule would no longer catch a single-producer inversion"

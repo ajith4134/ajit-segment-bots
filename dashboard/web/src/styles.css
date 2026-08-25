@@ -294,3 +294,15 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
   font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
   color: #6E5B2E; border: 1px solid #6E5B2E; text-transform: uppercase;
 }
+
+/* Where the money came from, per closed trade. Laid out as pieces rather than a
+   number, because the point is which component dominates -- and the residual is
+   always among them, because a reconciliation shown without what it could not
+   explain reads as complete when its own author says it may not be. */
+.trade-table td.attribution { white-space: normal; min-width: 260px; }
+.attribution-cell { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10px; }
+.piece { display: inline-flex; gap: 4px; align-items: baseline; }
+.piece-name { color: var(--faint); }
+.piece-residual b { color: #C08A3E; }
+.piece-broken { outline: 1px solid #D45B54; border-radius: 3px; padding: 0 3px; }
+.piece-broken b { color: #D45B54; }

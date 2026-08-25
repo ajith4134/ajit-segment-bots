@@ -272,6 +272,16 @@ def read_closed_trades() -> tuple[list[dict], dict]:
         )
     trades.reverse()
 
+    attributions, attribution_provenance = read_attributions()
+    for trade in trades:
+        # The same identity every decoder derives, from runtime/trade_identity.py:
+        # venue, symbol and opening time are what make two round trips distinct,
+        # and a board inventing its own key would match nothing.
+        trade["trade_id"] = (
+            f"{trade.get('venue_id')}:{trade.get('symbol')}:{trade.get('opened_at_ns')}"
+        )
+        trade["attribution"] = attributions.get(trade["trade_id"])
+
     if not journal.exists():
         proof = f"no journal at {journal}: nothing has recorded a position yet"
     elif tail.is_whole_file:
@@ -283,7 +293,56 @@ def read_closed_trades() -> tuple[list[dict], dict]:
             f"stretch, of which the newest {len(trades)} are shown. Older ones are in the journal, "
             f"not on this board"
         )
-    return trades, {"ok": journal.exists(), "proof": proof, "is_whole_file": tail.is_whole_file}
+    return trades, {
+        "ok": journal.exists(), "proof": proof, "is_whole_file": tail.is_whole_file,
+        "attribution_proof": attribution_provenance["proof"],
+        "attributions_found": len(attributions),
+    }
+
+
+def read_attributions() -> tuple[dict, dict]:
+    """Where the money came from, per trade, from learning-recorder's journal.
+
+    The attribution lives on the bus and nothing recorded it until 2026-08-25, so
+    a board had nothing on disk to read. `learning-recorder` now journals it
+    (docs/proposals/a-conclusion-nobody-records-is-a-conclusion-nobody-has.md),
+    which is why this can exist at all.
+
+    The residual travels with the components, always. `pnl-attributor`'s own
+    docstring calls a large residual the most useful thing it produces -- it says
+    the model of where PnL comes from is missing something -- and a board showing
+    the components without it would present an incomplete reconciliation as a
+    complete one.
+    """
+    journal = read_state_directory() / "journal.learning-recorder.sqlite"
+    tail = read_journal_tail(journal, "pnl-attribution", CLOSED_TRADE_TAIL_BYTES)
+
+    by_trade: dict[str, dict] = {}
+    for entry in tail.entries:
+        payload = entry.get("payload") or {}
+        trade_id = payload.get("trade_id")
+        if not trade_id:
+            continue
+        # Latest wins: an attribution recomputed for the same trade supersedes.
+        by_trade[str(trade_id)] = {
+            "components": payload.get("components") or {},
+            "residual": payload.get("residual"),
+            "reconciles": payload.get("reconciles"),
+            "quote_currency": payload.get("quote_currency"),
+            "realised_pnl": payload.get("realised_pnl"),
+        }
+
+    if not journal.exists():
+        proof = (
+            f"no journal at {journal}: learning-recorder has not recorded an "
+            f"attribution yet, which is a different fact from a trade having none"
+        )
+    else:
+        proof = (
+            f"{len(by_trade)} attribution(s) from the last "
+            f"{tail.bytes_read / 1024 ** 2:.0f} MiB of {journal.name}"
+        )
+    return by_trade, {"ok": journal.exists(), "proof": proof}
 
 
 def summarise_closed(trades: list[dict]) -> dict:

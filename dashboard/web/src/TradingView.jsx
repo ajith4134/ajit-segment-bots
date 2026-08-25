@@ -128,6 +128,48 @@ function OpenPositions({ open }) {
   )
 }
 
+// Where the money actually came from. The same +40 is produced by a move that went
+// straight to target and by one twice as large that gave half of itself to fees --
+// opposite lessons, and realised PnL alone cannot tell them apart.
+//
+// The residual is always shown, never folded into the components. pnl-attributor's
+// own docstring calls a large residual the most useful thing it produces: it says
+// the model of where PnL comes from is missing something, and a board showing the
+// pieces without it would present an incomplete reconciliation as a complete one.
+function Attribution({ attribution }) {
+  if (!attribution) {
+    return <em className="unmeasured" title="learning-recorder has not journalled an attribution for this trade">not attributed</em>
+  }
+  const { components, residual, reconciles } = attribution
+  const pieces = Object.entries(components || {})
+    .filter(([, value]) => value)
+    .sort((a, z) => Math.abs(z[1]) - Math.abs(a[1]))
+
+  return (
+    <div className="attribution-cell mono">
+      {pieces.length === 0
+        ? <em className="unmeasured">no component carried any of it</em>
+        : pieces.map(([name, value]) => (
+          <span className="piece" key={name}>
+            <span className="piece-name">{name.replace(/^from[-_]/, '').replace(/[-_]/g, ' ')}</span>
+            <b style={{ color: value > 0 ? '#57D9A3' : '#D45B54' }}>{formatMoney(value, 2)}</b>
+          </span>
+        ))}
+      {residual !== null && residual !== undefined && (
+        <span
+          className={`piece piece-residual${reconciles === false ? ' piece-broken' : ''}`}
+          title={reconciles === false
+            ? 'the components do not add back to the realised total'
+            : 'what the model of where PnL comes from could not explain'}
+        >
+          <span className="piece-name">unexplained</span>
+          <b>{formatMoney(residual, 2)}</b>
+        </span>
+      )}
+    </div>
+  )
+}
+
 function ClosedTrades({ closed }) {
   const { trades, summary, provenance } = closed
 
@@ -174,6 +216,7 @@ function ClosedTrades({ closed }) {
                 <th className="n">quantity</th><th className="n">entry</th><th className="n">exit</th>
                 <th className="n">held</th><th className="n">best</th><th className="n">worst</th>
                 <th className="n">fees</th><th className="n">net</th>
+                <th>where the money came from</th>
               </tr>
             </thead>
             <tbody>
@@ -203,13 +246,17 @@ function ClosedTrades({ closed }) {
                   <td className="n mono"><Pnl value={t.worst_unrealised} /></td>
                   <td className="n mono faint">{t.fees_paid?.toFixed(3)}</td>
                   <td className="n mono"><Pnl value={t.net_pnl} /></td>
+                  <td className="attribution"><Attribution attribution={t.attribution} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <div className="trade-proof mono">{provenance.proof}</div>
+      <div className="trade-proof mono">
+        {provenance.proof}
+        {provenance.attribution_proof && <><br />{provenance.attribution_proof}</>}
+      </div>
     </div>
   )
 }

@@ -26,6 +26,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "research-finding", "forecast-accuracy", "ablation-scorecard",
         "skill-usefulness", "opportunity-instruction", "decision-rationale",
+        "pnl-attribution",
     ),
     produces=("journal-entry", "part-health"),
     resource_class="io-bound",
@@ -36,6 +37,12 @@ PART_DECLARATION = PartDeclaration(
 RECORDED_KINDS = (
     "research-finding", "forecast-accuracy", "ablation-scorecard",
     "skill-usefulness", "opportunity-instruction", "decision-rationale",
+    # Added 2026-08-25. An attribution is what was scored, and it is the one
+    # conclusion this recorder's own block exists to produce. Until then it lived
+    # on the bus only, for as long as the producing process lived: the attribution
+    # of a real closed trade, residual share 0.32, was computed and then vanished
+    # (docs/proposals/a-conclusion-nobody-records-is-a-conclusion-nobody-has.md).
+    "pnl-attribution",
 )
 
 # Claims that are only meaningful if they were made before their subject
@@ -144,7 +151,7 @@ def run_learning_recorder(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Six kinds of claim, each journalled under its type name with the claim's
+    Seven kinds of claim, each journalled under its type name with the claim's
     fields as payload. The forward-looking kinds carry the time their subject
     resolved where the type states one; a claim stamped after its subject
     resolved is refused by the recorder, which is what it is for.

@@ -66,10 +66,15 @@ ACTIVITY_READER = ActivityReader()
 # had finished, the server saturated, and Cloudflare answered the operator HTTP 524
 # while every part underneath was healthy.
 BOARD_FRESH_FOR_SECONDS = 30.0
-# The trades payload marks every held symbol against the tape, so its cost grows
-# with open positions rather than with the universe. Short window: a position can
-# open at any moment and a board minutes behind on that is worse than a slow one.
-TRADES_FRESH_FOR_SECONDS = 5.0
+# The trades payload marks every held symbol against the tape and reads the
+# attribution journal, so its cost grows with open positions rather than with the
+# universe -- measured at about four seconds with fifteen positions held.
+#
+# The window has to sit above that cost. At five seconds it was refreshing almost
+# continuously: each refresh took four, so a fresh answer was stale a second after
+# it arrived and the next caller paid the full four again. An interval below a
+# measurement's own cost is not a fast board, it is a board permanently mid-scan.
+TRADES_FRESH_FOR_SECONDS = 20.0
 # Same reason: a CPU percentage is a difference between two /proc/stat readings,
 # and the second one needs a first one this process actually took.
 MACHINE_READER = MachineLoadReader()

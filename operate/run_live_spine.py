@@ -275,6 +275,13 @@ LIVE_SPINE = (
     "winner-pattern-miner",
     "trade-narrative-writer",
     "lesson-extractor",
+    # What the system concluded, as opposed to what it did. Added 2026-08-25 with
+    # pnl-attribution: until then every conclusion this system drew lived on the
+    # bus and died with the process that drew it, so a board had nothing on disk
+    # to show and a part started tomorrow could learn nothing from today
+    # (docs/proposals/a-conclusion-nobody-records-is-a-conclusion-nobody-has.md).
+    # Last, after every part whose conclusions it writes down.
+    "learning-recorder",
 )
 
 # The segment this spine trades, and the only money mode it may run in. Checked
