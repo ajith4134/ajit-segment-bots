@@ -48,6 +48,10 @@ PART_DECLARATION = PartDeclaration(
 
 AGREES = "the-record-matches-the-venue"
 MISMATCHED = "the-record-disagrees-with-the-venue"
+# Reached when every fill in a trade was the paper book's. Defined since the
+# part was written and unreachable until 2026-08-25, which is its own defect:
+# a state no run can produce is a state the board can never render, and Rule 8
+# requires the honest states to be reachable in the design.
 NO_VENUE_RECORD = "the-venue-reported-nothing-for-this-trade"
 
 # How much a disagreement matters. A verifier that treats a rounding difference like
@@ -95,6 +99,15 @@ class VerifierStanding:
     serious: int = 0
     minor: int = 0
     fills_the_journal_never_saw: int = 0
+    # A paper fill has no venue counterpart by construction. Counted as its own
+    # state rather than as a mismatch: 'there is no venue to disagree with' and
+    # 'the venue disagrees' are different facts, and a board that showed the
+    # first as the second would report a fault on every paper trade forever.
+    paper_fills_not_verifiable: int = 0
+    # Trades where nothing could be compared at all. Kept apart from
+    # trades_that_agreed, because 'the record matches the venue' and 'no venue
+    # ever saw this' are different claims and only one of them is evidence.
+    trades_not_verifiable: int = 0
     repairs_made: int = 0
 
 
@@ -122,6 +135,10 @@ class TradeReplayVerifier:
         self._now_ns = now_ns
         self._journal: dict[str, dict] = {}
         self._venue: dict[str, dict] = {}
+        # Fills the paper book filled. Held apart from `_venue` because they are
+        # not evidence of what a venue did -- they are this system's own
+        # simulation, and comparing it against itself would verify nothing.
+        self._paper: set[str] = set()
         self.standing = VerifierStanding()
 
     def observe_journal_entry(self, fill_id: str, entry: dict) -> None:
@@ -129,6 +146,16 @@ class TradeReplayVerifier:
 
     def observe_venue_fill(self, fill_id: str, fill: dict) -> None:
         self._venue[fill_id] = dict(fill)
+
+    def observe_paper_fill(self, fill_id: str) -> None:
+        """A fill the paper book made, which no venue will ever confirm.
+
+        On paper the paper book *is* the venue, so there is nothing to replay
+        against and nothing has gone wrong. Recording it is what lets `verify`
+        tell that apart from a live fill the venue failed to report -- which is
+        one of the most serious things this part exists to catch.
+        """
+        self._paper.add(fill_id)
 
     def verify(self, trade_id: str, fill_ids) -> VerificationOutcome:
         self.standing.trades_verified += 1
@@ -148,6 +175,15 @@ class TradeReplayVerifier:
                         "position is real and this system does not know it exists",
                     )
                 )
+                continue
+
+            if venue is None and fill_id in self._paper:
+                # Not a mismatch and not a silence. The paper book filled this and
+                # no venue was ever going to confirm it, so there is nothing to
+                # replay against -- which is the money mode working, not a fault.
+                # Reported as its own count so the board can say "unverifiable
+                # because paper" rather than either "verified" or "broken".
+                self.standing.paper_fills_not_verifiable += 1
                 continue
 
             if venue is None:
@@ -215,13 +251,31 @@ class TradeReplayVerifier:
                 self.standing.minor += 1
 
         if not mismatches:
+            checked = [f for f in fill_ids if self._venue.get(f) is not None]
+            if not checked:
+                # Nothing disagreed because nothing could be compared. Counting this
+                # as agreement would be the flattering error: a board would read
+                # "the record matches the venue" off a trade no venue ever saw, and
+                # every paper trade would raise the agreement rate (Rule 8).
+                self.standing.trades_not_verifiable += 1
+                return VerificationOutcome(
+                    trade_id=trade_id, state=NO_VENUE_RECORD, mismatches=(),
+                    fields_checked=(),
+                    reason=(
+                        f"nothing to replay against: all "
+                        f"{len(list(fill_ids))} fill(s) were filled by the paper book, "
+                        f"which is this system's own simulation and not evidence of "
+                        f"what a venue did"
+                    ),
+                    verified_at_ns=self._now_ns(),
+                )
             self.standing.trades_that_agreed += 1
             return VerificationOutcome(
                 trade_id=trade_id, state=AGREES, mismatches=(),
                 fields_checked=CHECKED_FIELDS,
                 reason=(
                     f"the journal matches the venue on every checked field across "
-                    f"{len(list(fill_ids))} fill(s)"
+                    f"{len(checked)} venue-confirmed fill(s)"
                 ),
                 verified_at_ns=self._now_ns(),
             )
@@ -292,10 +346,20 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
     The journal's record of a fill and the venue's own fill are compared
-    field by field when the trade closes. No venue fills arrive in phase 1
-    (no key), so every verification finds the venue side missing -- which
-    the verifier reports as a mismatch on existence, honestly, until the
-    venue reader runs.
+    field by field when the trade closes.
+
+    **A paper fill is not a missing venue fill.** On paper the paper book *is*
+    the venue: nothing will ever confirm the fill because nothing else made it,
+    and there is no disagreement to find. Until 2026-08-25 this part reported
+    each one as a SERIOUS existence mismatch -- two on the first trade phase 5
+    put through it, and it would have been two on every paper trade forever.
+    That is the failure this part's own docstring warns about: a verifier that
+    treats an expected absence like a missing fill trains everyone to ignore it,
+    and then the real missing fill goes unread too.
+
+    So paper fills are counted as unverifiable rather than reported as wrong,
+    and the SERIOUS existence check is kept for exactly what it was written for:
+    a *live* fill the journal recorded and the venue never confirmed.
     """
     from dataclasses import asdict
 
@@ -320,7 +384,13 @@ def start_part(context) -> int:
             if entry.kind == "fill" and payload.get("fill_id"):
                 verifier.observe_journal_entry(str(payload["fill_id"]), payload)
         for fill in fills.payloads():
-            if not fill.is_paper:
+            if fill.is_paper:
+                # The paper book filled it, so no venue will confirm it. Told to the
+                # verifier rather than left out: a fill it has never heard of and a
+                # fill it knows is paper are different, and only the first is a
+                # missing record.
+                verifier.observe_paper_fill(fill.fill_id)
+            else:
                 verifier.observe_venue_fill(fill.fill_id, asdict(fill))
             fills_of_symbol.setdefault((fill.venue_id, fill.symbol), []).append(fill.fill_id)
         jobs = []

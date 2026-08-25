@@ -68,6 +68,11 @@ class DetectorStanding:
     largest_cluster: int = 0
     smallest_effective_bets: float | None = None
     hedges_not_clustered: int = 0
+    # Clusters recomputed with exactly the members they already had. Counted
+    # rather than silent, for the same reason cointegration-pair-finder counts
+    # its suppressed verdicts: a suppression rate that fell to zero would mean
+    # the churn is back, and one at 100% would mean nothing new is being found.
+    clusters_unchanged: int = 0
 
 
 class TradeClusterDetector:
@@ -94,7 +99,9 @@ class TradeClusterDetector:
         self._now_ns = now_ns
         self._groups: dict[str, str] = {}
         self._correlations: dict[tuple, float] = {}
-        self._sequence = 0
+        # What has already been published, so a recomputed cluster with the same
+        # members is a restatement rather than a finding.
+        self._published: dict[str, tuple] = {}
         self.standing = DetectorStanding()
 
     def observe_correlation_group(self, symbol: str, group: str) -> None:
@@ -170,14 +177,20 @@ class TradeClusterDetector:
                 used.add(member_id)
             symbols = [member.symbol for _, member in members]
             effective = self.effective_bets(symbols)
-            self._sequence += 1
             span = (
                 max(member.opened_at_ns for _, member in members)
                 - min(member.opened_at_ns for _, member in members)
             ) / 1e9
+            member_ids = tuple(member_id for member_id, _ in members)
+            # Identified by its membership, not by a counter. A counter gave the
+            # same cluster a new identity every time it was recomputed, so an
+            # unchanged cluster looked new to every reader -- which on 2026-08-25
+            # made trade-episode-encoder re-encode one trade 452 times, and
+            # winner-pattern-miner count it 201,948 times. What a cluster IS, is
+            # who is in it.
             cluster = TradeCluster(
-                cluster_id=f"cluster-{self._sequence}",
-                trade_ids=tuple(member_id for member_id, _ in members),
+                cluster_id="cluster-" + "+".join(sorted(member_ids)),
+                trade_ids=member_ids,
                 correlation_group=self._groups.get(trade.symbol),
                 direction=trade.direction,
                 opened_within_seconds=span,
@@ -191,6 +204,13 @@ class TradeClusterDetector:
                 ),
                 detected_at_ns=self._now_ns(),
             )
+            # News only. A cluster whose membership has not moved is the same
+            # finding restated, and every reader downstream treats a restatement
+            # as a fresh event unless it is stopped here.
+            if self._published.get(cluster.cluster_id) == member_ids:
+                self.standing.clusters_unchanged += 1
+                continue
+            self._published[cluster.cluster_id] = member_ids
             clusters.append(cluster)
             self.standing.clusters_found += 1
             self.standing.trades_in_clusters += len(members)

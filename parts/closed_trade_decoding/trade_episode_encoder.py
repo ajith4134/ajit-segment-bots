@@ -82,6 +82,11 @@ class EncoderStanding:
     edits_attempted: int = 0
     clustered_episodes: int = 0
     insignificant_episodes_kept: int = 0
+    # Ticks on which a trade was already encoded from exactly these analyses.
+    # Counted rather than silent: a large number here is the encoder being
+    # asked the same question repeatedly, which is worth seeing, and a zero
+    # once trades are closing would mean the check stopped working.
+    re_encodes_skipped: int = 0
     pieces_missing: dict = field(default_factory=dict)
 
 
@@ -231,6 +236,7 @@ def describe_episode_encoding(encoder: TradeEpisodeEncoder) -> dict:
         "supersessions": encoder.standing.supersessions,
         "clustered_episodes": encoder.standing.clustered_episodes,
         "insignificant_episodes_kept": encoder.standing.insignificant_episodes_kept,
+        "re_encodes_skipped": encoder.standing.re_encodes_skipped,
         "pieces_missing": dict(encoder.standing.pieces_missing),
         "required_pieces": list(REQUIRED_PIECES),
         "can_edit_an_episode": False,
@@ -290,6 +296,12 @@ def start_part(context) -> int:
     detector_of: dict[tuple[str, str], str] = {}
     action_of: dict[tuple[str, str], str] = {}
     cluster_of: dict[str, object] = {}
+    # What each trade was last encoded from. `LatestByKey.mapping()` returns every
+    # key it still retains rather than the ones that just arrived, so without this
+    # every trade ever closed is re-encoded on every tick, forever: one closed
+    # trade had become 3,048 episodes and was still climbing when this was found,
+    # and winner-pattern-miner had counted it 2.8 million times.
+    encoded_from: dict[str, tuple] = {}
 
     def read_trades():
         for entry in entries.payloads():
@@ -316,6 +328,21 @@ def start_part(context) -> int:
         for trade_id in sorted(touched):
             trade = closed_by_id[trade_id]
             key = (trade.venue_id, trade.symbol)
+            analyses = (
+                by_trade["pnl-attribution"].mapping().get(trade_id),
+                by_trade["entry-quality"].mapping().get(trade_id),
+                by_trade["outcome-significance"].mapping().get(trade_id),
+                by_trade["regime-transition-flag"].mapping().get(trade_id),
+                cluster_of.get(trade_id),
+                detector_of.get(key, "unknown"),
+                action_of.get(key, trade.direction),
+            )
+            # Re-encode when an analysis actually lands, which is what supersession
+            # is for -- not when the same analyses are simply still retained.
+            if encoded_from.get(trade_id) == analyses:
+                encoder.standing.re_encodes_skipped += 1
+                continue
+            encoded_from[trade_id] = analyses
             jobs.append({
                 "trade_id": trade_id, "closed_trade": trade,
                 "detector": detector_of.get(key, "unknown"), "action": action_of.get(key, trade.direction),
