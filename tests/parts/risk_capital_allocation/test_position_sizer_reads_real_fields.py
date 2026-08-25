@@ -1,0 +1,110 @@
+"""The sizer reads fields its producers actually carry.
+
+The third defect of this exact shape, and the second one to take a part off the
+air. `position-sizer` was wired to `locked-allocation` on 2026-08-22, before
+anything produced one, and it keyed the assembly on `lock.segment` -- a field
+`LockedAllocation` has never had. Nothing failed while `fund-lock-ledger` was
+unbuilt, because an assembly with no messages never calls its key function.
+
+`fund-lock-ledger` started with phase 8 on 2026-08-25. Within seconds the sizer
+was restarting on `AttributeError: 'LockedAllocation' object has no attribute
+'segment'`, and it restarted 1,587 times in the two hours before it was found:
+**no order was sized in that time**, so the bot's whole trading path was off the
+air while every board reported 127 parts running.
+
+The same tests as `test_stop_target_placer_reads_real_fields`, for the same
+reason: build the real producer type, so a field rename on either side fails here
+rather than in a live process.
+"""
+
+from __future__ import annotations
+
+from parts.portfolio_state.fund_lock_ledger import LOCKED, RELEASED, LockedAllocation
+from parts.risk_capital_allocation.position_sizer import free_capital_from_locks
+
+
+def allocation(order_id: str, free_after: float, at_ns: int, state: str = LOCKED):
+    return LockedAllocation(
+        order_id=order_id, venue_id="binance-usdm", symbol="BTCUSDT",
+        amount=100.0, state=state, free_balance_after=free_after,
+        reason="held against this order", decided_at_ns=at_ns,
+    )
+
+
+def test_a_locked_allocation_is_identified_by_its_order_not_by_a_segment():
+    """The field the sizer crashed on, pinned on the producer's own type."""
+    assert not hasattr(LockedAllocation, "segment")
+    assert "order_id" in LockedAllocation.__dataclass_fields__
+    assert "free_balance_after" in LockedAllocation.__dataclass_fields__
+
+
+def test_free_capital_is_the_most_recent_decision_not_the_largest():
+    """Free balance is a level: the newest statement of it is the true one."""
+    locks = {
+        "a": allocation("a", 900.0, at_ns=1),
+        "b": allocation("b", 800.0, at_ns=3),
+        "c": allocation("c", 850.0, at_ns=2),
+    }
+    assert free_capital_from_locks(locks.values()) == 800.0
+
+
+def test_a_release_raises_the_free_balance_again():
+    """A released lock is the newest decision, and its free balance is the one to use."""
+    locks = {
+        "a": allocation("a", 800.0, at_ns=1),
+        "b": allocation("b", 1_000.0, at_ns=2, state=RELEASED),
+    }
+    assert free_capital_from_locks(locks.values()) == 1_000.0
+
+
+def test_no_lock_ever_seen_is_not_a_free_balance_of_zero():
+    """Nothing locked and nothing said are different facts; zero would refuse every order."""
+    assert free_capital_from_locks(()) is None
+
+
+def sizer():
+    from parts.risk_capital_allocation.position_sizer import PositionSizer
+
+    return PositionSizer(taker_fee_rate=0.0005, slippage_fraction=0.0, now_ns=lambda: 1)
+
+
+def size_with(free_capital, leverage=1.0):
+    return sizer().size(
+        venue_id="binance-usdm", symbol="BTCUSDT", side="buy",
+        entry_price=100.0, stop_price=99.0, allotment=10_000.0,
+        risk_limit_fraction=0.01, leverage=leverage, price_increment=0.01,
+        quantity_increment=0.001, minimum_quantity=0.001, free_capital=free_capital,
+    )
+
+
+def test_free_capital_the_ledger_never_reported_does_not_cap_the_size():
+    """Risk is the only limit until the ledger has something to say."""
+    unbounded = size_with(free_capital=None)
+    assert unbounded.outcome == "sized"
+    assert unbounded.quantity > 0
+
+
+def test_an_order_is_shrunk_to_what_the_free_balance_pays_for():
+    """The account cannot spend money already locked against an order in flight."""
+    from parts.risk_capital_allocation.position_sizer import SHRUNK_TO_FIT
+
+    unbounded = size_with(free_capital=None)
+    capped = size_with(free_capital=10.0)
+    assert capped.quantity < unbounded.quantity
+    assert capped.outcome == SHRUNK_TO_FIT
+    assert capped.quantity * capped.entry_price <= 10.0 + 1e-9
+
+
+def test_leverage_is_what_the_free_balance_buys_more_of():
+    """A 10x position of the same notional costs a tenth of the balance."""
+    assert size_with(free_capital=10.0, leverage=10.0).quantity > size_with(free_capital=10.0).quantity
+
+
+def test_a_free_balance_too_small_to_trade_is_its_own_refusal():
+    """Not 'too small to risk': the stop is fine and the capital is committed."""
+    from parts.risk_capital_allocation.position_sizer import REFUSED_NO_FREE_CAPITAL
+
+    refused = size_with(free_capital=0.05)
+    assert refused.outcome == REFUSED_NO_FREE_CAPITAL
+    assert refused.quantity == 0.0
+    assert "free at" in refused.reason

@@ -54,6 +54,7 @@ REFUSED_NO_LIMIT = "refused-no-risk-allowed"
 REFUSED_STOP_INVALID = "refused-stop-on-the-wrong-side"
 REFUSED_TOO_SMALL = "refused-smallest-size-risks-too-much"
 REFUSED_NO_INCREMENT = "refused-no-price-increment"
+REFUSED_NO_FREE_CAPITAL = "refused-free-capital-funds-nothing-tradeable"
 SHRUNK_TO_FIT = "shrunk-to-fit"
 
 # How many times the size is re-solved against fees before giving up. Each pass
@@ -98,6 +99,12 @@ class SizerStanding:
     refused_stop_invalid: int = 0
     refused_too_small: int = 0
     refused_no_increment: int = 0
+    refused_no_free_capital: int = 0
+    # Orders the risk budget would have allowed and the free balance would not.
+    # Counted apart from the shrinks risk caused: a bot cut short by its own
+    # committed capital is a bot that needs fewer orders in flight, and a bot cut
+    # short by its stop distance is a different fact with a different answer.
+    shrunk_by_free_capital: int = 0
     largest_risk_taken: float = 0.0
     # Intents that said stand aside. Not a refusal by this part -- the decision
     # was made upstream -- but counted, because a bot whose every opinion is a
@@ -131,6 +138,7 @@ class PositionSizer:
         minimum_quantity: float,
         maximum_quantity: float | None = None,
         size_hint: float | None = None,
+        free_capital: float | None = None,
         intent_id: str = "",
     ) -> SizedOrder:
         if risk_limit_fraction <= NO_RISK_ALLOWED:
@@ -182,10 +190,35 @@ class PositionSizer:
         if maximum_quantity is not None:
             quantity = min(quantity, maximum_quantity)
 
-        snapped = self._snap_quantity(quantity, quantity_increment)
+        # Capital already locked against orders in flight is capital this order
+        # cannot spend. Risk and capital are different limits and both bind: the
+        # risk budget says how much this trade may lose, and the free balance says
+        # whether the account can pay for it at all. Sized against equity alone,
+        # two decisions in one tick are both sized against the same money, and the
+        # second is only discovered when fund-lock-ledger refuses its lock -- after
+        # the order exists. Shrinking here turns that refusal into a smaller order,
+        # which is the choice this part makes everywhere else.
+        affordable = quantity
+        if free_capital is not None:
+            affordable = min(quantity, self._quantity_free_capital_funds(free_capital, leverage, entry))
+
+        snapped = self._snap_quantity(affordable, quantity_increment)
         outcome = SIZED if snapped >= quantity - quantity_increment else SHRUNK_TO_FIT
+        if outcome == SHRUNK_TO_FIT and affordable < quantity:
+            self.standing.shrunk_by_free_capital += 1
 
         if snapped < minimum_quantity:
+            if affordable < quantity and self._snap_quantity(quantity, quantity_increment) >= minimum_quantity:
+                # The risk budget would have funded a tradeable size and the free
+                # balance would not. Said as its own refusal, because "too small"
+                # points at the stop and this points at capital already committed.
+                self.standing.refused_no_free_capital += 1
+                return self._refusal(
+                    venue_id, symbol, side, entry, stop, REFUSED_NO_FREE_CAPITAL, leverage,
+                    f"{free_capital:,.2f} free at {leverage:g}x funds {affordable:g}, "
+                    f"below the smallest tradeable size of {minimum_quantity:g}",
+                    intent_id,
+                )
             smallest_risk = minimum_quantity * loss_per_unit + self._fees_for(
                 minimum_quantity, entry, stop
             )
@@ -194,6 +227,7 @@ class PositionSizer:
                 venue_id, symbol, side, entry, stop, REFUSED_TOO_SMALL, leverage,
                 f"the smallest tradeable size of {minimum_quantity:g} would risk "
                 f"{smallest_risk:,.2f} against {risk_allowed:,.2f} allowed",
+                intent_id,
             )
 
         risk_at_stop = snapped * loss_per_unit + self._fees_for(snapped, entry, stop)
@@ -228,6 +262,17 @@ class PositionSizer:
             sized_at_ns=self._now_ns(),
         )
 
+    def _quantity_free_capital_funds(self, free_capital: float, leverage: float, entry: float) -> float:
+        """The largest position the unlocked balance pays the margin for.
+
+        Leverage is what makes this a different number from the notional: a 10x
+        position of 1,000 costs 100 of the balance, and refusing to see that would
+        cap every levered trade at its unlevered size.
+        """
+        if entry <= 0 or free_capital <= 0:
+            return 0.0
+        return free_capital * leverage / entry
+
     def _fees_for(self, quantity: float, entry: float, stop: float) -> float:
         """Both sides charged: an entry that stops out pays to get in and to get out."""
         return quantity * (entry + stop) * self._fee_rate
@@ -257,6 +302,27 @@ class PositionSizer:
             leverage=leverage, reason=reason, sized_at_ns=self._now_ns(),
             intent_id=intent_id,
         )
+
+
+def free_capital_from_locks(locks) -> float | None:
+    """What fund-lock-ledger last said is unlocked, or None if it has never said.
+
+    The newest decision wins rather than the smallest, because a free balance is a
+    level and not a total: the ledger owns the arithmetic of what is held against
+    what, and re-deriving it here from the locks this part happens to have seen
+    would be a second answer free to disagree with the one the ledger refuses
+    against. A released lock is a decision like any other, so the balance rises
+    again the moment the ledger says it has.
+
+    **None is not zero.** Nothing locked and nothing said are different facts, and
+    reading silence as a free balance of zero would refuse every order the first
+    time this part started before the ledger did.
+    """
+    newest = None
+    for lock in locks:
+        if newest is None or lock.decided_at_ns > newest.decided_at_ns:
+            newest = lock
+    return None if newest is None else newest.free_balance_after
 
 
 def entry_price_for(plan, instrument) -> float | None:
@@ -295,6 +361,8 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "refused_stop_invalid": sizer.standing.refused_stop_invalid,
         "refused_too_small": sizer.standing.refused_too_small,
         "refused_no_price_increment": sizer.standing.refused_no_increment,
+        "refused_no_free_capital": sizer.standing.refused_no_free_capital,
+        "shrunk_by_free_capital": sizer.standing.shrunk_by_free_capital,
         "largest_risk_taken": sizer.standing.largest_risk_taken,
         "intents_that_stood_aside": sizer.standing.stood_aside,
     }
@@ -355,9 +423,14 @@ def start_part(context) -> int:
         read=context.bus.reader("account-balance"),
         key_of=lambda balance: balance.segment,
     )
+    # Keyed by the order the capital is held against, which is what identifies a
+    # lock. It was keyed on a segment until 2026-08-25 -- a field LockedAllocation
+    # has never carried -- and nothing failed while fund-lock-ledger was unbuilt,
+    # because an assembly with no messages never calls its key function. The hour
+    # that part first ran, this one crashed on every tick that saw a lock.
     locked = LatestByKey(
         read=context.bus.reader("locked-allocation"),
-        key_of=lambda lock: lock.segment,
+        key_of=lambda lock: lock.order_id,
     )
     # The binding limit is the smallest fraction any limiter allows, so they are
     # kept per limiter and the minimum is taken: a limiter that says nothing must
@@ -384,7 +457,7 @@ def start_part(context) -> int:
         increment_by_symbol = increments.mapping()
         hint_by_symbol = hints.mapping()
         slippage.mapping()
-        locked.mapping()
+        free_capital = free_capital_from_locks(locked.mapping().values())
         balance_by_segment = allotments.mapping()
         every_limit = limits.mapping()
 
@@ -443,6 +516,7 @@ def start_part(context) -> int:
                     "quantity_increment": quantity_increment,
                     "minimum_quantity": quantity_increment,
                     "size_hint": getattr(hint, "quantity", None),
+                    "free_capital": free_capital,
                 }
             )
         return tuple(sizable)
