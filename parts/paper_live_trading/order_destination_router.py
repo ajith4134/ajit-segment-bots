@@ -33,6 +33,7 @@ from runtime.trading_types import (
     REFUSED_UNSTAMPED,
     ROUTED,
     OrderRequest,
+    leverage_behind,
 )
 
 PART_ID = "order-destination-router"
@@ -134,6 +135,11 @@ class OrderDestinationRouter:
                     # Carried, not acted on: what makes an order wait for a
                     # trigger is its type, never the presence of this number.
                     stop_price=stamped_order.stop_price,
+                    # Splitting an order does not change what it was sized at:
+                    # each slice commits its own notional over the same leverage,
+                    # and a slice that dropped it would have the account paying
+                    # full notional for a levered position.
+                    leverage=leverage_behind(stamped_order),
                     slice_sequence=index,
                     slice_count=len(slices),
                     at_second=at_second,

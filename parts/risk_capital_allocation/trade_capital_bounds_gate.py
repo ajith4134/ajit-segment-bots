@@ -31,6 +31,12 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.trading_types import (
+    UNLEVERED,
+    capital_committed_by,
+    leverage_behind,
+    quantity_for_capital,
+)
 
 PART_ID = "trade-capital-bounds-gate"
 
@@ -73,6 +79,11 @@ class BoundedOrder:
     # order for one decision the same id, which is what makes a republished
     # intent one order rather than one order per tick.
     intent_id: str = ""
+    # The leverage the sizer chose, carried on so what this order commits stays
+    # computable further along: `capital_used` is the notional over this number,
+    # and an order that dropped it would leave the account paying full notional
+    # for a levered position.
+    leverage: float = UNLEVERED
 
     @property
     def may_be_sent(self) -> bool:
@@ -116,7 +127,8 @@ class TradeCapitalBoundsGate:
                 f"the sizer produced no tradeable order: {sized_order.reason}",
             )
 
-        capital = sized_order.quantity * sized_order.entry_price
+        leverage = leverage_behind(sized_order)
+        capital = capital_committed_by(sized_order.quantity, sized_order.entry_price, leverage)
 
         if capital < bounds.minimum_capital:
             return self._bump(sized_order, bounds, capital)
@@ -133,7 +145,10 @@ class TradeCapitalBoundsGate:
 
     def _bump(self, sized_order, bounds, capital: float) -> BoundedOrder:
         """Raise to the minimum, unless that would risk more than allowed (RL-054)."""
-        quantity = self._snap_up(bounds.minimum_capital / sized_order.entry_price)
+        leverage = leverage_behind(sized_order)
+        quantity = self._snap_up(
+            quantity_for_capital(bounds.minimum_capital, sized_order.entry_price, leverage)
+        )
         scaled_risk = self._risk_at(sized_order, quantity)
 
         if scaled_risk > sized_order.risk_allowed:
@@ -145,7 +160,7 @@ class TradeCapitalBoundsGate:
                 f"bounds cannot both be satisfied for this trade",
             )
 
-        bumped_capital = quantity * sized_order.entry_price
+        bumped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
         self.standing.bumped += 1
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, bumped_capital)
         return self._bounded(
@@ -155,8 +170,11 @@ class TradeCapitalBoundsGate:
 
     def _cap(self, sized_order, bounds, capital: float) -> BoundedOrder:
         """Cut to the maximum. Never a refusal: the maximum is a tradeable size."""
-        quantity = self._snap_down(bounds.maximum_capital / sized_order.entry_price)
-        capped_capital = quantity * sized_order.entry_price
+        leverage = leverage_behind(sized_order)
+        quantity = self._snap_down(
+            quantity_for_capital(bounds.maximum_capital, sized_order.entry_price, leverage)
+        )
+        capped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
         self.standing.capped += 1
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, capped_capital)
         return self._bounded(
@@ -193,6 +211,7 @@ class TradeCapitalBoundsGate:
             risk_allowed=sized_order.risk_allowed,
             reason=reason,
             bounded_at_ns=self._now_ns(),
+            leverage=leverage_behind(sized_order),
             # Straight through: bounding an order does not make it a different
             # decision, and the id has to survive every step between the intent
             # and the venue or it stops being an identity.

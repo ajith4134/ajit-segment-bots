@@ -479,6 +479,20 @@ def read_trustworthy_after_ns() -> int | None:
         return None
 
 
+def capital_in_of(payload: dict) -> float | None:
+    """What a closed trade put in, from what the journal recorded.
+
+    None rather than zero when either half is missing: a trade whose entry price
+    or quantity was never recorded has an unknown capital, and zero would read as
+    a trade that cost nothing (Rule 8).
+    """
+    entry_price = payload.get("entry_price")
+    quantity = payload.get("quantity")
+    if not entry_price or not quantity:
+        return None
+    return abs(float(quantity)) * float(entry_price)
+
+
 def read_closed_trades() -> tuple[list[dict], dict]:
     """Recent round trips, from the end of the position journal."""
     from runtime.closed_trade_trust import judge_closed_trade
@@ -508,6 +522,16 @@ def read_closed_trades() -> tuple[list[dict], dict]:
                 "quantity": payload.get("quantity"),
                 "entry_price": payload.get("entry_price"),
                 "exit_price": payload.get("exit_price"),
+                # What went into the position, in the quote currency, at the price
+                # it was opened at. The same figure the open-positions table shows
+                # as `capital_in`, so a reader can compare a closed trade with a
+                # live one without doing arithmetic in their head.
+                #
+                # The notional, not the margin posted: margin is notional divided
+                # by the leverage the trade was opened at, and nothing records a
+                # per-trade leverage yet, so a margin figure would mean inventing
+                # the divisor.
+                "capital_in": capital_in_of(payload),
                 "realised_pnl": realised,
                 "fees_paid": fees,
                 # What the trade actually made. Gross minus fees, because a board
@@ -607,9 +631,16 @@ def summarise_closed(trades: list[dict]) -> dict:
     if not scored:
         return {
             "count": 0, "untrusted_count": untrusted, "net_pnl": None,
-            "wins": 0, "win_rate": None, "fees_paid": None,
+            "wins": 0, "win_rate": None, "fees_paid": None, "capital_in": None,
+            "return_on_capital": None,
         }
     wins = [t for t in scored if t["net_pnl"] > 0]
+    # Only over the rows whose capital is known, and the count of those rows
+    # travels with it: a return computed over a subset and presented as the
+    # return is the same fiction as a green tile off no measurement.
+    with_capital = [t for t in scored if t.get("capital_in")]
+    capital_in = sum(t["capital_in"] for t in with_capital) or None
+    net_of_those = sum(t["net_pnl"] for t in with_capital)
     return {
         "count": len(scored),
         "untrusted_count": len([t for t in trades if not t.get("is_trusted", True)]),
@@ -618,6 +649,10 @@ def summarise_closed(trades: list[dict]) -> dict:
         "fees_paid": sum(t["fees_paid"] for t in scored),
         "wins": len(wins),
         "win_rate": len(wins) / len(scored),
+        # What was put in across these round trips, and what came back on it.
+        "capital_in": capital_in,
+        "trades_with_a_known_capital": len(with_capital),
+        "return_on_capital": None if capital_in is None else net_of_those / capital_in,
     }
 
 

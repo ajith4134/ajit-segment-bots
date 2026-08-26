@@ -893,14 +893,87 @@ def bounds(minimum=100.0, maximum=1000.0):
     return TradeCapitalBounds(SEGMENT, minimum, maximum, "USDT")
 
 
-def sized_for_gate(quantity, entry=100.0, risk=50.0, allowed=100.0):
+def sized_for_gate(quantity, entry=100.0, risk=50.0, allowed=100.0, leverage=1.0):
     from parts.risk_capital_allocation.position_sizer import SIZED, SizedOrder
 
     return SizedOrder(
         venue_id=VENUE, symbol=SYMBOL, side=BUY, quantity=quantity, entry_price=entry,
         stop_price=98.0, outcome=SIZED, risk_allowed=allowed, risk_at_stop=risk,
-        fees_charged=0.0, notional=quantity * entry, leverage=1.0, reason="", sized_at_ns=1,
+        fees_charged=0.0, notional=quantity * entry, leverage=leverage, reason="",
+        sized_at_ns=1,
     )
+
+
+# The operator's bound is on what a trade **commits**, not on what it controls.
+# `maximum_capital_per_trade` says "the most one trade may commit" and
+# `leverage_ceiling` says how far that commitment reaches; measured against the
+# notional, the ceiling does nothing at all. It did nothing until 2026-08-26: the
+# operator raised it from 1 to 10 at 12:42 and the three trades that opened after
+# that committed 99.47, 100.17 and 100.09 USDT of notional against a 100 maximum,
+# exactly as they had at 1x.
+
+
+def test_leverage_decides_how_far_a_commitment_reaches():
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    # 10 units at 100 is 1,000 of notional. At 10x that commits 100.
+    result = gate.bound(
+        sized_for_gate(10.0, leverage=10.0), bounds(minimum=50.0, maximum=100.0), True
+    )
+
+    assert result.outcome == WITHIN_BOUNDS, (
+        "an order committing exactly the maximum was treated as ten times it"
+    )
+    assert result.capital_used == pytest.approx(100.0)
+    assert result.quantity == 10.0
+
+
+def test_the_same_order_unlevered_is_cut_to_the_maximum():
+    """The same notional at 1x commits ten times as much, and the bound bites."""
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    result = gate.bound(
+        sized_for_gate(10.0, leverage=1.0), bounds(minimum=50.0, maximum=100.0), True
+    )
+
+    assert result.outcome == CAPPED_AT_MAXIMUM
+    assert result.capital_used == pytest.approx(100.0)
+    assert result.quantity == pytest.approx(1.0)
+
+
+def test_a_cap_at_leverage_cuts_to_what_the_maximum_commitment_buys():
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    # 100 units at 100 is 10,000 of notional; at 5x that commits 2,000, over the
+    # 100 maximum, so it is cut to the 500 of notional 100 commits at 5x.
+    result = gate.bound(
+        sized_for_gate(100.0, leverage=5.0), bounds(minimum=50.0, maximum=100.0), True
+    )
+
+    assert result.outcome == CAPPED_AT_MAXIMUM
+    assert result.capital_used == pytest.approx(100.0)
+    assert result.quantity == pytest.approx(5.0)
+
+
+def test_a_bump_at_leverage_buys_what_the_minimum_commitment_buys():
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    result = gate.bound(
+        sized_for_gate(0.1, risk=1.0, allowed=100.0, leverage=10.0),
+        bounds(minimum=50.0, maximum=100.0), True,
+    )
+
+    assert result.outcome == BUMPED_TO_MINIMUM
+    assert result.capital_used == pytest.approx(50.0)
+    # 50 committed at 10x is 500 of notional, which is 5 units at 100.
+    assert result.quantity == pytest.approx(5.0)
+
+
+def test_an_order_with_no_leverage_behind_it_commits_its_whole_notional():
+    """Missing is unlevered, which is the conservative reading and the old one."""
+    from parts.risk_capital_allocation.trade_capital_bounds_gate import leverage_behind
+
+    class Unlevered:
+        leverage = 0.0
+
+    assert leverage_behind(Unlevered()) == 1.0
+    assert leverage_behind(object()) == 1.0
 
 
 def test_an_order_inside_the_bounds_passes_untouched():

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.trading_types import UNLEVERED, leverage_behind
 
 PART_ID = "order-idempotency-stamper"
 
@@ -60,6 +61,12 @@ class StampedOrder:
     outcome: str
     reason: str
     stamped_at_ns: int
+    # What the desk sized this order at. Stamping is about identity and changes
+    # nothing about the order, so the leverage travels through untouched -- and it
+    # has to travel, because the account that pays for the fill computes what the
+    # position ties up as its notional over this number and a fill states only a
+    # price and a quantity, which are the same at 1x and at 10x.
+    leverage: float = UNLEVERED
 
 
 @dataclass
@@ -157,6 +164,7 @@ class OrderIdempotencyStamper:
             outcome=outcome,
             reason=reason,
             stamped_at_ns=self._now_ns(),
+            leverage=leverage_behind(order),
         )
 
 

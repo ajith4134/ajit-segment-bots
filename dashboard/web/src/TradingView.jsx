@@ -323,6 +323,29 @@ function ClosedTrades({ closed }) {
               <span className="sep">·</span>
               <span>{formatPercent(summary.win_rate, 0)} won</span>
               <span className="sep">·</span>
+              {/* What was put in across these round trips, and what came back on
+                  it. Only over the rows whose capital the journal recorded, and
+                  it says so when that is not all of them. */}
+              {summary.capital_in == null ? (
+                <span className="unmeasured">capital in NOT MEASURED</span>
+              ) : (
+                <>
+                  <span>{summary.capital_in.toFixed(2)} USDT in</span>
+                  <span className="sep">·</span>
+                  <span>
+                    <Pnl value={summary.return_on_capital * 100} digits={2} />% on capital
+                  </span>
+                  {summary.trades_with_a_known_capital !== summary.count && (
+                    <>
+                      <span className="sep">·</span>
+                      <span className="unmeasured">
+                        over {summary.trades_with_a_known_capital} of {summary.count} rows
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
+              <span className="sep">·</span>
               <span className="faint">{summary.fees_paid?.toFixed(2)} in fees</span>
             </>
           )}
@@ -348,6 +371,7 @@ function ClosedTrades({ closed }) {
               <tr>
                 <th>symbol</th><th>side</th>
                 <th className="n">quantity</th><th className="n">entry</th><th className="n">exit</th>
+                <th className="n">capital in</th>
                 <th className="n">held</th><th className="n">best</th><th className="n">worst</th>
                 <th className="n">fees</th><th className="n">net</th>
                 <th>where the money came from</th>
@@ -375,6 +399,15 @@ function ClosedTrades({ closed }) {
                   <td className="n mono"><Num value={t.quantity} /></td>
                   <td className="n mono"><Num value={t.entry_price} /></td>
                   <td className="n mono"><Num value={t.exit_price} /></td>
+                  {/* What went in, at the price it went in at. Missing rather
+                      than zero when the journal never recorded a price or a
+                      quantity: a trade that cost nothing is a different claim
+                      from a trade whose cost is unknown. */}
+                  <td className="n mono">
+                    {t.capital_in == null
+                      ? <span className="unmeasured">—</span>
+                      : t.capital_in.toFixed(2)}
+                  </td>
                   <td className="n mono faint">{formatDuration(t.holding_seconds) || '—'}</td>
                   <td className="n mono"><Pnl value={t.best_unrealised} /></td>
                   <td className="n mono"><Pnl value={t.worst_unrealised} /></td>

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, LONG, SHORT
+from runtime.trading_types import BUY, LONG, SHORT, capital_committed_by, leverage_behind
 
 PART_ID = "paper-account-keeper"
 
@@ -76,6 +76,13 @@ class PaperBalance:
 class _PaperPosition:
     quantity: float
     average_price: float
+    # The cash this position actually took out of the account and still holds --
+    # its notional over the leverage it was opened at, not its notional. Kept as
+    # the number that was posted rather than recomputed from the average price,
+    # because a position increased twice at two different leverages has no single
+    # leverage to divide by, and the cash that left the account is a fact either
+    # way. Returned in proportion as the position is closed.
+    margin_posted: float = 0.0
 
 
 @dataclass
@@ -129,6 +136,7 @@ class PaperAccountKeeper:
                 f"{venue_id}|{symbol}": {
                     "quantity": position.quantity,
                     "average_price": position.average_price,
+                    "margin_posted": position.margin_posted,
                 }
                 for (venue_id, symbol), position in self._positions.items()
             },
@@ -150,8 +158,15 @@ class PaperAccountKeeper:
             quantity = float(held["quantity"])
             if quantity == 0:
                 continue
+            average_price = float(held["average_price"])
             self._positions[(venue_id, symbol)] = _PaperPosition(
-                quantity, float(held["average_price"])
+                quantity,
+                average_price,
+                # A checkpoint written before margin was tracked was written by an
+                # account that had debited the whole notional, so the unlevered
+                # reading is what its cash figure is consistent with. Restoring
+                # zero would hand that cash back at the next close.
+                float(held.get("margin_posted", abs(quantity) * average_price)),
             )
         self._seen_fills = set(state.get("seen_fills") or ())
         return len(self._positions)
@@ -182,10 +197,16 @@ class PaperAccountKeeper:
 
         key = (fill.venue_id, fill.symbol)
         held = self._positions.get(key)
-        cost = fill.quantity * fill.price
+        # What this fill ties up. **The notional over the leverage it was sized
+        # at**, which is the same figure `trade-capital-bounds-gate` admitted the
+        # trade on: an account that debited the notional while the gate measured
+        # the commitment would refuse for want of cash trades the operator's own
+        # bounds had just passed, and would report an equity ten times too small
+        # for every cap computed off it.
+        margin = capital_committed_by(fill.quantity, fill.price, leverage_behind(fill))
         opening = held is None or held.quantity == 0 or (held.quantity > 0) == (fill.side == BUY)
 
-        if opening and cost + fill.fee > self._cash:
+        if opening and margin + fill.fee > self._cash:
             # A paper account that went negative would let a strategy spend money
             # a venue would have refused it, and the paper record would show a
             # trade that could not have happened.
@@ -198,17 +219,22 @@ class PaperAccountKeeper:
 
         signed = fill.signed_quantity
         if held is None:
-            self._positions[key] = _PaperPosition(signed, fill.price)
-            self._cash -= cost if signed > 0 else -cost
+            # Margin leaves the account on both sides. A short posts margin the
+            # same way a long does -- it does not hand the account the sale
+            # proceeds, which is what a spot short would do and what this did
+            # until 2026-08-26: shorting *raised* free cash, and every exposure
+            # cap computed as a fraction of equity grew by opening a short.
+            self._positions[key] = _PaperPosition(signed, fill.price, margin)
+            self._cash -= margin
         else:
-            self._apply_to_position(key, held, fill, signed, cost)
+            self._apply_to_position(key, held, fill, signed, margin)
 
         self.standing.fills_applied += 1
         if self.standing.lowest_cash is None or self._cash < self.standing.lowest_cash:
             self.standing.lowest_cash = self._cash
         return APPLIED
 
-    def _apply_to_position(self, key, held, fill, signed, cost) -> None:
+    def _apply_to_position(self, key, held, fill, signed, margin) -> None:
         increasing = held.quantity == 0 or (held.quantity > 0) == (signed > 0)
         if increasing:
             total = abs(held.quantity) + abs(signed)
@@ -216,21 +242,33 @@ class PaperAccountKeeper:
                 abs(held.quantity) * held.average_price + abs(signed) * fill.price
             ) / total
             held.quantity += signed
-            self._cash -= cost if signed > 0 else -cost
+            held.margin_posted += margin
+            self._cash -= margin
             return
 
         closed = min(abs(held.quantity), abs(signed))
         gain = (fill.price - held.average_price) * closed
         realised = gain if held.quantity > 0 else -gain
-        self._cash += realised
-        # Returning the capital the closed portion had committed.
-        self._cash += closed * held.average_price if held.quantity > 0 else -closed * held.average_price
+        # The margin the closed portion had posted, returned in the proportion it
+        # is being closed in. Taken from what the position actually posted rather
+        # than recomputed from its average price: the two differ by exactly the
+        # leverage it opened at, and recomputing would hand back money that never
+        # left the account.
+        returned = held.margin_posted * (closed / abs(held.quantity))
+        held.margin_posted -= returned
+        self._cash += realised + returned
         self.standing.realised_total += realised
 
         held.quantity += signed
         if abs(signed) > closed:
+            # Straight through flat and out the other side. What is left is a new
+            # position the other way, posting its own margin at this fill's
+            # leverage -- the old position's is already back in cash.
             held.average_price = fill.price
-            self._cash -= abs(held.quantity) * fill.price if held.quantity > 0 else -abs(held.quantity) * fill.price
+            held.margin_posted = capital_committed_by(
+                abs(held.quantity), fill.price, leverage_behind(fill)
+            )
+            self._cash -= held.margin_posted
         if held.quantity == 0:
             del self._positions[key]
 
@@ -243,9 +281,11 @@ class PaperAccountKeeper:
             gain = (mark - position.average_price) * abs(position.quantity)
             unrealised += gain if position.quantity > 0 else -gain
 
-        committed = sum(
-            abs(position.quantity) * position.average_price for position in self._positions.values()
-        )
+        # What the open positions are holding of the account's own money. The
+        # margin they posted, not their notional: cash was only ever reduced by
+        # the margin, so adding the notional back would report an equity that grew
+        # with leverage -- and every risk cap in the segment is a fraction of it.
+        committed = sum(position.margin_posted for position in self._positions.values())
         equity = self._cash + committed + unrealised
 
         return PaperBalance(

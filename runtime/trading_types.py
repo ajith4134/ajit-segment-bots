@@ -54,6 +54,48 @@ def order_side_for(position_side: str) -> str:
     )
 
 
+# The smallest leverage there is, and what an order carries when nothing said one.
+# Unlevered means a position commits its whole notional, which is the conservative
+# reading: it claims the account has less room than a levered one would, never more.
+UNLEVERED = 1.0
+
+
+def leverage_behind(order_or_fill) -> float:
+    """The leverage a thing was sized at, or unlevered when it does not say.
+
+    Every step between the sizer and the account has to agree on this number,
+    because what a position ties up is its notional divided by it -- and a step
+    that dropped it would have the account paying full notional for a levered
+    position while the gate that admitted the trade measured it as a tenth of
+    that. Read with `getattr` on purpose: it is asked of sized orders, bounded
+    orders, stamped orders, order requests and fills, and a shape from before this
+    field existed is unlevered rather than an error.
+    """
+    leverage = getattr(order_or_fill, "leverage", None)
+    return float(leverage) if leverage and leverage > 0 else UNLEVERED
+
+
+def capital_committed_by(quantity: float, price: float, leverage: float) -> float:
+    """What a position of this size actually ties up: its notional over its leverage.
+
+    The operator's `maximum_capital_per_trade` bounds what a trade **commits**;
+    `leverage_ceiling` says how far that commitment reaches. Measured against the
+    notional instead, the ceiling does nothing at all -- which is what it did until
+    2026-08-26, when it was raised from 1 to 10 and every trade that opened
+    afterwards still committed 99.47, 100.17 and 100.09 USDT of notional against a
+    100 maximum, exactly as it had at 1x.
+    """
+    notional = abs(quantity) * price
+    return notional / leverage if leverage > 0 else notional
+
+
+def quantity_for_capital(capital: float, price: float, leverage: float) -> float:
+    """How much a given commitment buys at this leverage. The inverse of the above."""
+    if price <= 0:
+        return 0.0
+    return capital * max(leverage, UNLEVERED) / price
+
+
 @dataclass(frozen=True)
 class Fill:
     """One execution, as the venue reported it."""
@@ -68,6 +110,12 @@ class Fill:
     filled_at_ns: int
     order_id: str | None = None
     is_paper: bool = True
+    # The leverage the order behind this fill was sized at. Carried because what
+    # a position ties up is its notional over its leverage, and the account that
+    # pays for it has no other way to know: a fill states a price and a quantity,
+    # and those are the same numbers at 1x and at 10x. One when nothing said,
+    # which is the unlevered reading and the conservative one.
+    leverage: float = 1.0
 
     @property
     def signed_quantity(self) -> float:
@@ -145,6 +193,10 @@ class OrderRequest:
     routed_at_ns: int
     cancels_client_order_id: str | None = None
     order_type: str = MARKET
+    # What the desk sized this order at, carried through to whoever pays for the
+    # fill. An exit leaves it at one: closing returns whatever the position
+    # committed, which the account already knows.
+    leverage: float = 1.0
     # The price the decision behind this order was made at. Carried as evidence,
     # never as an instruction -- a market order is still a market order. It exists
     # so the venue side can refuse an order whose decision has gone stale: on

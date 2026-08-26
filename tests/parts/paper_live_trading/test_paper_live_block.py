@@ -179,13 +179,14 @@ def test_one_ungraduated_bot_blocks_the_whole_segment():
 # ---- order-idempotency-stamper -----------------------------------------------
 
 class BoundedStub:
-    def __init__(self, quantity=1.0, entry=100.0):
+    def __init__(self, quantity=1.0, entry=100.0, leverage=1.0):
         self.venue_id = VENUE
         self.symbol = SYMBOL
         self.side = BUY
         self.quantity = quantity
         self.entry_price = entry
         self.stop_price = 98.0
+        self.leverage = leverage
 
 
 def test_the_same_order_stamps_the_same_id():
@@ -471,8 +472,115 @@ def keeper(allotted=10_000.0):
     return subject
 
 
-def paper_fill(fill_id, side, price, quantity, fee=0.0, is_paper=True):
-    return Fill(fill_id, VENUE, SYMBOL, side, price, quantity, fee, 1, "o1", is_paper)
+def paper_fill(fill_id, side, price, quantity, fee=0.0, is_paper=True, leverage=1.0):
+    return Fill(
+        fill_id, VENUE, SYMBOL, side, price, quantity, fee, 1, "o1", is_paper, leverage
+    )
+
+
+# ---- what a position ties up ------------------------------------------------
+#
+# The operator raised `leverage_ceiling` from 1 to 10 at 12:42 on 2026-08-26 and
+# nothing changed: `trade-capital-bounds-gate` measured its bound against the
+# notional, so the three trades that opened afterwards committed 99.47, 100.17 and
+# 100.09 USDT against a 100 maximum, exactly as they had at 1x. The gate reads the
+# commitment now -- notional over leverage -- and this account has to agree with
+# it, or it refuses for want of cash the very trades the operator's bounds passed.
+
+
+def test_a_levered_fill_ties_up_its_notional_over_its_leverage():
+    subject = keeper(10_000.0)
+    # 10 at 100 is 1,000 of notional; at 10x it posts 100 of margin.
+    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, leverage=10.0)) == APPLIED
+
+    balance = subject.read_balance()
+    assert balance.cash == pytest.approx(9_900.0), "the account paid the whole notional"
+    subject.observe_mark_price(VENUE, SYMBOL, 100.0)
+    assert subject.read_balance().equity == pytest.approx(10_000.0), (
+        "equity grew with leverage, and every risk cap is a fraction of it"
+    )
+
+
+def test_the_same_fill_unlevered_ties_up_the_whole_notional():
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, leverage=1.0))
+    assert subject.read_balance().cash == pytest.approx(9_000.0)
+
+
+def test_closing_returns_the_margin_that_was_posted_not_the_notional():
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, leverage=10.0))
+    subject.apply_fill(paper_fill("f2", SELL, 110.0, 10.0))
+
+    balance = subject.read_balance()
+    assert balance.open_positions == 0
+    # 100 of margin back, plus the 100 the move made on 1,000 of notional.
+    assert balance.realised_total == pytest.approx(100.0)
+    assert balance.cash == pytest.approx(10_100.0)
+
+
+def test_half_a_levered_position_returns_half_its_margin():
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, leverage=10.0))
+    subject.apply_fill(paper_fill("f2", SELL, 100.0, 5.0))
+
+    balance = subject.read_balance()
+    assert balance.open_positions == 1
+    assert balance.cash == pytest.approx(9_950.0)
+    subject.observe_mark_price(VENUE, SYMBOL, 100.0)
+    assert subject.read_balance().equity == pytest.approx(10_000.0)
+
+
+def test_a_levered_trade_the_account_could_not_afford_unlevered_is_admitted():
+    """The operator's ceiling has to reach the account, or it reaches nothing."""
+    subject = keeper(200.0)
+    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0)) == REFUSED_INSUFFICIENT
+    assert subject.apply_fill(paper_fill("f2", BUY, 100.0, 10.0, leverage=10.0)) == APPLIED
+    assert subject.read_balance().cash == pytest.approx(100.0)
+
+
+def test_a_short_posts_margin_rather_than_raising_the_account_s_cash():
+    """A perpetual short does not hand the account the sale proceeds.
+
+    It did until 2026-08-26: opening a short *raised* free cash by the whole
+    notional, so a segment could short its way to a larger equity and every
+    exposure cap computed as a fraction of that equity grew with it.
+    """
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", SELL, 100.0, 10.0, leverage=10.0))
+
+    balance = subject.read_balance()
+    assert balance.cash == pytest.approx(9_900.0)
+    assert balance.open_positions == 1
+    subject.observe_mark_price(VENUE, SYMBOL, 90.0)
+    reread = subject.read_balance()
+    assert reread.unrealised == pytest.approx(100.0), "a short did not gain as the price fell"
+    assert reread.equity == pytest.approx(10_100.0)
+
+    subject.apply_fill(paper_fill("f2", BUY, 90.0, 10.0))
+    closed = subject.read_balance()
+    assert closed.open_positions == 0
+    assert closed.realised_total == pytest.approx(100.0)
+    assert closed.cash == pytest.approx(10_100.0)
+
+
+def test_a_checkpoint_written_before_margin_was_tracked_restores_unlevered():
+    """Its cash figure was written by an account that had paid the notional."""
+    before_margin_existed = {
+        "starting": 10_000.0, "cash": 9_000.0, "realised_total": 0.0, "fees_total": 0.0,
+        "fills_applied": 1,
+        "positions": {f"{VENUE}|{SYMBOL}": {"quantity": 10.0, "average_price": 100.0}},
+        "seen_fills": ["f1"],
+    }
+    subject = PaperAccountKeeper(SEGMENT)
+    assert subject.restore_from_checkpoint(before_margin_existed) == 1
+    subject.observe_mark_price(VENUE, SYMBOL, 100.0)
+    assert subject.read_balance().equity == pytest.approx(10_000.0)
+
+    subject.apply_fill(paper_fill("f2", SELL, 100.0, 10.0))
+    assert subject.read_balance().cash == pytest.approx(10_000.0), (
+        "the restored position handed back money that never left the account"
+    )
 
 
 # ---- the account survives a restart ------------------------------------------
@@ -739,6 +847,70 @@ def test_a_paper_trade_end_to_end_costs_what_it_should():
     # the instant the trade is done -- which is the truth a naive simulator hides.
     assert balance.equity < 10_000.0
     assert balance.fees_total > 0
+
+
+def test_the_leverage_the_desk_sized_at_survives_every_hop_to_the_account():
+    """Stamped, routed, filled, paid for -- and the number has to survive all four.
+
+    A fill states a price and a quantity, and those are identical at 1x and at
+    10x. Every step between `trade-capital-bounds-gate`, which admits a trade on
+    what it commits, and the account, which pays for it, has to carry the leverage
+    or the account pays the whole notional for a position the gate measured as a
+    tenth of it -- and the gate's bound then admits trades the account refuses.
+    """
+    stamper = OrderIdempotencyStamper()
+    router = OrderDestinationRouter()
+    filler = PaperFillSimulator(taker_fee_rate=0.0004, maker_fee_rate=0.0002)
+    account = keeper(10_000.0)
+
+    stamped = stamper.stamp(BoundedStub(quantity=10.0, leverage=10.0), "intent-levered")
+    assert stamped.leverage == 10.0, "the stamper dropped it"
+
+    request = router.route(stamped, Mode("paper"))[0]
+    assert request.leverage == 10.0, "the router dropped it"
+
+    result = filler.simulate(
+        client_order_id=request.client_order_id, venue_id=VENUE, symbol=SYMBOL, side=BUY,
+        quantity=request.quantity, order_type=MARKET, limit_price=None, money_mode="paper",
+        is_in_flight=False, fill_price_estimate=None, market_price=100.0,
+        leverage=request.leverage,
+    )
+    assert result.outcome == FILLED
+    assert result.fill.leverage == 10.0, "the book dropped it"
+
+    assert account.apply_fill(result.fill) == APPLIED
+    # 10 at 100 is 1,000 of notional, and at 10x that is 100 of margin plus the fee.
+    assert account.read_balance().cash == pytest.approx(10_000.0 - 100.0 - result.fill.fee)
+
+
+def test_an_exit_is_unlevered_and_still_closes_a_levered_position():
+    """Nothing states a leverage on the way out, and nothing needs to.
+
+    What comes back is the margin the position posted, which the account already
+    knows -- so an exit carrying the default is not a lost number.
+    """
+    filler = PaperFillSimulator(taker_fee_rate=0.0, maker_fee_rate=0.0)
+    account = keeper(10_000.0)
+    entry = filler.simulate(
+        client_order_id="entry-1", venue_id=VENUE, symbol=SYMBOL, side=BUY, quantity=10.0,
+        order_type=MARKET, limit_price=None, money_mode="paper", is_in_flight=False,
+        fill_price_estimate=None, market_price=100.0, leverage=10.0,
+    )
+    account.apply_fill(entry.fill)
+
+    exit_result = filler.simulate(
+        client_order_id="exit-1", venue_id=VENUE, symbol=SYMBOL, side=SELL, quantity=10.0,
+        order_type=MARKET, limit_price=None, money_mode="paper", is_in_flight=False,
+        fill_price_estimate=None, market_price=110.0,
+    )
+    assert exit_result.fill.leverage == 1.0
+    assert account.apply_fill(exit_result.fill) == APPLIED
+
+    balance = account.read_balance()
+    assert balance.open_positions == 0
+    assert balance.cash == pytest.approx(10_100.0), (
+        "the exit returned its own notional rather than the margin the entry posted"
+    )
 
 
 # ---- the paper book: orders that wait, and the position that closes ----------

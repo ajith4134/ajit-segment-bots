@@ -42,7 +42,9 @@ from runtime.trading_types import (
     STOP_MARKET,
     TAKE_PROFIT_MARKET,
     TRIGGERED_ORDER_TYPES,
+    UNLEVERED,
     Fill,
+    leverage_behind,
 )
 
 PART_ID = "paper-fill-simulator"
@@ -128,6 +130,10 @@ class RestingOrder:
     limit_price: float | None
     stop_price: float | None
     rested_at_ns: int
+    # What the order was sized at. Held with the rest of the order because a
+    # resting order fills long after the message that placed it is gone, and the
+    # fill it produces has to state the leverage the account will pay for it at.
+    leverage: float = UNLEVERED
 
     @property
     def key(self) -> tuple[str, str]:
@@ -331,6 +337,7 @@ class PaperFillSimulator:
         cancels_client_order_id: str | None = None,
         decided_at_price: float | None = None,
         maximum_decision_drift: float | None = None,
+        leverage: float = UNLEVERED,
     ) -> PaperFillResult:
         self.standing.orders_seen += 1
 
@@ -383,7 +390,7 @@ class PaperFillSimulator:
             order = RestingOrder(
                 client_order_id=client_order_id, venue_id=venue_id, symbol=symbol, side=side,
                 quantity=quantity, order_type=order_type, limit_price=limit_price or None,
-                stop_price=stop_price, rested_at_ns=self._now_ns(),
+                stop_price=stop_price, rested_at_ns=self._now_ns(), leverage=leverage,
             )
             if market_price is not None and self.is_triggered(
                 order_type, side, stop_price, market_price
@@ -431,7 +438,7 @@ class PaperFillSimulator:
                             client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
                             side=side, quantity=quantity, order_type=LIMIT,
                             limit_price=limit_price, stop_price=None,
-                            rested_at_ns=self._now_ns(),
+                            rested_at_ns=self._now_ns(), leverage=leverage,
                         ),
                         RESTING,
                         f"a {side} limit at {limit_price:g} is on the book; no price has arrived "
@@ -457,6 +464,7 @@ class PaperFillSimulator:
                         client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
                         side=side, quantity=quantity, order_type=LIMIT,
                         limit_price=limit_price, stop_price=None, rested_at_ns=self._now_ns(),
+                        leverage=leverage,
                     ),
                     RESTING,
                     f"the market is at {price:g} and the limit is {limit_price:g}; a real order "
@@ -471,7 +479,7 @@ class PaperFillSimulator:
             RestingOrder(
                 client_order_id=client_order_id, venue_id=venue_id, symbol=symbol, side=side,
                 quantity=quantity, order_type=order_type, limit_price=limit_price,
-                stop_price=None, rested_at_ns=self._now_ns(),
+                stop_price=None, rested_at_ns=self._now_ns(), leverage=leverage,
             ),
             price, fillable=fillable, is_taker=is_taker, slippage=slippage, note=None,
         )
@@ -539,6 +547,7 @@ class PaperFillSimulator:
                     symbol=order.symbol, side=order.side, quantity=order.quantity,
                     order_type=order.order_type, limit_price=order.limit_price,
                     stop_price=order.stop_price, rested_at_ns=order.rested_at_ns,
+                    leverage=order.leverage,
                 )
         self.standing.orders_on_the_book = len(self._resting)
 
@@ -554,6 +563,10 @@ class PaperFillSimulator:
             filled_at_ns=self._now_ns(),
             order_id=client_order_id,
             is_paper=True,
+            # A fill states a price and a quantity, and those are the same number
+            # at 1x and at 10x. What the position ties up is the notional over
+            # this, and paper-account-keeper has no other source for it.
+            leverage=order.leverage,
         )
         return self._result(
             client_order_id, order.venue_id, order.symbol, order.side, outcome, fill,
@@ -800,6 +813,10 @@ def start_part(context) -> int:
             # What the decision thought the market was, and how far the market
             # may have left it before this book refuses to fill.
             "decided_at_price": getattr(request, "decided_at_price", 0.0) or None,
+            # Carried from the request rather than defaulted here: an exit says
+            # nothing about leverage and is unlevered, and an entry says what the
+            # desk sized it at.
+            "leverage": leverage_behind(request),
             "maximum_decision_drift": maximum_decision_drift,
         }
 
