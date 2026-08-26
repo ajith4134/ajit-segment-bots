@@ -150,11 +150,13 @@ class SwitchingPlanner:
         memory_exhaustion_warning_seconds: float,
         io_stall_fraction: float,
         never_switched_off_priority_ceiling: int,
+        plans_between_on_retries: int,
         now_ns=time.time_ns,
     ) -> None:
         self._memory_warning = memory_exhaustion_warning_seconds
         self._io_stall = io_stall_fraction
         self._never_off_ceiling = never_switched_off_priority_ceiling
+        self._plans_between_on_retries = plans_between_on_retries
         self._now_ns = now_ns
         # Consecutive plans each candidate has been absent from the metering.
         self._plans_absent: dict[str, int] = {}
@@ -175,6 +177,11 @@ class SwitchingPlanner:
         # be observed absent before it can be observed back: without that, the
         # sweep taken while it was still stopping reads as a part that returned.
         self._seen_gone: set[str] = set()
+        # The plan number each part was last asked on at. An ask cannot be
+        # judged to have failed until a part has had time to start and to be
+        # metered, and until then re-asking produces a refusal rather than a
+        # part.
+        self._asked_on_at: dict[str, int] = {}
         self.standing = PlannerStanding()
 
     def plan(self, inputs: GovernorInputs) -> SwitchPlan:
@@ -221,6 +228,7 @@ class SwitchingPlanner:
                 if part_id in self._seen_gone:
                     del self._switched_off[part_id]
                     self._seen_gone.discard(part_id)
+                    self._asked_on_at.pop(part_id, None)
                     self.standing.restored += 1
                 else:
                     continue
@@ -246,6 +254,15 @@ class SwitchingPlanner:
         for part_id in self._candidates_to_start(inputs, cleared):
             if part_id in inputs.running_parts:
                 continue
+            asked_at = self._asked_on_at.get(part_id)
+            if asked_at is not None and self.standing.plans - asked_at < self._plans_between_on_retries:
+                # Asked for already, and not yet long enough ago to know whether
+                # the ask worked. A part takes a second or two to start and
+                # another sweep to be metered, so re-asking on the next plan is
+                # how gate-actuator came to record 17 refusals reading
+                # "PartAlreadyRunning" between 05:21 and 05:40 on 2026-08-26.
+                held.append(part_id)
+                continue
             self._plans_absent[part_id] = self._plans_absent.get(part_id, 0) + 1
             if self._plans_absent[part_id] < PLANS_ABSENT_BEFORE_START:
                 # Absent from the metering is not yet off: the sweep may simply
@@ -269,14 +286,11 @@ class SwitchingPlanner:
             self.standing.by_reason[decision.reason] = self.standing.by_reason.get(decision.reason, 0) + 1
             if decision.action == TURN_ON:
                 self.standing.switched_on += 1
-                # The ask is made once per full sweep, not once per plan: a part
-                # takes longer to appear in the metering than the second between
-                # two plans, and re-asking every plan is how the actuator came to
-                # record 324 failed flips of parts that had never stopped
-                # (2026-08-24). A shed part stays remembered until it is seen
-                # running, so an on the actuator failed to flip is asked again
-                # rather than quietly dropped -- and a part that goes on and off
-                # repeatedly is held by its flap report, not by being forgotten.
+                self._asked_on_at[decision.part_id] = self.standing.plans
+                # A shed part stays remembered until it is seen running, so an
+                # on the actuator failed to flip is asked again rather than
+                # quietly dropped -- and a part that goes on and off repeatedly
+                # is held by its flap report, not by being forgotten.
                 self._plans_absent[decision.part_id] = 0
             else:
                 self.standing.switched_off += 1
@@ -591,6 +605,16 @@ def start_part(context) -> int:
             io_stall_fraction=context.number("io_stall_fraction"),
             never_switched_off_priority_ceiling=int(
                 context.number("never_switched_off_priority_ceiling")
+            ),
+            # How long to wait before deciding an on did not take. Derived rather
+            # than set: until a reading could have gone stale, "not in the
+            # metering" and "not started" are the same observation.
+            plans_between_on_retries=max(
+                1,
+                round(
+                    context.number("part_usage_reading_maximum_age_seconds")
+                    / context.number("switch_plan_cadence_seconds")
+                ),
             ),
         ),
         control_socket=context.control_socket,

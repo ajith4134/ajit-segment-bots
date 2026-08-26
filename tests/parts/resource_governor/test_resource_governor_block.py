@@ -383,11 +383,12 @@ def test_this_box_reports_what_it_actually_has():
 
 # ---- switching-planner -------------------------------------------------------
 
-def planner(never_switched_off_priority_ceiling=10):
+def planner(never_switched_off_priority_ceiling=10, plans_between_on_retries=2):
     return SwitchingPlanner(
         memory_exhaustion_warning_seconds=120.0,
         io_stall_fraction=0.5,
         never_switched_off_priority_ceiling=never_switched_off_priority_ceiling,
+        plans_between_on_retries=plans_between_on_retries,
     )
 
 
@@ -610,8 +611,10 @@ def test_a_part_still_stopping_is_not_a_part_that_came_back(capacity):
 def test_an_on_the_actuator_could_not_flip_is_asked_again(capacity):
     """A part that never came back is still off, and forgetting it is how a
     silent hole opens: nothing else in the governor asks for a part the governor
-    itself switched off."""
-    subject = planner()
+    itself switched off. Asked again, but not on the next plan: gate-actuator
+    recorded 17 refusals reading "PartAlreadyRunning" between 05:21 and 05:40 on
+    2026-08-26, one for every part re-asked before it had been metered."""
+    subject = planner(plans_between_on_retries=2)
     subject.plan(
         GovernorInputs(
             capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),),
@@ -622,7 +625,9 @@ def test_an_on_the_actuator_could_not_flip_is_asked_again(capacity):
     assert [d.action for d in plan_after_a_full_sweep(subject, quiet).decisions] == [TURN_ON]
 
     # Nothing started: the part is still absent from every sweep, so the ask is
-    # made again once a whole sweep has missed it -- not on the very next plan.
+    # made again -- but only after the retry window has passed and a whole sweep
+    # has then missed it, never on the next plan.
+    assert subject.plan(quiet).decisions == ()
     assert subject.plan(quiet).decisions == ()
     assert [d.action for d in subject.plan(quiet).decisions] == [TURN_ON]
 

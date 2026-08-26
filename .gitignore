@@ -34,3 +34,11 @@ dashboard/wiring-explorer.html
 # Rendered spec and plan pages: generated from the .md by dashboard/render_spec.py
 docs/superpowers/specs/*.html
 docs/superpowers/plans/*.html
+
+# Samples a measurement script takes of this machine's live state. The script is
+# the deliverable and the summary is quoted where it is used; a timestamped dump
+# of one machine-minute committed here would read as a fact about the project
+# rather than about that minute (Rule 8, and the same reason the boards are not
+# committed).
+measurements/*/samples.jsonl
+measurements/*/summary.txt

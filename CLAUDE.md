@@ -353,6 +353,80 @@ block, opens a part, and fails on any console error. It is separate from
 `verify_board_renders.sh`, which waits for `networkidle` — that never fires on a
 page that polls forever.
 
+## The governor can switch a part back on — since 2026-08-26
+
+**Until this date nothing the governor switched off ever came back.** Over eight
+unattended hours it wrote 152 switch-records, every one an off and every one
+`hog-under-contention`, with `switched_on` 0 across 30,150 plans. The 42 parts it
+left off included `order-book-reader`, `venue-quote-stream-reader` and
+`tick-size-resolver`, and no order was placed in those eight hours. The coverage
+probe read 285 of 327 running, down from 327 the evening before, and nothing
+reported a fault: every one of those offs was a decision the governor was
+entitled to make. Only the return was missing.
+
+`switching-planner` now remembers what it shed and re-reads the reason on every
+plan. What it re-reads is the **machine-level** condition, because the
+part-level one is unobservable while the part is off — an off part publishes no
+usage, so no hog report can name it and no forecast can call it the fastest
+grower. The evidence is symmetric on purpose: a part is shed on a hog report and
+comes back when the reports stop, which is what `hog-detector` publishing only
+under contention already means.
+
+Its standing answers "why is that part still off" without reading the code:
+
+    switched_off / switched_on / restored     what it decided, and what came back
+    off_until_the_pressure_clears             shed and waiting for the condition
+    sheds_still_stopping / sheds_confirmed_gone   which of those are really gone
+    conservation_plan_names / hog_reports_read     what the last plan actually saw
+    hogs_deferred                             hogs one measurement did not justify
+
+**A level with no age bound is the trap this project keeps falling into.**
+`LatestByKey` holds a key's last value forever unless `maximum_age_seconds` is
+set, and four parts read `part-resource-usage` without it. The planner's "what is
+running is what is reporting its own usage" therefore included **every part the
+governor had ever switched off** — 214 of them at 05:11 on 2026-08-26 — so no
+shed part could ever be observed gone, and `off-state-verifier` had recorded 167
+faults with **0 verified releases** because the reading it checks for a released
+part never expired. With `part_usage_reading_maximum_age_seconds` bounding all
+four: 0 faults, 26 verified. The same shape cost `position-sizer` a fifty-six
+minute stale price on 2026-08-23; the bound exists, it is opt-in, and the
+question to ask of every `LatestByKey` is what makes its keys go away.
+
+**The control path is never shed.** The governor had switched off its own
+`memory-pressure-forecaster`, `duty-cycle-planner` and `part-restart-budgeter`
+for hogging, then went on planning against the last levels those three managed to
+publish. `never_switched_off_priority_ceiling` (27) covers the fourteen
+resource-governor parts and `control-recorder`, ranked in `part-priority.toml`;
+unlike `reservation_priority_ceiling` (10) it reserves no capacity, it only
+refuses to shed.
+
+Two decisions inside the planner worth not undoing:
+
+- **One hog per measurement.** Fair share is an equal slice among the parts
+  running, so at 327 parts everything doing real work is over three times it the
+  moment the machine is contended: one reading named sixteen parts and
+  `gate-actuator` flipped all sixteen, two seconds apart, from that one reading.
+  The worst hog is shed and the next decision is made against a fresh sweep.
+- **An ask is not repeated until it could have been answered.** A part takes a
+  second or two to start and another sweep to be metered; re-asking sooner
+  produced 17 `PartAlreadyRunning` refusals, which is the 2026-08-24 defect in a
+  new place.
+
+## What this box actually holds
+
+**All 327 parts on measured a load average of 30.6 one minute after start**, on
+twelve cores. The phase 5-15 plan sized 327 parts at 11.4 cores by extrapolating
+from 59 running; the extrapolation was not wrong about cores — steady state is
+about 8.6 across 319 parts — but load is not cores, and start-up is where it
+bites. `measurements/2026-08-26-what-fits-on-this-box/sample_what_fits.py`
+samples the machine every minute and prints what each part costs, read from its
+own cgroup.
+
+RL-072's target is every part running and every wire carrying. That target and
+this machine are not obviously compatible, and the honest reading of a governor
+that sheds under contention is that **the board should show parts off with the
+reason, not a coverage number that quietly excludes them.**
+
 ## Position state survives a restart — since 2026-08-25
 
 `position-close-detector` and `cost-basis-tracker` checkpoint their lot books to
