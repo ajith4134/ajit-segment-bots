@@ -67,6 +67,19 @@ class OutOfDistributionFlag:
     reason: str
     flagged_at_ns: int
 
+    @property
+    def was_judged(self) -> bool:
+        """Whether anything was actually compared, or nothing could be.
+
+        A flag with no training statistics behind it is not a verdict about the
+        forecast; it says this gate had nothing to judge it against. The two are
+        different facts and a reader that treats them the same refuses a model
+        for being unmeasured -- which is how bull-conviction-model formed no
+        conviction at all on 2026-08-26 while 3,523 of 3,523 checks were flagged
+        for no statistics.
+        """
+        return self.state != NO_TRAINING_STATISTICS
+
 
 @dataclass
 class GateStanding:

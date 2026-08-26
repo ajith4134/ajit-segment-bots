@@ -2463,6 +2463,51 @@ value = 1000
 unit  = "windows"
 note  = "operator, 2026-08-23: how many windows the finetuner holds in memory. A thousand; a process's memory is bounded."
 
+[kronos_source_root]
+value = "~/.local/share/ajit-segment-bots/vendor/kronos"
+unit  = "path"
+note  = "Claude, 2026-08-26: where the upstream Kronos repository (shiyu-coder/Kronos, MIT, AAAI 2026) is cloned on this machine, pinned at commit 67b630e67f6a18c9e9be918d9b4337c960db1e9a of 2026-04-13. Outside the repository on purpose: it is third-party code that is re-fetchable, and a copy committed here would drift from upstream silently while still claiming a commit. Upstream ships no package metadata -- it is a repository with a model/ directory -- so runtime/kronos_runtime.py adds this to sys.path rather than importing an installed package."
+
+[kronos_model_root]
+value = "~/.local/share/ajit-segment-bots/models/kronos"
+unit  = "path"
+note  = "Claude, 2026-08-26: where the Kronos model zoo is downloaded on this machine. Weights live outside the repository for the reason the tape does: 111 MB of re-fetchable artefact is permanent weight in every future clone. Downloaded from Hugging Face (NeoQuasar/Kronos-*), which is where upstream publishes them."
+
+[kronos_model_name]
+value = "Kronos-mini"
+unit  = "model zoo entry"
+note  = "Claude, 2026-08-26: which Kronos to run. Measured on this box the day it was installed, 64 candles and 5 steps, eight sampled paths batched: Kronos-mini 4.1M params 0.87 s, Kronos-small 24.7M params 4.46 s, both on CPU because this box has no accelerator. At about 1.7 windows a second across the traded universe, small would need seven cores of twelve and mini needs about one and a half. Mini is the size this machine can actually run continuously; kronos-size-selector exists to promote it on measured accuracy rather than on preference."
+
+[kronos_tokenizer_name]
+value = "Kronos-Tokenizer-2k"
+unit  = "model zoo entry"
+note  = "Claude, 2026-08-26: the tokenizer paired with kronos_model_name. Upstream pairs Kronos-mini with Tokenizer-2k (context 2048) and Kronos-small and base with Tokenizer-base (context 512); a mismatched pair produces tokens the predictor was not trained on. Change this whenever kronos_model_name changes."
+
+[kronos_maximum_context]
+value = 2048
+unit  = "candles"
+note  = "Claude, 2026-08-26: the longest context the loaded model accepts, handed to KronosPredictor. 2048 for Kronos-mini; 512 for Kronos-small and Kronos-base. It is a ceiling and not a requirement -- the windows this system publishes are kline_window_length long -- and setting it above what the model was trained on would let a long window silently exceed its position encoding."
+
+[kronos_minimum_window_candles]
+value = 64
+unit  = "candles"
+note  = "Claude, 2026-08-26: the shortest window kronos-forecaster will forecast from; anything shorter is refused as WINDOW_TOO_SHORT rather than padded, because padding feeds the model a series it never saw. Sixty-four matches kline_window_length, which the operator recorded on 2026-08-23 as the shortest context the Kronos tokenizer accepts."
+
+[kronos_sampling_temperature]
+value = 1.0
+unit  = "temperature"
+note  = "Claude, 2026-08-26: the sampling temperature for each path. One is upstream's own default and means the model's distribution unaltered; below one narrows it and would make an interval built from the paths read tighter than the model actually is, which is the one thing this forecast must not do."
+
+[kronos_top_p]
+value = 0.9
+unit  = "nucleus mass"
+note  = "Claude, 2026-08-26: the nucleus sampling mass per token, upstream's own default. Nine tenths keeps the tail that a five-minute move lives in while dropping the tokens the model has effectively ruled out; at 1.0 the sampler draws from the full tail including tokens with negligible mass, which widens the interval with noise rather than with uncertainty."
+
+[kronos_device]
+value = "cpu"
+unit  = "torch device"
+note  = "Claude, 2026-08-26: which device the model runs on. This box has no accelerator (hardware-scanner reports none), so cpu is not a fallback here, it is the fact. accelerator-scheduler still gates the part: a device this setting names and the governor has not granted is not a device this part may use (T-2)."
+
 [kronos_forecast_steps]
 value = 5
 unit  = "candles"

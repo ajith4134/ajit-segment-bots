@@ -360,6 +360,13 @@ def describe_feature_building(builder: BearFeatureBuilder) -> dict:
         "incomplete_vectors": builder.standing.vectors_built - builder.standing.complete_vectors,
         "symbols_tracked": builder.standing.symbols_tracked,
         "missing_by_feature": dict(sorted(builder.standing.missing_by_feature.items())),
+        # One counter per feature as well as the map, because only numbers reach
+        # part-health: "0 complete vectors of 454" said nothing about which of
+        # the twelve was absent, and each one is a different missing input.
+        **{
+            f"missing_{name}": builder.standing.missing_by_feature.get(name, 0)
+            for name in FEATURE_NAMES
+        },
         "book_snapshots_absent": builder.standing.books_absent,
         "thinnest_squeeze_room_seen": builder.standing.thinnest_squeeze_room,
         "feature_names": list(FEATURE_NAMES),

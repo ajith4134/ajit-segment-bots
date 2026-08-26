@@ -330,11 +330,23 @@ def run_kronos_forecaster(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No weights are loaded on this machine, so every forecast is the refusal
-    MODEL_NOT_LOADED, which is a state and not a zero. Fine-tuned models,
-    champion choices and accelerator slots are applied as they arrive.
+    The weights are installed on this machine since 2026-08-26 -- the upstream
+    repository at a pinned commit and the published model zoo, both outside this
+    repository and both named by settings. They are loaded here and handed to the
+    forecaster, which keeps this part able to say MODEL_NOT_LOADED honestly on a
+    box where they are absent: the loader raises, the refusal is published, and
+    nothing forecasts from nothing.
+
+    Fine-tuned models arriving on the wire are loaded through the same loader, so
+    a model kronos-finetuner produced becomes the challenger without this part
+    knowing how weights are made.
     """
+    import pathlib
+
     from runtime.input_assembly import Batch
+    from runtime.kronos_runtime import (
+        KronosArtefact, KronosNotInstalled, build_kronos_predictor,
+    )
 
     windows = Batch(read=context.bus.reader("kline-window"))
     models = Batch(read=context.bus.reader("finetuned-model"))
@@ -348,6 +360,51 @@ def start_part(context) -> int:
         interval_quantile=context.number("kronos_interval_quantile"),
         interval_seconds=context.number("forecast_horizon"),
     )
+
+    def setting_path(name: str) -> pathlib.Path:
+        return pathlib.Path(str(context.setting(name).value)).expanduser()
+
+    model_root = setting_path("kronos_model_root")
+    minimum_window = int(context.number("kronos_minimum_window_candles"))
+
+    def artefact_for(model_directory: pathlib.Path) -> KronosArtefact:
+        return KronosArtefact(
+            source_root=setting_path("kronos_source_root"),
+            tokenizer_path=model_root / str(context.setting("kronos_tokenizer_name").value),
+            model_path=model_directory,
+            maximum_context=int(context.number("kronos_maximum_context")),
+            sampling_temperature=context.number("kronos_sampling_temperature"),
+            top_p=context.number("kronos_top_p"),
+            device=str(context.setting("kronos_device").value),
+        )
+
+    def load(artefact_path, name: str):
+        """The one thing that turns an artefact into weights, or None.
+
+        None rather than an exception for an absent model: the forecaster counts
+        it and refuses, which is the state this part exists to report. Anything
+        else -- corrupt weights, a broken import -- is left to raise, because a
+        model that is present and unusable is a fault and not a state.
+        """
+        try:
+            predict = build_kronos_predictor(
+                artefact_for(pathlib.Path(str(artefact_path)).expanduser())
+            )
+        except KronosNotInstalled:
+            return None
+        return LoadedModel(
+            name=name,
+            context_length=minimum_window,
+            predict=predict,
+            device=str(context.setting("kronos_device").value),
+            finetuned_on=None,
+        )
+
+    forecaster.install_loader(load)
+    base_name = str(context.setting("kronos_model_name").value)
+    champion = load(model_root / base_name, base_name)
+    if champion is not None:
+        forecaster.load_model(CHAMPION, champion)
 
     def read_windows_and_choices(_forecaster):
         for model in models.payloads():

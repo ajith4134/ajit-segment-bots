@@ -79,6 +79,10 @@ class ModelStanding:
     convictions_formed: int = 0
     refused_features_flagged: int = 0
     refused_forecast_flagged: int = 0
+    # Forecasts the gate could not judge at all. Counted apart from the refusals
+    # because "nothing to compare it with" is a fact about the gate and being
+    # out of distribution is a fact about the forecast.
+    forecasts_unjudgeable: int = 0
     refused_nothing_usable: int = 0
     labels_trained_on: int = 0
     retrains: int = 0
@@ -161,8 +165,25 @@ class BullConvictionModel:
         """Another part's view of where price is going, as one more feature."""
         self._forecasts[(venue_id, symbol)] = expected_return
 
-    def observe_forecast_flag(self, venue_id: str, symbol: str, is_out_of_distribution: bool) -> None:
+    def observe_forecast_flag(
+        self, venue_id: str, symbol: str, is_out_of_distribution: bool, was_judged: bool = True,
+    ) -> None:
+        """A verdict on the forecast, or the gate saying it had nothing to judge.
+
+        Unjudged is not flagged. A gate with no training statistics for a model
+        has not found the forecast unlike anything -- it has found nothing to
+        compare it with -- so the forecast is dropped and this model forms its
+        conviction from the features alone, exactly as it does when no forecaster
+        is running. Refusing instead is how a base model nobody has fine-tuned
+        yet stopped every conviction on 2026-08-26: 3,523 of 3,523 checks flagged
+        for no statistics, 424 convictions refused, none formed.
+        """
         key = (venue_id, symbol)
+        if not was_judged:
+            self._forecasts.pop(key, None)
+            self._forecast_flagged.discard(key)
+            self.standing.forecasts_unjudgeable += 1
+            return
         if is_out_of_distribution:
             self._forecast_flagged.add(key)
         else:
@@ -388,6 +409,7 @@ def describe_conviction(model: BullConvictionModel) -> dict:
         "convictions_formed": model.standing.convictions_formed,
         "refused_features_out_of_distribution": model.standing.refused_features_flagged,
         "refused_forecast_out_of_distribution": model.standing.refused_forecast_flagged,
+        "forecasts_the_gate_could_not_judge": model.standing.forecasts_unjudgeable,
         "refused_nothing_usable": model.standing.refused_nothing_usable,
         "labels_trained_on": model.standing.labels_trained_on,
         "mean_absolute_training_error": model.standing.mean_absolute_error,
@@ -522,7 +544,14 @@ def start_part(context) -> int:
         for forecast in forecasts.payloads():
             model.observe_price_forecast(forecast.venue_id, forecast.symbol, forecast.expected_return)
         for flag in forecast_flags.payloads():
-            model.observe_forecast_flag(flag.venue_id, flag.symbol, flag.is_out_of_distribution)
+            model.observe_forecast_flag(
+                flag.venue_id,
+                flag.symbol,
+                flag.is_out_of_distribution,
+                # Stated by the gate on the flag itself, so this part reads a
+                # field rather than another block's state vocabulary (T-4).
+                getattr(flag, "was_judged", True),
+            )
         for window in kline_windows.payloads():
             # The window carries candles; the model wants the three series it
             # shapes features from. Unpacked here rather than in the model, which
