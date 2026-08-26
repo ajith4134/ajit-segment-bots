@@ -1,0 +1,567 @@
+{
+  "rows": [
+    {
+      "symbol": "1000PEPEUSDT",
+      "prints": 120006,
+      "compared": 62679,
+      "no_fresh_reference": 57327,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000467,
+      "q90_disagreement": 0.000753,
+      "q99_disagreement": 0.001093,
+      "largest_disagreement": 0.002022,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "AAVEUSDT",
+      "prints": 82818,
+      "compared": 71458,
+      "no_fresh_reference": 11360,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000628,
+      "q90_disagreement": 0.000939,
+      "q99_disagreement": 0.001804,
+      "largest_disagreement": 0.002517,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "ADAUSDT",
+      "prints": 101441,
+      "compared": 81989,
+      "no_fresh_reference": 19452,
+      "flagged": 366,
+      "flagged_fraction": 0.0045,
+      "median_disagreement": 0.0,
+      "q90_disagreement": 0.000479,
+      "q99_disagreement": 0.001422,
+      "largest_disagreement": 0.008068,
+      "flagged_by_reference_age": {
+        "under_5000ms": 366
+      }
+    },
+    {
+      "symbol": "BNBUSDT",
+      "prints": 105340,
+      "compared": 48991,
+      "no_fresh_reference": 56349,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.001135,
+      "q90_disagreement": 0.001335,
+      "q99_disagreement": 0.001485,
+      "largest_disagreement": 0.002572,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "BTCUSDT",
+      "prints": 120005,
+      "compared": 104295,
+      "no_fresh_reference": 15710,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000113,
+      "q90_disagreement": 0.000272,
+      "q99_disagreement": 0.000696,
+      "largest_disagreement": 0.00094,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "BTRUSDT",
+      "prints": 120000,
+      "compared": 101992,
+      "no_fresh_reference": 18008,
+      "flagged": 100889,
+      "flagged_fraction": 0.9892,
+      "median_disagreement": 0.01381,
+      "q90_disagreement": 0.017312,
+      "q99_disagreement": 0.032518,
+      "largest_disagreement": 0.044428,
+      "flagged_by_reference_age": {
+        "under_1000ms": 203,
+        "under_100ms": 88002,
+        "under_2000ms": 59,
+        "under_5000ms": 248,
+        "under_500ms": 12377
+      }
+    },
+    {
+      "symbol": "CLUSDT",
+      "prints": 78855,
+      "compared": 62706,
+      "no_fresh_reference": 16149,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000125,
+      "q90_disagreement": 0.000374,
+      "q99_disagreement": 0.000621,
+      "largest_disagreement": 0.001611,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "CRCLUSDT",
+      "prints": 77133,
+      "compared": 36646,
+      "no_fresh_reference": 40487,
+      "flagged": 68,
+      "flagged_fraction": 0.0019,
+      "median_disagreement": 0.000218,
+      "q90_disagreement": 0.000547,
+      "q99_disagreement": 0.001642,
+      "largest_disagreement": 0.00763,
+      "flagged_by_reference_age": {
+        "under_1000ms": 65,
+        "under_2000ms": 3
+      }
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "prints": 120001,
+      "compared": 85643,
+      "no_fresh_reference": 34358,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000232,
+      "q90_disagreement": 0.000467,
+      "q99_disagreement": 0.000921,
+      "largest_disagreement": 0.001622,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "ENAUSDT",
+      "prints": 120002,
+      "compared": 83642,
+      "no_fresh_reference": 36360,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000627,
+      "q90_disagreement": 0.000913,
+      "q99_disagreement": 0.001395,
+      "largest_disagreement": 0.002513,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "ETHUSDT",
+      "prints": 120004,
+      "compared": 93366,
+      "no_fresh_reference": 26638,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000123,
+      "q90_disagreement": 0.000221,
+      "q99_disagreement": 0.00055,
+      "largest_disagreement": 0.000862,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "prints": 120001,
+      "compared": 101901,
+      "no_fresh_reference": 18100,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.00021,
+      "q90_disagreement": 0.00047,
+      "q99_disagreement": 0.001068,
+      "largest_disagreement": 0.00264,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "KORUUSDT",
+      "prints": 120004,
+      "compared": 103801,
+      "no_fresh_reference": 16203,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000471,
+      "q90_disagreement": 0.000498,
+      "q99_disagreement": 0.000994,
+      "largest_disagreement": 0.002941,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "LINKUSDT",
+      "prints": 118606,
+      "compared": 84371,
+      "no_fresh_reference": 34235,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000175,
+      "q90_disagreement": 0.000352,
+      "q99_disagreement": 0.000794,
+      "largest_disagreement": 0.002738,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "MUUSDT",
+      "prints": 85984,
+      "compared": 41874,
+      "no_fresh_reference": 44110,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000184,
+      "q90_disagreement": 0.00044,
+      "q99_disagreement": 0.000886,
+      "largest_disagreement": 0.001165,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "NEARUSDT",
+      "prints": 89472,
+      "compared": 67995,
+      "no_fresh_reference": 21477,
+      "flagged": 85,
+      "flagged_fraction": 0.0013,
+      "median_disagreement": 0.000532,
+      "q90_disagreement": 0.001067,
+      "q99_disagreement": 0.002148,
+      "largest_disagreement": 0.005836,
+      "flagged_by_reference_age": {
+        "under_100ms": 82,
+        "under_5000ms": 3
+      }
+    },
+    {
+      "symbol": "ONGUSDT",
+      "prints": 120020,
+      "compared": 109747,
+      "no_fresh_reference": 10273,
+      "flagged": 4255,
+      "flagged_fraction": 0.0388,
+      "median_disagreement": 0.003447,
+      "q90_disagreement": 0.004445,
+      "q99_disagreement": 0.006126,
+      "largest_disagreement": 0.009345,
+      "flagged_by_reference_age": {
+        "under_1000ms": 277,
+        "under_100ms": 3371,
+        "under_2000ms": 81,
+        "under_5000ms": 1,
+        "under_500ms": 525
+      }
+    },
+    {
+      "symbol": "PENGUUSDT",
+      "prints": 94924,
+      "compared": 87764,
+      "no_fresh_reference": 7160,
+      "flagged": 1,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000211,
+      "q90_disagreement": 0.000528,
+      "q99_disagreement": 0.001061,
+      "largest_disagreement": 0.005045,
+      "flagged_by_reference_age": {
+        "under_1000ms": 1
+      }
+    },
+    {
+      "symbol": "SKHYNIXUSDT",
+      "prints": 120000,
+      "compared": 70525,
+      "no_fresh_reference": 49475,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000667,
+      "q90_disagreement": 0.001058,
+      "q99_disagreement": 0.001499,
+      "largest_disagreement": 0.002522,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "SKHYUSDT",
+      "prints": 97637,
+      "compared": 70138,
+      "no_fresh_reference": 27499,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000188,
+      "q90_disagreement": 0.000443,
+      "q99_disagreement": 0.00088,
+      "largest_disagreement": 0.002086,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "SNDKUSDT",
+      "prints": 120000,
+      "compared": 68956,
+      "no_fresh_reference": 51044,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000148,
+      "q90_disagreement": 0.000351,
+      "q99_disagreement": 0.000621,
+      "largest_disagreement": 0.001012,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "SNXXUSDT",
+      "prints": 105361,
+      "compared": 87929,
+      "no_fresh_reference": 17432,
+      "flagged": 34,
+      "flagged_fraction": 0.0004,
+      "median_disagreement": 0.000778,
+      "q90_disagreement": 0.001541,
+      "q99_disagreement": 0.002387,
+      "largest_disagreement": 0.006385,
+      "flagged_by_reference_age": {
+        "under_5000ms": 34
+      }
+    },
+    {
+      "symbol": "SOLUSDT",
+      "prints": 120011,
+      "compared": 96606,
+      "no_fresh_reference": 23405,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000104,
+      "q90_disagreement": 0.000311,
+      "q99_disagreement": 0.00062,
+      "largest_disagreement": 0.001348,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "SOXLUSDT",
+      "prints": 120002,
+      "compared": 107926,
+      "no_fresh_reference": 12076,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000171,
+      "q90_disagreement": 0.00035,
+      "q99_disagreement": 0.000696,
+      "largest_disagreement": 0.00233,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "SPCXUSDT",
+      "prints": 93005,
+      "compared": 68367,
+      "no_fresh_reference": 24638,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000145,
+      "q90_disagreement": 0.000503,
+      "q99_disagreement": 0.001383,
+      "largest_disagreement": 0.003785,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "STXUSDT",
+      "prints": 120007,
+      "compared": 83008,
+      "no_fresh_reference": 36999,
+      "flagged": 1003,
+      "flagged_fraction": 0.0121,
+      "median_disagreement": 0.000759,
+      "q90_disagreement": 0.002154,
+      "q99_disagreement": 0.005124,
+      "largest_disagreement": 0.013213,
+      "flagged_by_reference_age": {
+        "under_1000ms": 254,
+        "under_100ms": 640,
+        "under_5000ms": 3,
+        "under_500ms": 106
+      }
+    },
+    {
+      "symbol": "SUIUSDT",
+      "prints": 120001,
+      "compared": 85425,
+      "no_fresh_reference": 34576,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000524,
+      "q90_disagreement": 0.000788,
+      "q99_disagreement": 0.001059,
+      "largest_disagreement": 0.002635,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "TAOUSDT",
+      "prints": 120000,
+      "compared": 95217,
+      "no_fresh_reference": 24783,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000258,
+      "q90_disagreement": 0.000641,
+      "q99_disagreement": 0.001605,
+      "largest_disagreement": 0.004709,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "TRUMPUSDT",
+      "prints": 120001,
+      "compared": 87018,
+      "no_fresh_reference": 32983,
+      "flagged": 67,
+      "flagged_fraction": 0.0008,
+      "median_disagreement": 0.000451,
+      "q90_disagreement": 0.000905,
+      "q99_disagreement": 0.001843,
+      "largest_disagreement": 0.006236,
+      "flagged_by_reference_age": {
+        "under_100ms": 67
+      }
+    },
+    {
+      "symbol": "TSLAUSDT",
+      "prints": 49901,
+      "compared": 33631,
+      "no_fresh_reference": 16270,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000257,
+      "q90_disagreement": 0.000634,
+      "q99_disagreement": 0.001151,
+      "largest_disagreement": 0.002314,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "WLDUSDT",
+      "prints": 110438,
+      "compared": 77743,
+      "no_fresh_reference": 32695,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000259,
+      "q90_disagreement": 0.000779,
+      "q99_disagreement": 0.00179,
+      "largest_disagreement": 0.003327,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "XAGUSDT",
+      "prints": 75257,
+      "compared": 61531,
+      "no_fresh_reference": 13726,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000146,
+      "q90_disagreement": 0.000432,
+      "q99_disagreement": 0.000588,
+      "largest_disagreement": 0.001888,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "XAUUSDT",
+      "prints": 120000,
+      "compared": 62894,
+      "no_fresh_reference": 57106,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 5.2e-05,
+      "q90_disagreement": 0.00014,
+      "q99_disagreement": 0.000326,
+      "largest_disagreement": 0.000561,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "XRPUSDT",
+      "prints": 120169,
+      "compared": 75813,
+      "no_fresh_reference": 44356,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.00014,
+      "q90_disagreement": 0.000351,
+      "q99_disagreement": 0.001391,
+      "largest_disagreement": 0.003084,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "ZECUSDT",
+      "prints": 120083,
+      "compared": 105610,
+      "no_fresh_reference": 14473,
+      "flagged": 0,
+      "flagged_fraction": 0.0,
+      "median_disagreement": 0.000443,
+      "q90_disagreement": 0.000782,
+      "q99_disagreement": 0.001736,
+      "largest_disagreement": 0.003249,
+      "flagged_by_reference_age": {}
+    },
+    {
+      "symbol": "ZROUSDT",
+      "prints": 120000,
+      "compared": 102514,
+      "no_fresh_reference": 17486,
+      "flagged": 940,
+      "flagged_fraction": 0.0092,
+      "median_disagreement": 0.000508,
+      "q90_disagreement": 0.001418,
+      "q99_disagreement": 0.004624,
+      "largest_disagreement": 0.01116,
+      "flagged_by_reference_age": {
+        "under_100ms": 868,
+        "under_500ms": 72
+      }
+    }
+  ],
+  "summary": {
+    "day": "2026-08-26",
+    "symbols_on_both_venues": 39,
+    "symbols_measured": 36,
+    "prints_compared": 2871711,
+    "prints_flagged_at_the_live_threshold": 107708,
+    "flagged_fraction": 0.0375,
+    "median_of_symbol_medians": 0.000245,
+    "worst_symbols": [
+      {
+        "symbol": "BTRUSDT",
+        "flagged_fraction": 0.9892,
+        "median": 0.01381
+      },
+      {
+        "symbol": "ONGUSDT",
+        "flagged_fraction": 0.0388,
+        "median": 0.003447
+      },
+      {
+        "symbol": "STXUSDT",
+        "flagged_fraction": 0.0121,
+        "median": 0.000759
+      },
+      {
+        "symbol": "ZROUSDT",
+        "flagged_fraction": 0.0092,
+        "median": 0.000508
+      },
+      {
+        "symbol": "ADAUSDT",
+        "flagged_fraction": 0.0045,
+        "median": 0.0
+      },
+      {
+        "symbol": "CRCLUSDT",
+        "flagged_fraction": 0.0019,
+        "median": 0.000218
+      },
+      {
+        "symbol": "NEARUSDT",
+        "flagged_fraction": 0.0013,
+        "median": 0.000532
+      },
+      {
+        "symbol": "TRUMPUSDT",
+        "flagged_fraction": 0.0008,
+        "median": 0.000451
+      },
+      {
+        "symbol": "SNXXUSDT",
+        "flagged_fraction": 0.0004,
+        "median": 0.000778
+      },
+      {
+        "symbol": "1000PEPEUSDT",
+        "flagged_fraction": 0.0,
+        "median": 0.000467
+      }
+    ]
+  }
+}

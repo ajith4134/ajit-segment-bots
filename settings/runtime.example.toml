@@ -3864,3 +3864,23 @@ note  = "Claude, 2026-08-26: how many times its own measured cost a probe rests 
 value = 30.0
 unit  = "seconds"
 note  = "Claude, 2026-08-26: how long the sizer keeps believing a limiter that has stopped speaking. It is not what withdraws a limit -- a limiter's tick is one statement and its next statement replaces it whole, told apart by the limiter's own decided_at_ns, so an all-clear withdraws a scoped zero immediately. This bound is for the other silence: a limiter that is off, wedged or crashed, whose last word would otherwise bind forever. Every limiter restates its current word on every tick, so thirty seconds is tens of missed publishes -- including drawdown-breaker and stop-frequency-breaker, which until today published only when equity arrived or a trade closed and would have expired while holding a brake on. It fails in the safe direction: binding_limit_for returns None when no limit applies to a symbol and the sizer refuses to size without one, so expiry withdraws permission rather than granting it."
+
+[anomaly_basis_window_observations]
+value = 200
+unit  = "prints"
+note  = "Claude, 2026-08-26: how many of a venue-symbol's own prints market-anomaly-detector learns its normal basis from. Two venues pricing one contract apart is a fact about the contract, not a broken feed: measured across 36 symbols both venues carried on the tape of 2026-08-26, 2,871,711 prints, the median cross-venue disagreement is 0.0245% while BTRUSDT sits 1.38% apart on 98.9% of its prints with nothing wrong with either feed. Comparing levels flagged 3.75% of every print in the market and halted the symbol each time; comparing the departure from the learned basis flags 0.28% at the same threshold, and BTRUSDT falls from 98.9% to 6.5%. Two hundred prints because the busiest symbols print several times a second, so the window is seconds to a minute of market -- long enough that one broken print cannot move the median, short enough that a basis which genuinely shifts is relearned rather than defended. The measurement is in measurements/2026-08-26-anomaly-disagreement/."
+
+[anomaly_minimum_basis_observations]
+value = 50
+unit  = "prints"
+note  = "Claude, 2026-08-26: how many prints a venue-symbol pair must have before its basis is allowed to judge anything. Below it the check reports the-basis-between-these-venues-is-not-measured-yet, which is neither an anomaly nor a clean bill: an unmeasured basis is not a reason to distrust a feed and not evidence that it is sound (Rule 8). Fifty is the count the tape measurement used to produce the 0.28% flag rate above, and a quarter of the window, so a pair starts judging well before the window is full."
+
+[anomaly_reference_maximum_age_seconds]
+value = 5.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how old the cross-venue reference may be before market-anomaly-detector refuses to check against it. The detector kept each symbol's last consolidated price forever, so a fresh print could be compared against a reference from any time ago and read as a venue that moved alone -- the same immortal-level shape that made a scoped risk limit permanent on the same day. Five seconds, matching consolidated_price_maximum_quote_age: the consolidator already drops a contributor after five, so a reading older than that is built from prices the market has left twice over."
+
+[symbol_universe_restatement_interval]
+value = 30.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how long a consumer that has just started waits before symbol-catalogue-reader tells it which symbols this system captures. The venue's list is re-read every symbol_catalogue_refresh_interval (900 s) and was published only then, which makes a level into an event: measured on the live spine at 14:41, four minutes after a restart, the reader had selected 104 symbols across both venues and instrument-selector had received zero symbol-universe messages, registered no listings, and refused every one of the 794 intents the arbiter formed. Thirty seconds rather than the one second level_refresh_interval_seconds uses, because this level is 104 items to 37 consumers rather than one small payload, and a consumer that has just started is already waiting on quotes, prices and a stop plan -- half a minute of it is not the bottleneck. The read interval is unchanged: this is what is said between reads, not how often the venue is asked."

@@ -1,0 +1,565 @@
+{
+  "rows": [
+    {
+      "symbol": "1000PEPEUSDT",
+      "compared": 62579,
+      "median_departure": 0.000131,
+      "q99_departure": 0.000628,
+      "largest_departure": 0.001374,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "AAVEUSDT",
+      "compared": 71358,
+      "median_departure": 8e-05,
+      "q99_departure": 0.000942,
+      "largest_departure": 0.001479,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ADAUSDT",
+      "compared": 81889,
+      "median_departure": 0.0,
+      "q99_departure": 0.00096,
+      "largest_departure": 0.00617,
+      "flagged_fraction_at": {
+        "0.0020": 0.00278,
+        "0.0030": 0.00164,
+        "0.0050": 0.00094,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "BNBUSDT",
+      "compared": 48891,
+      "median_departure": 9.3e-05,
+      "q99_departure": 0.000474,
+      "largest_departure": 0.002252,
+      "flagged_fraction_at": {
+        "0.0020": 0.00094,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "BTCUSDT",
+      "compared": 104195,
+      "median_departure": 3.4e-05,
+      "q99_departure": 0.000364,
+      "largest_departure": 0.001252,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "BTRUSDT",
+      "compared": 101892,
+      "median_departure": 0.001159,
+      "q99_departure": 0.0098,
+      "largest_departure": 0.028423,
+      "flagged_fraction_at": {
+        "0.0020": 0.28682,
+        "0.0030": 0.16082,
+        "0.0050": 0.06466,
+        "0.0075": 0.02324,
+        "0.0100": 0.0093
+      }
+    },
+    {
+      "symbol": "CLUSDT",
+      "compared": 62681,
+      "median_departure": 0.000124,
+      "q99_departure": 0.000499,
+      "largest_departure": 0.001487,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "CRCLUSDT",
+      "compared": 36546,
+      "median_departure": 0.000166,
+      "q99_departure": 0.001545,
+      "largest_departure": 0.004644,
+      "flagged_fraction_at": {
+        "0.0020": 0.0072,
+        "0.0030": 0.00402,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "compared": 85543,
+      "median_departure": 0.000116,
+      "q99_departure": 0.00069,
+      "largest_departure": 0.001511,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ENAUSDT",
+      "compared": 83542,
+      "median_departure": 0.00014,
+      "q99_departure": 0.000916,
+      "largest_departure": 0.00321,
+      "flagged_fraction_at": {
+        "0.0020": 0.00063,
+        "0.0030": 5e-05,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ETHUSDT",
+      "compared": 93266,
+      "median_departure": 3.7e-05,
+      "q99_departure": 0.000348,
+      "largest_departure": 0.000639,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "compared": 101801,
+      "median_departure": 0.000112,
+      "q99_departure": 0.000855,
+      "largest_departure": 0.002435,
+      "flagged_fraction_at": {
+        "0.0020": 0.00055,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "KORUUSDT",
+      "compared": 103701,
+      "median_departure": 1e-06,
+      "q99_departure": 0.000991,
+      "largest_departure": 0.00294,
+      "flagged_fraction_at": {
+        "0.0020": 0.0002,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "LINKUSDT",
+      "compared": 84271,
+      "median_departure": 8.8e-05,
+      "q99_departure": 0.0007,
+      "largest_departure": 0.002738,
+      "flagged_fraction_at": {
+        "0.0020": 0.00032,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "MUUSDT",
+      "compared": 41774,
+      "median_departure": 0.000129,
+      "q99_departure": 0.000601,
+      "largest_departure": 0.001138,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "NEARUSDT",
+      "compared": 67895,
+      "median_departure": 0.000528,
+      "q99_departure": 0.001615,
+      "largest_departure": 0.005304,
+      "flagged_fraction_at": {
+        "0.0020": 0.0067,
+        "0.0030": 0.00191,
+        "0.0050": 1e-05,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ONGUSDT",
+      "compared": 109647,
+      "median_departure": 0.000397,
+      "q99_departure": 0.003417,
+      "largest_departure": 0.010098,
+      "flagged_fraction_at": {
+        "0.0020": 0.03534,
+        "0.0030": 0.01417,
+        "0.0050": 0.00458,
+        "0.0075": 0.00032,
+        "0.0100": 1e-05
+      }
+    },
+    {
+      "symbol": "PENGUUSDT",
+      "compared": 87664,
+      "median_departure": 0.000106,
+      "q99_departure": 0.001065,
+      "largest_departure": 0.005045,
+      "flagged_fraction_at": {
+        "0.0020": 0.00243,
+        "0.0030": 0.00046,
+        "0.0050": 1e-05,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SKHYNIXUSDT",
+      "compared": 70425,
+      "median_departure": 0.000188,
+      "q99_departure": 0.000845,
+      "largest_departure": 0.001489,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SKHYUSDT",
+      "compared": 70038,
+      "median_departure": 0.000126,
+      "q99_departure": 0.000757,
+      "largest_departure": 0.002023,
+      "flagged_fraction_at": {
+        "0.0020": 1e-05,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SNDKUSDT",
+      "compared": 68856,
+      "median_departure": 0.000108,
+      "q99_departure": 0.000535,
+      "largest_departure": 0.000948,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SNXXUSDT",
+      "compared": 88113,
+      "median_departure": 4e-06,
+      "q99_departure": 0.002383,
+      "largest_departure": 0.005645,
+      "flagged_fraction_at": {
+        "0.0020": 0.01315,
+        "0.0030": 0.00531,
+        "0.0050": 0.00024,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SOLUSDT",
+      "compared": 96506,
+      "median_departure": 0.000103,
+      "q99_departure": 0.000413,
+      "largest_departure": 0.001037,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SOXLUSDT",
+      "compared": 107826,
+      "median_departure": 8.8e-05,
+      "q99_departure": 0.000608,
+      "largest_departure": 0.002071,
+      "flagged_fraction_at": {
+        "0.0020": 2e-05,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "SPCXUSDT",
+      "compared": 68623,
+      "median_departure": 0.000145,
+      "q99_departure": 0.001238,
+      "largest_departure": 0.003639,
+      "flagged_fraction_at": {
+        "0.0020": 0.00223,
+        "0.0030": 0.00068,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "STXUSDT",
+      "compared": 82908,
+      "median_departure": 0.000374,
+      "q99_departure": 0.004247,
+      "largest_departure": 0.014265,
+      "flagged_fraction_at": {
+        "0.0020": 0.06952,
+        "0.0030": 0.02294,
+        "0.0050": 0.00696,
+        "0.0075": 0.00305,
+        "0.0100": 0.00062
+      }
+    },
+    {
+      "symbol": "SUIUSDT",
+      "compared": 85325,
+      "median_departure": 0.000131,
+      "q99_departure": 0.000658,
+      "largest_departure": 0.002898,
+      "flagged_fraction_at": {
+        "0.0020": 0.00013,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "TAOUSDT",
+      "compared": 95117,
+      "median_departure": 0.000128,
+      "q99_departure": 0.001376,
+      "largest_departure": 0.004536,
+      "flagged_fraction_at": {
+        "0.0020": 0.00393,
+        "0.0030": 0.00155,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "TRUMPUSDT",
+      "compared": 86918,
+      "median_departure": 0.000449,
+      "q99_departure": 0.001848,
+      "largest_departure": 0.00578,
+      "flagged_fraction_at": {
+        "0.0020": 0.00841,
+        "0.0030": 0.00278,
+        "0.0050": 3e-05,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "TSLAUSDT",
+      "compared": 33721,
+      "median_departure": 0.000174,
+      "q99_departure": 0.001051,
+      "largest_departure": 0.001764,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "WLDUSDT",
+      "compared": 77643,
+      "median_departure": 0.000256,
+      "q99_departure": 0.001284,
+      "largest_departure": 0.002807,
+      "flagged_fraction_at": {
+        "0.0020": 0.00058,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "XAGUSDT",
+      "compared": 61520,
+      "median_departure": 0.000144,
+      "q99_departure": 0.000583,
+      "largest_departure": 0.001888,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "XAUUSDT",
+      "compared": 62794,
+      "median_departure": 4.3e-05,
+      "q99_departure": 0.000277,
+      "largest_departure": 0.000496,
+      "flagged_fraction_at": {
+        "0.0020": 0.0,
+        "0.0030": 0.0,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "XRPUSDT",
+      "compared": 75713,
+      "median_departure": 7e-05,
+      "q99_departure": 0.000837,
+      "largest_departure": 0.003084,
+      "flagged_fraction_at": {
+        "0.0020": 0.00065,
+        "0.0030": 5e-05,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ZECUSDT",
+      "compared": 105510,
+      "median_departure": 0.000144,
+      "q99_departure": 0.001332,
+      "largest_departure": 0.00326,
+      "flagged_fraction_at": {
+        "0.0020": 0.00302,
+        "0.0030": 0.00017,
+        "0.0050": 0.0,
+        "0.0075": 0.0,
+        "0.0100": 0.0
+      }
+    },
+    {
+      "symbol": "ZROUSDT",
+      "compared": 102414,
+      "median_departure": 0.000252,
+      "q99_departure": 0.002805,
+      "largest_departure": 0.00976,
+      "flagged_fraction_at": {
+        "0.0020": 0.02504,
+        "0.0030": 0.00836,
+        "0.0050": 0.00271,
+        "0.0075": 0.00133,
+        "0.0100": 0.0
+      }
+    }
+  ],
+  "summary": {
+    "day": "2026-08-26",
+    "symbols_measured": 36,
+    "prints_compared": 2869105,
+    "basis_window": 200,
+    "minimum_observations": 50,
+    "median_of_symbol_median_departures": 0.000127,
+    "flagged_fraction_at": {
+      "0.0020": 0.0159,
+      "0.0030": 0.0077,
+      "0.0050": 0.0028,
+      "0.0075": 0.00097,
+      "0.0100": 0.00035
+    },
+    "worst_symbols_at_0.005": [
+      {
+        "symbol": "BTRUSDT",
+        "flagged": 0.06466,
+        "median_departure": 0.001159
+      },
+      {
+        "symbol": "STXUSDT",
+        "flagged": 0.00696,
+        "median_departure": 0.000374
+      },
+      {
+        "symbol": "ONGUSDT",
+        "flagged": 0.00458,
+        "median_departure": 0.000397
+      },
+      {
+        "symbol": "ZROUSDT",
+        "flagged": 0.00271,
+        "median_departure": 0.000252
+      },
+      {
+        "symbol": "ADAUSDT",
+        "flagged": 0.00094,
+        "median_departure": 0.0
+      },
+      {
+        "symbol": "SNXXUSDT",
+        "flagged": 0.00024,
+        "median_departure": 4e-06
+      },
+      {
+        "symbol": "TRUMPUSDT",
+        "flagged": 3e-05,
+        "median_departure": 0.000449
+      },
+      {
+        "symbol": "NEARUSDT",
+        "flagged": 1e-05,
+        "median_departure": 0.000528
+      }
+    ]
+  }
+}

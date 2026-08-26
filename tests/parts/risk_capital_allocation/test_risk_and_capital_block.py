@@ -300,33 +300,80 @@ def test_a_position_near_its_liquidation_stops_new_risk():
     subject = margin_watch(distance=0.1)
     subject.observe_liquidation_price(VENUE, SYMBOL, liquidation_price=95.0, mark_price=100.0)
     subject.observe_account(equity=1000.0, maintenance_requirement=100.0)
-    assert subject.read_limit().fraction_of_allotment == NO_RISK_ALLOWED
+    limits = subject.read_limits()
+
+    assert binding_for(limits, SYMBOL) == NO_RISK_ALLOWED
     assert subject.standing.state == NEAR_LIQUIDATION
+    assert binding_for(limits, "SOMETHINGELSEUSDT") > 0.0, (
+        "one position approaching its own liquidation stopped an unrelated symbol"
+    )
 
 
 def test_a_thin_equity_cushion_stops_new_risk_even_with_distant_liquidations():
     subject = margin_watch(distance=0.1, headroom=0.2)
     subject.observe_liquidation_price(VENUE, SYMBOL, liquidation_price=50.0, mark_price=100.0)
     subject.observe_account(equity=1000.0, maintenance_requirement=900.0)
-    assert subject.read_limit().fraction_of_allotment == NO_RISK_ALLOWED
+    limits = subject.read_limits()
+
     assert subject.standing.state == NEAR_MARGIN_CALL
+    # Account-wide, unlike the per-position stops: the maintenance requirement is
+    # one number for the whole account and every symbol draws on it.
+    assert binding_for(limits, "SOMETHINGELSEUSDT") == NO_RISK_ALLOWED
 
 
 def test_an_unmeasurable_liquidation_price_stops_rather_than_assuming_safety():
     """Assuming it is safe is the assumption that ends a segment."""
     subject = margin_watch()
     subject.observe_liquidation_price(VENUE, SYMBOL, liquidation_price=None, mark_price=100.0)
-    limit_now = subject.read_limit()
-    assert limit_now.fraction_of_allotment == NO_RISK_ALLOWED
+    limits = subject.read_limits()
+
+    assert binding_for(limits, SYMBOL) == NO_RISK_ALLOWED
     assert subject.standing.state == UNKNOWN_DISTANCE
+    assert subject.standing.symbols_stopped_for_an_unmeasurable_position == 1
+
+
+def test_an_unmeasurable_position_does_not_stop_the_rest_of_the_book():
+    """The whole-segment stop this part used to issue, and what it cost.
+
+    A liquidation price is computed from the leverage a position was opened at,
+    leverage-selector answers only while an intent is being formed, and a position
+    restored from a checkpoint has no leverage-choice behind it. Measured on the
+    live spine at 15:01 on 2026-08-26: 12 open positions, liquidation-price-
+    tracker refusing 7,041 of them for "no leverage-choice for this position",
+    this watch issuing an unscoped zero every tick, and position-sizer refusing
+    3,799 of 4,065 actionable intents -- with the nearest measurable liquidation
+    99.5% away.
+    """
+    subject = margin_watch()
+    subject.observe_liquidation_price(VENUE, SYMBOL, liquidation_price=None, mark_price=100.0)
+    subject.observe_liquidation_price(VENUE, "ETHUSDT", liquidation_price=50.0, mark_price=100.0)
+    subject.observe_account(equity=1000.0, maintenance_requirement=100.0)
+    limits = subject.read_limits()
+
+    assert binding_for(limits, SYMBOL) == NO_RISK_ALLOWED
+    assert binding_for(limits, "ETHUSDT") > 0.0, (
+        "a position nobody could measure stopped a position that was measured and safe"
+    )
+    assert binding_for(limits, "SOLUSDTNOTHELD") > 0.0, (
+        "a position nobody could measure stopped a symbol with no position at all"
+    )
 
 
 def test_a_safe_account_permits_risk():
     subject = margin_watch()
     subject.observe_liquidation_price(VENUE, SYMBOL, liquidation_price=50.0, mark_price=100.0)
     subject.observe_account(equity=1000.0, maintenance_requirement=100.0)
-    assert subject.read_limit().fraction_of_allotment == 1.0
+    assert binding_for(subject.read_limits(), SYMBOL) == 1.0
     assert subject.standing.state == SAFE
+
+
+def binding_for(limits, symbol: str) -> float:
+    """What the sizer would allow on this symbol, given one limiter's statement."""
+    applying = [
+        limit.fraction_of_allotment for limit in limits if limit.applies_to(symbol)
+    ]
+    assert applying, f"no limit in this statement applies to {symbol}"
+    return min(applying)
 
 
 # ---- stop-frequency-breaker --------------------------------------------------

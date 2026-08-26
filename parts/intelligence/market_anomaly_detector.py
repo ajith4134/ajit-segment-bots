@@ -9,7 +9,16 @@ same shape: **a real move shows up in more than one place.**
 
 - **A price that moved on one venue and not another** is a data problem until
   proven otherwise. A genuine move arbitrages across venues in seconds; a stale
-  or broken feed does not.
+  or broken feed does not. What is compared is the **departure from the basis
+  this pair of venues normally holds**, never the distance from parity: two
+  venues pricing a contract apart is a fact about the contract, and measured on
+  the tape of 2026-08-26 it is the ordinary state. Across 36 symbols carried by
+  both venues, 2,871,711 prints, the median disagreement is 0.0245% -- and
+  BTRUSDT sits 1.38% apart on 98.9% of its prints with nothing wrong with either
+  feed. Comparing levels flagged 3.75% of every print in the market; comparing
+  departures from the learned basis flags 0.28%, and BTRUSDT falls from 98.9% to
+  6.5%. The measurement is in
+  `measurements/2026-08-26-anomaly-disagreement/`.
 - **A move that arrives during a known feed gap** is not a move, it is the
   reconnection. The gap detector already knows; this part refuses to treat the
   first post-gap print as information.
@@ -54,6 +63,13 @@ CROSSED_BOOK = "the-book-is-crossed-or-locked"
 MOVE_WITHOUT_VOLUME = "price-moved-without-trades-behind-it"
 STALE_FEED = "this-venue-has-stopped-updating"
 CANNOT_CROSS_CHECK = "only-one-venue-carries-this-symbol"
+# Not yet knowing what two venues normally charge for a contract is its own
+# state. Reported rather than folded into NO_ANOMALY, because "measured and
+# clean" and "not measured" are different facts and only one of them is evidence
+# (Rule 8), and rather than folded into an anomaly, because an unmeasured basis
+# is not a reason to distrust a feed.
+BASIS_NOT_MEASURED_YET = "the-basis-between-these-venues-is-not-measured-yet"
+REFERENCE_IS_TOO_OLD = "the-cross-venue-reference-is-too-old-to-check-against"
 
 
 @dataclass(frozen=True)
@@ -66,10 +82,19 @@ class MarketAnomaly:
     is_anomalous: bool
     observed_price: float | None
     consolidated_price: float | None
+    # How far this print sits from the basis this venue normally holds against
+    # the others -- not from the reference itself. Named `disagreement_fraction`
+    # still because that is what it decides, but it is a departure since
+    # 2026-08-26.
     disagreement_fraction: float | None
     venues_compared: int
     reason: str
     detected_at_ns: int
+    # What the pair normally sits at, and on how many prints. Carried so a reader
+    # can tell a venue that moved from a pair that has always been apart, and so
+    # a flag can be argued with rather than only believed.
+    learned_basis: float | None = None
+    basis_observations: int = 0
 
     @property
     def should_be_traded_on(self) -> bool:
@@ -84,6 +109,12 @@ class DetectorStanding:
     by_anomaly: dict = field(default_factory=dict)
     single_venue_symbols: int = 0
     largest_disagreement_seen: float | None = None
+    # Pairs whose normal basis is measured, and checks that could not be made
+    # because it is not yet, or because the reference on hand was older than a
+    # print now can be argued with.
+    pairs_with_a_measured_basis: int = 0
+    checks_against_a_stale_reference: int = 0
+    widest_learned_basis: float | None = None
 
 
 class MarketAnomalyDetector:
@@ -96,6 +127,9 @@ class MarketAnomalyDetector:
         minimum_volume_for_a_move: float,
         move_threshold: float,
         window_length: int,
+        basis_window_observations: int = 200,
+        minimum_basis_observations: int = 50,
+        reference_maximum_age_seconds: float = 5.0,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < disagreement_threshold < 1.0:
@@ -110,10 +144,31 @@ class MarketAnomalyDetector:
         self._minimum_volume = minimum_volume_for_a_move
         self._move_threshold = move_threshold
         self._window = window_length
+        if basis_window_observations < 2 or minimum_basis_observations < 2:
+            raise ValueError(
+                "a basis needs at least two observations to be a basis; got "
+                f"{basis_window_observations!r} over a minimum of "
+                f"{minimum_basis_observations!r}"
+            )
+        if minimum_basis_observations > basis_window_observations:
+            raise ValueError(
+                "a minimum above the window can never be reached, so the pair would never "
+                f"be checked: {minimum_basis_observations!r} of {basis_window_observations!r}"
+            )
+        if reference_maximum_age_seconds <= 0:
+            raise ValueError("a reference with no age bound is never old, which is false")
+        self._basis_window = basis_window_observations
+        self._minimum_basis_observations = minimum_basis_observations
+        self._reference_maximum_age_ns = int(reference_maximum_age_seconds * 1e9)
         self._now_ns = now_ns
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._last_update: dict[tuple[str, str], int] = {}
         self._consolidated: dict[str, tuple] = {}
+        # What this venue normally prints against the others, per venue and
+        # symbol. The learned half of the judgement (RL-060): the threshold says
+        # how far a print may depart from what this pair does, and the pair's own
+        # prints say what that is.
+        self._basis: dict[tuple[str, str], RollingWindow] = {}
         self._books: dict[tuple[str, str], tuple] = {}
         self._volumes: dict[tuple[str, str], float] = {}
         self._gaps: set[tuple[str, str]] = set()
@@ -130,6 +185,7 @@ class MarketAnomalyDetector:
 
     def observe_consolidated_price(
         self, symbol: str, price: float, venues: int, contributing_prices: dict | None = None,
+        observed_at_ns: int | None = None,
     ) -> None:
         """What every venue together says this symbol is worth, and who said what.
 
@@ -139,8 +195,19 @@ class MarketAnomalyDetector:
         two venues the blend is half of it, and the weight is the size of one
         print: a large trade on one side pulls the reference towards it and makes
         the other side read as anomalous.
+
+        `observed_at_ns` is when the reference was taken. Kept because this map
+        held a symbol's last reference forever: a reference is a level, and a
+        level with no age bound is the trap this project keeps falling into --
+        a fresh print compared against a reference from any time ago reads as a
+        venue that moved alone, which is precisely the flag this part raises.
         """
-        self._consolidated[symbol] = (price, venues, dict(contributing_prices or {}))
+        self._consolidated[symbol] = (
+            price,
+            venues,
+            dict(contributing_prices or {}),
+            self._now_ns() if observed_at_ns is None else observed_at_ns,
+        )
 
     def observe_book(self, venue_id: str, symbol: str, best_bid: float, best_ask: float) -> None:
         self._books[(venue_id, symbol)] = (best_bid, best_ask)
@@ -158,8 +225,8 @@ class MarketAnomalyDetector:
     def check(self, venue_id: str, symbol: str) -> MarketAnomaly:
         self.standing.checks += 1
         key = (venue_id, symbol)
-        window = self._prices.get(key)
-        price = None if window is None else window.latest
+        window_of_prints = self._prices.get(key)
+        price = None if window_of_prints is None else window_of_prints.latest
 
         if key in self._gaps:
             # The first print after a reconnection is not information about the
@@ -203,6 +270,23 @@ class MarketAnomalyDetector:
 
         consolidated_price, venues = consolidated[0], consolidated[1]
         contributing_prices = consolidated[2] if len(consolidated) > 2 else {}
+        reference_at_ns = consolidated[3] if len(consolidated) > 3 else None
+        if (
+            reference_at_ns is not None
+            and self._now_ns() - reference_at_ns > self._reference_maximum_age_ns
+        ):
+            # A reference that old describes a market this print has left. It is
+            # not evidence that this venue moved alone, and calling it that is how
+            # a quiet symbol becomes a permanently anomalous one.
+            self.standing.checks_against_a_stale_reference += 1
+            return self._anomaly(
+                venue_id, symbol, REFERENCE_IS_TOO_OLD, False, price, consolidated_price, None,
+                venues,
+                f"the cross-venue reference for {symbol} was taken "
+                f"{(self._now_ns() - reference_at_ns) / 1e9:.1f}s ago, past the "
+                f"{self._reference_maximum_age_ns / 1e9:.0f}s a reference is evidence about a "
+                f"print now; nothing can be cross-checked until a fresh one arrives",
+            )
         if price is None or consolidated_price <= 0:
             return self._anomaly(
                 venue_id, symbol, NO_ANOMALY, False, price, consolidated_price, None, venues,
@@ -228,39 +312,94 @@ class MarketAnomalyDetector:
         reference = sum(others.values()) / len(others) if others else consolidated_price
         venues_compared = len(others) if others else venues
 
-        disagreement = abs(price - reference) / reference
-        if (
-            self.standing.largest_disagreement_seen is None
-            or disagreement > self.standing.largest_disagreement_seen
-        ):
-            self.standing.largest_disagreement_seen = disagreement
+        # What this venue prints against the others right now, signed, because the
+        # side of the basis is what says which venue moved.
+        basis = (price - reference) / reference
+        window = self._basis.get(key)
+        if window is None:
+            window = RollingWindow(length=self._basis_window)
+            self._basis[key] = window
+        normal = window.quantile(0.5, self._minimum_basis_observations)
+        observations = window.count
+        # The median rather than the mean: the window is exactly where the outliers
+        # this part is looking for land, and a mean moves towards them, so a single
+        # broken print would raise the bar for the next one.
+        window.observe(basis)
 
-        if disagreement > self._disagreement:
+        move = self._recent_move(window_of_prints)
+        volume = self._volumes.get(key, 0.0)
+        moved_without_volume = (
+            move is not None and move > self._move_threshold and volume < self._minimum_volume
+        )
+
+        if normal is None:
+            # The pair's basis cannot judge anything yet, but a move nobody traded
+            # is a fact about this venue alone and needs no cross-venue reference
+            # at all -- so it is still named. Checked here rather than after the
+            # disagreement, because gating it on the basis would leave the first
+            # fifty prints of every pair unwatched for it.
+            if moved_without_volume:
+                return self._anomaly(
+                    venue_id, symbol, MOVE_WITHOUT_VOLUME, True, price, reference, None,
+                    venues_compared,
+                    f"price moved {move:.2%} on {volume:,.0f} of quote volume, below the "
+                    f"{self._minimum_volume:,.0f} this detector treats as a market. That is a "
+                    f"print rather than a trade: a wick nobody could have traded, or a feed "
+                    f"reporting an index",
+                    learned_basis=None, basis_observations=observations,
+                )
             return self._anomaly(
-                venue_id, symbol, VENUES_DISAGREE, True, price, reference,
-                disagreement, venues_compared,
-                f"{venue_id} has {symbol} at {price:.8g} against {reference:.8g} across the "
-                f"{venues_compared} other venue(s) -- {disagreement:.2%} apart, past the "
-                f"{self._disagreement:.2%} that separates a real move from a data problem. A "
-                f"genuine move arbitrages across venues in seconds",
+                venue_id, symbol, BASIS_NOT_MEASURED_YET, False, price, reference, None,
+                venues_compared,
+                f"{venue_id} is {basis:+.3%} from the {venues_compared} other venue(s) on "
+                f"{symbol}, and this pair has {observations} of the "
+                f"{self._minimum_basis_observations} prints needed before that number means "
+                f"anything. Not measured is not clean",
+                learned_basis=None, basis_observations=observations,
             )
 
-        move = self._recent_move(window)
-        volume = self._volumes.get(key, 0.0)
-        if move is not None and move > self._move_threshold and volume < self._minimum_volume:
+        departure = abs(basis - normal)
+        if (
+            self.standing.largest_disagreement_seen is None
+            or departure > self.standing.largest_disagreement_seen
+        ):
+            self.standing.largest_disagreement_seen = departure
+        if (
+            self.standing.widest_learned_basis is None
+            or abs(normal) > self.standing.widest_learned_basis
+        ):
+            self.standing.widest_learned_basis = abs(normal)
+
+        if departure > self._disagreement:
+            return self._anomaly(
+                venue_id, symbol, VENUES_DISAGREE, True, price, reference,
+                departure, venues_compared,
+                f"{venue_id} has {symbol} at {price:.8g} against {reference:.8g} across the "
+                f"{venues_compared} other venue(s) -- {basis:+.2%}, where this pair normally "
+                f"sits at {normal:+.2%} over its last {observations} prints. That is "
+                f"{departure:.2%} of departure, past the {self._disagreement:.2%} that "
+                f"separates a real move from a data problem. A genuine move arbitrages across "
+                f"venues in seconds; a basis does not move at all",
+                learned_basis=normal, basis_observations=observations,
+            )
+
+        if moved_without_volume:
             return self._anomaly(
                 venue_id, symbol, MOVE_WITHOUT_VOLUME, True, price, reference,
-                disagreement, venues_compared,
+                departure, venues_compared,
                 f"price moved {move:.2%} on {volume:,.0f} of quote volume, below the "
                 f"{self._minimum_volume:,.0f} this detector treats as a market. That is a "
                 f"print rather than a trade: a wick nobody could have traded, or a feed "
                 f"reporting an index",
+                learned_basis=normal, basis_observations=observations,
             )
 
         return self._anomaly(
-            venue_id, symbol, NO_ANOMALY, False, price, reference, disagreement, venues_compared,
-            f"{venue_id} agrees with {venues_compared} other venue(s) to within "
-            f"{disagreement:.3%}, the book is uncrossed, and the feed is live",
+            venue_id, symbol, NO_ANOMALY, False, price, reference, departure, venues_compared,
+            f"{venue_id} is {basis:+.3%} from {venues_compared} other venue(s) on {symbol}, "
+            f"{departure:.3%} from the {normal:+.3%} this pair normally holds over its last "
+            f"{observations} prints; the book is uncrossed and the feed is live",
+            learned_basis=normal, basis_observations=observations,
         )
 
     def _recent_move(self, window: RollingWindow) -> float | None:
@@ -271,7 +410,7 @@ class MarketAnomalyDetector:
 
     def _anomaly(
         self, venue_id, symbol, anomaly, is_anomalous, price, consolidated,
-        disagreement, venues, reason,
+        disagreement, venues, reason, learned_basis=None, basis_observations=0,
     ) -> MarketAnomaly:
         if is_anomalous:
             self.standing.anomalies += 1
@@ -287,6 +426,8 @@ class MarketAnomalyDetector:
             venues_compared=venues,
             reason=reason,
             detected_at_ns=self._now_ns(),
+            learned_basis=learned_basis,
+            basis_observations=basis_observations,
         )
 
 
@@ -309,6 +450,14 @@ def describe_anomalies(detector: MarketAnomalyDetector) -> dict:
         },
         "single_venue_symbols_that_could_not_be_cross_checked": detector.standing.single_venue_symbols,
         "largest_disagreement_seen": detector.standing.largest_disagreement_seen,
+        "pairs_with_a_measured_basis": sum(
+            1
+            for window in detector._basis.values()
+            if window.count >= detector._minimum_basis_observations
+        ),
+        "pairs_watched_for_a_basis": len(detector._basis),
+        "widest_learned_basis": detector.standing.widest_learned_basis,
+        "checks_against_a_stale_reference": detector.standing.checks_against_a_stale_reference,
         "venue_symbols_watched": len(detector._prices),
         "produces_a_trading_signal": False,
     }
@@ -365,6 +514,9 @@ def start_part(context) -> int:
         minimum_volume_for_a_move=context.number("anomaly_minimum_quote_volume_for_a_move"),
         move_threshold=context.number("anomaly_move_threshold"),
         window_length=int(context.number("anomaly_window_length")),
+        basis_window_observations=int(context.number("anomaly_basis_window_observations")),
+        minimum_basis_observations=int(context.number("anomaly_minimum_basis_observations")),
+        reference_maximum_age_seconds=context.number("anomaly_reference_maximum_age_seconds"),
     )
 
     def read_market(_detector):
@@ -392,6 +544,10 @@ def start_part(context) -> int:
                 price.price,
                 len(price.contributing_venues),
                 getattr(price, "contributing_prices", None),
+                # The consolidator's own stamp for when it took the reading, not
+                # this part's clock: how old a reference is has to be measured
+                # from when it was taken.
+                price.observed_at_ns,
             )
         return tuple(sorted(touched))
 

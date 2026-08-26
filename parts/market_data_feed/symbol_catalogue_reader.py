@@ -29,6 +29,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Mapping
 
+from runtime.level_publishing import LevelPublisher, LevelPublisherByKey
 from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -377,6 +378,7 @@ def run_symbol_catalogue_reader(
     health_interval_seconds: float,
     emit_health,
     publish_universe=None,
+    restatement_interval_seconds: float = 30.0,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
@@ -396,18 +398,31 @@ def run_symbol_catalogue_reader(
         request_timeout_seconds=request_timeout_seconds,
     )
     last_read_at = [None]
+    # The universe is a level, and a level nobody restates is an event. It was
+    # published only on a read, so a consumer that started between two reads had
+    # an empty universe for up to the whole refresh interval -- fifteen minutes.
+    # Measured on the live spine at 14:41 on 2026-08-26, four minutes after a
+    # restart: this reader had completed both venues' catalogues and selected 104
+    # symbols, instrument-selector had received **zero** symbol-universe messages
+    # and registered no listings, and every one of the 794 intents the arbiter
+    # formed was refused for having no instrument. The venue's list is re-read on
+    # the REST interval; what it says is restated on this one.
+    restated = LevelPublisher(
+        publish=publish_universe or (lambda items: None),
+        refresh_interval_seconds=restatement_interval_seconds,
+    )
 
     def read_if_due() -> None:
         now = time.monotonic()
         if last_read_at[0] is None or now - last_read_at[0] >= refresh_interval_seconds:
-            selection = reader.read_catalogue()
+            reader.read_catalogue()
             last_read_at[0] = now
-            if publish_universe is not None:
-                # Republished in full on every read, not as a diff: symbol-universe
-                # is a level -- these are the symbols we capture, now -- and a
-                # consumer that joined after the last read would otherwise have an
-                # empty universe and no way to know it was missing one.
-                publish_universe(selection)
+        if publish_universe is not None and reader.selection:
+            # In full rather than as a diff, and on a cadence rather than on a
+            # change: a consumer that joined after the last read has no way to ask
+            # for what it missed, and nothing else can tell it that its empty
+            # universe is missing rather than empty.
+            restated.publish_level(reader.selection)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -455,9 +470,29 @@ __all__ = [
     "SymbolSelectionRefused",
     "describe_catalogue",
     "fetch_json",
+    "restate_each_venues_universe",
     "run_symbol_catalogue_reader",
     "select_capturable_symbols",
 ]
+
+
+def restate_each_venues_universe(readers, restated) -> int:
+    """Say again what each venue currently lists, and answer how many spoke.
+
+    The venue's list is re-read on the REST interval; this is what is said in
+    between. `symbol-universe` is a level -- these are the symbols this system
+    captures, now -- and a level published only when it is re-read is an event to
+    everyone who was not listening at that moment.
+
+    A reader with nothing selected says nothing rather than saying an empty
+    universe: never read and lists nothing are different facts, and only one of
+    them means a consumer should stop looking for instruments (Rule 8).
+    """
+    spoke = 0
+    for reader in readers:
+        if reader.selection and restated.publish_level(reader.venue_id, reader.selection):
+            spoke += 1
+    return spoke
 
 
 def start_part(context) -> int:
@@ -507,6 +542,22 @@ def start_part(context) -> int:
         for adapter in adapters
     ]
     refresh_interval_seconds = context.number("symbol_catalogue_refresh_interval")
+    # The venue's list is re-read on the REST interval; what it currently says is
+    # restated on this one. The universe is a level -- these are the symbols we
+    # capture, now -- and it was published only on a read, which makes it an event
+    # for anybody who was not listening at that moment.
+    #
+    # Measured on the live spine at 14:41 on 2026-08-26, four minutes after a
+    # restart: this part had read both venues and selected 104 symbols;
+    # instrument-selector had received **zero** symbol-universe messages, held no
+    # listings, and refused all 794 intents the arbiter had formed for having no
+    # instrument to express them with. Nothing was faulty and nothing said
+    # anything: the one message that carried the universe went out before its
+    # reader was listening, and the next was fifteen minutes away.
+    restated = LevelPublisherByKey(
+        publish=publish_universe,
+        refresh_interval_seconds=context.number("symbol_universe_restatement_interval"),
+    )
     last_read_at = [None]
     # What was handed to each reader at its last read, so a held symbol that could
     # not be kept is not asked for again on the next tick.
@@ -553,12 +604,22 @@ def start_part(context) -> int:
             for reader in readers
         )
         if not (due or newly_missing):
+            # Nothing new to read, which is not the same as nothing to say. Each
+            # venue's current selection is restated on its own cadence, so a
+            # consumer that started a moment ago waits that long rather than the
+            # rest of the refresh interval.
+            restate_each_venues_universe(readers, restated)
             return
         last_read_at[0] = now
         for reader in readers:
             held_here = wanted[reader.venue_id]
             asked_for[reader.venue_id] = held_here
-            publish_universe(reader.read_catalogue(held_here))
+            selection = reader.read_catalogue(held_here)
+            # Through the same publisher the restatement uses, so a read and a
+            # restatement cannot disagree about when this venue last spoke. A read
+            # that changed nothing is not republished here; it is already out
+            # there and being restated on its cadence.
+            restated.publish_level(reader.venue_id, selection)
             # A symbol the bot holds that this venue will not let us capture. Not
             # a fault in this part and not something asking again can fix -- but a
             # position on it can never be priced from this venue's stream, so it

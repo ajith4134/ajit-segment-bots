@@ -52,7 +52,8 @@ from parts.intelligence.idea_generator import (
 )
 from parts.intelligence.market_anomaly_detector import (
     CANNOT_CROSS_CHECK, CROSSED_BOOK, DURING_A_FEED_GAP, MOVE_WITHOUT_VOLUME, NO_ANOMALY,
-    STALE_FEED, VENUES_DISAGREE, MarketAnomalyDetector,
+    STALE_FEED, VENUES_DISAGREE, BASIS_NOT_MEASURED_YET, REFERENCE_IS_TOO_OLD,
+    MarketAnomalyDetector,
 )
 from parts.intelligence.market_event_reader import (
     DELISTING, FUNDING_CHANGE, LEVERAGE_CHANGE, MAINTENANCE, UNCLASSIFIED,
@@ -408,25 +409,122 @@ def test_the_classifiers_cover_the_events_that_matter():
 
 # ---- market-anomaly-detector ------------------------------------------------
 
-def an_anomaly_detector(disagreement=0.01, stale=60.0, minimum_volume=1000.0, move=0.02, clock=None):
+def an_anomaly_detector(
+    disagreement=0.01, stale=60.0, minimum_volume=1000.0, move=0.02, clock=None,
+    minimum_basis=2, basis_window=200, reference_age=5.0,
+):
     detector = MarketAnomalyDetector(
         disagreement_threshold=disagreement, stale_after_seconds=stale,
         minimum_volume_for_a_move=minimum_volume, move_threshold=move, window_length=50,
+        basis_window_observations=basis_window, minimum_basis_observations=minimum_basis,
+        reference_maximum_age_seconds=reference_age,
     )
     if clock is not None:
         detector._now_ns = clock
     return detector
 
 
+def cross_venue_prints(symbol: str) -> list[tuple[int, str, float]]:
+    """Both venues' real prints for one symbol, merged into the order they happened.
+
+    Cut from the tape by `tests/captured/cut_cross_venue_fixture.py`, both venues
+    over the same window: a basis measured across two captures taken at different
+    moments would be measuring the capture (RL-063).
+    """
+    import pathlib
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "captured"
+    read_payload_lines = _capture_script().read_payload_lines
+    prints: list[tuple[int, str, float]] = []
+    for venue_id in ("binance-usdm", "bybit-linear"):
+        path = root / venue_id / f"2026-08-26-{symbol.lower()}-trades-cross-venue.jsonl"
+        assert path.exists(), (
+            f"{path} is missing. Recut it with "
+            f"`.venv/bin/python tests/captured/cut_cross_venue_fixture.py 2026-08-26 {symbol}`"
+        )
+        adapter = load_venue_adapter(venue_id)
+        for _received_at_ns, payload in read_payload_lines(path):
+            for trade in adapter.read_trades(payload):
+                prints.append((trade.venue_time_ns, trade.venue_id, trade.price))
+    prints.sort()
+    return prints
+
+
+def _capture_script():
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "captured" / "capture_venue_payloads.py"
+    specification = importlib.util.spec_from_file_location("capture_venue_payloads", path)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def replay_cross_venue(prints, symbol: str, threshold: float = 0.005):
+    """Feed both venues' prints through a detector, as the live spine would.
+
+    Returns how many prints the old level comparison would have flagged, what the
+    basis rule said instead, and the detector, so a test can ask what it learned.
+    """
+    at = {"now": prints[0][0]}
+    detector = MarketAnomalyDetector(
+        disagreement_threshold=threshold, stale_after_seconds=600.0,
+        minimum_volume_for_a_move=0.0, move_threshold=1.0, window_length=50,
+        basis_window_observations=200, minimum_basis_observations=50,
+        reference_maximum_age_seconds=5.0, now_ns=lambda: at["now"],
+    )
+    latest: dict[str, float] = {}
+    states: dict[str, int] = {}
+    level_rule_flags = 0
+    for at_ns, venue_id, price in prints:
+        at["now"] = at_ns
+        others = [other for venue, other in latest.items() if venue != venue_id]
+        if others:
+            reference = sum(others) / len(others)
+            if abs(price - reference) / reference > threshold:
+                level_rule_flags += 1
+        detector.observe_price(venue_id, symbol, price, at_ns)
+        detector.observe_volume(venue_id, symbol, 1_000_000_000.0)
+        latest[venue_id] = price
+        detector.observe_consolidated_price(
+            symbol, sum(latest.values()) / len(latest), len(latest), dict(latest),
+            observed_at_ns=at_ns,
+        )
+        anomaly = detector.check(venue_id, symbol)
+        states[anomaly.anomaly] = states.get(anomaly.anomaly, 0) + 1
+    return level_rule_flags, states, detector
+
+
+def teach_the_basis(detector, venue, symbol, own_price, others, times=5):
+    """Print the pair at a steady basis until the detector has measured it."""
+    for _ in range(times):
+        detector.observe_price(venue, symbol, own_price, detector._now_ns())
+        detector.observe_consolidated_price(
+            symbol, own_price, venues=len(others) + 1,
+            contributing_prices={venue: own_price, **others},
+            observed_at_ns=detector._now_ns(),
+        )
+        detector.check(venue, symbol)
+
+
 def test_one_venue_moving_alone_is_a_data_problem_until_proven_otherwise():
     """A genuine move arbitrages across venues in seconds."""
     subject = an_anomaly_detector(disagreement=0.01)
-    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
-    subject.observe_consolidated_price(SYMBOL, 100.0, venues=3)
     subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    teach_the_basis(subject, VENUE, SYMBOL, 100.0, {"other-venue": 100.0})
+
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
+    subject.observe_consolidated_price(
+        SYMBOL, 105.0, venues=2,
+        contributing_prices={VENUE: 110.0, "other-venue": 100.0},
+        observed_at_ns=subject._now_ns(),
+    )
     anomaly = subject.check(VENUE, SYMBOL)
     assert anomaly.anomaly == VENUES_DISAGREE
     assert anomaly.is_anomalous
+    assert anomaly.learned_basis == pytest.approx(0.0)
 
 
 def test_a_venue_is_checked_against_the_others_and_not_against_itself():
@@ -435,12 +533,15 @@ def test_a_venue_is_checked_against_the_others_and_not_against_itself():
     and bybit on BTRUSDT read as a 1.09% anomaly on the bybit side alone, because
     the reference had been pulled towards the venue with the larger last trade."""
     subject = an_anomaly_detector(disagreement=0.02)
-    subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
     subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    teach_the_basis(subject, VENUE, SYMBOL, 101.0, {"other-venue": 100.0})
+
+    subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
     # A blend that would be 3% away from this venue, made of the venue itself at
     # 101 and one other at 100. Against the other venue alone it is 1% away.
     subject.observe_consolidated_price(
         SYMBOL, 98.0, venues=2, contributing_prices={VENUE: 101.0, "other-venue": 100.0},
+        observed_at_ns=subject._now_ns(),
     )
     anomaly = subject.check(VENUE, SYMBOL)
     assert anomaly.anomaly == NO_ANOMALY
@@ -461,13 +562,17 @@ def test_the_only_fresh_venue_cannot_be_cross_checked_however_many_carry_the_sym
 
 def test_a_venue_that_really_did_move_alone_is_still_named():
     subject = an_anomaly_detector(disagreement=0.01)
-    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
     subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    teach_the_basis(subject, VENUE, SYMBOL, 100.0, {"other-venue": 100.0})
+
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
     subject.observe_consolidated_price(
         SYMBOL, 105.0, venues=2, contributing_prices={VENUE: 110.0, "other-venue": 100.0},
+        observed_at_ns=subject._now_ns(),
     )
     anomaly = subject.check(VENUE, SYMBOL)
     assert anomaly.anomaly == VENUES_DISAGREE and anomaly.is_anomalous
+    # Ten percent above a pair that normally prints level.
     assert anomaly.disagreement_fraction == pytest.approx(0.1)
 
 
@@ -510,6 +615,102 @@ def test_a_single_venue_symbol_is_reported_as_uncheckable_not_clean():
     anomaly = subject.check(VENUE, SYMBOL)
     assert anomaly.anomaly == CANNOT_CROSS_CHECK
     assert "not the same as being clean" in anomaly.reason
+
+
+# ---- a basis is not an anomaly -----------------------------------------------
+#
+# Measured on the live spine of 2026-08-26: market-anomaly-detector raised 25,011
+# anomalies of the kind "one venue moved and the others did not", trading-halt-
+# decider halted on 66,875 of its decisions, halt-enforcer zeroed the risk on the
+# halted symbols, and position-sizer sized nothing at all. Nothing was broken. The
+# check compared *levels* -- how far a print sits from the other venue -- and two
+# venues pricing one contract apart is the ordinary state of a market.
+#
+# On the tape of the same day, across 36 symbols both venues carry and 2,871,711
+# prints, the median cross-venue disagreement is 0.0245% and BTRUSDT sits 1.38%
+# apart on 98.9% of its prints. The measurement is in
+# measurements/2026-08-26-anomaly-disagreement/.
+
+
+def test_a_pair_that_is_always_apart_is_not_a_broken_feed():
+    """The real BTRUSDT prints from both venues, replayed against each other.
+
+    Level comparison flags 61.7% of them and every flag halts the symbol. The
+    departure from the basis this pair holds flags a tenth of that, and what is
+    left is the pair genuinely moving apart rather than the pair existing.
+    """
+    prints = cross_venue_prints("BTRUSDT")
+    assert len(prints) > 3_000, "the fixture is too short to learn a basis from"
+
+    level_rule_flags, states, detector = replay_cross_venue(prints, "BTRUSDT")
+
+    flagged = states.get(VENUES_DISAGREE, 0)
+    compared = flagged + states.get(NO_ANOMALY, 0)
+    assert level_rule_flags / compared > 0.5, (
+        "this fixture is meant to be a pair that levels-comparison cannot cope with"
+    )
+    assert flagged / compared < 0.15, (
+        f"the basis rule still flags {flagged / compared:.1%} of BTRUSDT's prints"
+    )
+    assert detector.standing.widest_learned_basis > 0.005, (
+        "the pair's basis was measured as smaller than the threshold, so this fixture "
+        "no longer demonstrates anything"
+    )
+
+
+def test_a_departure_from_the_basis_is_still_named():
+    """The rule must not have been softened into never firing."""
+    subject = an_anomaly_detector(disagreement=0.005, minimum_basis=3)
+    subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    # A pair that always prints 1.4% above the other venue -- BTRUSDT's own shape.
+    teach_the_basis(subject, VENUE, SYMBOL, 101.4, {"other-venue": 100.0})
+
+    steady = subject.check(VENUE, SYMBOL)
+    assert steady.anomaly == NO_ANOMALY, "the basis itself read as an anomaly"
+    assert steady.learned_basis == pytest.approx(0.014)
+
+    subject.observe_price(VENUE, SYMBOL, 103.5, subject._now_ns())
+    subject.observe_consolidated_price(
+        SYMBOL, 101.75, venues=2,
+        contributing_prices={VENUE: 103.5, "other-venue": 100.0},
+        observed_at_ns=subject._now_ns(),
+    )
+    departed = subject.check(VENUE, SYMBOL)
+    assert departed.anomaly == VENUES_DISAGREE and departed.is_anomalous
+    assert departed.disagreement_fraction == pytest.approx(0.021)
+    assert "normally sits at" in departed.reason
+
+
+def test_a_basis_not_yet_measured_is_reported_rather_than_assumed_clean():
+    subject = an_anomaly_detector(minimum_basis=10)
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_consolidated_price(
+        SYMBOL, 100.0, venues=2,
+        contributing_prices={VENUE: 100.0, "other-venue": 100.0},
+        observed_at_ns=subject._now_ns(),
+    )
+    unmeasured = subject.check(VENUE, SYMBOL)
+    assert unmeasured.anomaly == BASIS_NOT_MEASURED_YET
+    assert unmeasured.is_anomalous is False, "an unmeasured basis is not a broken feed"
+    assert "Not measured is not clean" in unmeasured.reason
+
+
+def test_a_reference_too_old_cannot_prove_a_venue_moved_alone():
+    """The reference is a level, and a level with no age bound never expires."""
+    clock = Clock()
+    subject = an_anomaly_detector(disagreement=0.005, minimum_basis=2, clock=clock, stale=600.0)
+    subject.observe_consolidated_price(
+        SYMBOL, 100.0, venues=2,
+        contributing_prices={VENUE: 100.0, "other-venue": 100.0},
+        observed_at_ns=clock(),
+    )
+    clock.advance_seconds(60)
+    subject.observe_price(VENUE, SYMBOL, 110.0, at_ns=clock())
+
+    stale = subject.check(VENUE, SYMBOL)
+    assert stale.anomaly == REFERENCE_IS_TOO_OLD
+    assert stale.is_anomalous is False
+    assert subject.standing.checks_against_a_stale_reference == 1
 
 
 def test_an_anomaly_is_never_something_to_trade_on():

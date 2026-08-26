@@ -180,6 +180,20 @@
       "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. The bare route is deliberate and is the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is silent on /market/ws, which is the opposite of this venue's ticker streams"
     },
     {
+      "path": "binance-usdm/2026-08-26-btrusdt-trades-cross-venue.jsonl",
+      "venue": "binance-usdm",
+      "source": "the tape this project records: binance-usdm/BTRUSDT/2026-08-26",
+      "captured_on": "2026-08-26",
+      "records": 1200,
+      "trades": 1200,
+      "seconds_spanned": 36.605,
+      "price_range": [
+        0.07739,
+        0.07924
+      ],
+      "how": "the first 1200 trade frames of BTRUSDT on binance-usdm, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
+    },
+    {
       "path": "bybit-linear/2026-08-22-catalogue-subset.json",
       "venue": "bybit-linear",
       "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
@@ -294,6 +308,20 @@
       "full_response_symbol_count": 837,
       "highest_quote_volume": 6839311843.7074,
       "lowest_quote_volume": 206.9245
+    },
+    {
+      "path": "bybit-linear/2026-08-26-btrusdt-trades-cross-venue.jsonl",
+      "venue": "bybit-linear",
+      "source": "the tape this project records: bybit-linear/BTRUSDT/2026-08-26",
+      "captured_on": "2026-08-26",
+      "records": 1200,
+      "trades": 3243,
+      "seconds_spanned": 70.034,
+      "price_range": [
+        0.07693,
+        0.07939
+      ],
+      "how": "the first 1200 trade frames of BTRUSDT on bybit-linear, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
     }
   ]
 }

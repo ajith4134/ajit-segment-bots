@@ -19,6 +19,7 @@ from parts.market_data_feed.symbol_catalogue_reader import (
     QUOTE_VOLUME_24H,
     SymbolCatalogueReader,
     SymbolSelectionRefused,
+    restate_each_venues_universe,
     describe_catalogue,
     CatalogueStanding,
     select_capturable_symbols,
@@ -543,3 +544,107 @@ def test_reading_with_a_held_symbol_puts_it_in_the_selection(read_captured_json)
     kept = reader.read_catalogue(frozenset({below_the_cut}))
     assert below_the_cut in {e.symbol for e in kept}
     assert reader.selection == kept, "the reader kept a selection it did not publish"
+
+
+# ---- the universe is a level, so it is said again -----------------------------
+#
+# Measured on the live spine at 14:41 on 2026-08-26, four minutes after a
+# restart: this part had read both venues' catalogues and selected 104 symbols,
+# and instrument-selector had received **zero** symbol-universe messages, held no
+# listings, and refused all 794 intents opinion-arbiter had formed -- no
+# instrument to express them with, so no entry price, so nothing sized. The one
+# message carrying the universe had gone out before its reader was listening and
+# the next was fifteen minutes away.
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance_seconds(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class AReader:
+    """A catalogue reader reduced to what the restatement reads off it."""
+
+    def __init__(self, venue_id: str, selection) -> None:
+        self.venue_id = venue_id
+        self.selection = selection
+
+
+def a_restatement(publish, clock, interval=30.0):
+    from runtime.level_publishing import LevelPublisherByKey
+
+    return LevelPublisherByKey(
+        publish=publish, refresh_interval_seconds=interval, monotonic=clock,
+    )
+
+
+def test_a_consumer_that_starts_between_reads_is_told_the_universe():
+    published = []
+    clock = Clock()
+    restated = a_restatement(published.append, clock)
+    readers = [AReader("binance-usdm", ("BTCUSDT", "ETHUSDT"))]
+
+    assert restate_each_venues_universe(readers, restated) == 1, "the first word was never said"
+    assert published == [("BTCUSDT", "ETHUSDT")]
+
+    # A tick later, with no read due and nothing changed: the level is not
+    # restated on every tick, which is what would put a 104-symbol payload on the
+    # bus for 37 consumers at the tick rate.
+    clock.advance_seconds(1.0)
+    assert restate_each_venues_universe(readers, restated) == 0
+    assert len(published) == 1
+
+    # Past the restatement interval, it is said again -- so a consumer that
+    # started in between has it, rather than waiting out the read interval.
+    clock.advance_seconds(30.0)
+    assert restate_each_venues_universe(readers, restated) == 1
+    assert published[-1] == ("BTCUSDT", "ETHUSDT")
+
+
+def test_a_venue_that_has_not_read_yet_says_nothing_rather_than_an_empty_universe():
+    """Never read and lists nothing are different facts."""
+    published = []
+    clock = Clock()
+    restated = a_restatement(published.append, clock)
+
+    assert restate_each_venues_universe([AReader("bybit-linear", ())], restated) == 0
+    assert published == []
+
+
+def test_each_venue_is_restated_on_its_own_clock():
+    """One venue reading must not reset the other's silence."""
+    published = []
+    clock = Clock()
+    restated = a_restatement(published.append, clock)
+    binance = AReader("binance-usdm", ("BTCUSDT",))
+    bybit = AReader("bybit-linear", ("BTCUSDT",))
+
+    assert restate_each_venues_universe([binance], restated) == 1
+    clock.advance_seconds(20.0)
+    assert restate_each_venues_universe([bybit], restated) == 1, (
+        "the second venue's first word was withheld because the first venue had spoken"
+    )
+    clock.advance_seconds(11.0)
+    # Binance is due again at 31s; bybit spoke at 20s and is not.
+    assert restate_each_venues_universe([binance, bybit], restated) == 1
+
+
+def test_a_selection_that_changes_is_said_at_once():
+    published = []
+    clock = Clock()
+    restated = a_restatement(published.append, clock)
+    reader = AReader("binance-usdm", ("BTCUSDT",))
+
+    restate_each_venues_universe([reader], restated)
+    clock.advance_seconds(1.0)
+    reader.selection = ("BTCUSDT", "SOLUSDT")
+    assert restate_each_venues_universe([reader], restated) == 1, (
+        "a new symbol waited for the refresh interval"
+    )
+    assert published[-1] == ("BTCUSDT", "SOLUSDT")
