@@ -41,6 +41,10 @@ PART_DECLARATION = PartDeclaration(
 )
 
 APPLIED = "applied"
+
+# What this part's checkpoint is called under `position_state_root`, beside the
+# lot books and the resting stops.
+CHECKPOINT_COMPONENT = "paper-account"
 REFUSED_LIVE_FILL = "refused-live-fill"
 REFUSED_DUPLICATE = "refused-duplicate-fill"
 REFUSED_INSUFFICIENT = "refused-insufficient-paper-balance"
@@ -83,6 +87,12 @@ class KeeperStanding:
     realised_total: float = 0.0
     fees_total: float = 0.0
     lowest_cash: float | None = None
+    # What came back from the checkpoint, and what the store made of the file.
+    # Named `restored_symbols` because that is the field
+    # `restore_and_arm_checkpoint` sets, and the shape is what the substrate
+    # knows this part by (T-4).
+    restored_symbols: int = 0
+    checkpoint_verdict: str = "no checkpoint has been read yet"
 
 
 class PaperAccountKeeper:
@@ -98,6 +108,53 @@ class PaperAccountKeeper:
         self._marks: dict[tuple[str, str], float] = {}
         self._seen_fills: set[str] = set()
         self.standing = KeeperStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """The account, as the next process needs to find it.
+
+        Cash, what is held, and what has already been realised. Without this the
+        paper account started every run at the full allotment while
+        `fill-reconciler` restored the positions that had spent it: measured on
+        the live spine at 16:10 on 2026-08-26, eight positions open against a
+        keeper reporting `fills_applied` 0, `open_positions` 0 and equity exactly
+        10,000. Every risk cap in the segment is a fraction of that number.
+        """
+        return {
+            "starting": self._starting,
+            "cash": self._cash,
+            "realised_total": self.standing.realised_total,
+            "fees_total": self.standing.fees_total,
+            "fills_applied": self.standing.fills_applied,
+            "positions": {
+                f"{venue_id}|{symbol}": {
+                    "quantity": position.quantity,
+                    "average_price": position.average_price,
+                }
+                for (venue_id, symbol), position in self._positions.items()
+            },
+            # The fills already applied, so a fill redelivered across a restart is
+            # still refused as a duplicate rather than spending the cash twice.
+            "seen_fills": sorted(self._seen_fills),
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Bring the account back, and answer how many positions came with it."""
+        self._starting = float(state.get("starting", 0.0))
+        self._cash = float(state.get("cash", 0.0))
+        self.standing.realised_total = float(state.get("realised_total", 0.0))
+        self.standing.fees_total = float(state.get("fees_total", 0.0))
+        self.standing.fills_applied = int(state.get("fills_applied", 0))
+        self._positions = {}
+        for key, held in (state.get("positions") or {}).items():
+            venue_id, _, symbol = key.partition("|")
+            quantity = float(held["quantity"])
+            if quantity == 0:
+                continue
+            self._positions[(venue_id, symbol)] = _PaperPosition(
+                quantity, float(held["average_price"])
+            )
+        self._seen_fills = set(state.get("seen_fills") or ())
+        return len(self._positions)
 
     def set_allotment(self, allotted: float) -> None:
         """The paper account starts at what the operator allocated, and only there.
@@ -234,10 +291,20 @@ def run_paper_account_keeper(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
+        applied = 0
         for fill in read_fills(keeper):
-            keeper.apply_fill(fill)
+            if keeper.apply_fill(fill) == APPLIED:
+                applied += 1
+        if applied and write_checkpoint is not None:
+            # After the balance has changed and before anybody acts on it. A
+            # checkpoint written on a tick that changed nothing would rewrite the
+            # file at the fill stream's rate to record an account that had not
+            # moved -- the level-on-every-tick defect, one layer down in the
+            # filesystem.
+            write_checkpoint(keeper.standing.fills_applied)
         publish_balance(keeper.read_balance())
 
     return run_part(
@@ -265,6 +332,13 @@ def start_part(context) -> int:
     what the market is doing rather than against the entry price, which would make
     every open position look flat forever.
     """
+    import pathlib
+
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
     from runtime.input_assembly import Batch, LatestValue
 
     fills = Batch(read=context.bus.reader("fill"))
@@ -279,6 +353,31 @@ def start_part(context) -> int:
         # context loaded beside the runtime scope. A currency in the runtime scope
         # would be one currency for every segment.
         currency=str(context.setting("quote_currency", scope=segment).value),
+    )
+    # Restored before the allotment is applied, so `set_allotment` sees the
+    # starting balance this account already had and adds nothing. Without the
+    # checkpoint every restart handed the strategy a fresh 10,000 while
+    # fill-reconciler restored the positions that had already spent it: measured
+    # on the live spine at 16:10 on 2026-08-26, eight positions open and this part
+    # reporting `fills_applied` 0, `open_positions` 0 and equity exactly the
+    # starting balance. Every risk cap in the segment is a fraction of that
+    # number, so an account that forgets is an account whose caps are fiction.
+    #
+    # Beside the lot books and the resting stops, under position_state_root: it is
+    # the same fact about the same positions.
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    write_checkpoint = restore_and_arm_checkpoint(
+        store,
+        # Every fill, for the same reason the lot books use: a fill changes what
+        # the account holds and losing one costs a position its cash.
+        CheckpointSchedule(1),
+        PART_ID,
+        CHECKPOINT_COMPONENT,
+        keeper,
+        {},
     )
     funded_at = [None]
 
@@ -300,4 +399,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        write_checkpoint=write_checkpoint,
     )

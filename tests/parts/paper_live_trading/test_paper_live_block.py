@@ -475,6 +475,70 @@ def paper_fill(fill_id, side, price, quantity, fee=0.0, is_paper=True):
     return Fill(fill_id, VENUE, SYMBOL, side, price, quantity, fee, 1, "o1", is_paper)
 
 
+# ---- the account survives a restart ------------------------------------------
+#
+# Measured on the live spine at 16:10 on 2026-08-26: eight positions open,
+# restored by fill-reconciler and cost-basis-tracker from their own checkpoints,
+# and this part reporting `fills_applied` 0, `open_positions` 0 and equity exactly
+# the 10,000 starting balance. The paper account was the one part of the book that
+# forgot, and every risk cap in the segment is a fraction of its equity -- so a
+# forgetting account is a segment whose caps are fiction.
+
+
+def test_the_account_comes_back_holding_what_it_held():
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, fee=1.0))
+    subject.observe_mark_price(VENUE, SYMBOL, 110.0)
+    before = subject.read_balance()
+
+    restored = PaperAccountKeeper(SEGMENT)
+    assert restored.restore_from_checkpoint(subject.read_checkpoint_state()) == 1
+    # The allotment arrives again on the next tick, as it does on every run, and
+    # must not hand the account a second 10,000.
+    restored.set_allotment(10_000.0)
+    restored.observe_mark_price(VENUE, SYMBOL, 110.0)
+    after = restored.read_balance()
+
+    assert after.cash == pytest.approx(before.cash)
+    assert after.equity == pytest.approx(before.equity)
+    assert after.open_positions == 1
+    assert after.unrealised == pytest.approx(100.0)
+
+
+def test_a_restored_account_does_not_spend_its_cash_twice():
+    """A fill redelivered across a restart is still the same fill."""
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, fee=1.0))
+
+    restored = PaperAccountKeeper(SEGMENT)
+    restored.restore_from_checkpoint(subject.read_checkpoint_state())
+    assert restored.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, fee=1.0)) == REFUSED_DUPLICATE
+    assert restored.read_balance().cash == pytest.approx(subject.read_balance().cash)
+
+
+def test_a_restored_account_closes_what_it_restored():
+    """A position that came back must be closable, not a second position."""
+    subject = keeper(10_000.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0))
+
+    restored = PaperAccountKeeper(SEGMENT)
+    restored.restore_from_checkpoint(subject.read_checkpoint_state())
+    restored.set_allotment(10_000.0)
+    restored.apply_fill(paper_fill("f2", SELL, 110.0, 10.0))
+    balance = restored.read_balance()
+
+    assert balance.open_positions == 0
+    assert balance.realised_total == pytest.approx(100.0)
+    assert balance.cash == pytest.approx(10_100.0)
+
+
+def test_an_account_that_never_ran_restores_to_nothing_held():
+    """Never run and came back empty are different facts, and both are honest."""
+    subject = PaperAccountKeeper(SEGMENT)
+    assert subject.restore_from_checkpoint(subject.read_checkpoint_state()) == 0
+    assert subject.read_balance().cash == pytest.approx(0.0)
+
+
 def test_the_paper_account_starts_at_the_allotment():
     assert keeper(10_000.0).read_balance().cash == pytest.approx(10_000.0)
 
