@@ -889,6 +889,38 @@ def test_the_size_is_snapped_down_to_the_increment_never_up():
 
 # ---- trade-capital-bounds-gate -----------------------------------------------
 
+def test_a_refusal_for_no_risk_names_the_limiter_that_bound_it():
+    """Six parts publish `risk-limit` and the sizer takes the smallest.
+
+    "No risk allowed" was one number with six possible authors, so a run that
+    sized nothing said nothing about which part to go and look at -- measured on
+    the live spine at 20:05 on 2026-08-26, 4,724 of 13,185 actionable intents.
+    """
+    sizer = PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0)
+    result = sizer.size(
+        venue_id=VENUE, symbol=SYMBOL, side=BUY, entry_price=100.0, stop_price=98.0,
+        allotment=10_000.0, risk_limit_fraction=0.0, leverage=1.0,
+        price_increment=0.01, quantity_increment=0.001, minimum_quantity=0.001,
+        bound_by="margin-liquidation-watch",
+    )
+
+    assert result.outcome == REFUSED_NO_LIMIT
+    assert "margin-liquidation-watch" in result.reason
+    assert sizer.standing.refused_by_limiter == {"margin-liquidation-watch": 1}
+
+
+def test_a_limit_that_names_no_author_is_still_counted_as_one():
+    """Silence about the author is its own state, not an absent refusal."""
+    sizer = PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0)
+    sizer.size(
+        venue_id=VENUE, symbol=SYMBOL, side=BUY, entry_price=100.0, stop_price=98.0,
+        allotment=10_000.0, risk_limit_fraction=0.0, leverage=1.0,
+        price_increment=0.01, quantity_increment=0.001, minimum_quantity=0.001,
+    )
+
+    assert sizer.standing.refused_by_limiter == {"a limiter that did not name itself": 1}
+
+
 def bounds(minimum=100.0, maximum=1000.0):
     return TradeCapitalBounds(SEGMENT, minimum, maximum, "USDT")
 

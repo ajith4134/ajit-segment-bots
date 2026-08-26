@@ -101,6 +101,14 @@ class SizerStanding:
     sized: int = 0
     shrunk: int = 0
     refused_no_limit: int = 0
+    # Which limiter's zero it was, by name, counted per limiter. A run that sizes
+    # nothing because the risk limit is zero says nothing about *why* until this
+    # is here: six parts publish `risk-limit` and the sizer takes the smallest, so
+    # "no risk allowed" was one number with six possible authors. Measured on the
+    # live spine at 20:05 on 2026-08-26, 4,724 of 13,185 actionable intents were
+    # refused this way and finding the author meant reading every limiter's
+    # standing and reasoning backwards.
+    refused_by_limiter: dict = field(default_factory=dict)
     refused_stop_invalid: int = 0
     refused_too_small: int = 0
     refused_no_increment: int = 0
@@ -161,12 +169,17 @@ class PositionSizer:
         size_multiple: float | None = None,
         free_capital: float | None = None,
         intent_id: str = "",
+        bound_by: str = "",
     ) -> SizedOrder:
         if risk_limit_fraction <= NO_RISK_ALLOWED:
             self.standing.refused_no_limit += 1
+            named = bound_by or "a limiter that did not name itself"
+            self.standing.refused_by_limiter[named] = (
+                self.standing.refused_by_limiter.get(named, 0) + 1
+            )
             return self._refusal(
                 venue_id, symbol, side, entry_price, stop_price, REFUSED_NO_LIMIT, leverage,
-                "the binding risk limit allows nothing to be risked", intent_id,
+                f"the binding risk limit allows nothing to be risked ({named})", intent_id,
             )
 
         if price_increment is None or price_increment <= 0:
@@ -391,6 +404,7 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "sized": sizer.standing.sized,
         "shrunk_to_fit": sizer.standing.shrunk,
         "refused_no_risk_allowed": sizer.standing.refused_no_limit,
+        "refused_by_limiter": dict(sizer.standing.refused_by_limiter),
         "refused_stop_invalid": sizer.standing.refused_stop_invalid,
         "refused_too_small": sizer.standing.refused_too_small,
         "refused_no_price_increment": sizer.standing.refused_no_increment,
@@ -579,7 +593,7 @@ def start_part(context) -> int:
 
         balance = balance_by_segment.get(segment)
 
-        def binding_limit_for(symbol: str | None) -> float | None:
+        def binding_limit_for(symbol: str | None) -> tuple[float, str] | None:
             """The smallest fraction any limiter allows for this symbol.
 
             Per symbol since 2026-08-25: a limit carries the symbols it is about,
@@ -588,7 +602,7 @@ def start_part(context) -> int:
             able to stop it.
             """
             applying = [
-                limit.fraction_of_allotment
+                (limit.fraction_of_allotment, limit.limiter)
                 for limit in every_limit.values()
                 if limit.applies_to(symbol)
             ]
@@ -654,7 +668,10 @@ def start_part(context) -> int:
                     # new trade smaller because earlier ones are still open, which
                     # is a rule nobody stated.
                     "allotment": balance.equity,
-                    "risk_limit_fraction": binding,
+                    "risk_limit_fraction": binding[0],
+                    # Which limiter that fraction came from, so a refusal names
+                    # its author rather than leaving six candidates.
+                    "bound_by": binding[1],
                     "leverage": leverage.leverage if leverage is not None else 1.0,
                     "price_increment": getattr(increment, "increment", None),
                     "quantity_increment": quantity_increment,
