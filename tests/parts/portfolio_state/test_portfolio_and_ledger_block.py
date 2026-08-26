@@ -56,17 +56,19 @@ SYMBOL = "BTCUSDT"
 SECOND = 1_000_000_000
 
 
-def fill(fill_id, side, price, quantity, at=1, fee=0.0):
+def fill(fill_id, side, price, quantity, at=1, fee=0.0, leverage=1.0):
     return Fill(
         fill_id=fill_id, venue_id=VENUE, symbol=SYMBOL, side=side,
         price=price, quantity=quantity, fee=fee, filled_at_ns=at * SECOND,
+        leverage=leverage,
     )
 
 
-def position(quantity, entry=100.0, at=1):
+def position(quantity, entry=100.0, at=1, leverage=None):
     return Position(
         venue_id=VENUE, symbol=SYMBOL, quantity=quantity, average_entry_price=entry,
         realised_pnl=0.0, fees_paid=0.0, opened_at_ns=at * SECOND, updated_at_ns=at * SECOND,
+        leverage=leverage,
     )
 
 
@@ -370,6 +372,46 @@ def test_going_flat_clears_the_excursion():
     assert tracker.read(VENUE, SYMBOL) is None
 
 
+def test_a_position_carries_the_leverage_of_the_fill_that_opened_it():
+    """The only place the decision that chose it survives (2026-08-26)."""
+    subject = FillReconciler(quantity_tolerance=0.0)
+    held = subject.observe_fill(fill("f1", BUY, 100.0, 1.0, leverage=10.0))
+    assert held.leverage == 10.0
+
+
+def test_the_leverage_survives_a_restart():
+    subject = FillReconciler(quantity_tolerance=0.0)
+    subject.observe_fill(fill("f1", BUY, 100.0, 1.0, leverage=10.0))
+
+    restored = FillReconciler(quantity_tolerance=0.0)
+    restored.restore_from_checkpoint(subject.read_checkpoint_state())
+    assert restored.reconcile(VENUE, SYMBOL).position.leverage == 10.0
+
+
+def test_a_checkpoint_from_before_positions_carried_leverage_restores_unknown():
+    """Not 1x: a position restored as unlevered gets a liquidation price that is
+    wrong rather than absent, and only an absent one stops new risk."""
+    subject = FillReconciler(quantity_tolerance=0.0)
+    subject.restore_from_checkpoint({
+        "positions": {
+            f"{VENUE}|{SYMBOL}": {
+                "venue_id": VENUE, "symbol": SYMBOL, "quantity": 1.0,
+                "average_entry_price": 100.0, "realised_pnl": 0.0, "fees_paid": 0.0,
+                "opened_at_ns": SECOND, "updated_at_ns": SECOND,
+            }
+        },
+        "seen_fills": [],
+    })
+    assert subject.reconcile(VENUE, SYMBOL).position.leverage is None
+
+
+def test_adding_to_a_position_keeps_what_its_margin_was_posted_at():
+    subject = FillReconciler(quantity_tolerance=0.0)
+    subject.observe_fill(fill("f1", BUY, 100.0, 1.0, leverage=10.0))
+    held = subject.observe_fill(fill("f2", BUY, 102.0, 1.0, at=2, leverage=1.0))
+    assert held.leverage == 10.0
+
+
 # ---- liquidation-price-tracker -----------------------------------------------
 
 def test_a_long_is_liquidated_below_its_entry():
@@ -399,6 +441,47 @@ def test_more_leverage_dies_closer_to_the_entry():
     tracker.set_leverage(VENUE, SYMBOL, 50.0)
     steep = tracker.compute(VENUE, SYMBOL).liquidation_price
     assert steep > gentle
+
+
+# A position outlives the decision that opened it, and `leverage-selector`
+# answers only while an intent is being formed. Measured on the live spine at
+# 15:01 on 2026-08-26: 12 open positions, 7,041 readings refused for "no
+# leverage-choice for this position", `margin-liquidation-watch` stopping new risk
+# on each of those symbols, and the sizer refusing most of what it saw -- while
+# nothing was anywhere near liquidation.
+
+
+def test_a_restored_position_is_measured_from_the_leverage_it_carries():
+    """No choice has arrived this run, and one still must not be assumed."""
+    tracker = LiquidationPriceTracker()
+    tracker.observe_position(position(1.0, entry=100.0, leverage=10.0))
+    tracker.set_maintenance_margin_rate(VENUE, SYMBOL, 0.005)
+
+    result = tracker.compute(VENUE, SYMBOL)
+    assert result.liquidation_price == pytest.approx(90.5)
+    assert tracker.standing.leverage_from_the_position_itself == 1
+
+
+def test_a_live_choice_outranks_what_the_position_was_opened_at():
+    """The selector is answering about now; the position is remembering."""
+    tracker = LiquidationPriceTracker()
+    tracker.observe_position(position(1.0, entry=100.0, leverage=2.0))
+    tracker.set_leverage(VENUE, SYMBOL, 10.0)
+    tracker.set_maintenance_margin_rate(VENUE, SYMBOL, 0.005)
+
+    assert tracker.compute(VENUE, SYMBOL).liquidation_price == pytest.approx(90.5)
+    assert tracker.standing.leverage_from_the_position_itself == 0
+
+
+def test_a_position_carrying_no_leverage_is_still_unmeasurable():
+    """Unlevered and unrecorded are different, and only one has a price."""
+    tracker = LiquidationPriceTracker()
+    tracker.observe_position(position(1.0, entry=100.0, leverage=None))
+    tracker.set_maintenance_margin_rate(VENUE, SYMBOL, 0.005)
+
+    result = tracker.compute(VENUE, SYMBOL)
+    assert result.liquidation_price is None
+    assert tracker.standing.without_leverage == 1
 
 
 def test_an_unknown_maintenance_rate_computes_nothing():

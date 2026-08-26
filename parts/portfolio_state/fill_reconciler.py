@@ -132,6 +132,12 @@ class FillReconciler:
                     "fees_paid": held.fees_paid,
                     "opened_at_ns": held.opened_at_ns,
                     "updated_at_ns": held.updated_at_ns,
+                    # What it was opened at. Without this a restored position has
+                    # no leverage anywhere -- `leverage-selector` answers while an
+                    # intent is being formed and never again -- and a position
+                    # whose leverage nobody knows has no computable liquidation
+                    # price, which stops new risk on its symbol.
+                    "leverage": held.leverage,
                 }
                 for key, held in self._positions.items()
             },
@@ -150,6 +156,12 @@ class FillReconciler:
                 fees_paid=float(held["fees_paid"]),
                 opened_at_ns=int(held["opened_at_ns"]),
                 updated_at_ns=int(held["updated_at_ns"]),
+                # Absent in a checkpoint written before positions carried it, and
+                # absent is None: a position restored as 1x would be handed a
+                # liquidation price computed from a leverage nobody recorded.
+                leverage=(
+                    float(held["leverage"]) if held.get("leverage") is not None else None
+                ),
             )
             for text, held in (state.get("positions") or {}).items()
         }
@@ -176,6 +188,9 @@ class FillReconciler:
                 fees_paid=fill.fee,
                 opened_at_ns=fill.filled_at_ns,
                 updated_at_ns=fill.filled_at_ns,
+                # Carried off the fill, which is the only place it survives the
+                # decision that chose it.
+                leverage=getattr(fill, "leverage", None),
             )
         else:
             position = self._apply(held, fill)
@@ -213,6 +228,12 @@ class FillReconciler:
             fees_paid=held.fees_paid + fill.fee,
             opened_at_ns=held.opened_at_ns if held.quantity != 0 else fill.filled_at_ns,
             updated_at_ns=fill.filled_at_ns,
+            # A position reopened from flat takes the new fill's leverage; one
+            # being added to or reduced keeps what it was opened at, because that
+            # is the leverage its margin was posted at.
+            leverage=(
+                getattr(fill, "leverage", None) if held.quantity == 0 else held.leverage
+            ),
         )
 
     def observe_venue_report(self, venue_id: str, symbol: str, quantity: float) -> None:

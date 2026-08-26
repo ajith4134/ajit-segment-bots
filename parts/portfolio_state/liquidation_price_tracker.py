@@ -43,6 +43,10 @@ class LiquidationPrice:
 class TrackerStanding:
     positions_tracked: int = 0
     without_leverage: int = 0
+    # Readings that were only possible because the position carried its own
+    # leverage. Counted because "the selector answered" and "the position
+    # remembered" are different facts about how this number was reached.
+    leverage_from_the_position_itself: int = 0
     without_margin_rate: int = 0
     computed: int = 0
     closest_distance: float | None = None
@@ -100,11 +104,27 @@ class LiquidationPriceTracker:
         if position is None:
             return None
 
+        # The live choice first, then what the position itself was opened at.
+        # **`leverage-selector` answers only while an intent is being formed**, so
+        # a position restored from a checkpoint -- or one older than this process
+        # -- has no choice behind it and could never be measured: on the live spine
+        # at 15:01 on 2026-08-26 it refused 7,041 of 12 open positions' readings
+        # for exactly this, `margin-liquidation-watch` stopped new risk on each of
+        # those symbols, and `position-sizer` refused most of what it saw. The
+        # position now carries the leverage its margin was posted at, off the fill
+        # that opened it.
         leverage = self._leverage.get(key)
+        if leverage is None:
+            leverage = getattr(position, "leverage", None)
+            if leverage is not None:
+                self.standing.leverage_from_the_position_itself += 1
         rate = self._margin_rates.get(key)
         if leverage is None or leverage <= 0:
             self.standing.without_leverage += 1
-            return self._unknown(position, leverage or 0.0, rate or 0.0, "no leverage-choice for this position")
+            return self._unknown(
+                position, leverage or 0.0, rate or 0.0,
+                "no leverage-choice for this position and none recorded on the position itself",
+            )
         if rate is None:
             self.standing.without_margin_rate += 1
             return self._unknown(position, leverage, 0.0, "the venue's maintenance margin rate is unknown")
@@ -165,6 +185,7 @@ def describe_liquidations(tracker: LiquidationPriceTracker) -> dict:
         "positions_tracked": tracker.standing.positions_tracked,
         "computed": tracker.standing.computed,
         "without_leverage": tracker.standing.without_leverage,
+        "leverage_from_the_position_itself": tracker.standing.leverage_from_the_position_itself,
         "without_margin_rate": tracker.standing.without_margin_rate,
         "closest_distance_fraction": tracker.standing.closest_distance,
     }

@@ -241,6 +241,14 @@ class Position:
     fees_paid: float
     opened_at_ns: int
     updated_at_ns: int
+    # The leverage this position was opened at, or None when nothing recorded one.
+    # **None rather than one**, because "opened unlevered" and "nobody wrote down
+    # the leverage" are different facts and only the first one lets a liquidation
+    # price be computed. A position restored from a checkpoint has no
+    # `leverage-choice` behind it -- the selector answers while an intent is being
+    # formed and never again -- which is why the leverage has to travel with the
+    # position rather than be looked up beside it.
+    leverage: float | None = None
 
     @property
     def direction(self) -> str:
