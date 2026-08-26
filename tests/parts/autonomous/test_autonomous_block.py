@@ -683,6 +683,61 @@ def test_falling_competence_narrows_the_envelope():
     assert COMPETENCE_FELL in outcome.narrowing_reasons
 
 
+def a_boundary_with_nothing_demonstrated():
+    """What every start looks like: no closed trade, so no competence."""
+    boundary = AutonomyBoundary(
+        competence_for_level=COMPETENCE_BARS, clean_modifications_required=1,
+        readings_before_widening=2,
+        maximum_notional_for_level=NOTIONAL_CEILINGS, now_ns=Clock(),
+    )
+    boundary.observe_survival_tier(COMFORTABLE)
+    return boundary
+
+
+def test_on_paper_the_envelope_may_trade_before_it_has_demonstrated_anything():
+    """Competence is measured from closed trades and closed trades need trading.
+    Measured 2026-08-26: 49,908 envelopes issued, 0 widenings, 444,545 zero risk
+    limits and 33 order intents refused -- a loop with no entry point."""
+    subject = a_boundary_with_nothing_demonstrated()
+    subject.observe_money_mode("paper")
+    envelope = subject.issue().envelope
+    assert envelope.level == ACT_WITHIN_LIMITS
+    assert envelope.may_trade is True
+    assert subject.earned_level == OBSERVE_ONLY
+
+
+def test_the_paper_floor_grants_trading_and_nothing_else():
+    subject = a_boundary_with_nothing_demonstrated()
+    subject.observe_money_mode("paper")
+    envelope = subject.issue().envelope
+    assert envelope.may_change_settings is False
+    assert envelope.may_admit_parts is False
+
+
+def test_live_money_has_no_floor():
+    subject = a_boundary_with_nothing_demonstrated()
+    subject.observe_money_mode("live")
+    envelope = subject.issue().envelope
+    assert envelope.level == OBSERVE_ONLY and envelope.may_trade is False
+
+
+def test_a_money_mode_that_has_not_been_read_is_not_paper():
+    """Missing is not empty: a floor granted because the mode could not be read
+    would treat "we do not know" as "no money is at risk"."""
+    subject = a_boundary_with_nothing_demonstrated()
+    envelope = subject.issue().envelope
+    assert envelope.level == OBSERVE_ONLY and envelope.may_trade is False
+
+
+def test_a_human_override_goes_through_the_paper_floor():
+    subject = a_boundary_with_nothing_demonstrated()
+    subject.observe_money_mode("paper")
+    subject.issue()
+    subject.observe_override(True)
+    envelope = subject.issue().envelope
+    assert envelope.level == OBSERVE_ONLY and envelope.may_trade is False
+
+
 def test_the_envelope_is_not_a_binary_switch():
     described = importlib.import_module(
         BLOCK_PARTS["autonomy-boundary"]

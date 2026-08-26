@@ -127,6 +127,11 @@ class TradingHaltDecider:
         self._was_halted = False
         self.standing = DeciderStanding()
 
+    @property
+    def is_halted(self) -> bool:
+        """What the last decision said, so a board can show it without re-deciding."""
+        return self._was_halted
+
     def observe_override(self, is_active: bool) -> None:
         self._override_active = is_active
 
@@ -267,6 +272,16 @@ def describe_halting(decider: TradingHaltDecider) -> dict:
         "halts": decider.standing.halts,
         "resumptions": decider.standing.resumptions,
         "by_cause": dict(decider.standing.by_cause),
+        # One counter per cause as well as the map, because only numbers survive
+        # onto part-health (runtime.part_process.countable_standing) and "why is
+        # trading halted" was unanswerable from the board without them: the
+        # answer on 2026-08-26 was the autonomy envelope, and finding that out
+        # took reading five parts' source.
+        **{
+            f"halted_by_{cause.replace('-', '_')}": decider.standing.by_cause.get(cause, 0)
+            for cause in HALT_CAUSES
+        },
+        "is_halted": decider.is_halted,
         "times_closing_was_permitted_during_a_halt": (
             decider.standing.times_closing_was_permitted_during_a_halt
         ),

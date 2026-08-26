@@ -42,7 +42,7 @@ PART_ID = "autonomy-boundary"
 
 PART_DECLARATION = PartDeclaration(
     part_id="autonomy-boundary",
-    consumes=("bot-maturity", "modification-record", "survival-tier"),
+    consumes=("bot-maturity", "modification-record", "money-mode", "survival-tier"),
     produces=("autonomy-envelope", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -66,6 +66,15 @@ NARROWING_REASONS = (
     A_HUMAN_SAID_SO, COMPETENCE_FELL, A_MODIFICATION_BROKE_SOMETHING, RUNWAY_IS_SHORT,
     A_FAULT_IS_UNRESOLVED, EXPOSURE_IS_UNREACHABLE,
 )
+
+PAPER = "paper"
+# The level a paper run is never issued below. Competence is measured from closed
+# trades and closed trades need trading, so on paper the evidence for acting can
+# only be gathered by acting: 49,908 envelopes issued on 2026-08-26, zero
+# widenings, and 33 order intents refused against 444,545 zero risk limits. What
+# the floor raises is what is *issued*; the earned level is still earned, and
+# changing settings or admitting parts still follows it.
+PAPER_FLOOR = ACT_WITHIN_LIMITS
 
 # The tier a level needs to have headroom at.
 TIER_FOR_LEVEL = {
@@ -102,6 +111,7 @@ class BoundaryStanding:
     by_narrowing_reason: dict = field(default_factory=dict)
     widening_attempts_blocked: int = 0
     times_widened_without_evidence: int = 0
+    issued_on_the_paper_floor: int = 0
 
 
 class AutonomyBoundary:
@@ -136,7 +146,10 @@ class AutonomyBoundary:
         self._readings_before_widening = readings_before_widening
         self._maximum_notional = dict(maximum_notional_for_level)
         self._now_ns = now_ns
+        # What the evidence supports. The envelope may be issued above this on
+        # paper, and never is on live.
         self._level = OBSERVE_ONLY
+        self._money_mode: str | None = None
         self._competence: float | None = None
         self._tier: str | None = None
         self._clean_modifications = 0
@@ -148,6 +161,44 @@ class AutonomyBoundary:
 
     def observe_competence(self, competence: float) -> None:
         self._competence = competence
+
+    def observe_money_mode(self, mode: str | None) -> None:
+        """Paper or live, as money-mode-reader read it from the segment's settings.
+
+        None until it has been read, and None is not paper: a floor granted
+        because the mode could not be read would be the one case where "we do not
+        know" and "no money is at risk" are treated as the same answer.
+        """
+        self._money_mode = mode
+
+    @property
+    def earned_level(self) -> str:
+        """The level the evidence supports, which is what widening moves."""
+        return self._level
+
+    @property
+    def issued_level(self) -> str:
+        """The level actually published, floor included."""
+        return self._issued_level()
+
+    @property
+    def floor_level(self) -> str:
+        """The level below which the envelope is not issued right now."""
+        return PAPER_FLOOR if self._money_mode == PAPER else OBSERVE_ONLY
+
+    def _issued_level(self) -> str:
+        """What is issued: the earned level, or the floor, whichever is wider.
+
+        A human override is the exception and goes through the floor. Nothing in
+        this system may conclude that a person did not mean it, and a floor that
+        outranked an override would be exactly that.
+        """
+        if self._override_active:
+            return self._level
+        floor = self.floor_level
+        if AUTONOMY_LEVELS.index(self._level) >= AUTONOMY_LEVELS.index(floor):
+            return self._level
+        return floor
 
     def observe_survival_tier(self, tier: str) -> None:
         self._tier = tier
@@ -251,15 +302,26 @@ class AutonomyBoundary:
         )
 
     def _outcome(self, state, previous, narrowing, blocking, reason) -> EnvelopeOutcome:
-        level = self._level
+        earned = self._level
+        level = self._issued_level()
+        if level != earned:
+            self.standing.issued_on_the_paper_floor += 1
+            reason = (
+                f"{reason}. Issued at {level} rather than {earned}: the money mode is "
+                f"paper, where the evidence for acting can only be gathered by acting"
+            )
         return EnvelopeOutcome(
             state=state,
             envelope=AutonomyEnvelope(
                 level=level,
                 may_trade=level in (ACT_WITHIN_LIMITS, MODIFY_ITSELF),
                 maximum_notional=self._maximum_notional[level],
-                may_admit_parts=level == MODIFY_ITSELF,
-                may_change_settings=level in (ACT_WITHIN_LIMITS, MODIFY_ITSELF),
+                # Both follow the level the evidence supports, never the floor: a
+                # system that has demonstrated nothing may trade on paper, and may
+                # not rewrite its own settings or admit parts on the strength of a
+                # money mode.
+                may_admit_parts=earned == MODIFY_ITSELF,
+                may_change_settings=earned in (ACT_WITHIN_LIMITS, MODIFY_ITSELF),
                 reason=reason,
                 narrowed_by=narrowing[0] if narrowing else None,
                 issued_at_ns=self._now_ns(),
@@ -278,6 +340,9 @@ def describe_boundary(boundary: AutonomyBoundary) -> dict:
         "holds": boundary.standing.holds,
         "by_narrowing_reason": dict(boundary.standing.by_narrowing_reason),
         "widening_attempts_blocked": boundary.standing.widening_attempts_blocked,
+        "issued_on_the_paper_floor": boundary.standing.issued_on_the_paper_floor,
+        "earned_level_rank": AUTONOMY_LEVELS.index(boundary.earned_level),
+        "issued_level_rank": AUTONOMY_LEVELS.index(boundary.issued_level),
         "levels": list(AUTONOMY_LEVELS),
         "narrowing_reasons": list(NARROWING_REASONS),
         "widens_without_sustained_evidence": False,
@@ -331,6 +396,7 @@ def start_part(context) -> int:
         key_of=lambda maturity: (maturity.bot, maturity.regime),
     )
     modifications = Batch(read=context.bus.reader("modification-record"))
+    modes = LatestValue(read=context.bus.reader("money-mode"))
     tiers = LatestValue(read=context.bus.reader("survival-tier"))
     publish_envelopes = context.bus.publisher_for("autonomy-envelope")
 
@@ -360,6 +426,8 @@ def start_part(context) -> int:
         tier = tiers.value()
         if tier is not None:
             boundary.observe_survival_tier(tier.tier)
+        mode = modes.value()
+        boundary.observe_money_mode(getattr(mode, "mode", None))
 
     return run_autonomy_boundary(
         boundary=boundary,

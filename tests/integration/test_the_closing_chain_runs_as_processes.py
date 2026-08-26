@@ -63,6 +63,12 @@ TRADES_PER_SYMBOL = 4_000
 CLOSING_CHAIN = (
     "money-mode-reader",
     "paper-fill-simulator",
+    # The book does not fill an order until this part says the simulated round
+    # trip has elapsed. It is in the chain because it is in the live spine, and
+    # because leaving it out hid a crash: the fill simulator read
+    # delayed-order-request as though it were an order-request and died on
+    # `may_be_sent` 17 times in 50 minutes on 2026-08-26.
+    "order-latency-simulator",
     "fill-reconciler",
     "cost-basis-tracker",
     "peak-excursion-tracker",
@@ -279,6 +285,10 @@ def test_a_position_opens_and_closes_across_nine_processes(
         # chainer did is visible in what the manager published, which is the next
         # thing along and the thing that matters: the exits actually being sent.
         "order-request": watch_at(wiring, "order-state-poller", "order-request"),
+        # What the book did with those orders. Watched because "nothing closed"
+        # is not a diagnosis: a refused fill, a resting stop and an order held in
+        # flight are three different failures and the outcome names which.
+        "fill": watch_at(wiring, "trade-lifecycle-recorder", "fill"),
     }
     seen = {data_type: [] for data_type in watched}
 
@@ -380,7 +390,8 @@ def test_a_position_opens_and_closes_across_nine_processes(
     )
     assert counted["closed-trade"] > 0, (
         f"{symbol} rose from {entry_price} to {highest} against a target at {target_price} "
-        f"and nothing closed: {counted}"
+        f"and nothing closed: {counted}. Fills: "
+        f"{[repr(m.payload)[:220] for m in seen['fill']][:4]}"
     )
 
     closed = seen["closed-trade"][0].payload

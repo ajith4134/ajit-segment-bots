@@ -141,6 +141,7 @@ class SimulatorStanding:
     partially_filled: int = 0
     resting: int = 0
     held_in_flight: int = 0
+    released_without_a_verdict: int = 0
     refused_feed_jump: int = 0
     refused_no_price: int = 0
     refused_already_filled: int = 0
@@ -196,6 +197,10 @@ class PaperFillSimulator:
     def resting_orders(self) -> tuple:
         """What is on the book right now, oldest first."""
         return tuple(sorted(self._resting.values(), key=lambda order: order.rested_at_ns))
+
+    def note_release_without_a_verdict(self, client_order_id: str) -> None:
+        """An order freed by the wait running out rather than by a latency verdict."""
+        self.standing.released_without_a_verdict += 1
 
     def cancel(self, client_order_id: str, reason: str) -> PaperFillResult | None:
         """Withdraw one resting order. Returns what was withdrawn, or None.
@@ -584,6 +589,7 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "cancels_for_an_unknown_order": simulator.standing.cancels_for_an_unknown_order,
         "refused_because_the_decision_was_stale": simulator.standing.refused_decision_stale,
         "held_in_flight": simulator.standing.held_in_flight,
+        "released_without_a_verdict": simulator.standing.released_without_a_verdict,
         "refused_feed_jump": simulator.standing.refused_feed_jump,
         "refused_no_price": simulator.standing.refused_no_price,
         "refused_already_filled": simulator.standing.refused_already_filled,
@@ -659,6 +665,15 @@ def start_part(context) -> int:
 
     last_price: dict[tuple[str, str], float] = {}
     maximum_decision_drift = context.number("maximum_decision_price_drift")
+    # Orders waiting for order-latency-simulator to say the simulated round trip
+    # has elapsed, by client order id, with the moment each began waiting.
+    waiting: dict[str, tuple[dict, float]] = {}
+    # The same number the latency simulator holds an order by, read from the same
+    # setting: beyond it that part stops holding, so an order still waiting here
+    # is waiting on a release that is not coming rather than on latency.
+    longest_hold_seconds = context.number("order_latency_maximum")
+
+    monotonic = time.monotonic
 
     def read_orders(simulator):
         for trade in trades_in(trades.payloads()):
@@ -671,8 +686,20 @@ def start_part(context) -> int:
         mode = modes.value()
         mode_name = getattr(mode, "mode", None)
 
+        # What the latency simulator has decided about each order so far. It is a
+        # different shape on a different wire: a DelayedOrderRequest names an
+        # order and says whether the simulated round trip has elapsed, and it
+        # carries no side, no quantity and no price. Reading the two streams as
+        # one list is what crashed this part 17 times in 50 minutes on
+        # 2026-08-26 -- `'DelayedOrderRequest' object has no attribute
+        # 'may_be_sent'` -- and, before the crash, would have filled every paper
+        # order at the price that was on screen when the decision was made.
+        released_now = {
+            record.client_order_id: record.may_fill_now for record in delayed.payloads()
+        }
+
         orders = []
-        for request in list(requests.payloads()) + list(delayed.payloads()):
+        for request in requests.payloads():
             # A cancel is its own request and carries no quantity, so it is
             # applied before the sendable test rather than dropped by it. A cancel
             # that is silently discarded leaves a stop resting on a position that
@@ -680,6 +707,7 @@ def start_part(context) -> int:
             # the market reaches it.
             withdraws = getattr(request, "cancels_client_order_id", None)
             if withdraws and not request.may_be_sent:
+                waiting.pop(withdraws, None)
                 simulator.cancel(
                     withdraws,
                     f"withdrawn by {request.client_order_id}: {request.reason}",
@@ -687,43 +715,93 @@ def start_part(context) -> int:
                 continue
             if not request.may_be_sent:
                 continue
+            if withdraws:
+                waiting.pop(withdraws, None)
             key = (request.venue_id, request.symbol)
-            orders.append(
-                {
-                    "client_order_id": request.client_order_id,
-                    "venue_id": request.venue_id,
-                    "symbol": request.symbol,
-                    "side": request.side,
-                    "quantity": request.quantity,
-                    # Stated by the part that sent it, never inferred from which
-                    # price fields are set: an entry carries the stop price that
-                    # will protect it, and inferring made every entry a stop.
-                    "order_type": getattr(request, "order_type", MARKET),
-                    "limit_price": request.limit_price or None,
-                    # None when the mode could not be read, which this part refuses
-                    # rather than treating as paper.
-                    "money_mode": mode_name,
-                    "is_in_flight": False,
-                    "fill_price_estimate": estimate_by_symbol.get(key),
-                    "market_price": last_price.get(key),
-                    # A stop rests until a live price crosses it. This is the
-                    # field that lets a position close: without it every exit
-                    # order sent by stop-order-manager would fill immediately at
-                    # the market, which is not a stop, it is a market exit taken
-                    # the instant the stop was decided.
-                    # Only a triggered order's stop price is a trigger. On an
-                    # entry the same field is the protective stop to attach once
-                    # it fills, and passing that as a trigger would make the
-                    # entry wait for the market to fall to its own stop.
-                    "stop_price": request.trigger_price,
-                    "cancels_client_order_id": request.cancels_client_order_id,
-                    # What the decision thought the market was, and how far the
-                    # market may have left it before this book refuses to fill.
-                    "decided_at_price": getattr(request, "decided_at_price", 0.0) or None,
-                    "maximum_decision_drift": maximum_decision_drift,
-                }
-            )
+            order = build_order(request, key, mode_name, estimate_by_symbol)
+            if released_now.get(request.client_order_id) is not True:
+                # Held, and remembered: the release names the order and cannot
+                # re-send it, so whoever saw the order first has to keep it. A
+                # verdict that has not arrived yet holds the order too -- the two
+                # parts read the same order in the same tick, so "no verdict" is
+                # nearly always "not decided yet", and filling on it would fill
+                # every paper order at the price that was on screen when the
+                # decision was made, which is what simulating latency is for.
+                order["is_in_flight"] = True
+                waiting[request.client_order_id] = (order, monotonic())
+            orders.append(order)
+
+        for client_order_id, may_fill_now in released_now.items():
+            if not may_fill_now or client_order_id not in waiting:
+                continue
+            order, _ = waiting.pop(client_order_id)
+            orders.append(price_now(order))
+
+        # A verdict that never came does not strand the order. The latency
+        # simulator stops holding at order_latency_maximum whatever it measured,
+        # so past that the order is waiting on a part that is off or on a message
+        # that was lost -- and a venue answering late fills at the market it
+        # answers into, which is what this does. Counted, because an order filled
+        # without a latency verdict is a different fact from one released by it.
+        expired = [
+            client_order_id
+            for client_order_id, (_, held_since) in waiting.items()
+            if monotonic() - held_since > longest_hold_seconds
+        ]
+        for client_order_id in expired:
+            order, _ = waiting.pop(client_order_id)
+            simulator.note_release_without_a_verdict(client_order_id)
+            orders.append(price_now(order))
+
         return tuple(orders)
+
+    def price_now(order: dict) -> dict:
+        """The same order, freed to fill, priced where the market is now.
+
+        Filling a released order at the price it arrived with is the thing
+        simulating latency was meant to prevent.
+        """
+        released = dict(order)
+        released["is_in_flight"] = False
+        key = (released["venue_id"], released["symbol"])
+        released["market_price"] = last_price.get(key)
+        released["fill_price_estimate"] = prices.mapping().get(key)
+        return released
+
+    def build_order(request, key, mode_name, estimate_by_symbol) -> dict:
+        return {
+            "client_order_id": request.client_order_id,
+            "venue_id": request.venue_id,
+            "symbol": request.symbol,
+            "side": request.side,
+            "quantity": request.quantity,
+            # Stated by the part that sent it, never inferred from which price
+            # fields are set: an entry carries the stop price that will protect
+            # it, and inferring made every entry a stop.
+            "order_type": getattr(request, "order_type", MARKET),
+            "limit_price": request.limit_price or None,
+            # None when the mode could not be read, which this part refuses
+            # rather than treating as paper.
+            "money_mode": mode_name,
+            "is_in_flight": False,
+            "fill_price_estimate": estimate_by_symbol.get(key),
+            "market_price": last_price.get(key),
+            # A stop rests until a live price crosses it. This is the field that
+            # lets a position close: without it every exit order sent by
+            # stop-order-manager would fill immediately at the market, which is
+            # not a stop, it is a market exit taken the instant the stop was
+            # decided.
+            # Only a triggered order's stop price is a trigger. On an entry the
+            # same field is the protective stop to attach once it fills, and
+            # passing that as a trigger would make the entry wait for the market
+            # to fall to its own stop.
+            "stop_price": request.trigger_price,
+            "cancels_client_order_id": request.cancels_client_order_id,
+            # What the decision thought the market was, and how far the market
+            # may have left it before this book refuses to fill.
+            "decided_at_price": getattr(request, "decided_at_price", 0.0) or None,
+            "maximum_decision_drift": maximum_decision_drift,
+        }
 
     def read_prices() -> dict:
         """The latest live price per symbol, for the orders already on the book.

@@ -4681,6 +4681,7 @@
       "consumes": [
         "bot-maturity",
         "modification-record",
+        "money-mode",
         "survival-tier"
       ],
       "produces": [
@@ -4694,7 +4695,7 @@
         "on"
       ],
       "origin": "proposed",
-      "note": "The user asked for a bot that decides without asking. That is a boundary, not an absence of one -- and a boundary that lives in one part is a boundary that can be read, changed and audited. Spread across nine parts as an assumption, it could only be discovered after it was crossed. It widens with earned maturity rather than by default.",
+      "note": "The user asked for a bot that decides without asking. That is a boundary, not an absence of one -- and a boundary that lives in one part is a boundary that can be read, changed and audited. Spread across nine parts as an assumption, it could only be discovered after it was crossed. It widens with earned maturity rather than by default. Reads the money mode since 2026-08-26: on paper the issued level is floored at act-within-limits, because competence is measured from closed trades and closed trades need trading -- a loop with no entry point that left 33 order intents refused against 444,545 zero risk limits. The level the evidence supports is still earned, and what may change settings or admit parts still follows it.",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
