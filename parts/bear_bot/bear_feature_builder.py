@@ -43,8 +43,8 @@ BOT = "bear-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bear-feature-builder",
     consumes=(
-        "bear-side-candidate", "symbol-price-frame", "order-book-snapshot",
-        "symbol-profile", "funding-forecast",
+        "bear-side-candidate", "funding-forecast", "order-book-snapshot",
+        "symbol-price-frame", "symbol-profile", "symbol-universe",
     ),
     produces=("bear-feature-vector", "part-health"),
     resource_class="bandwidth-bound",
@@ -415,6 +415,11 @@ def start_part(context) -> int:
     books = Batch(read=context.bus.reader("order-book-snapshot"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     funding = Batch(read=context.bus.reader("funding-forecast"))
+    # The rate the venue is charging right now, which is a listing fact and has
+    # been on symbol-universe since 2026-08-22. Read here since 2026-08-26,
+    # because until then this part had no source for it at all and recorded
+    # funding_rate as missing on every vector it ever built.
+    universe = Batch(read=context.bus.reader("symbol-universe"))
     publish_vectors = context.bus.publisher_for("bear-feature-vector")
 
     def read_candidates_and_market(builder):
@@ -432,7 +437,19 @@ def start_part(context) -> int:
             if typical_spread is not None:
                 builder.observe_symbol_profile(profile.venue_id, profile.symbol, typical_spread)
         for forecast in funding.payloads():
-            builder.observe_funding_forecast(forecast)
+            # Unpacked, not passed whole: this took the payload as its only
+            # argument until 2026-08-26 and would have raised TypeError the first
+            # time a forecast ever arrived -- which nothing noticed, because the
+            # forecaster has never produced one.
+            if forecast.predicted_rate is not None:
+                builder.observe_funding_forecast(
+                    forecast.venue_id, forecast.symbol, forecast.predicted_rate
+                )
+        for listed in universe.payloads():
+            if listed.funding_rate_per_settlement is not None:
+                builder.observe_funding(
+                    listed.venue_id, listed.symbol, listed.funding_rate_per_settlement
+                )
         return candidates.payloads()
 
     return run_bear_feature_builder(

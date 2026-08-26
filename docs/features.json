@@ -8398,10 +8398,11 @@
       "category": "bull-bot",
       "consumes": [
         "bull-side-candidate",
-        "symbol-price-frame",
+        "funding-forecast",
         "order-book-snapshot",
+        "symbol-price-frame",
         "symbol-profile",
-        "funding-forecast"
+        "symbol-universe"
       ],
       "produces": [
         "bull-feature-vector",
@@ -8710,10 +8711,11 @@
       "category": "bear-bot",
       "consumes": [
         "bear-side-candidate",
-        "symbol-price-frame",
+        "funding-forecast",
         "order-book-snapshot",
+        "symbol-price-frame",
         "symbol-profile",
-        "funding-forecast"
+        "symbol-universe"
       ],
       "produces": [
         "bear-feature-vector",
