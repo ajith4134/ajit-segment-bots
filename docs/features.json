@@ -6531,7 +6531,9 @@
       "name": "Symbol catalogue reader",
       "role": "list every symbol the venue offers in this segment",
       "category": "market-data-feed",
-      "consumes": [],
+      "consumes": [
+        "position"
+      ],
       "produces": [
         "symbol-universe",
         "part-health"

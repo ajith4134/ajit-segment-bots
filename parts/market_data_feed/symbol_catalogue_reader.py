@@ -39,7 +39,7 @@ PART_ID = "symbol-catalogue-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="symbol-catalogue-reader",
-    consumes=(),
+    consumes=("position",),
     produces=("symbol-universe", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -89,6 +89,10 @@ class CatalogueStanding:
     listings_seen: int = 0
     capturable_seen: int = 0
     selected: int = 0
+    # Symbols in the universe only because the bot is holding them -- below the
+    # volume cut and kept anyway. A number that is not zero is the feed doing the
+    # thing this exists for, so it belongs on health rather than in a comment.
+    kept_because_held: int = 0
     without_volume: int = 0
     # How many selected symbols the venue quoted no funding rate for, and how many
     # it quoted a rate for but no settlement interval. Counted rather than
@@ -144,6 +148,7 @@ def select_capturable_symbols(
     selection_metric: str,
     funding: Mapping[str, ContractFunding] | None = None,
     standing: CatalogueStanding | None = None,
+    held_symbols=(),
 ) -> tuple[CapturableSymbol, ...]:
     """Apply the settings policy to one venue's catalogue. Pure, so it is testable.
 
@@ -165,6 +170,7 @@ def select_capturable_symbols(
         )
 
     capturable = [listing for listing in listings if adapter.is_symbol_capturable(listing)]
+    held = frozenset(held_symbols or ())
     funding = funding or {}
     chosen = [
         _with_funding(
@@ -184,7 +190,31 @@ def select_capturable_symbols(
     # two runs over the same catalogue select the same symbols.
     chosen.sort(key=lambda entry: (-(entry.quote_volume_24h or 0.0), entry.symbol))
     if captured_symbol_count != CAPTURE_EVERY_SYMBOL:
-        chosen = chosen[:captured_symbol_count]
+        # The rank cut, then whatever is held put back. A symbol the bot is
+        # holding is captured whatever its volume, because a position that cannot
+        # be priced cannot be stopped out, cannot have its excursion measured, and
+        # cannot be valued by risk -- and every one of those failures is silent.
+        #
+        # Measured 2026-08-26: the bot held STORJUSDT on both venues and its tape
+        # stopped at 2026-08-25 18:40, with no file for today at all. The universe
+        # is re-selected every 900 seconds, STORJUSDT's volume had slipped below
+        # rank 50, and `feed-coverage-auditor` read complete throughout -- it
+        # audits coverage of the universe, and the symbol had left it.
+        #
+        # Added after the cut rather than sorted ahead of it, so a held symbol
+        # never displaces a higher-volume one: the universe becomes "the top N by
+        # volume, plus what we are still holding". It leaves on the ordinary
+        # rotation once the position is flat, which is not an exception to the
+        # rotation but the rotation resuming.
+        ranked = chosen[:captured_symbol_count]
+        inside = {entry.symbol for entry in ranked}
+        kept_for_a_position = [
+            entry for entry in chosen[captured_symbol_count:]
+            if entry.symbol in held and entry.symbol not in inside
+        ]
+        chosen = ranked + kept_for_a_position
+        if standing is not None:
+            standing.kept_because_held = len(kept_for_a_position)
 
     if standing is not None:
         standing.listings_seen = len(listings)
@@ -289,13 +319,23 @@ class SymbolCatalogueReader:
         self.standing.funding_failure = None
         return facts
 
-    def read_catalogue(self) -> tuple[CapturableSymbol, ...]:
+    @property
+    def venue_id(self) -> str:
+        """Which venue this reader reads, so a caller need not open its adapter."""
+        return self._adapter.venue_id
+
+    def read_catalogue(self, held_symbols=()) -> tuple[CapturableSymbol, ...]:
         """Fetch both responses, apply the policy, and keep what came back.
 
         On a failed fetch the previous selection stands and the failure is
         recorded. Dropping to an empty selection because one request timed out
         would stop the capture of every symbol over a transient error -- and
         those minutes are not recoverable.
+
+        `held_symbols` are kept whatever their volume rank. They are passed in
+        rather than looked up, because what the bot holds is not a fact about a
+        venue catalogue and this reader has no business knowing where it comes
+        from (T-4).
         """
         try:
             listings = self._read_every_catalogue_page()
@@ -314,6 +354,7 @@ class SymbolCatalogueReader:
             selection_metric=self._selection_metric,
             funding=funding,
             standing=self.standing,
+            held_symbols=held_symbols,
         )
         self.standing.reads_completed += 1
         self.standing.read_at_ns = self._time_ns()
@@ -385,6 +426,7 @@ def describe_catalogue(reader: SymbolCatalogueReader) -> dict:
         "listings_seen": reader.standing.listings_seen,
         "capturable_seen": reader.standing.capturable_seen,
         "selected": reader.standing.selected,
+        "kept_because_held": reader.standing.kept_because_held,
         "selected_without_volume": reader.standing.without_volume,
         "selected_without_funding_rate": reader.standing.without_funding_rate,
         "selected_without_funding_interval": reader.standing.without_funding_interval,
@@ -439,7 +481,17 @@ def start_part(context) -> int:
             "and a mismatch between them is a fact rather than something to work around."
         )
 
+    from runtime.input_assembly import LatestByKey
+
     publish_universe = context.bus.publisher_for("symbol-universe")
+    # What the bot holds, per venue and symbol. `fill-reconciler` republishes every
+    # held position on every tick, so this is a current picture rather than a log
+    # of what was once opened -- and it carries `is_flat`, so a position that has
+    # closed stops being held here without anything having to expire it.
+    positions = LatestByKey(
+        read=context.bus.reader("position"),
+        key_of=lambda position: (position.venue_id, position.symbol),
+    )
     readers = [
         SymbolCatalogueReader(
             adapter=adapter,
@@ -453,12 +505,21 @@ def start_part(context) -> int:
     last_read_at = [None]
 
     def read_if_due() -> None:
+        # Drained every tick, not only when a catalogue read is due: the position
+        # stream is how this part learns what is held, and reading it once every
+        # 900 seconds would mean acting on a picture that old.
+        held = positions.mapping()
         now = clock.monotonic()
         if last_read_at[0] is not None and now - last_read_at[0] < refresh_interval_seconds:
             return
         last_read_at[0] = now
         for reader in readers:
-            publish_universe(reader.read_catalogue())
+            held_here = frozenset(
+                symbol
+                for (venue_id, symbol), position in held.items()
+                if venue_id == reader.venue_id and not position.is_flat
+            )
+            publish_universe(reader.read_catalogue(held_here))
 
     def describe_all_catalogues() -> dict:
         # One recorder per venue in one process; a heartbeat standing keeps

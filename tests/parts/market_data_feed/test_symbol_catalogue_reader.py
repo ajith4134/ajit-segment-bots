@@ -20,6 +20,7 @@ from parts.market_data_feed.symbol_catalogue_reader import (
     SymbolCatalogueReader,
     SymbolSelectionRefused,
     describe_catalogue,
+    CatalogueStanding,
     select_capturable_symbols,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -84,7 +85,10 @@ def build_reader(
 
 def test_the_built_wiring_equals_the_blueprint():
     assert PART_DECLARATION == load_declaration_from_blueprint(PART_ID)
-    assert PART_DECLARATION.consumes == (), "this part reads the venue, not another part"
+    assert PART_DECLARATION.consumes == ("position",), (
+        "this part reads the venue, and what the bot holds -- so that a symbol "
+        "with an open position is not dropped from the universe when its volume slips"
+    )
 
 
 @pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
@@ -353,3 +357,157 @@ def test_a_failed_funding_read_leaves_carry_unpriced_and_does_not_stop_the_captu
     assert "TimeoutError" in reader.standing.funding_failure
     assert all(entry.funding_rate_per_settlement is None for entry in selection)
     assert all(entry.price_increment is None or entry.price_increment > 0 for entry in selection)
+
+
+# ---- a held symbol is captured whatever its volume ----------------------------
+#
+# Measured 2026-08-26: the bot held STORJUSDT on both venues and its tape stopped
+# at 2026-08-25 18:40 -- no file for today at all, while BTCUSDT was current to
+# the minute. The universe is re-selected every 900 seconds, STORJUSDT's volume
+# had slipped below rank 50, and it was dropped from the universe, the stream
+# plan, and capture.
+#
+# Every consequence was silent. The position could not be priced, so its resting
+# stop could never trigger -- a stop that cannot trigger is the appearance of
+# protection rather than protection. Its excursion froze at the last price seen,
+# which is what signal-excursion-profiler learns its quantiles from. And
+# feed-coverage-auditor read complete throughout, because it audits coverage *of
+# the universe* and the symbol had left it.
+
+
+def _ranked_symbols(venue_id, read_captured_json, count):
+    """The venue's own ranking, so the cut here is the one the live part makes."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    return select_capturable_symbols(
+        adapter=adapter,
+        listings=adapter.read_symbol_listings(catalogue),
+        quote_volumes=dict(adapter.read_quote_volumes(tickers)),
+        captured_symbol_count=count,
+        selection_metric=QUOTE_VOLUME_24H,
+    )
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_a_held_symbol_below_the_cut_is_kept(venue_id, read_captured_json):
+    """The defect, on the venue's real ranking."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    listings = adapter.read_symbol_listings(catalogue)
+    volumes = dict(adapter.read_quote_volumes(tickers))
+
+    everything = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=0, selection_metric=QUOTE_VOLUME_24H,
+    )
+    count = 5
+    assert len(everything) > count, "need more symbols than the cut for this to mean anything"
+    below_the_cut = everything[count].symbol
+
+    without = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+    )
+    assert below_the_cut not in {entry.symbol for entry in without}, (
+        "this symbol is supposed to be below the cut"
+    )
+
+    standing = CatalogueStanding(venue_id=adapter.venue_id)
+    with_position = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+        standing=standing, held_symbols=(below_the_cut,),
+    )
+    kept = {entry.symbol for entry in with_position}
+    assert below_the_cut in kept, "a symbol the bot is holding was dropped from the universe"
+    assert standing.kept_because_held == 1
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_a_held_symbol_never_displaces_a_higher_volume_one(venue_id, read_captured_json):
+    """The rank cut is unchanged; the held symbol is added after it."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    listings = adapter.read_symbol_listings(catalogue)
+    volumes = dict(adapter.read_quote_volumes(tickers))
+    count = 5
+
+    ranked = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+    )
+    everything = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=0, selection_metric=QUOTE_VOLUME_24H,
+    )
+    with_position = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+        held_symbols=(everything[count].symbol,),
+    )
+
+    assert [entry.symbol for entry in with_position[:count]] == [
+        entry.symbol for entry in ranked
+    ], "keeping a held symbol reordered the ranked selection"
+    assert len(with_position) == count + 1
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_a_held_symbol_already_inside_the_cut_is_not_added_twice(venue_id, read_captured_json):
+    """A duplicate would be a second stream for one symbol, on a planned budget."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    listings = adapter.read_symbol_listings(catalogue)
+    volumes = dict(adapter.read_quote_volumes(tickers))
+    count = 5
+
+    ranked = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+    )
+    standing = CatalogueStanding(venue_id=adapter.venue_id)
+    with_position = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=count, selection_metric=QUOTE_VOLUME_24H,
+        standing=standing, held_symbols=(ranked[0].symbol,),
+    )
+
+    symbols = [entry.symbol for entry in with_position]
+    assert len(symbols) == len(set(symbols)) == count
+    assert standing.kept_because_held == 0
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_holding_nothing_selects_exactly_what_it_always_did(venue_id, read_captured_json):
+    """The ordinary path must be untouched by the exception."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    listings = adapter.read_symbol_listings(catalogue)
+    volumes = dict(adapter.read_quote_volumes(tickers))
+
+    before = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=CAPTURED_SYMBOL_COUNT, selection_metric=QUOTE_VOLUME_24H,
+    )
+    after = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes,
+        captured_symbol_count=CAPTURED_SYMBOL_COUNT, selection_metric=QUOTE_VOLUME_24H,
+        held_symbols=(),
+    )
+    assert [entry.symbol for entry in before] == [entry.symbol for entry in after]
+
+
+@pytest.mark.parametrize("venue_id", sorted(CATALOGUE_FIXTURES))
+def test_a_symbol_the_venue_does_not_list_cannot_be_kept(venue_id, read_captured_json):
+    """Holding something delisted must not invent a listing for it."""
+    adapter = load_venue_adapter(venue_id)
+    catalogue, tickers = load_real_responses(venue_id, read_captured_json)
+    kept = select_capturable_symbols(
+        adapter=adapter,
+        listings=adapter.read_symbol_listings(catalogue),
+        quote_volumes=dict(adapter.read_quote_volumes(tickers)),
+        captured_symbol_count=5, selection_metric=QUOTE_VOLUME_24H,
+        held_symbols=("NOTHINGLISTEDUSDT",),
+    )
+    assert "NOTHINGLISTEDUSDT" not in {entry.symbol for entry in kept}
+    assert len(kept) == 5
