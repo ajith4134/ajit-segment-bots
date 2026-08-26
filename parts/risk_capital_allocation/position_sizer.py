@@ -442,9 +442,42 @@ def start_part(context) -> int:
     yet. It is named as temporary where it is set.
     """
     from runtime.input_assembly import Batch, LatestByKey, LatestStatementBySource
+    from runtime.level_publishing import LevelPublisherByKey
 
     intents = Batch(read=context.bus.reader("trade-intent"))
     publish_sized_orders = context.bus.publisher_for("sized-order")
+    # One order per decision, not one per tick. The arbiter publishes a standing
+    # opinion every tick -- an opinion still held is still published -- so this
+    # part sized the same decision again on every one of them: measured on the
+    # live spine at 15:56 on 2026-08-26, `sized` 26,402 and paper-fill-simulator
+    # holding 26,911 orders in flight for 12 fills, about 57 order requests a
+    # second for perhaps thirty standing decisions.
+    #
+    # Nothing was double-filled -- `order-idempotency-stamper` derives one id per
+    # decision and the simulator holds a duplicate rather than filling it -- so
+    # this is waste rather than a wrong trade. It is the whole execution path
+    # carrying it, though, and a duplicate held is a duplicate that had to be
+    # decoded, gated, stamped and routed first.
+    sized_orders_stated = LevelPublisherByKey(
+        publish=publish_sized_orders,
+        refresh_interval_seconds=context.number("sized_order_restatement_interval"),
+        # What makes two sized orders the same request: the decision, which way it
+        # goes, how much it asks for, and how it ended. Deliberately not the entry
+        # price or the fees -- those move with every print, and comparing them
+        # would call every restatement a change, which is the storm this shape
+        # exists to stop. The quantity is snapped to the venue's increment before
+        # it gets here, so a price that drifts changes it only when it crosses one.
+        identity_of=lambda items: tuple(
+            (item.intent_id, item.side, item.quantity, item.outcome) for item in items
+        ),
+    )
+
+    def state_each_sized_order(orders) -> None:
+        for order in orders:
+            # Per decision, so one symbol being re-sized does not restate the
+            # others, and so a decision whose size is holding still is said again
+            # on the refresh rather than going silent if a datagram is lost.
+            sized_orders_stated.publish_level(order.intent_id or id(order), (order,))
 
     def by_symbol(data_type: str) -> LatestByKey:
         return LatestByKey(
@@ -639,7 +672,7 @@ def start_part(context) -> int:
         sizer=sizer,
         control_socket=context.control_socket,
         read_intents=read_intents,
-        publish_sized_orders=publish_sized_orders,
+        publish_sized_orders=state_each_sized_order,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

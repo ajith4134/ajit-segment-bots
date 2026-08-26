@@ -383,6 +383,117 @@ def test_a_position_that_closes_forgets_its_stop():
     assert subject.standing.positions_without_a_stop == 1
 
 
+# ---- one decision, one order -------------------------------------------------
+#
+# The arbiter publishes a standing opinion every tick, so the sizer sized the same
+# decision every tick and an order request went onto the bus each time. Measured on
+# the live spine at 15:56 on 2026-08-26: `sized` 26,402 and paper-fill-simulator
+# holding 26,911 in flight against 12 fills -- about 57 requests a second for
+# perhaps thirty standing decisions. Nothing was double-filled; the whole execution
+# path carried every duplicate to the point where it could be recognised as one.
+
+
+def a_sized_order(intent_id, quantity, entry_price, outcome="sized", side=BUY):
+    from parts.risk_capital_allocation.position_sizer import SizedOrder
+
+    return SizedOrder(
+        venue_id=VENUE, symbol=SYMBOL, side=side, quantity=quantity,
+        entry_price=entry_price, stop_price=entry_price * 0.99, outcome=outcome,
+        risk_allowed=100.0, risk_at_stop=100.0, fees_charged=0.1,
+        notional=quantity * entry_price, leverage=1.0, reason="under test",
+        sized_at_ns=1, intent_id=intent_id,
+    )
+
+
+def stated_orders(refresh_interval=5.0):
+    """The sizer's own publishing seam, with a clock a test can move."""
+    from runtime.level_publishing import LevelPublisherByKey
+
+    published = []
+    clock = Clock()
+    stated = LevelPublisherByKey(
+        publish=lambda items: published.extend(items),
+        refresh_interval_seconds=refresh_interval,
+        monotonic=lambda: clock.now,
+        identity_of=lambda items: tuple(
+            (item.intent_id, item.side, item.quantity, item.outcome) for item in items
+        ),
+    )
+
+    def state(order):
+        stated.publish_level(order.intent_id, (order,))
+
+    return state, published, clock
+
+
+def test_a_decision_sized_again_at_a_drifting_price_is_one_order():
+    state, published, clock = stated_orders()
+    decision = "binance-usdm|BTCUSDT|buy|open"
+
+    for tick, price in enumerate((100.0, 100.02, 99.98, 100.05)):
+        clock.now += 0.25
+        state(a_sized_order(decision, quantity=2.0, entry_price=price))
+
+    assert len(published) == 1, (
+        f"one decision put {len(published)} order requests on the bus"
+    )
+
+
+def test_a_decision_whose_size_changes_is_a_new_order():
+    """The dedupe must not swallow a decision the desk sized differently."""
+    state, published, clock = stated_orders()
+    decision = "binance-usdm|BTCUSDT|buy|open"
+
+    state(a_sized_order(decision, quantity=2.0, entry_price=100.0))
+    clock.now += 0.25
+    state(a_sized_order(decision, quantity=3.0, entry_price=100.0))
+
+    assert [order.quantity for order in published] == [2.0, 3.0]
+
+
+def test_an_unchanged_decision_is_said_again_on_the_refresh():
+    """The restatement is what stops a lost datagram meaning a trade never happens."""
+    state, published, clock = stated_orders(refresh_interval=5.0)
+    decision = "binance-usdm|BTCUSDT|buy|open"
+
+    state(a_sized_order(decision, quantity=2.0, entry_price=100.0))
+    clock.now += 4.0
+    state(a_sized_order(decision, quantity=2.0, entry_price=100.0))
+    assert len(published) == 1
+
+    clock.now += 1.5
+    state(a_sized_order(decision, quantity=2.0, entry_price=100.0))
+    assert len(published) == 2
+
+
+def test_two_decisions_do_not_share_a_clock():
+    """One symbol being re-sized must not restate the rest of the book."""
+    state, published, clock = stated_orders()
+
+    state(a_sized_order("binance-usdm|BTCUSDT|buy|open", 2.0, 100.0))
+    clock.now += 1.0
+    state(a_sized_order("binance-usdm|ETHUSDT|buy|open", 5.0, 50.0))
+    clock.now += 1.0
+    state(a_sized_order("binance-usdm|BTCUSDT|buy|open", 2.0, 100.0))
+
+    assert len(published) == 2, "an unchanged decision was restated by another's clock"
+
+
+def test_a_refusal_is_deduplicated_too_and_a_changed_one_is_not():
+    """A refusal repeated every tick is the same waste as an order repeated."""
+    state, published, clock = stated_orders()
+    decision = "binance-usdm|BTCUSDT|buy|open"
+
+    state(a_sized_order(decision, 0.0, 100.0, outcome="refused-no-risk-allowed"))
+    clock.now += 0.25
+    state(a_sized_order(decision, 0.0, 100.0, outcome="refused-no-risk-allowed"))
+    assert len(published) == 1
+
+    clock.now += 0.25
+    state(a_sized_order(decision, 2.0, 100.0, outcome="sized"))
+    assert [order.outcome for order in published] == ["refused-no-risk-allowed", "sized"]
+
+
 # ---- margin-liquidation-watch ------------------------------------------------
 
 def margin_watch(distance=0.1, headroom=0.2):
