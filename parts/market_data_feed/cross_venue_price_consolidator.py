@@ -47,6 +47,11 @@ class ConsolidatedPrice:
     contributing_venues: tuple[str, ...]
     excluded_venues: tuple[str, ...]
     weights: dict[str, float]
+    # What each contributing venue actually said, so a reader can take one venue
+    # back out. market-anomaly-detector asks "did this venue move when the others
+    # did not", and answering it against a blend that includes the venue being
+    # checked compares a price with itself.
+    contributing_prices: dict[str, float]
     oldest_contribution_seconds: float | None
     reason: str
     observed_at_ns: int
@@ -121,6 +126,7 @@ class CrossVenuePriceConsolidator:
                 contributing_venues=(),
                 excluded_venues=tuple(sorted(excluded)),
                 weights={},
+                contributing_prices={},
                 oldest_contribution_seconds=None,
                 reason="no venue has a fresh, usable quote for this symbol",
                 observed_at_ns=now,
@@ -139,6 +145,9 @@ class CrossVenuePriceConsolidator:
             contributing_venues=tuple(sorted(contributing)),
             excluded_venues=tuple(sorted(excluded)),
             weights=weights,
+            contributing_prices={
+                venue_id: quote.price for venue_id, quote in contributing.items()
+            },
             oldest_contribution_seconds=oldest,
             reason=f"volume-weighted across {len(contributing)} venue(s)",
             observed_at_ns=now,

@@ -84,33 +84,35 @@ CLOSING_CHAIN = (
 EXIT_INSIDE_THE_RUN_S_RANGE = 0.5
 
 
-def busiest_symbol_today(venue_id: str) -> tuple[str, str] | None:
-    """The symbol with most of today on the tape, and today's date."""
+# How many of the day's busiest symbols to read before choosing one to replay.
+# The choice needs movement, not volume, and movement can only be seen by reading;
+# six keeps the read bounded while giving the choice something to choose between.
+SYMBOLS_CONSIDERED = 6
+
+# The smallest rise, as a fraction of the first trade, this test will accept from
+# the symbol it replays. The exits sit at half of the run's own range, so a symbol
+# that moved less than this leaves a target inside the tick size and the test
+# proves only that nothing happened -- which is how it failed on 2026-08-26, on
+# SKHYNIXUSDT, whose whole replay rose 0.0025% (1214.16 to 1214.19).
+SMALLEST_USABLE_RISE = 0.001
+
+
+def busiest_symbols_today(venue_id: str) -> tuple[tuple[str, ...], str]:
+    """The symbols with most of today on the tape, busiest first, and today's date."""
     day = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
     venue_root = TAPE_ROOT / venue_id
     if not venue_root.is_dir():
-        return None
+        return (), day
     sized = []
     for symbol_directory in venue_root.iterdir():
         index_path = symbol_directory / f"{day}.index"
         if index_path.exists() and index_path.stat().st_size > 0:
             sized.append((index_path.stat().st_size, symbol_directory.name))
-    if not sized:
-        return None
     sized.sort(reverse=True)
-    return sized[0][1], day
+    return tuple(name for _, name in sized), day
 
 
-@pytest.fixture(scope="module")
-def real_trades_of_one_symbol():
-    """Today's trades in one symbol, in order, from the tape this machine records."""
-    venue_id = "binance-usdm"
-    busiest = busiest_symbol_today(venue_id)
-    assert busiest is not None, (
-        f"no tape for {venue_id} today. This test replays what the venue actually sent, so "
-        f"there is no fixture to fall back on (RL-063) -- start the capture and try again."
-    )
-    symbol, day = busiest
+def todays_trades_of(venue_id: str, symbol: str, day: str) -> list:
     adapter = load_venue_adapter(venue_id)
     index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
     blob_path = TAPE_ROOT / venue_id / symbol / f"{day}.blob"
@@ -119,7 +121,52 @@ def real_trades_of_one_symbol():
         trades.extend(adapter.read_trades(read_payload(blob_path, record)))
         if len(trades) >= TRADES_PER_SYMBOL:
             break
-    assert len(trades) >= 500, f"{symbol} has only {len(trades)} trades on today's tape"
+    return trades
+
+
+def rise_within(trades: list) -> float:
+    """How far the run rises above its own first trade, as a fraction of it.
+
+    This is the quantity the test actually depends on: the target is placed at a
+    fraction of it, and a target the replay never reaches asserts nothing.
+    """
+    if len(trades) < 2 or trades[0].price <= 0:
+        return 0.0
+    return (max(trade.price for trade in trades[1:]) - trades[0].price) / trades[0].price
+
+
+@pytest.fixture(scope="module")
+def real_trades_of_one_symbol():
+    """Today's trades in one symbol that actually moved, from this machine's tape.
+
+    Busiest-by-bytes was the choice until 2026-08-26 and it is the wrong one: the
+    symbol with the most prints is often the one being marked in ticks, and this
+    test needs a symbol whose replay crosses a target after the exits are on the
+    book. So the busiest few are read and the one that rose most is replayed.
+    """
+    venue_id = "binance-usdm"
+    candidates, day = busiest_symbols_today(venue_id)
+    assert candidates, (
+        f"no tape for {venue_id} today. This test replays what the venue actually sent, so "
+        f"there is no fixture to fall back on (RL-063) -- start the capture and try again."
+    )
+    considered = []
+    for symbol in candidates[:SYMBOLS_CONSIDERED]:
+        trades = todays_trades_of(venue_id, symbol, day)
+        if len(trades) >= 500:
+            considered.append((rise_within(trades), symbol, trades))
+    assert considered, (
+        f"none of the {SYMBOLS_CONSIDERED} busiest symbols on {venue_id} has 500 trades on "
+        f"today's tape yet"
+    )
+    considered.sort(key=lambda entry: entry[0], reverse=True)
+    rise, symbol, trades = considered[0]
+    assert rise >= SMALLEST_USABLE_RISE, (
+        f"the best of today's {len(considered)} busiest symbols is {symbol}, which rose "
+        f"{rise:.4%} across {len(trades):,} trades -- below the {SMALLEST_USABLE_RISE:.2%} this "
+        f"test needs for a target to be reachable. Nothing is wrong with the code: the market "
+        f"has not moved enough today for this replay to prove anything"
+    )
     return trades
 
 
@@ -287,8 +334,10 @@ def test_a_position_opens_and_closes_across_nine_processes(
         "order-request": watch_at(wiring, "order-state-poller", "order-request"),
         # What the book did with those orders. Watched because "nothing closed"
         # is not a diagnosis: a refused fill, a resting stop and an order held in
-        # flight are three different failures and the outcome names which.
+        # flight are three different failures and the outcome names which. Only
+        # fills travel on `fill`, so the book's own counters come from its health.
         "fill": watch_at(wiring, "trade-lifecycle-recorder", "fill"),
+        "part-health": watch_at(wiring, "heartbeat-collector", "part-health"),
     }
     seen = {data_type: [] for data_type in watched}
 
@@ -378,6 +427,10 @@ def test_a_position_opens_and_closes_across_nine_processes(
         placer.close()
 
     counted = {data_type: len(messages) for data_type, messages in seen.items()}
+    book_standing = {}
+    for message in seen["part-health"]:
+        if getattr(message.payload, "part_id", None) == "paper-fill-simulator":
+            book_standing = dict(message.payload.standing)
 
     assert still_running == list(CLOSING_CHAIN), (
         f"parts died: {sorted(set(CLOSING_CHAIN) - set(still_running))}"
@@ -390,8 +443,7 @@ def test_a_position_opens_and_closes_across_nine_processes(
     )
     assert counted["closed-trade"] > 0, (
         f"{symbol} rose from {entry_price} to {highest} against a target at {target_price} "
-        f"and nothing closed: {counted}. Fills: "
-        f"{[repr(m.payload)[:220] for m in seen['fill']][:4]}"
+        f"and nothing closed: {counted}. The book's own counters: {book_standing}"
     )
 
     closed = seen["closed-trade"][0].payload

@@ -128,9 +128,19 @@ class MarketAnomalyDetector:
         window.observe(price)
         self._last_update[key] = at_ns if at_ns is not None else self._now_ns()
 
-    def observe_consolidated_price(self, symbol: str, price: float, venues: int) -> None:
-        """What every venue together says this symbol is worth."""
-        self._consolidated[symbol] = (price, venues)
+    def observe_consolidated_price(
+        self, symbol: str, price: float, venues: int, contributing_prices: dict | None = None,
+    ) -> None:
+        """What every venue together says this symbol is worth, and who said what.
+
+        The per-venue prices matter because the question this part asks is
+        whether **one** venue moved when the others did not, and a blend that
+        includes the venue being checked is partly that venue's own price. With
+        two venues the blend is half of it, and the weight is the size of one
+        print: a large trade on one side pulls the reference towards it and makes
+        the other side read as anomalous.
+        """
+        self._consolidated[symbol] = (price, venues, dict(contributing_prices or {}))
 
     def observe_book(self, venue_id: str, symbol: str, best_bid: float, best_ask: float) -> None:
         self._books[(venue_id, symbol)] = (best_bid, best_ask)
@@ -191,14 +201,34 @@ class MarketAnomalyDetector:
                 f"clean, and a single-venue symbol is where a bad feed goes unnoticed",
             )
 
-        consolidated_price, venues = consolidated
+        consolidated_price, venues = consolidated[0], consolidated[1]
+        contributing_prices = consolidated[2] if len(consolidated) > 2 else {}
         if price is None or consolidated_price <= 0:
             return self._anomaly(
                 venue_id, symbol, NO_ANOMALY, False, price, consolidated_price, None, venues,
                 "no price to check",
             )
 
-        disagreement = abs(price - consolidated_price) / consolidated_price
+        # The others, not the blend. A venue compared against a reference it is
+        # part of is compared partly against itself, which is not what "a real
+        # move shows up in more than one place" means.
+        others = {
+            other: other_price
+            for other, other_price in contributing_prices.items()
+            if other != venue_id and other_price > 0
+        }
+        if contributing_prices and not others:
+            self.standing.single_venue_symbols += 1
+            return self._anomaly(
+                venue_id, symbol, CANNOT_CROSS_CHECK, False, price, consolidated_price, None, 1,
+                f"{venue_id} is the only venue contributing a fresh price for {symbol}, so "
+                f"there is nothing to cross-check it against; that is not the same as being "
+                f"clean",
+            )
+        reference = sum(others.values()) / len(others) if others else consolidated_price
+        venues_compared = len(others) if others else venues
+
+        disagreement = abs(price - reference) / reference
         if (
             self.standing.largest_disagreement_seen is None
             or disagreement > self.standing.largest_disagreement_seen
@@ -207,20 +237,20 @@ class MarketAnomalyDetector:
 
         if disagreement > self._disagreement:
             return self._anomaly(
-                venue_id, symbol, VENUES_DISAGREE, True, price, consolidated_price,
-                disagreement, venues,
-                f"{venue_id} has {symbol} at {price:.8g} against a consolidated "
-                f"{consolidated_price:.8g} across {venues} venue(s) -- {disagreement:.2%} apart, "
-                f"past the {self._disagreement:.2%} that separates a real move from a data "
-                f"problem. A genuine move arbitrages across venues in seconds",
+                venue_id, symbol, VENUES_DISAGREE, True, price, reference,
+                disagreement, venues_compared,
+                f"{venue_id} has {symbol} at {price:.8g} against {reference:.8g} across the "
+                f"{venues_compared} other venue(s) -- {disagreement:.2%} apart, past the "
+                f"{self._disagreement:.2%} that separates a real move from a data problem. A "
+                f"genuine move arbitrages across venues in seconds",
             )
 
         move = self._recent_move(window)
         volume = self._volumes.get(key, 0.0)
         if move is not None and move > self._move_threshold and volume < self._minimum_volume:
             return self._anomaly(
-                venue_id, symbol, MOVE_WITHOUT_VOLUME, True, price, consolidated_price,
-                disagreement, venues,
+                venue_id, symbol, MOVE_WITHOUT_VOLUME, True, price, reference,
+                disagreement, venues_compared,
                 f"price moved {move:.2%} on {volume:,.0f} of quote volume, below the "
                 f"{self._minimum_volume:,.0f} this detector treats as a market. That is a "
                 f"print rather than a trade: a wick nobody could have traded, or a feed "
@@ -228,9 +258,9 @@ class MarketAnomalyDetector:
             )
 
         return self._anomaly(
-            venue_id, symbol, NO_ANOMALY, False, price, consolidated_price, disagreement, venues,
-            f"{venue_id} agrees with {venues} venue(s) to within {disagreement:.3%}, the book "
-            f"is uncrossed, and the feed is live",
+            venue_id, symbol, NO_ANOMALY, False, price, reference, disagreement, venues_compared,
+            f"{venue_id} agrees with {venues_compared} other venue(s) to within "
+            f"{disagreement:.3%}, the book is uncrossed, and the feed is live",
         )
 
     def _recent_move(self, window: RollingWindow) -> float | None:
@@ -266,6 +296,17 @@ def describe_anomalies(detector: MarketAnomalyDetector) -> dict:
         "checks": detector.standing.checks,
         "anomalies": detector.standing.anomalies,
         "by_anomaly": dict(sorted(detector.standing.by_anomaly.items())),
+        # One counter per kind as well as the map, because only numbers survive
+        # onto part-health: 162,773 anomalies in 1,206,824 checks on 2026-08-26
+        # said nothing about which of the five this part detects was firing, and
+        # each one means a different fault.
+        **{
+            f"anomaly_{kind.replace('-', '_')}": detector.standing.by_anomaly.get(kind, 0)
+            for kind in (
+                VENUES_DISAGREE, DURING_A_FEED_GAP, CROSSED_BOOK, MOVE_WITHOUT_VOLUME,
+                STALE_FEED,
+            )
+        },
         "single_venue_symbols_that_could_not_be_cross_checked": detector.standing.single_venue_symbols,
         "largest_disagreement_seen": detector.standing.largest_disagreement_seen,
         "venue_symbols_watched": len(detector._prices),
@@ -346,7 +387,12 @@ def start_part(context) -> int:
             )
             touched.add((book.venue_id, book.symbol))
         for price in consolidated.payloads():
-            detector.observe_consolidated_price(price.symbol, price.price, len(price.contributing_venues))
+            detector.observe_consolidated_price(
+                price.symbol,
+                price.price,
+                len(price.contributing_venues),
+                getattr(price, "contributing_prices", None),
+            )
         return tuple(sorted(touched))
 
     def publish(items) -> None:

@@ -429,6 +429,48 @@ def test_one_venue_moving_alone_is_a_data_problem_until_proven_otherwise():
     assert anomaly.is_anomalous
 
 
+def test_a_venue_is_checked_against_the_others_and_not_against_itself():
+    """With two venues the blend is half the venue being checked, and the weight
+    is the size of one print: measured 2026-08-26, a 1% real gap between binance
+    and bybit on BTRUSDT read as a 1.09% anomaly on the bybit side alone, because
+    the reference had been pulled towards the venue with the larger last trade."""
+    subject = an_anomaly_detector(disagreement=0.02)
+    subject.observe_price(VENUE, SYMBOL, 101.0, subject._now_ns())
+    subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    # A blend that would be 3% away from this venue, made of the venue itself at
+    # 101 and one other at 100. Against the other venue alone it is 1% away.
+    subject.observe_consolidated_price(
+        SYMBOL, 98.0, venues=2, contributing_prices={VENUE: 101.0, "other-venue": 100.0},
+    )
+    anomaly = subject.check(VENUE, SYMBOL)
+    assert anomaly.anomaly == NO_ANOMALY
+    assert anomaly.consolidated_price == 100.0
+    assert anomaly.venues_compared == 1
+
+
+def test_the_only_fresh_venue_cannot_be_cross_checked_however_many_carry_the_symbol():
+    """Two venues carry it and one of them has gone quiet: what is left is one
+    price, and comparing it with itself would read as agreement."""
+    subject = an_anomaly_detector()
+    subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
+    subject.observe_consolidated_price(
+        SYMBOL, 100.0, venues=2, contributing_prices={VENUE: 100.0},
+    )
+    assert subject.check(VENUE, SYMBOL).anomaly == CANNOT_CROSS_CHECK
+
+
+def test_a_venue_that_really_did_move_alone_is_still_named():
+    subject = an_anomaly_detector(disagreement=0.01)
+    subject.observe_price(VENUE, SYMBOL, 110.0, subject._now_ns())
+    subject.observe_volume(VENUE, SYMBOL, 1_000_000.0)
+    subject.observe_consolidated_price(
+        SYMBOL, 105.0, venues=2, contributing_prices={VENUE: 110.0, "other-venue": 100.0},
+    )
+    anomaly = subject.check(VENUE, SYMBOL)
+    assert anomaly.anomaly == VENUES_DISAGREE and anomaly.is_anomalous
+    assert anomaly.disagreement_fraction == pytest.approx(0.1)
+
+
 def test_a_crossed_book_is_not_a_market_state():
     subject = an_anomaly_detector()
     subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
