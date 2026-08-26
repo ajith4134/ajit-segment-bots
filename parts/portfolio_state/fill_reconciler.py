@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import pathlib
 import time
 from dataclasses import dataclass, field
 
+from runtime.durable_state import (
+    CheckpointSchedule,
+    DurableStateStore,
+    restore_and_arm_checkpoint,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.trading_types import BUY, Position
+
+# One checkpoint per part per component; this part keeps exactly one thing.
+CHECKPOINT_COMPONENT = "held-positions"
 
 PART_ID = "fill-reconciler"
 
@@ -23,6 +32,20 @@ PART_DECLARATION = PartDeclaration(
 AGREED = "agreed"
 DIVERGED = "diverged"
 UNCHECKED = "unchecked"
+
+
+def position_key_text(key: tuple[str, str]) -> str:
+    """One position's key as one string, for a JSON object that has only strings.
+
+    The same separator the lot books and the resting exits use, so the position
+    checkpoints written by three different parts read alike.
+    """
+    return f"{key[0]}|{key[1]}"
+
+
+def position_key_of(text: str) -> tuple[str, str]:
+    venue_id, _, symbol = text.partition("|")
+    return venue_id, symbol
 
 
 @dataclass(frozen=True)
@@ -45,6 +68,11 @@ class ReconcilerStanding:
     divergences: int = 0
     symbols: int = 0
     last_divergence: str | None = None
+    # Not counters: what happened to the checkpoint at start. A reconciler that
+    # came back holding nothing and one whose checkpoint could not be read are
+    # different facts, and only the second is a fault (Rule 8).
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
 
 
 class FillReconciler:
@@ -66,6 +94,68 @@ class FillReconciler:
         self._seen_fills: set[str] = set()
         self._venue_quantities: dict[tuple[str, str], float] = {}
         self.standing = ReconcilerStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """What is held, to carry into the next process.
+
+        This part starts every other part that watches an open trade -- its own
+        docstring says so -- and it held its positions in memory alone until
+        2026-08-26. So every restart began with nothing held, and since a position
+        is only learned from a *fill*, a position already open when the process
+        started was invisible for the rest of that process's life.
+
+        Measured on the live spine at 11:47 on 2026-08-26, with 20 positions open
+        and restored by the two parts that did checkpoint:
+
+            fill-reconciler          received nothing, published no position
+            peak-excursion-tracker   positions_tracked 0, prices_without_cost_basis
+                                     162,960 -- so the excursion on the board was
+                                     frozen at whatever it last was, and 16 of 20
+                                     rows contradicted their own live P&L
+            stop-order-manager       0 of 20 positions had a stop resting
+            exposure-limiter         positions_seen 0, total_exposure 0
+            margin-liquidation-watch positions_watched 0
+
+        `seen_fills` rides along so a fill replayed across a restart is still
+        recognised as one already applied; without it a restart could double a
+        position. The venue quantities do not: they are what the venue said, and
+        the venue is asked again rather than remembered.
+        """
+        return {
+            "positions": {
+                position_key_text(key): {
+                    "venue_id": held.venue_id,
+                    "symbol": held.symbol,
+                    "quantity": held.quantity,
+                    "average_entry_price": held.average_entry_price,
+                    "realised_pnl": held.realised_pnl,
+                    "fees_paid": held.fees_paid,
+                    "opened_at_ns": held.opened_at_ns,
+                    "updated_at_ns": held.updated_at_ns,
+                }
+                for key, held in self._positions.items()
+            },
+            "seen_fills": sorted(self._seen_fills),
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Rebuild what is held. Returns how many symbols came back."""
+        self._positions = {
+            position_key_of(text): Position(
+                venue_id=str(held["venue_id"]),
+                symbol=str(held["symbol"]),
+                quantity=float(held["quantity"]),
+                average_entry_price=float(held["average_entry_price"]),
+                realised_pnl=float(held["realised_pnl"]),
+                fees_paid=float(held["fees_paid"]),
+                opened_at_ns=int(held["opened_at_ns"]),
+                updated_at_ns=int(held["updated_at_ns"]),
+            )
+            for text, held in (state.get("positions") or {}).items()
+        }
+        self._seen_fills = set(state.get("seen_fills") or ())
+        self.standing.symbols = len(self._positions)
+        return self.standing.symbols
 
     def observe_fill(self, fill) -> Position:
         key = (fill.venue_id, fill.symbol)
@@ -178,6 +268,7 @@ def run_fill_reconciler(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
         """Reconcile, then publish the positions -- not the reconciliations.
@@ -202,6 +293,13 @@ def run_fill_reconciler(
         publish_positions(tuple(
             reconciliation.position for reconciliation in reconciler.reconcile_all()
         ))
+        # After the publish, never before: a checkpoint written first would record
+        # a position no consumer had been told about yet. Only on a tick that
+        # applied a fill -- the positions are republished every tick regardless,
+        # and rewriting the file at that rate would record a book that had not
+        # moved.
+        if fills and write_checkpoint is not None:
+            write_checkpoint(reconciler.standing.fills_applied)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -234,6 +332,40 @@ def start_part(context) -> int:
     reports = Batch(read=context.bus.reader("venue-position-report"))
     publish_positions = context.bus.publisher_for("position")
 
+    # What is held, carried across a restart. This part is where a fill becomes a
+    # position, so a position it has forgotten is a position nothing downstream
+    # can see -- and it learns a position only from a *fill*, which for one
+    # already open will never arrive again. Beside the lot books under
+    # position_state_root, because it is the same fact about the same position.
+    #
+    # Nothing extra is needed to tell the rest of the system: `tick` republishes
+    # every held position on every tick, so the restored book reaches the
+    # excursion tracker, the stop manager, the exposure limiter and the margin
+    # watch on the first tick after start.
+    reconciler = FillReconciler(
+        # How far our quantity may sit from the venue's before it is a
+        # divergence rather than rounding. Read from the increment the venue
+        # itself publishes, because a tolerance smaller than one tradeable
+        # step would report every position as diverged, and one larger than a
+        # step would hide a genuinely missing fill.
+        quantity_tolerance=context.number("order_quantity_increment"),
+    )
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    write_checkpoint = restore_and_arm_checkpoint(
+        store,
+        # Every fill. A position changes tens of times an hour and losing one
+        # costs the whole book its meaning -- the same reasoning the lot books
+        # use, and this is the same fact about the same position.
+        CheckpointSchedule(1),
+        PART_ID,
+        CHECKPOINT_COMPONENT,
+        reconciler,
+        {"quantity_tolerance": float(context.number("order_quantity_increment"))},
+    )
+
     def read_fills_and_reports():
         venue_quantities = tuple(
             (report.venue_id, report.symbol, report.quantity) for report in reports.payloads()
@@ -241,14 +373,7 @@ def start_part(context) -> int:
         return tuple(fills.payloads()), venue_quantities
 
     return run_fill_reconciler(
-        reconciler=FillReconciler(
-            # How far our quantity may sit from the venue's before it is a
-            # divergence rather than rounding. Read from the increment the venue
-            # itself publishes, because a tolerance smaller than one tradeable
-            # step would report every position as diverged, and one larger than a
-            # step would hide a genuinely missing fill.
-            quantity_tolerance=context.number("order_quantity_increment"),
-        ),
+        reconciler=reconciler,
         control_socket=context.control_socket,
         read_fills_and_reports=read_fills_and_reports,
         publish_positions=publish_positions,
@@ -256,4 +381,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        write_checkpoint=write_checkpoint,
     )

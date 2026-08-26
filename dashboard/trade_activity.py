@@ -331,6 +331,103 @@ def attach_learned_excursions(positions: list[dict]) -> dict:
     }
 
 
+def attach_resting_exits(positions: list[dict]) -> dict:
+    """Attach the stop and target actually resting for each position.
+
+    Read from `stop-order-manager`'s own checkpoint -- the file that part restores
+    from -- for the same reason the prediction is read from the profiler's: a
+    second record kept for the board would be free to disagree with the one the
+    bot acts on, and on a protective stop that disagreement is the whole story.
+
+    The checkpoint exists as of 2026-08-26. Before it, these exits lived in that
+    part's memory alone, so every restart forgot every stop -- and because it only
+    ever hears about a stop when something upstream proposes a *new* one, a
+    position already open was left with no protective order and nothing said so.
+    A board could not show the column because nothing anywhere held the answer.
+
+    A position with no entry here is reported as unprotected rather than blank.
+    That is the state worth seeing: it means this position is open with no stop
+    resting for it, which is a fact about the trade, not a gap in the board.
+    """
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+        root = pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+    except Exception as refusal:
+        for position in positions:
+            position["exit_proof"] = f"{NOT_MEASURED}: settings refused position_state_root"
+        return {"ok": False, "proof": f"settings refused position_state_root ({refusal})"}
+
+    path = root / "stop-order-manager.resting-exits.json"
+    if not path.exists():
+        for position in positions:
+            position["stop_price"] = None
+            position["target_price"] = None
+            position["exit_proof"] = (
+                f"{NOT_MEASURED}: stop-order-manager has not written a checkpoint, "
+                f"which is a different fact from nothing being protected"
+            )
+        return {
+            "ok": False,
+            "proof": (
+                f"no checkpoint at {path}: stop-order-manager has not written one, which "
+                f"is a different fact from no position being protected"
+            ),
+        }
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as failure:
+        for position in positions:
+            position["exit_proof"] = f"{NOT_MEASURED}: {path} could not be read"
+        return {"ok": False, "proof": f"{path} could not be read: {failure}"}
+
+    resting = (document.get("state") or {}).get("resting") or {}
+    for position in positions:
+        held = resting.get(f"{position['venue_id']}|{position['symbol']}")
+        if held is None:
+            position["stop_price"] = None
+            position["target_price"] = None
+            position["is_protected"] = False
+            position["exit_proof"] = (
+                f"{path.name} holds no resting exit for {position['symbol']}: this "
+                f"position is open with no stop protecting it"
+            )
+            continue
+        position["stop_price"] = held.get("stop_price")
+        position["target_price"] = held.get("target_price")
+        position["is_protected"] = True
+        entry = position.get("entry_price")
+        stop = position.get("stop_price")
+        # How far the stop sits from entry, which is what a reader actually judges
+        # -- a stop at 78,900 says nothing until you know the entry was 79,544.
+        position["stop_distance_fraction"] = (
+            None if not entry or stop is None else abs(entry - stop) / entry
+        )
+        position["exit_proof"] = (
+            f"{path.name}: order {held.get('order_id')} resting at {held.get('stop_price')}"
+            + (
+                f", target {held.get('target_price')}"
+                if held.get("target_price") is not None
+                else ", no target"
+            )
+        )
+
+    protected = sum(1 for position in positions if position.get("is_protected"))
+    return {
+        "ok": True,
+        "protected": protected,
+        "unprotected": len(positions) - protected,
+        "proof": (
+            f"{path}, written "
+            f"{(time.time_ns() - int(document.get('saved_at_ns') or 0)) / 1e9:.0f}s ago -- "
+            f"the same file stop-order-manager restores from. "
+            f"{protected} of {len(positions)} open position(s) have a stop resting"
+        ),
+    }
+
+
 def attach_live_prices(positions: list[dict]) -> None:
     """Mark each held position against the tape, in place.
 
@@ -532,6 +629,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     # call of this direction is read off a checkpoint, not off the tape, so it
     # costs nothing the price marking does and is the same answer either way.
     prediction_provenance = attach_learned_excursions(positions)
+    exit_provenance = attach_resting_exits(positions)
     closed, closed_provenance = read_closed_trades()
     return {
         "generated_at_ns": time.time_ns(),
@@ -544,6 +642,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
             ) if any(p.get("unrealised_pnl") is not None for p in positions) else None,
             "provenance": position_provenance,
             "prediction_provenance": prediction_provenance,
+            "exit_provenance": exit_provenance,
         },
         "closed": {
             "trades": closed,

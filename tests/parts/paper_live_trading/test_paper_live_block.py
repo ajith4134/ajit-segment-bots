@@ -927,3 +927,260 @@ def test_the_worst_drawdown_is_the_deepest_seen_and_not_the_latest():
 
 def test_a_bot_with_no_record_at_all_is_refused_as_such():
     assert guard().judge("nobody").verdict == NO_RECORD
+
+
+# ---- a resting stop must survive a restart -------------------------------------
+#
+# Held in memory alone until 2026-08-26. The consequence is not a board gap: this
+# part only ever hears about a stop when something upstream proposes a *new* one,
+# so a position already open at restart is left with no protective order and
+# nothing reports it. The lot books were fixed for the same reason on 2026-08-25,
+# after 46 restarts left 86% of everything ever opened unaccounted for.
+
+
+def test_a_resting_stop_comes_back_after_a_restart(durable_tmp_path):
+    """The whole point: the next process knows what is protecting each position."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.paper_live_trading.stop_order_manager import CHECKPOINT_COMPONENT
+
+    store = DurableStateStore(durable_tmp_path)
+    before = StopOrderManager()
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, before, {}
+    )
+    before.apply_adjustment(VENUE, SYMBOL, LONG, 1.5, 98.0, Mode("paper"))
+    write(before.standing.placed)
+    assert before.resting_stop(VENUE, SYMBOL) == 98.0
+
+    after = StopOrderManager()
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, after, {}
+    )
+
+    assert after.resting_stop(VENUE, SYMBOL) == 98.0, (
+        "a restart forgot the stop protecting an open position"
+    )
+    assert after.standing.stops_resting == 1
+    assert after.standing.restored_symbols == 1
+
+
+def test_a_restored_manager_still_refuses_to_widen(durable_tmp_path):
+    """A stop that came back must be a stop, not just a number in a dict.
+
+    The refusal to widen is the manager's whole safety property, and it is decided
+    against what it believes is resting -- so a restore that produced a lookalike
+    object would silently drop it on exactly the positions that had been open
+    longest.
+    """
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.paper_live_trading.stop_order_manager import CHECKPOINT_COMPONENT
+
+    store = DurableStateStore(durable_tmp_path)
+    before = StopOrderManager()
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, before, {}
+    )
+    before.apply_adjustment(VENUE, SYMBOL, LONG, 1.0, 99.0, Mode("paper"))
+    write(before.standing.placed)
+
+    after = StopOrderManager()
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, after, {}
+    )
+    widening = after.apply_adjustment(VENUE, SYMBOL, LONG, 1.0, 98.0, Mode("paper"))
+
+    assert widening.action == REFUSED_WIDENING
+    assert after.resting_stop(VENUE, SYMBOL) == 99.0
+
+
+def test_order_ids_do_not_repeat_across_a_restart(durable_tmp_path):
+    """A reused id is an id the venue may still have resting against another order."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.paper_live_trading.stop_order_manager import CHECKPOINT_COMPONENT
+
+    store = DurableStateStore(durable_tmp_path)
+    before = StopOrderManager()
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, before, {}
+    )
+    first = before.apply_adjustment(VENUE, SYMBOL, LONG, 1.0, 99.0, Mode("paper"))
+    write(before.standing.placed)
+
+    after = StopOrderManager()
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "stop-order-manager", CHECKPOINT_COMPONENT, after, {}
+    )
+    # A different symbol, so the widening refusal does not shadow the id check.
+    second = after.apply_adjustment(VENUE, "ETHUSDT", LONG, 1.0, 99.0, Mode("paper"))
+
+    assert first.place_order_id != second.place_order_id, (
+        f"both processes minted {first.place_order_id}"
+    )
+
+
+def test_a_manager_that_has_never_checkpointed_says_so_rather_than_reading_empty(durable_tmp_path):
+    """Came back holding nothing, and never ran, are different facts (Rule 8)."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.paper_live_trading.stop_order_manager import CHECKPOINT_COMPONENT
+
+    cold = StopOrderManager()
+    restore_and_arm_checkpoint(
+        DurableStateStore(durable_tmp_path), CheckpointSchedule(1),
+        "stop-order-manager", CHECKPOINT_COMPONENT, cold, {},
+    )
+
+    assert cold.standing.checkpoint_verdict, "a cold start recorded no verdict at all"
+    assert cold.standing.stops_resting == 0
+
+
+# ---- one wire, two adjustment shapes ------------------------------------------
+#
+# `stop-adjustment` carries two payloads: exit-order-chainer's pair of exits the
+# instant an entry fills, and profit-lock's raised stop as a trade goes into
+# profit. That is the shape which defeats both blueprint checkers, exactly as
+# `market-data` did carrying trades and candles.
+#
+# Measured on the live spine at 12:01 on 2026-08-26, the hour profit-lock first
+# had positions to work on: it trailed 34 stops and published all 34, and this
+# part dropped every one as unreadable. `placed` 0, and not one refusal counter
+# moved -- a shape it cannot read was never a refusal -- so 20 open positions had
+# 0 stops resting and nothing anywhere said why.
+
+
+class _Trail:
+    """profit-lock's shape: a new stop, the position's direction, no quantity."""
+
+    def __init__(self, venue_id, symbol, direction, new_stop, did_move=True):
+        self.venue_id = venue_id
+        self.symbol = symbol
+        self.direction = direction
+        self.new_stop = new_stop
+        self.did_move = did_move
+
+
+class _ChainedExits:
+    """exit-order-chainer's shape: a fill names the side, quantity and both prices."""
+
+    def __init__(self, venue_id, symbol, exit_side, quantity, stop_price,
+                 target_price=None, should_be_sent=True):
+        self.venue_id = venue_id
+        self.symbol = symbol
+        self.exit_side = exit_side
+        self.quantity = quantity
+        self.stop_price = stop_price
+        self.target_price = target_price
+        self.should_be_sent = should_be_sent
+
+
+def test_a_trailed_stop_is_read_and_sized_from_the_position():
+    """profit-lock names no quantity, so it comes from what is actually held."""
+    from parts.paper_live_trading.stop_order_manager import read_adjustment
+
+    held = {(VENUE, SYMBOL): 1.5}
+    read = read_adjustment(_Trail(VENUE, SYMBOL, LONG, 98.0), held)
+
+    assert read is not None, "profit-lock's shape was unreadable -- the live defect"
+    assert read["stop_price"] == 98.0
+    assert read["direction"] == LONG
+    assert read["quantity"] == 1.5, "a trailed stop must cover what is actually held"
+    assert read["target_price"] is None
+
+
+def test_a_trail_on_a_short_is_sized_from_the_absolute_quantity():
+    """A short's held quantity is negative; an order quantity never is."""
+    from parts.paper_live_trading.stop_order_manager import read_adjustment
+
+    read = read_adjustment(_Trail(VENUE, SYMBOL, SHORT, 102.0), {(VENUE, SYMBOL): -2.0})
+    assert read["quantity"] == 2.0
+    assert read["direction"] == SHORT
+
+
+def test_a_trail_that_did_not_move_is_not_sent():
+    """Replacing a resting stop with an identical one is a window with no stop."""
+    from parts.paper_live_trading.stop_order_manager import SKIP, read_adjustment
+
+    read = read_adjustment(
+        _Trail(VENUE, SYMBOL, LONG, 98.0, did_move=False), {(VENUE, SYMBOL): 1.5}
+    )
+    assert read is SKIP
+
+
+def test_a_trail_for_a_position_this_part_does_not_know_is_refused():
+    """A stop for no quantity protects nothing and would read as one that rests."""
+    from parts.paper_live_trading.stop_order_manager import read_adjustment
+
+    assert read_adjustment(_Trail(VENUE, SYMBOL, LONG, 98.0), {}) is None
+
+
+def test_the_chainer_shape_still_reads():
+    """The shape that already worked must survive teaching the part a second one."""
+    from parts.paper_live_trading.stop_order_manager import read_adjustment
+
+    read = read_adjustment(
+        _ChainedExits(VENUE, SYMBOL, SELL, 2.0, 98.0, target_price=110.0), {}
+    )
+    assert read["direction"] == LONG, "the exit side is the opposite of the position's"
+    assert read["quantity"] == 2.0
+    assert read["stop_price"] == 98.0
+    assert read["target_price"] == 110.0
+
+
+def test_a_chained_exit_that_says_not_to_send_is_skipped():
+    from parts.paper_live_trading.stop_order_manager import SKIP, read_adjustment
+
+    read = read_adjustment(
+        _ChainedExits(VENUE, SYMBOL, SELL, 0.0, 98.0, should_be_sent=False), {}
+    )
+    assert read is SKIP
+
+
+def test_a_shape_carrying_neither_is_unreadable():
+    """Unreadable is its own answer, not a refusal and not a skip."""
+    from parts.paper_live_trading.stop_order_manager import read_adjustment
+
+    class _Nothing:
+        venue_id = VENUE
+        symbol = SYMBOL
+
+    assert read_adjustment(_Nothing(), {(VENUE, SYMBOL): 1.0}) is None
+
+
+def test_health_reports_adjustments_that_never_reached_the_manager():
+    """The counter that was local, which is how 34 dropped stops stayed invisible."""
+    from parts.paper_live_trading.stop_order_manager import describe_stop_orders
+
+    described = describe_stop_orders(
+        StopOrderManager(),
+        {"unreadable": 34, "last_unreadable": "StopAdjustment", "held_back": 7},
+    )
+    assert described["unreadable_adjustments"] == 34
+    assert described["last_unreadable_adjustment"] == "StopAdjustment"
+    assert described["adjustments_that_said_hold"] == 7
+
+
+def test_a_trail_does_not_ask_for_a_target_it_never_carried():
+    """A refusal counted for something nobody requested reads as a failure.
+
+    Measured on the live spine at 12:07 on 2026-08-26: 14 trailed stops placed
+    correctly, and 14 `refused_no_target` beside them, because the tick asked for
+    a target on every adjustment including the ones that carry none by design.
+    """
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 1.5, 98.0, Mode("paper"))
+    assert manager.standing.refused_no_target == 0

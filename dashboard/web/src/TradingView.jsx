@@ -86,9 +86,10 @@ function OpenPositions({ open }) {
                 <th className="n">quantity</th><th className="n">entry</th>
                 <th className="n">price now</th><th className="n">age</th>
                 <th className="n">capital in</th><th className="n">unrealised</th>
-                <th className="n">peak</th><th className="n">worst</th>
+                <th className="n">peak / worst</th>
                 <th className="n">realised</th>
                 <th className="n">predicted up</th><th className="n">predicted down</th>
+                <th className="n">stop</th><th className="n">target</th>
                 <th className="n">tailgating</th>
                 <th className="n">fees</th><th className="n">held for</th>
               </tr>
@@ -115,19 +116,26 @@ function OpenPositions({ open }) {
                   </td>
                   <td className="n mono">{p.capital_in?.toFixed(2)}</td>
                   <td className="n mono"><Pnl value={p.unrealised_pnl} digits={3} /></td>
-                  {/* The best and worst this position has been through, from the
-                      excursion the closing part checkpoints alongside the lots.
-                      Never zero for "we did not watch": the key's absence is what
-                      says nothing was recorded, and that renders as not measured. */}
+                  {/* Peak and worst in one cell, best/worst, because they are one
+                      fact -- the range this position has travelled -- and reading
+                      them apart makes the reader do the subtraction. Never zero for
+                      "we did not watch": the excursion's absence is what says
+                      nothing was recorded, and that renders as not measured.
+
+                      Both are widened by the live unrealised before display. The
+                      checkpoint records what peak-excursion-tracker saw, and it
+                      cannot have seen a move it was not running for -- so a stored
+                      worst of -4.91 on a position sitting at -27.27 is not a
+                      smaller loss, it is an older reading. The live mark is
+                      evidence of the excursion in its own right, and taking the
+                      wider of the two is the only reading that cannot understate
+                      it. */}
                   <td className="n mono">
-                    {p.best_unrealised === null || p.best_unrealised === undefined
-                      ? <em className="unmeasured" title="peak-excursion-tracker has recorded no excursion for this position">not measured</em>
-                      : <Pnl value={p.best_unrealised} digits={3} />}
-                  </td>
-                  <td className="n mono">
-                    {p.worst_unrealised === null || p.worst_unrealised === undefined
-                      ? <em className="unmeasured" title="peak-excursion-tracker has recorded no excursion for this position">not measured</em>
-                      : <Pnl value={p.worst_unrealised} digits={3} />}
+                    <Excursion
+                      best={p.best_unrealised}
+                      worst={p.worst_unrealised}
+                      live={p.unrealised_pnl}
+                    />
                   </td>
                   {/* Realised on a position still open: a lot sold back before the
                       rest. Absent means this position was never scaled out of, which
@@ -160,15 +168,40 @@ function OpenPositions({ open }) {
                           <span className="faint"> ({(p.expected_adverse_fraction * 100).toFixed(2)}%)</span>
                         </span>}
                   </td>
-                  {/* Tailgating, and every other per-position plan -- the stop, the
-                      target, the trailing level, the conviction behind the entry --
-                      lives on the bus and nowhere else. This process is not on the
-                      bus, so it cannot read them, and a column that guessed would be
-                      exactly the failure Rule 8 exists to prevent. NOT BUILT rather
-                      than NOT MEASURED: nothing writes it anywhere a board could
-                      look, which is a fact about the system, not about this reading. */}
+                  {/* The stop and target actually resting, from stop-order-manager's
+                      own checkpoint -- the file that part restores from. `unprotected`
+                      is the state worth seeing and is deliberately loud: it means this
+                      position is open with no stop resting for it, which is a fact
+                      about the trade rather than a gap in the board. It is distinct
+                      from `not measured`, which means the part has never checkpointed
+                      at all. */}
                   <td className="n mono">
-                    <em className="unmeasured" title="tail-follow-conviction-model and tail-trailing-exit-planner publish on the bus only; no part writes a per-position tailgating state to disk, so no board can read one">not built</em>
+                    {p.stop_price === null || p.stop_price === undefined
+                      ? <em className={p.is_protected === false ? 'unprotected' : 'unmeasured'}
+                            title={p.exit_proof}>
+                          {p.is_protected === false ? 'unprotected' : 'not measured'}
+                        </em>
+                      : <span title={p.exit_proof}>
+                          <Num value={p.stop_price} />
+                          {p.stop_distance_fraction != null && (
+                            <span className="faint"> ({(p.stop_distance_fraction * 100).toFixed(2)}%)</span>
+                          )}
+                        </span>}
+                  </td>
+                  <td className="n mono">
+                    {p.target_price === null || p.target_price === undefined
+                      ? <span className="faint" title={p.exit_proof}>—</span>
+                      : <span title={p.exit_proof}><Num value={p.target_price} /></span>}
+                  </td>
+                  {/* Tailgating is the one per-position plan still held on the bus
+                      alone. tail-trailing-exit-planner keeps its trailing level in
+                      memory the way stop-order-manager kept its resting stops until
+                      2026-08-26; until it checkpoints too, nothing anywhere holds the
+                      answer and a column that guessed would be exactly the failure
+                      Rule 8 exists to prevent. NOT BUILT, not NOT MEASURED: this is a
+                      fact about the system, not about this reading. */}
+                  <td className="n mono">
+                    <em className="unmeasured" title="tail-trailing-exit-planner holds its trailing level in memory and publishes tail-exit-plan on the bus; nothing writes a per-position tailgating state to disk, so no board process can read one">not built</em>
                   </td>
                   <td className="n mono faint">{p.fees_paid?.toFixed(3)}</td>
                   <td className="n mono faint">
@@ -184,6 +217,40 @@ function OpenPositions({ open }) {
       )}
       <div className="trade-proof mono">{provenance.proof}</div>
     </div>
+  )
+}
+
+function Excursion({ best, worst, live }) {
+  // The widest each side has been, counting the live mark as evidence. A tracker
+  // that was not running for a move did not record it, and the stored figure is
+  // then older rather than smaller -- so the live unrealised widens the range it
+  // falls outside of. Shown as best/worst in one cell.
+  const hasStored = best !== null && best !== undefined
+    && worst !== null && worst !== undefined
+  const hasLive = live !== null && live !== undefined
+  if (!hasStored && !hasLive) {
+    return (
+      <em className="unmeasured"
+          title="peak-excursion-tracker has recorded no excursion for this position, and the tape cannot mark it either">
+        not measured
+      </em>
+    )
+  }
+  const peak = Math.max(hasStored ? best : -Infinity, hasLive ? live : -Infinity)
+  const trough = Math.min(hasStored ? worst : Infinity, hasLive ? live : Infinity)
+  const widened = hasStored && hasLive && (live > best || live < worst)
+  const proof = !hasStored
+    ? 'no excursion recorded; this range is the live mark alone'
+    : widened
+      ? `the recorded excursion was ${best.toFixed(3)}/${worst.toFixed(3)}, `
+        + 'widened by the live mark -- the tracker was not running for part of this trade'
+      : 'from the excursion peak-excursion-tracker recorded, alongside the lots'
+  return (
+    <span title={proof} className={widened ? 'widened' : undefined}>
+      <Pnl value={peak} digits={2} />
+      <span className="faint"> / </span>
+      <Pnl value={trough} digits={2} />
+    </span>
   )
 }
 

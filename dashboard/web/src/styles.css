@@ -176,6 +176,17 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
 .busy-counter { color: var(--faint); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rate-live { color: #57D9A3; font-weight: 600; }
 .unmeasured { color: #6E5B2E; font-style: normal; }
+/* A position open with no stop resting for it. Deliberately not the same colour
+   as `unmeasured`: "nobody measured this" and "this trade is unprotected" are
+   different facts and only the second is about money at risk. Red, because it is
+   the state a person should act on -- Rule 8 asks that a failing state be
+   reachable in the design, and this is that state for an open position. */
+.unprotected { color: #E0705C; font-style: normal; font-weight: 600; }
+/* An excursion the live mark had to widen: the tracker was not running for part
+   of this trade, so the stored figure was older rather than smaller. Marked so
+   the reader can tell a measured range from a reconstructed one, and the title
+   carries what was actually recorded. */
+.widened { border-bottom: 1px dotted #6E5B2E; }
 
 .live-parts { border-top: 1px solid var(--border); }
 

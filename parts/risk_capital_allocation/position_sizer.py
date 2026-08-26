@@ -456,12 +456,32 @@ def start_part(context) -> int:
     # The binding limit is the smallest fraction any limiter allows, so they are
     # kept per limiter and the minimum is taken: a limiter that says nothing must
     # not be able to raise a limit another one lowered.
+    # Keyed by the limiter, and only by the limiter. Each of the seven publishes
+    # exactly one limit per tick -- `publish_limit(x.read_limit())`, singular --
+    # so a limiter has one current word and its next word must replace it.
+    #
+    # It was keyed on `(limiter, symbols)` until 2026-08-26, which turned one
+    # limiter's *sequence* of limits into a set of immortal per-scope entries.
+    # halt-enforcer zeroes risk scoped to the symbols an anomaly was seen on, and
+    # publishes its all-clear with no scope at all -- a different key. So the zero
+    # was never replaced, and `LatestByKey` holds a key's last value forever
+    # unless bounded, so it never expired either.
+    #
+    # Measured on the live spine at 11:47 on 2026-08-26: 443 halts raised and 443
+    # released, `is_halted` 0, and still every one of 838 intents refused --
+    # `refused_no_risk_allowed` 14, `intents_that_stood_aside` 824, `sized` 0.
+    # 2,899 anomalies of the kind "one venue moved and the others did not" across
+    # 100 venue-symbols, so essentially every symbol had been scoped-to-zero once
+    # and was permanently untradeable. No order was ever filled, no position ever
+    # got a stop, and nothing reported a fault: each of those zeros was a limit a
+    # limiter was entitled to issue, and only its immortality was wrong.
+    #
+    # The scope has not gone anywhere -- it travels inside the limit and
+    # `applies_to` still decides per symbol, which is what stops a two-symbol halt
+    # zeroing the other ninety-eight.
     limits = LatestByKey(
         read=context.bus.reader("risk-limit"),
-        # By limiter *and* scope: one limiter can hold a limit on the whole book
-        # and another on the two symbols a halt was raised over, and keying on the
-        # limiter alone would let the second overwrite the first.
-        key_of=lambda limit: (limit.limiter, limit.symbols),
+        key_of=lambda limit: limit.limiter,
     )
     timed = Batch(read=context.bus.reader("timed-intent"))
 

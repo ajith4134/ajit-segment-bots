@@ -823,3 +823,169 @@ def test_a_journal_starting_a_fresh_file_starts_at_genesis(durable_tmp_path):
     assert read_journal_tail(damaged) is None, (
         "a tail that could not be read must not become a digest the chain claims to follow"
     )
+
+
+# ---- a position already open must survive a restart ---------------------------
+#
+# fill-reconciler is where a fill becomes a position, so nothing downstream of a
+# fill has an input until it is running -- its own docstring says so. It held its
+# positions in memory alone until 2026-08-26, and a position is learned only from
+# a *fill*, which for one already open never arrives again. So every restart began
+# blind to everything already held.
+#
+# Measured on the live spine at 11:47 on 2026-08-26, with 20 positions open and
+# restored by the two portfolio parts that did checkpoint:
+#
+#     fill-reconciler           received nothing, published no position
+#     peak-excursion-tracker    positions_tracked 0, prices_without_cost_basis
+#                               162,960 -- the excursion on the board was frozen,
+#                               and 16 of 20 rows contradicted their own live P&L
+#                               (a "worst" of -4.91 on a position sitting at -27.27)
+#     stop-order-manager        0 of 20 positions had a stop resting
+#     exposure-limiter          positions_seen 0, total_exposure 0
+#     margin-liquidation-watch  positions_watched 0
+
+
+def test_a_held_position_comes_back_after_a_restart(durable_tmp_path):
+    """Everything downstream of a fill depends on this one book being remembered."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.portfolio_state.fill_reconciler import CHECKPOINT_COMPONENT
+
+    store = DurableStateStore(durable_tmp_path)
+    settings = {"quantity_tolerance": 1e-9}
+    before = FillReconciler(quantity_tolerance=1e-9)
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, before, settings
+    )
+    before.observe_fill(fill("f-1", BUY, 100.0, 2.0, at=5, fee=0.1))
+    write(before.standing.fills_applied)
+
+    after = FillReconciler(quantity_tolerance=1e-9)
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, after, settings
+    )
+
+    assert after.standing.restored_symbols == 1, "a restart forgot an open position"
+    restored = after.reconcile_all()
+    assert len(restored) == 1
+    held = restored[0].position
+    assert held.quantity == 2.0
+    assert held.average_entry_price == 100.0
+    assert held.fees_paid == 0.1
+    assert held.opened_at_ns == before.reconcile_all()[0].position.opened_at_ns
+
+
+def test_a_restored_position_is_republished_so_downstream_learns_of_it(durable_tmp_path):
+    """The restore is only useful if the rest of the system is told.
+
+    `tick` publishes every held position on every tick, so a restored book reaches
+    the excursion tracker, the stop manager, the exposure limiter and the margin
+    watch on the first tick after start -- with no extra wiring. This pins that,
+    because a restore that stayed private would fix nothing anybody can see.
+    """
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.portfolio_state.fill_reconciler import (
+        CHECKPOINT_COMPONENT,
+        run_fill_reconciler,
+    )
+    import parts.portfolio_state.fill_reconciler as module
+
+    store = DurableStateStore(durable_tmp_path)
+    settings = {"quantity_tolerance": 1e-9}
+    before = FillReconciler(quantity_tolerance=1e-9)
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, before, settings
+    )
+    before.observe_fill(fill("f-1", BUY, 100.0, 2.0, at=5))
+    write(before.standing.fills_applied)
+
+    after = FillReconciler(quantity_tolerance=1e-9)
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, after, settings
+    )
+
+    published = []
+    body = {}
+
+    def capture_run_part(*, do_one_tick, **_rest):
+        body["tick"] = do_one_tick
+        return 0
+
+    original = module.run_part
+    module.run_part = capture_run_part
+    try:
+        run_fill_reconciler(
+            reconciler=after,
+            control_socket=None,
+            # No fills at all: the position is only there because it was restored.
+            read_fills_and_reports=lambda: ((), ()),
+            publish_positions=published.extend,
+            health_interval_seconds=1.0,
+            emit_health=lambda _health: None,
+        )
+    finally:
+        module.run_part = original
+
+    body["tick"]()
+
+    assert len(published) == 1, (
+        "a restored position was never published, so nothing downstream could see it"
+    )
+    assert published[0].quantity == 2.0
+
+
+def test_a_fill_already_applied_is_not_applied_twice_across_a_restart(durable_tmp_path):
+    """Without the seen-fill ids, a replayed fill would double the position."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.portfolio_state.fill_reconciler import CHECKPOINT_COMPONENT
+
+    store = DurableStateStore(durable_tmp_path)
+    settings = {"quantity_tolerance": 1e-9}
+    before = FillReconciler(quantity_tolerance=1e-9)
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, before, settings
+    )
+    before.observe_fill(fill("f-1", BUY, 100.0, 2.0, at=5))
+    write(before.standing.fills_applied)
+
+    after = FillReconciler(quantity_tolerance=1e-9)
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "fill-reconciler", CHECKPOINT_COMPONENT, after, settings
+    )
+    after.observe_fill(fill("f-1", BUY, 100.0, 2.0, at=5))   # the same fill again
+
+    assert after.reconcile_all()[0].position.quantity == 2.0, (
+        "a fill replayed across a restart doubled the position"
+    )
+    assert after.standing.duplicates_ignored == 1
+
+
+def test_a_reconciler_that_has_never_checkpointed_says_so(durable_tmp_path):
+    """Came back holding nothing, and never ran, are different facts (Rule 8)."""
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+    from parts.portfolio_state.fill_reconciler import CHECKPOINT_COMPONENT
+
+    cold = FillReconciler(quantity_tolerance=1e-9)
+    restore_and_arm_checkpoint(
+        DurableStateStore(durable_tmp_path), CheckpointSchedule(1),
+        "fill-reconciler", CHECKPOINT_COMPONENT, cold, {"quantity_tolerance": 1e-9},
+    )
+
+    assert cold.standing.checkpoint_verdict, "a cold start recorded no verdict"
+    assert cold.standing.restored_symbols == 0

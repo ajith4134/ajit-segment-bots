@@ -22,9 +22,15 @@ most common way a small loss becomes an account-ending one.
 
 from __future__ import annotations
 
+import pathlib
 import time
 from dataclasses import dataclass, field
 
+from runtime.durable_state import (
+    CheckpointSchedule,
+    DurableStateStore,
+    restore_and_arm_checkpoint,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.trading_types import (
@@ -40,6 +46,9 @@ from runtime.trading_types import (
     TAKE_PROFIT_MARKET,
     OrderRequest,
 )
+
+# One checkpoint per part per component; this part keeps exactly one thing.
+CHECKPOINT_COMPONENT = "resting-exits"
 
 PART_ID = "stop-order-manager"
 
@@ -91,6 +100,21 @@ class StopOrderAction:
         return self.action == CANCEL_EXIT
 
 
+def stop_key_text(key: tuple[str, str]) -> str:
+    """One position's key as one string, for a JSON object that has only strings.
+
+    The same separator the lot books use, so the two checkpoints written for one
+    position read alike and a person comparing them by eye is comparing the same
+    shape.
+    """
+    return f"{key[0]}|{key[1]}"
+
+
+def stop_key_of(text: str) -> tuple[str, str]:
+    venue_id, _, symbol = text.partition("|")
+    return venue_id, symbol
+
+
 @dataclass
 class _RestingStop:
     """The exits this manager believes are resting for one position.
@@ -119,6 +143,11 @@ class ManagerStanding:
     refused_no_mode: int = 0
     unprotected_windows: int = 0
     stops_resting: int = 0
+    # Not counters: what happened to the checkpoint at start. A part that came
+    # back holding nothing and one whose checkpoint could not be read are
+    # different facts, and only the second is a fault (Rule 8).
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
 
 
 class StopOrderManager:
@@ -129,6 +158,57 @@ class StopOrderManager:
         self._resting: dict[tuple[str, str], _RestingStop] = {}
         self._sequence = 0
         self.standing = ManagerStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """The exits this manager believes are resting, to carry into the next process.
+
+        Held in memory alone until 2026-08-26, which meant every restart forgot
+        every resting stop. The consequence is not a board gap: a position whose
+        stop this part has forgotten has no protective order and nothing reports
+        it, because `apply_adjustment` only ever hears about a stop when something
+        upstream proposes a new one. The lot books were fixed for the same reason
+        on 2026-08-25, when 86% of everything ever opened turned out to be
+        unaccounted for after 46 restarts.
+
+        `_sequence` rides along so order ids stay unique across a restart. Without
+        it the next process starts at 1 and mints `stop-binance-usdm-BTCUSDT-1`
+        again -- an id the venue may still have resting against the first one.
+
+        The standing counters are deliberately absent: they count what *this*
+        process did. `stops_resting` is recomputed from what came back, because
+        that is a fact about the stops rather than about the process.
+        """
+        return {
+            "resting": {
+                stop_key_text(key): {
+                    "order_id": held.order_id,
+                    "stop_price": held.stop_price,
+                    "quantity": held.quantity,
+                    "target_order_id": held.target_order_id,
+                    "target_price": held.target_price,
+                }
+                for key, held in self._resting.items()
+            },
+            "sequence": self._sequence,
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Rebuild what was resting. Returns how many positions came back protected."""
+        self._resting = {
+            stop_key_of(text): _RestingStop(
+                order_id=str(held["order_id"]),
+                stop_price=float(held["stop_price"]),
+                quantity=float(held["quantity"]),
+                target_order_id=held.get("target_order_id"),
+                target_price=(
+                    None if held.get("target_price") is None else float(held["target_price"])
+                ),
+            )
+            for text, held in (state.get("resting") or {}).items()
+        }
+        self._sequence = int(state.get("sequence") or 0)
+        self.standing.stops_resting = len(self._resting)
+        return self.standing.stops_resting
 
     def observe_position_closed(self, venue_id: str, symbol: str) -> tuple:
         """The position is flat; withdraw whatever exits were protecting it.
@@ -315,7 +395,15 @@ class StopOrderManager:
         )
 
 
-def describe_stop_orders(manager: StopOrderManager) -> dict:
+def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
+    """The manager's standing, including what never reached it.
+
+    `unreadable_adjustments` is on health because it was not, and that is how a
+    shape this part could not read stayed invisible: it is not a refusal, so no
+    refusal counter moved, and the only trace was a local dict in start_part. On
+    2026-08-26 that hid every one of profit-lock's 34 trailed stops.
+    """
+    dropped = dropped or {}
     return {
         "part_id": PART_ID,
         "placed": manager.standing.placed,
@@ -327,6 +415,11 @@ def describe_stop_orders(manager: StopOrderManager) -> dict:
         "targets_placed": manager.standing.targets_placed,
         "exits_withdrawn": manager.standing.exits_withdrawn,
         "refused_no_target": manager.standing.refused_no_target,
+        "restored_symbols": manager.standing.restored_symbols,
+        "checkpoint_verdict": manager.standing.checkpoint_verdict,
+        "unreadable_adjustments": dropped.get("unreadable", 0),
+        "last_unreadable_adjustment": dropped.get("last_unreadable"),
+        "adjustments_that_said_hold": dropped.get("held_back", 0),
     }
 
 
@@ -335,17 +428,38 @@ def run_stop_order_manager(
     health_interval_seconds: float, emit_health, read_flat_positions=None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
+    dropped=None,
 ) -> int:
     """`read_flat_positions` names the positions that have gone flat this tick.
 
     Their resting exits are withdrawn, and the withdrawals are published like any
     other order. A cancel that is not sent is a stop still sitting at the venue.
+
+    `write_checkpoint` is called after the orders go out, never before: a
+    checkpoint written first would record a stop as resting that no order request
+    ever carried, and the next process would believe a position was protected by
+    an order nobody sent. That is the same ordering `cost-basis-tracker` uses and
+    for the same reason.
+
+    It is called only on a tick that changed something. The manager is woken by
+    every `position` message, so checkpointing unconditionally would rewrite the
+    file at the position stream's rate to record a set of stops that had not
+    moved -- the level-on-every-tick defect, one layer down in the filesystem.
     """
     def tick() -> None:
         actions = []
         for adjustment in read_adjustments():
             target_price = adjustment.pop("target_price", None)
             actions.append(manager.apply_adjustment(**adjustment))
+            if target_price is None:
+                # A trail moves the stop and says nothing about the target, which
+                # stays where the chainer put it. Asking for one anyway counted a
+                # refusal for something nobody requested: measured on the live
+                # spine at 12:07 on 2026-08-26, 14 trailed stops placed correctly
+                # and 14 `refused_no_target` beside them, which reads on health
+                # like a protective layer failing while it was working.
+                continue
             actions.append(manager.place_target(
                 venue_id=adjustment["venue_id"], symbol=adjustment["symbol"],
                 direction=adjustment["direction"], quantity=adjustment["quantity"],
@@ -354,7 +468,10 @@ def run_stop_order_manager(
         if read_flat_positions is not None:
             for venue_id, symbol in read_flat_positions():
                 actions.extend(manager.observe_position_closed(venue_id, symbol))
-        publish_orders(tuple(action for action in actions if action.is_actionable))
+        actionable = tuple(action for action in actions if action.is_actionable)
+        publish_orders(actionable)
+        if actionable and write_checkpoint is not None:
+            write_checkpoint(manager.standing.placed + manager.standing.exits_withdrawn)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -364,8 +481,93 @@ def run_stop_order_manager(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_stop_orders(manager),
+        read_standing=lambda: describe_stop_orders(manager, dropped),
     )
+
+
+# Returned when an adjustment is readable and deliberately not to be sent.
+SKIP = object()
+
+
+def read_adjustment(adjustment, held_quantity: dict) -> dict | None:
+    """One `stop-adjustment`, whichever of its two shapes it is.
+
+    `stop-adjustment` is one wire carrying two payloads, which is the shape that
+    defeats both blueprint checkers -- the same trap `market-data` was, carrying
+    trades and candles until `candle` was split out. The two:
+
+    **`exit-order-chainer`** emits the pair of exits the instant an entry fills.
+    It names `exit_side`, `quantity`, `stop_price` and `target_price`, because a
+    fill names all of them.
+
+    **`profit-lock`** emits a raised stop as a trade goes into profit. It names
+    `new_stop` and the position's own `direction`, and it names no quantity at
+    all -- trailing a stop does not change how much is held, so it has none to
+    state. Its `did_move` says whether the stop actually moved or the lock decided
+    to hold it where it was.
+
+    Read wrong, this cost the whole protective layer. Measured on the live spine
+    at 12:01 on 2026-08-26, the hour profit-lock first had positions to work on:
+    it trailed 34 stops and published all 34, and this part dropped every one as
+    unreadable -- `placed` 0, and not one refusal counter moved, because a shape
+    it cannot read was never a refusal. 20 open positions, 0 stops resting.
+
+    The quantity for a trail comes from the position itself, which this part is
+    already tracking from the `position` stream. Taking it from there rather than
+    inventing one is what makes the trailed stop cover what is actually held: a
+    stop for a quantity nobody holds is either a naked short when it fills or a
+    position still exposed after it does.
+
+    Returns None when the shape is unreadable, SKIP when it is readable and says
+    not to send, and the order otherwise.
+    """
+    venue_id = getattr(adjustment, "venue_id", None)
+    symbol = getattr(adjustment, "symbol", None)
+    if venue_id is None or symbol is None:
+        return None
+
+    exit_side = getattr(adjustment, "exit_side", None)
+    stop_price = getattr(adjustment, "stop_price", None)
+    if exit_side is not None and stop_price is not None:
+        if not getattr(adjustment, "should_be_sent", True):
+            return SKIP
+        return {
+            "venue_id": venue_id,
+            "symbol": symbol,
+            # The exit is the opposite side of the position, so the position's
+            # own direction is the opposite of the exit's side.
+            "direction": LONG if exit_side == SELL else SHORT,
+            "quantity": getattr(adjustment, "quantity", None),
+            "stop_price": stop_price,
+            "target_price": getattr(adjustment, "target_price", None),
+        }
+
+    # The lock's shape: a new stop for a position whose direction it states.
+    new_stop = getattr(adjustment, "new_stop", None)
+    direction = getattr(adjustment, "direction", None)
+    if new_stop is None or direction not in (LONG, SHORT):
+        return None
+    if not getattr(adjustment, "did_move", False):
+        # The lock looked and left the stop where it was. Sending that would
+        # replace a resting order with an identical one, and every replace is a
+        # window in which the position is unprotected.
+        return SKIP
+    quantity = held_quantity.get((venue_id, symbol))
+    if not quantity:
+        # A trail for a position this part has not been told about. Refused
+        # rather than sized at zero: a stop for no quantity protects nothing and
+        # would read as a stop that is resting.
+        return None
+    return {
+        "venue_id": venue_id,
+        "symbol": symbol,
+        "direction": direction,
+        "quantity": abs(quantity),
+        "stop_price": new_stop,
+        # A trail moves the stop and says nothing about the target, which stays
+        # where the chainer put it.
+        "target_price": None,
+    }
 
 
 def start_part(context) -> int:
@@ -401,6 +603,24 @@ def start_part(context) -> int:
     gone_flat: list[tuple[str, str]] = []
     held_quantity: dict[tuple[str, str], float] = {}
     unreadable = {"count": 0, "last": None}
+    # Adjustments read fine and deliberately not sent: a lock that decided to hold
+    # the stop where it was. A different fact from one this part could not read,
+    # and both belong on health rather than in a local counter nobody can see.
+    held_back = {"count": 0}
+
+    class _Dropped(dict):
+        """A live view of the two counters, read fresh each time health is built."""
+
+        def get(self, name, default=None):
+            if name == "unreadable":
+                return unreadable["count"]
+            if name == "last_unreadable":
+                return unreadable["last"]
+            if name == "held_back":
+                return held_back["count"]
+            return default
+
+    dropped = _Dropped()
 
     def read_adjustments():
         mode = modes.value()
@@ -416,25 +636,16 @@ def start_part(context) -> int:
 
         readable = []
         for adjustment in adjustments.payloads():
-            exit_side = getattr(adjustment, "exit_side", None)
-            stop_price = getattr(adjustment, "stop_price", None)
-            if exit_side is None or stop_price is None:
+            read = read_adjustment(adjustment, held_quantity)
+            if read is None:
                 unreadable["count"] += 1
                 unreadable["last"] = type(adjustment).__name__
                 continue
-            if not getattr(adjustment, "should_be_sent", True):
+            if read is SKIP:
+                held_back["count"] += 1
                 continue
-            readable.append({
-                "venue_id": adjustment.venue_id,
-                "symbol": adjustment.symbol,
-                # The exit is the opposite side of the position, so the position's
-                # own direction is the opposite of the exit's side.
-                "direction": LONG if exit_side == SELL else SHORT,
-                "quantity": adjustment.quantity,
-                "stop_price": stop_price,
-                "target_price": getattr(adjustment, "target_price", None),
-                "money_mode": mode,
-            })
+            read["money_mode"] = mode
+            readable.append(read)
         return readable
 
     def read_flat_positions():
@@ -445,8 +656,36 @@ def start_part(context) -> int:
     def publish_as_order_requests(actions) -> None:
         publish_orders(tuple(as_order_request(action) for action in actions))
 
+    # What is resting, carried across a restart. Until 2026-08-26 this was memory
+    # alone: every restart forgot every stop, and because this part only ever
+    # hears about a stop when something upstream proposes a new one, a position
+    # already open was then unprotected with nothing reporting it. The spine had
+    # restarted 46 times by the day the lot books were fixed for the same reason.
+    #
+    # Beside the lot books, under position_state_root, because it is the same
+    # fact about the same position and a board reading one should not have to
+    # look somewhere else for the other.
+    manager = StopOrderManager()
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    write_checkpoint = restore_and_arm_checkpoint(
+        store,
+        # Every change, not every N: a resting stop changes when a position opens
+        # or closes, which is tens of times an hour, and losing one costs a
+        # position its protection. That is the same reasoning the lot books use
+        # and the opposite of the price series, which changes hundreds of times a
+        # second and costs nothing to lose a second of.
+        CheckpointSchedule(1),
+        PART_ID,
+        CHECKPOINT_COMPONENT,
+        manager,
+        {},
+    )
+
     return run_stop_order_manager(
-        manager=StopOrderManager(),
+        manager=manager,
         control_socket=context.control_socket,
         read_adjustments=read_adjustments,
         publish_orders=publish_as_order_requests,
@@ -455,6 +694,10 @@ def start_part(context) -> int:
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
         read_flat_positions=read_flat_positions,
+        write_checkpoint=write_checkpoint,
+        # Live views of the two local counters, so health reports what never
+        # reached the manager rather than only what did.
+        dropped=dropped,
     )
 
 
