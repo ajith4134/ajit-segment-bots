@@ -404,7 +404,14 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "sized": sizer.standing.sized,
         "shrunk_to_fit": sizer.standing.shrunk,
         "refused_no_risk_allowed": sizer.standing.refused_no_limit,
-        "refused_by_limiter": dict(sizer.standing.refused_by_limiter),
+        # One counter per limiter, flattened, because `countable_standing` carries
+        # numbers only -- and rightly: a per-symbol map grows with the universe and
+        # has no business on a channel every part writes to every interval. The
+        # limiters are a bounded set of six parts, not a map that grows.
+        **{
+            f"refused_by_{limiter}": count
+            for limiter, count in sizer.standing.refused_by_limiter.items()
+        },
         "refused_stop_invalid": sizer.standing.refused_stop_invalid,
         "refused_too_small": sizer.standing.refused_too_small,
         "refused_no_price_increment": sizer.standing.refused_no_increment,
