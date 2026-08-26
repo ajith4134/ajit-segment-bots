@@ -429,42 +429,47 @@ def attach_resting_exits(positions: list[dict]) -> dict:
 
 
 def attach_live_prices(positions: list[dict]) -> None:
-    """Mark each held position against the tape, in place.
+    """Mark each held position against the tape's latest print, in place.
 
     Per held symbol, so the cost is the number of open positions rather than the
     size of the universe. A symbol the tape cannot answer for is left as
     `NOT MEASURED` rather than marked at its entry price, which would render a
     losing position as flat.
+
+    **The latest print, not the day's window.** This walked every record since each
+    position opened so it could state a high and a low -- three fields no panel
+    renders -- and marking 16 positions took 81 seconds for one `/api/trades`
+    response on 2026-08-26. The browser gives up long before that, so the rows
+    arrived with no prices and the panel looked like a system that had lost its
+    positions. The extremes a reader actually sees are `best_unrealised` and
+    `worst_unrealised`, which come from `peak-excursion-tracker`'s own checkpoint
+    and are measured continuously rather than re-derived per request.
     """
-    from build_trade_board import read_price_window
+    from build_trade_board import read_last_price
 
     for position in positions:
         try:
-            window = read_price_window(
-                position["venue_id"], position["symbol"], position.get("opened_at_ns")
-            )
+            latest = read_last_price(position["venue_id"], position["symbol"])
         except Exception:
-            window = None
-        if window is None:
+            latest = None
+        if latest is None:
             position["price_now"] = None
             position["price_age_seconds"] = None
             position["unrealised_pnl"] = None
             position["price_proof"] = f"{NOT_MEASURED}: the tape has no record for this symbol today"
             continue
+        price, read_at_ns = latest
+        age_seconds = max(0.0, (time.time_ns() - read_at_ns) / 1e9)
         entry = position.get("entry_price")
         is_short = position.get("direction") == "short"
         moved = None
         if entry:
-            moved = (entry - window.last_price) if is_short else (window.last_price - entry)
-        position["price_now"] = window.last_price
-        position["price_age_seconds"] = window.age_seconds
-        position["highest_since_open"] = window.highest
-        position["lowest_since_open"] = window.lowest
-        position["trades_seen"] = window.trades_seen
+            moved = (entry - price) if is_short else (price - entry)
+        position["price_now"] = price
+        position["price_age_seconds"] = age_seconds
         position["unrealised_pnl"] = None if moved is None else moved * position["quantity"]
         position["price_proof"] = (
-            f"tape, {window.trades_seen} trade(s) since this position opened, "
-            f"last print {window.age_seconds:.0f}s ago"
+            f"tape, last print {age_seconds:.0f}s ago"
         )
 
 

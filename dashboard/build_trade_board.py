@@ -653,6 +653,57 @@ def read_price_window(venue_id: str, symbol: str, since_ns: int | None) -> Price
     )
 
 
+def read_last_price(venue_id: str, symbol: str, records_to_try: int = 4000):
+    """The symbol's last print and when it landed, without reading the day.
+
+    `read_price_window` walks every record since a position opened so it can state
+    a high and a low, which is right for a page built once and wrong for a view
+    that refreshes: on 2026-08-26 marking 16 open positions that way took
+    **81 seconds** for one `/api/trades` response, and the browser gave up long
+    before it arrived -- so the Trading panel rendered rows with no price at all,
+    which reads as a system that has lost its positions rather than one whose
+    board is slow.
+
+    This reads backwards from the newest record instead and stops at the first
+    trade for this symbol. `records_to_try` bounds how far back it will look
+    before giving up, so a symbol whose tape is written by a different stream
+    cannot turn a fast path into a full scan; giving up returns None, which the
+    caller renders as NOT MEASURED rather than as a price.
+
+    Returns `(price, read_at_ns)`, or None.
+    """
+    from runtime.tape import day_of_timestamp_ns, read_tape_index, tape_paths_for
+    from runtime.venues.adapter_registry import load_venue_adapter
+
+    now_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+    index_path, blob_path = tape_paths_for(
+        TAPE_ROOT, venue_id, symbol, day_of_timestamp_ns(now_ns)
+    )
+    if not index_path.exists() or not blob_path.exists():
+        return None
+    index = read_tape_index(index_path)
+    if len(index) == 0:
+        return None
+    try:
+        adapter = load_venue_adapter(venue_id)
+    except Exception:
+        return None
+
+    first = max(0, len(index) - records_to_try)
+    with open(blob_path, "rb") as handle:
+        for record in reversed(index[first:]):
+            handle.seek(int(record["blob_offset"]))
+            payload = handle.read(int(record["blob_length"]))
+            try:
+                trades = adapter.read_trades(payload)
+            except Exception:
+                continue
+            for trade in reversed(trades):
+                if trade.symbol == symbol:
+                    return trade.price, int(record["received_at_ns"])
+    return None
+
+
 def read_tape_last_write_seconds() -> float | None:
     """How long ago anything was written to the tape, or None if there is no tape."""
     newest = None
