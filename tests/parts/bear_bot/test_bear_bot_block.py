@@ -915,6 +915,55 @@ def a_thesis(clock, features=None, regime="falling", horizon=600.0, expected=0.0
     )
 
 
+# The field that crash-looped the part. `HeldThesis` gained
+# `expected_move_fraction` and the one place that builds it was never updated, so
+# every tick that saw a short raised `TypeError: HeldThesis.__init__() missing 1
+# required positional argument` -- and the carry test, the squeeze test and the
+# horizon test never ran once on the live spine.
+
+
+def test_the_expected_move_comes_from_the_features_that_state_it():
+    """A z-score counts standard deviations; the volatility fraction is one."""
+    from parts.bear_bot.bear_position_invalidation_watcher import expected_move_of
+
+    assert expected_move_of(a_vector({
+        "price_z_score": 2.0, "realised_volatility_fraction": 0.02,
+    })) == pytest.approx(0.04)
+
+
+def test_a_short_entered_against_the_move_still_expects_a_move():
+    """The distance is a magnitude: a short is entered at a positive z-score."""
+    from parts.bear_bot.bear_position_invalidation_watcher import expected_move_of
+
+    assert expected_move_of(a_vector({
+        "price_z_score": -2.0, "realised_volatility_fraction": 0.02,
+    })) == pytest.approx(0.04)
+
+
+def test_no_expected_move_is_on_record_when_a_feature_is_missing():
+    """Zero, which the carry test reads as 'cannot judge' rather than as nothing."""
+    from parts.bear_bot.bear_position_invalidation_watcher import expected_move_of
+
+    assert expected_move_of(a_vector({"price_z_score": 2.0})) == 0.0
+    assert expected_move_of(a_vector({})) == 0.0
+
+
+def test_a_thesis_can_be_built_from_a_vector_the_builder_produces():
+    """The construction the live part makes, against the real dataclass."""
+    from parts.bear_bot.bear_position_invalidation_watcher import (
+        HeldThesis, expected_move_of,
+    )
+
+    vector = a_vector({"price_z_score": 2.0, "realised_volatility_fraction": 0.02})
+    thesis = HeldThesis(
+        venue_id=VENUE, symbol=SYMBOL, entry_features=dict(vector.features),
+        entry_regime="falling", entry_price=100.0,
+        expected_move_fraction=expected_move_of(vector),
+        horizon_seconds=600.0, opened_at_ns=1, detector=DETECTOR,
+    )
+    assert thesis.expected_move_fraction == pytest.approx(0.04)
+
+
 def a_now_vector(**overrides):
     features = {
         "price_z_score": 1.5, "offer_side_imbalance": 0.3,

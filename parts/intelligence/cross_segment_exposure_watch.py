@@ -165,7 +165,18 @@ class CrossSegmentExposureWatch:
         by_underlying: dict[str, float] = {}
 
         for (segment, _, symbol), position in positions:
-            notional = position.quantity * position.mark_price
+            # **At the price each position was opened at, because `position` is
+            # this part's only input and a `Position` carries no mark.** Reading
+            # `mark_price` off one crash-looped this part every tick a position
+            # was open -- it is a field the type has never had, and the exposure
+            # it was meant to measure was never measured once.
+            #
+            # Cost-basis notional is the honest measure available here, and it is
+            # the right one for what this part asks: concentration and net-to-gross
+            # are ratios between positions, and marking them all to a price this
+            # part cannot see would not change which underlying dominates. Where a
+            # mark is wanted, it arrives as a declared input (R-01), not a getattr.
+            notional = position.quantity * position.average_entry_price
             net += notional
             gross += abs(notional)
             by_segment[segment] = by_segment.get(segment, 0.0) + notional
@@ -202,7 +213,8 @@ class CrossSegmentExposureWatch:
             positions_counted=len(positions),
             reason=(
                 f"{len(positions)} position(s) across {len(by_segment)} segment(s): net "
-                f"{net:,.0f} against gross {gross:,.0f}"
+                f"{net:,.0f} against gross {gross:,.0f}, measured at what each position "
+                f"was opened at -- no mark reaches this part"
                 + (
                     f" ({abs(net) / gross:.0%} directional -- a book that is net flat and "
                     f"grossly enormous is the shape of a blow-up, and the two numbers "
@@ -257,8 +269,15 @@ class CrossSegmentExposureWatch:
 
         groups = []
         for root, members in grouped.items():
-            net = sum(position.quantity * position.mark_price for _, _, _, position in members)
-            gross = sum(abs(position.quantity * position.mark_price) for _, _, _, position in members)
+            # The same basis as `view`: what each position was opened at, which
+            # is the only price a part consuming `position` alone can have.
+            net = sum(
+                position.quantity * position.average_entry_price for _, _, _, position in members
+            )
+            gross = sum(
+                abs(position.quantity * position.average_entry_price)
+                for _, _, _, position in members
+            )
             segments = tuple(sorted({segment for segment, _, _, _ in members}))
             measured = all(
                 self.correlation_between(left[2], right[2])[1]

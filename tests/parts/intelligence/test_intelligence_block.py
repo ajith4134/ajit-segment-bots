@@ -116,10 +116,20 @@ class Clock:
         self.now_ns += int(seconds * 1e9)
 
 
-class Position:
-    def __init__(self, symbol=SYMBOL, quantity=1.0, mark=100.0, venue=VENUE):
-        self.venue_id, self.symbol = venue, symbol
-        self.quantity, self.mark_price = quantity, mark
+def Position(symbol=SYMBOL, quantity=1.0, mark=100.0, venue=VENUE):
+    """The real `Position`, not a stand-in that carries fields it does not have.
+
+    A hand-written stub carrying `mark_price` is what let
+    `cross-segment-exposure-watch` read that field in three places and pass every
+    test while crash-looping on the live spine from the first open position
+    onwards: `Position` has never had a mark, and only the real type says so.
+    """
+    from runtime.trading_types import Position as RealPosition
+
+    return RealPosition(
+        venue_id=venue, symbol=symbol, quantity=quantity, average_entry_price=mark,
+        realised_pnl=0.0, fees_paid=0.0, opened_at_ns=0, updated_at_ns=0,
+    )
 
 
 class Episode:

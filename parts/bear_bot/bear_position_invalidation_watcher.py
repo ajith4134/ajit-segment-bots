@@ -69,6 +69,26 @@ class HeldThesis:
     detector: str
 
 
+def expected_move_of(vector) -> float:
+    """The move this short was entered expecting, as a fraction of price.
+
+    A z-score counts standard deviations from the mean and
+    `realised_volatility_fraction` is one standard deviation as a fraction of
+    price, so the product is the distance back to the mean in the same units the
+    funding carry is measured in -- which is what makes the two comparable at all.
+
+    Zero when either feature is missing. The carry test reads that as "no expected
+    move on record" and stands down, rather than closing a position against an
+    expectation nobody measured.
+    """
+    features = getattr(vector, "features", None) or {}
+    z_score = features.get("price_z_score")
+    volatility = features.get("realised_volatility_fraction")
+    if z_score is None or volatility is None:
+        return 0.0
+    return abs(float(z_score)) * abs(float(volatility))
+
+
 @dataclass
 class WatcherStanding:
     positions_watched: int = 0
@@ -431,6 +451,21 @@ def start_part(context) -> int:
                         venue_id=key[0], symbol=key[1],
                         entry_features=dict(vector.features), entry_regime=str(regime),
                         entry_price=position.average_entry_price,
+                        # What this short expected to make, from the two features
+                        # that already say it: a z-score is a distance from the
+                        # mean **in standard deviations**, and the volatility
+                        # fraction is one standard deviation as a fraction of
+                        # price, so their product is the move back to the mean as
+                        # a fraction. No constant is invented and nothing is
+                        # assumed about the horizon (RL-061).
+                        #
+                        # Zero when either feature is absent, which the carry test
+                        # already reads as "cannot be judged" rather than as an
+                        # expectation of nothing -- and this whole field was
+                        # missing until 2026-08-26, which crash-looped the part on
+                        # the first short it saw and left the carry test, the
+                        # squeeze test and the horizon test unable to run at all.
+                        expected_move_fraction=expected_move_of(vector),
                         # The longest the bot's own plan could have given the
                         # trade: the detector's horizon at the conviction multiple.
                         # The plan itself is not an input of this part.
