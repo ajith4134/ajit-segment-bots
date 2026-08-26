@@ -383,8 +383,12 @@ def test_this_box_reports_what_it_actually_has():
 
 # ---- switching-planner -------------------------------------------------------
 
-def planner():
-    return SwitchingPlanner(memory_exhaustion_warning_seconds=120.0, io_stall_fraction=0.5)
+def planner(never_switched_off_priority_ceiling=10):
+    return SwitchingPlanner(
+        memory_exhaustion_warning_seconds=120.0,
+        io_stall_fraction=0.5,
+        never_switched_off_priority_ceiling=never_switched_off_priority_ceiling,
+    )
 
 
 
@@ -511,15 +515,22 @@ def test_a_part_out_of_restart_budget_is_held(capacity):
 def test_offs_are_ordered_before_ons(capacity):
     from parts.resource_governor.hog_detector import HogReport
 
-    plan = plan_after_a_full_sweep(
-        planner(),
+    subject = planner()
+    # One sweep with the newcomer absent, so the plan below is the one it is due
+    # on -- and the machine turns contended on that same plan.
+    subject.plan(
+        GovernorInputs(
+            capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),), admitted_parts=("newcomer",)
+        )
+    )
+    plan = subject.plan(
         GovernorInputs(
             capacity=capacity,
             running_parts=("greedy",),
             usages=(usage("greedy"),),
             hog_reports=(HogReport("greedy", CPU, 8.0, 1.0, 8.0, True, 1),),
             admitted_parts=("newcomer",),
-        ),
+        )
     )
     assert [d.action for d in plan.decisions] == [TURN_OFF, TURN_ON]
 
@@ -532,6 +543,194 @@ def test_imminent_memory_exhaustion_switches_off_the_fastest_grower(capacity):
         GovernorInputs(capacity=capacity, running_parts=("leaky", "quiet"), usages=(usage("leaky"), usage("quiet")), memory_forecast=forecast)
     )
     assert [(d.part_id, d.action) for d in plan.decisions] == [("leaky", TURN_OFF)]
+
+
+def hog_report(part_id, times_fair_share=8.0):
+    from parts.resource_governor.hog_detector import HogReport
+
+    return HogReport(part_id, CPU, times_fair_share, 1.0, times_fair_share, True, 1)
+
+
+def test_a_part_shed_for_hogging_comes_back_when_the_contention_stops(capacity):
+    """The defect this closes, measured on the live spine 2026-08-25 20:05 to
+    21:08: 152 switch-records, every one an off and every one for hogging, and
+    switched_on 0 across 30,150 plans. order-book-reader, venue-quote-stream-reader
+    and tick-size-resolver were among the 42 left off, and the bot placed no order
+    for the eight hours that followed."""
+    subject = planner()
+    contended = GovernorInputs(
+        capacity=capacity, running_parts=("greedy", "quiet"),
+        usages=(usage("greedy"), usage("quiet")), hog_reports=(hog_report("greedy"),),
+    )
+    assert [(d.part_id, d.action) for d in subject.plan(contended).decisions] == [("greedy", TURN_OFF)]
+
+    # The machine is quiet: hog-detector publishes nothing at all while
+    # uncontended, which is the same evidence the off was made on.
+    quiet = GovernorInputs(capacity=capacity, running_parts=("quiet",), usages=(usage("quiet"),))
+    back = plan_after_a_full_sweep(subject, quiet)
+    assert [(d.part_id, d.action) for d in back.decisions] == [("greedy", TURN_ON)]
+    assert [d.reason for d in back.decisions] == ["capacity-available"]
+
+    # Restored is counted from the metering, not from the ask: a part is back
+    # when the sweep sees it, and an on the actuator could not flip is not.
+    assert subject.standing.restored == 0
+    running_again = GovernorInputs(
+        capacity=capacity, running_parts=("greedy", "quiet"), usages=(usage("greedy"), usage("quiet")),
+    )
+    subject.plan(running_again)
+    assert subject.standing.restored == 1
+    assert subject.standing.off_until_the_pressure_clears == 0
+
+
+def test_a_part_still_stopping_is_not_a_part_that_came_back(capacity):
+    """A part takes about two seconds to stop and the sweep it was measured in is
+    a second old, so the metering either side of an off still carries it. Reading
+    that as a return counted 112 restorations against 80 offs and zero ons on the
+    live spine at 2026-08-26 04:35, and forgot each shed as it was made."""
+    subject = planner()
+    contended = GovernorInputs(
+        capacity=capacity, running_parts=("greedy", "quiet"),
+        usages=(usage("greedy"), usage("quiet")), hog_reports=(hog_report("greedy"),),
+    )
+    subject.plan(contended)
+
+    # The next two sweeps still carry it, because it has not finished stopping.
+    subject.plan(contended)
+    subject.plan(contended)
+    assert subject.standing.restored == 0
+    assert subject.standing.off_until_the_pressure_clears == 1
+    # And it is not shed twice for the same reason while it is on its way out.
+    assert subject.standing.switched_off == 1
+
+    quiet = GovernorInputs(capacity=capacity, running_parts=("quiet",), usages=(usage("quiet"),))
+    back = plan_after_a_full_sweep(subject, quiet)
+    assert [(d.part_id, d.action) for d in back.decisions] == [("greedy", TURN_ON)]
+
+
+def test_an_on_the_actuator_could_not_flip_is_asked_again(capacity):
+    """A part that never came back is still off, and forgetting it is how a
+    silent hole opens: nothing else in the governor asks for a part the governor
+    itself switched off."""
+    subject = planner()
+    subject.plan(
+        GovernorInputs(
+            capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),),
+            hog_reports=(hog_report("greedy"),),
+        )
+    )
+    quiet = GovernorInputs(capacity=capacity, usages=(usage("quiet"),))
+    assert [d.action for d in plan_after_a_full_sweep(subject, quiet).decisions] == [TURN_ON]
+
+    # Nothing started: the part is still absent from every sweep, so the ask is
+    # made again once a whole sweep has missed it -- not on the very next plan.
+    assert subject.plan(quiet).decisions == ()
+    assert [d.action for d in subject.plan(quiet).decisions] == [TURN_ON]
+
+
+def test_a_part_stays_off_while_the_contention_that_shed_it_lasts(capacity):
+    subject = planner()
+    contended = GovernorInputs(
+        capacity=capacity, running_parts=("greedy", "quiet"),
+        usages=(usage("greedy"), usage("quiet")), hog_reports=(hog_report("greedy"),),
+    )
+    subject.plan(contended)
+
+    # Still contended -- hog-detector is still naming someone, even though the
+    # part that is off can no longer be named by it.
+    still = GovernorInputs(
+        capacity=capacity, running_parts=("quiet",), usages=(usage("quiet"),),
+        hog_reports=(hog_report("quiet"),),
+    )
+    for _ in range(4):
+        assert all(d.action != TURN_ON for d in subject.plan(still).decisions)
+    assert subject.standing.off_until_the_pressure_clears == 2
+
+
+def test_a_part_shed_outside_its_duty_cycle_comes_back_in_its_own_hours(capacity):
+    from parts.resource_governor.duty_cycle_planner import DutyCycle
+
+    subject = planner()
+    duty = {"nightly": DutyCycle("nightly", (2, 3), 2, 14, 48, "quietest hours observed", 1)}
+    asleep = GovernorInputs(
+        capacity=capacity, running_parts=("nightly",), usages=(usage("nightly"),),
+        duty_cycles=duty, current_hour=14,
+    )
+    assert [(d.part_id, d.action) for d in subject.plan(asleep).decisions] == [("nightly", TURN_OFF)]
+
+    awake = GovernorInputs(capacity=capacity, usages=(usage("other"),), duty_cycles=duty, current_hour=2)
+    plan = plan_after_a_full_sweep(subject, awake)
+    assert [(d.part_id, d.action) for d in plan.decisions] == [("nightly", TURN_ON)]
+
+
+def test_one_measurement_sheds_one_hog(capacity):
+    """Fair share is an equal slice among the parts running, so at 327 parts every
+    part doing real work is over three times it the moment the machine is
+    contended. The reading that named one hog named sixteen on 2026-08-25 21:08,
+    and gate-actuator flipped all sixteen off two seconds apart on that one
+    measurement."""
+    subject = planner()
+    plan = subject.plan(
+        GovernorInputs(
+            capacity=capacity,
+            running_parts=("worst", "middling", "least"),
+            usages=(usage("worst"), usage("middling"), usage("least")),
+            hog_reports=(hog_report("middling", 5.0), hog_report("worst", 9.0), hog_report("least", 3.1)),
+        )
+    )
+    assert [(d.part_id, d.action) for d in plan.decisions] == [("worst", TURN_OFF)]
+    assert subject.standing.hogs_deferred == 2
+
+
+def test_the_control_path_is_never_switched_off(capacity):
+    """A governor that sheds its own instruments plans the next question against
+    the last levels they managed to publish. It shed memory-pressure-forecaster,
+    duty-cycle-planner and part-restart-budgeter on 2026-08-25."""
+    subject = planner(never_switched_off_priority_ceiling=27)
+    plan = subject.plan(
+        GovernorInputs(
+            capacity=capacity,
+            running_parts=("memory-pressure-forecaster", "ordinary"),
+            usages=(usage("memory-pressure-forecaster"), usage("ordinary")),
+            hog_reports=(hog_report("memory-pressure-forecaster", 40.0),),
+            priorities={"memory-pressure-forecaster": 20},
+        )
+    )
+    assert plan.decisions == ()
+
+
+def test_an_ordinary_part_is_still_shed_while_the_control_path_is_not(capacity):
+    subject = planner(never_switched_off_priority_ceiling=27)
+    plan = subject.plan(
+        GovernorInputs(
+            capacity=capacity,
+            running_parts=("gate-actuator", "ordinary"),
+            usages=(usage("gate-actuator"), usage("ordinary")),
+            hog_reports=(hog_report("gate-actuator", 40.0), hog_report("ordinary", 4.0)),
+            priorities={"gate-actuator": 18},
+        )
+    )
+    assert [(d.part_id, d.action) for d in plan.decisions] == [("ordinary", TURN_OFF)]
+
+
+def test_a_restored_part_that_flaps_is_held_rather_than_started(capacity):
+    """The return path is not allowed to become an oscillation: what shed a part
+    can be true again the moment it is back, and switch-oscillation-damper is
+    what says so."""
+    from parts.resource_governor.switch_oscillation_damper import FlapReport
+
+    subject = planner()
+    subject.plan(
+        GovernorInputs(
+            capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),),
+            hog_reports=(hog_report("greedy"),),
+        )
+    )
+    quiet = GovernorInputs(
+        capacity=capacity, usages=(usage("quiet"),),
+        flap_reports={"greedy": FlapReport("greedy", 4, 60.0, 1.0, 30.0, 1)},
+    )
+    plan = plan_after_a_full_sweep(subject, quiet)
+    assert plan.decisions == () and "greedy" in plan.held
 
 
 # ---- gate-actuator -----------------------------------------------------------

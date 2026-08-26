@@ -116,6 +116,23 @@ class PlannerStanding:
     switched_on: int = 0
     switched_off: int = 0
     held: int = 0
+    # Parts switched off by this planner that are waiting for the condition which
+    # shed them to clear, and parts planned back on because it has. Counted apart
+    # from switched_on because they answer the question the ratchet of 2026-08-25
+    # could not: does anything this governor turns off ever come back.
+    off_until_the_pressure_clears: int = 0
+    restored: int = 0
+    # Hog decisions this plan deliberately did not make, because one measurement
+    # can only justify shedding one part before it is taken again.
+    hogs_deferred: int = 0
+    # What the last plan actually saw, so "why is that part still off" is
+    # answerable from the health table instead of by reading this code. Each is
+    # the reading itself, not a verdict about it.
+    sheds_confirmed_gone: int = 0
+    sheds_still_stopping: int = 0
+    conservation_plan_names: int = 0
+    hog_reports_read: int = 0
+    conditions_that_have_passed: int = 0
     by_reason: dict = field(default_factory=dict)
 
 
@@ -132,10 +149,12 @@ class SwitchingPlanner:
         self,
         memory_exhaustion_warning_seconds: float,
         io_stall_fraction: float,
+        never_switched_off_priority_ceiling: int,
         now_ns=time.time_ns,
     ) -> None:
         self._memory_warning = memory_exhaustion_warning_seconds
         self._io_stall = io_stall_fraction
+        self._never_off_ceiling = never_switched_off_priority_ceiling
         self._now_ns = now_ns
         # Consecutive plans each candidate has been absent from the metering.
         self._plans_absent: dict[str, int] = {}
@@ -143,6 +162,19 @@ class SwitchingPlanner:
         # reservation only reconciles a part that is in here: absent-but-known
         # is evidence of an off part, never-known is a part still starting.
         self._ever_seen_running: set[str] = set()
+        # What this planner switched off, and the reason it gave. Kept so the
+        # reason can be re-read on every plan: an off with no way back is not
+        # governance, it is a ratchet. Measured 2026-08-25 20:05 to 21:08, the
+        # cost of not keeping it: 152 switch-records, every one an off, every
+        # one "hog-under-contention", switched_on 0 across 30,150 plans. Among
+        # the 42 parts left off were order-book-reader, venue-quote-stream-reader
+        # and tick-size-resolver, and the bot placed no order for the eight hours
+        # that followed.
+        self._switched_off: dict[str, str] = {}
+        # Which of those the metering has since confirmed gone. A shed part must
+        # be observed absent before it can be observed back: without that, the
+        # sweep taken while it was still stopping reads as a part that returned.
+        self._seen_gone: set[str] = set()
         self.standing = PlannerStanding()
 
     def plan(self, inputs: GovernorInputs) -> SwitchPlan:
@@ -177,11 +209,41 @@ class SwitchingPlanner:
         for part_id in inputs.running_parts:
             self._plans_absent.pop(part_id, None)
             self._ever_seen_running.add(part_id)
+            if part_id in self._switched_off:
+                # Shed, and still in the sweep. Which of the two things that can
+                # mean is decided by _seen_gone and never by this reading alone:
+                # a part takes about two seconds to stop and the metering it was
+                # measured in is a second old, so the sweeps either side of an
+                # off still carry it. Measured live 2026-08-26 04:35: reading
+                # presence here as "it came back" counted 112 restorations
+                # against 80 offs and 0 ons -- and worse, forgot every shed as
+                # it was made, which is the return path defeating itself.
+                if part_id in self._seen_gone:
+                    del self._switched_off[part_id]
+                    self._seen_gone.discard(part_id)
+                    self.standing.restored += 1
+                else:
+                    continue
             reason = self._off_reason(part_id, inputs, reserved)
             if reason is not None:
                 decisions.append(SwitchDecision(part_id, TURN_OFF, reason, self._priority(part_id, inputs)))
 
-        for part_id in self._candidates_to_start(inputs):
+        for part_id in self._switched_off:
+            if part_id not in inputs.running_parts:
+                # Observed gone. Only now can this part be observed back.
+                self._seen_gone.add(part_id)
+
+        decisions = self._one_hog_per_measurement(decisions, inputs)
+
+        cleared = self._sheds_whose_condition_has_passed(inputs)
+        self.standing.sheds_confirmed_gone = len(self._seen_gone)
+        self.standing.sheds_still_stopping = len(self._switched_off) - len(self._seen_gone)
+        self.standing.conditions_that_have_passed = len(cleared)
+        self.standing.hog_reports_read = len(inputs.hog_reports)
+        self.standing.conservation_plan_names = (
+            len(inputs.conservation_plan.parts_to_stop) if inputs.conservation_plan is not None else -1
+        )
+        for part_id in self._candidates_to_start(inputs, cleared):
             if part_id in inputs.running_parts:
                 continue
             self._plans_absent[part_id] = self._plans_absent.get(part_id, 0) + 1
@@ -195,7 +257,9 @@ class SwitchingPlanner:
                 held.append(part_id)
                 continue
             decisions.append(
-                SwitchDecision(part_id, TURN_ON, self._on_reason(part_id, reserved), self._priority(part_id, inputs))
+                SwitchDecision(
+                    part_id, TURN_ON, self._on_reason(part_id, reserved, cleared), self._priority(part_id, inputs)
+                )
             )
 
         # Off before on, and within each, by priority: freeing room before
@@ -205,12 +269,116 @@ class SwitchingPlanner:
             self.standing.by_reason[decision.reason] = self.standing.by_reason.get(decision.reason, 0) + 1
             if decision.action == TURN_ON:
                 self.standing.switched_on += 1
+                # The ask is made once per full sweep, not once per plan: a part
+                # takes longer to appear in the metering than the second between
+                # two plans, and re-asking every plan is how the actuator came to
+                # record 324 failed flips of parts that had never stopped
+                # (2026-08-24). A shed part stays remembered until it is seen
+                # running, so an on the actuator failed to flip is asked again
+                # rather than quietly dropped -- and a part that goes on and off
+                # repeatedly is held by its flap report, not by being forgotten.
+                self._plans_absent[decision.part_id] = 0
             else:
                 self.standing.switched_off += 1
+                # Written after the sort, so what is remembered is what the plan
+                # actually asks for rather than what it considered.
+                self._switched_off[decision.part_id] = decision.reason
+                self._seen_gone.discard(decision.part_id)
         self.standing.held += len(held)
+        self.standing.off_until_the_pressure_clears = len(self._switched_off)
         return SwitchPlan(tuple(decisions), tuple(sorted(held)), None, self._now_ns())
 
+    def _one_hog_per_measurement(self, decisions, inputs) -> list[SwitchDecision]:
+        """Shed the worst hog, not every hog the same reading named.
+
+        Fair share is one part's equal slice among the parts running, so at 327
+        parts every part doing real work is over three times it the moment the
+        machine is contended: the reading that named one hog named sixteen, and
+        gate-actuator flipped them two seconds apart on that one measurement
+        while the metering it came from was already a minute old (2026-08-25
+        21:08:20 to 21:08:50). Shedding the worst one and re-measuring is what
+        makes the next decision answer the machine as it is rather than as it
+        was; the ones not shed are not forgiven, they are simply not decided yet.
+        """
+        hogs = [decision for decision in decisions if decision.reason == OFF_REASONS[1]]
+        if len(hogs) <= 1:
+            return decisions
+        worst = max(hogs, key=lambda d: (self._times_fair_share(d.part_id, inputs), d.part_id))
+        deferred = [decision for decision in hogs if decision.part_id != worst.part_id]
+        self.standing.hogs_deferred += len(deferred)
+        return [decision for decision in decisions if decision not in deferred]
+
+    def _times_fair_share(self, part_id, inputs) -> float:
+        """How far over its share the hog reports put this part, worst resource first."""
+        return max(
+            (report.times_fair_share for report in inputs.hog_reports if report.part_id == part_id),
+            default=0.0,
+        )
+
+    def _sheds_whose_condition_has_passed(self, inputs) -> tuple[str, ...]:
+        """Parts this planner switched off whose reason no longer reads true.
+
+        The reason is re-evaluated, never remembered as a verdict. What is
+        re-read is the machine-level condition behind it, because the part-level
+        one is unobservable while the part is off: an off part publishes no
+        usage, so no hog report can name it and no forecast can call it the
+        fastest grower. The evidence is deliberately the same on both sides --
+        a part is shed on a hog report and comes back when the reports stop,
+        which is what hog-detector publishing only under contention already
+        means.
+        """
+        cleared = []
+        for part_id, reason in sorted(self._switched_off.items()):
+            if part_id in inputs.running_parts or part_id not in self._seen_gone:
+                # Still stopping is not yet off, and asking for a part back
+                # while it is still letting go is how a flap is manufactured.
+                continue
+            if not self._off_condition_still_holds(part_id, reason, inputs):
+                cleared.append(part_id)
+        return tuple(cleared)
+
+    def _off_condition_still_holds(self, part_id, reason, inputs) -> bool:
+        if reason == OFF_REASONS[0]:
+            forecast = inputs.memory_forecast
+            return (
+                forecast is not None
+                and forecast.seconds_to_exhaustion is not None
+                and forecast.seconds_to_exhaustion <= self._memory_warning
+            )
+        if reason == OFF_REASONS[1]:
+            return bool(inputs.hog_reports)
+        if reason == OFF_REASONS[2]:
+            pressure = inputs.io_pressure
+            return (
+                pressure is not None
+                and pressure.is_measured
+                and pressure.full_stalled_10s is not None
+                and pressure.full_stalled_10s >= self._io_stall
+            )
+        if reason == OFF_REASONS[3]:
+            duty = inputs.duty_cycles.get(part_id)
+            return (
+                duty is not None
+                and inputs.current_hour is not None
+                and inputs.current_hour not in duty.allowed_hours
+            )
+        if reason == OFF_REASONS[4]:
+            plan = inputs.conservation_plan
+            return plan is not None and part_id in plan.parts_to_stop
+        # A reason this planner cannot re-read is a reason it cannot say has
+        # passed. Held off, and visible in off_until_the_pressure_clears.
+        return True
+
     def _off_reason(self, part_id, inputs, reserved) -> str | None:
+        if self._priority(part_id, inputs) <= self._never_off_ceiling:
+            # The control path is not shed, whatever the pressure. A governor
+            # that switches off its own instruments decides the next question
+            # blind: on 2026-08-25 it shed memory-pressure-forecaster,
+            # duty-cycle-planner, part-restart-budgeter, failing-part-detector
+            # and probe-runner, and every level they publish then read as the
+            # last value they managed to send. Importance rank is the axis this
+            # block already loses parts by, so it is the axis this floor sits on.
+            return None
         forecast = inputs.memory_forecast
         if (
             forecast is not None
@@ -243,10 +411,11 @@ class SwitchingPlanner:
             return OFF_REASONS[4]
         return None
 
-    def _candidates_to_start(self, inputs) -> tuple[str, ...]:
-        """Who might be switched on: explicit asks, plus reserved parts that vanished.
+    def _candidates_to_start(self, inputs, cleared: tuple[str, ...]) -> tuple[str, ...]:
+        """Who might be switched on: explicit asks, reserved parts that vanished,
+        and the parts this planner shed whose reason has since passed.
 
-        The two sources carry different evidence. An admitted part, a restart
+        The three sources carry different evidence. An admitted part, a restart
         request, a replacement or a conservation plan is an explicit ask --
         something decided this part should run. A reservation is not an ask; it
         is a standing floor, and using it to start a part is reconciliation:
@@ -256,6 +425,10 @@ class SwitchingPlanner:
         plans after every spine boot were switching "on" whichever reserved part
         was slowest to its first metering sweep (symbol-catalogue-reader,
         fetching two venues' catalogues, at 13:00:16 on 2026-08-24).
+
+        The third is this planner reconsidering its own decision, and it is the
+        only one that closes the loop: without it every off is permanent, which
+        is what an unattended eight hours proved on 2026-08-25.
         """
         # Part ids, not the objects that name them: a restart request and an
         # admitted part each carry a part_id, and putting the objects themselves
@@ -272,6 +445,7 @@ class SwitchingPlanner:
             # The part being replaced is the one to start: a replacement plan is
             # how a faulty part is swapped without a gap in between.
             candidates.append(inputs.replacement_plan.part_id)
+        candidates += list(cleared)
         seen, ordered = set(), []
         for part_id in candidates:
             if part_id not in seen:
@@ -290,8 +464,13 @@ class SwitchingPlanner:
             return "outside its duty cycle"
         return None
 
-    def _on_reason(self, part_id, reserved) -> str:
-        return ON_REASONS[0] if part_id in reserved else ON_REASONS[1]
+    def _on_reason(self, part_id, reserved, cleared) -> str:
+        if part_id in reserved:
+            return ON_REASONS[0]
+        # A part this planner shed is not being admitted; the room it was shed
+        # for is back. Naming that separately is what makes the return path
+        # legible in the switch journal rather than looking like an admission.
+        return ON_REASONS[2] if part_id in cleared else ON_REASONS[1]
 
     def _priority(self, part_id, inputs) -> int:
         return int(inputs.priorities.get(part_id, 50))
@@ -304,6 +483,14 @@ def describe_planning(planner: SwitchingPlanner) -> dict:
         "refusals": planner.standing.refusals,
         "switched_on": planner.standing.switched_on,
         "switched_off": planner.standing.switched_off,
+        "restored": planner.standing.restored,
+        "off_until_the_pressure_clears": planner.standing.off_until_the_pressure_clears,
+        "hogs_deferred": planner.standing.hogs_deferred,
+        "sheds_confirmed_gone": planner.standing.sheds_confirmed_gone,
+        "sheds_still_stopping": planner.standing.sheds_still_stopping,
+        "conservation_plan_names": planner.standing.conservation_plan_names,
+        "hog_reports_read": planner.standing.hog_reports_read,
+        "conditions_that_have_passed": planner.standing.conditions_that_have_passed,
         "held": planner.standing.held,
         "by_reason": dict(planner.standing.by_reason),
     }
@@ -349,7 +536,16 @@ def start_part(context) -> int:
         return LatestByKey(read=context.bus.reader(data_type), key_of=lambda payload: payload.part_id)
 
     capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
-    usages = by_part("part-resource-usage")
+    # Bounded, because LatestByKey holds a key forever without it and "what is
+    # running is what is reporting its own usage" then includes every part this
+    # governor has ever switched off. Measured 2026-08-26 05:11: all 214 shed
+    # parts were still in running_parts, so none could be observed gone and none
+    # could come back.
+    usages = LatestByKey(
+        read=context.bus.reader("part-resource-usage"),
+        key_of=lambda payload: payload.part_id,
+        maximum_age_seconds=context.number("part_usage_reading_maximum_age_seconds"),
+    )
     priorities = by_part("part-priority")
     restart_budgets = by_part("restart-budget")
     flap_reports = by_part("flap-report")
@@ -393,6 +589,9 @@ def start_part(context) -> int:
         planner=SwitchingPlanner(
             memory_exhaustion_warning_seconds=context.number("memory_exhaustion_warning"),
             io_stall_fraction=context.number("io_stall_fraction"),
+            never_switched_off_priority_ceiling=int(
+                context.number("never_switched_off_priority_ceiling")
+            ),
         ),
         control_socket=context.control_socket,
         read_inputs=read_inputs,

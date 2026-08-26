@@ -154,7 +154,13 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey
 
     market_data = Batch(read=context.bus.reader("market-data"))
-    usages = LatestByKey(read=context.bus.reader("part-resource-usage"), key_of=lambda u: u.part_id)
+    usages = LatestByKey(
+        read=context.bus.reader("part-resource-usage"),
+        key_of=lambda u: u.part_id,
+        # An off part costs nothing, and its last reading before it stopped is
+        # not what an hour of its cost looks like.
+        maximum_age_seconds=context.number("part_usage_reading_maximum_age_seconds"),
+    )
     publish_duty_cycles = context.bus.publisher_for("duty-cycle")
     planner = DutyCyclePlanner(
         quiet_hours_wanted=int(context.number("duty_cycle_quiet_hours_wanted")),

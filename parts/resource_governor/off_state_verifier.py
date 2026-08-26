@@ -230,7 +230,12 @@ def start_part(context) -> int:
 
     records = Batch(read=context.bus.reader("switch-record"))
     usages = LatestByKey(
-        read=context.bus.reader("part-resource-usage"), key_of=lambda usage: usage.part_id
+        read=context.bus.reader("part-resource-usage"),
+        key_of=lambda usage: usage.part_id,
+        # A part that let go stops being metered, and an unbounded key would
+        # hold its last reading forever: 167 faults and 0 verified releases on
+        # 2026-08-26 were this bound missing, not parts refusing to stop.
+        maximum_age_seconds=context.number("part_usage_reading_maximum_age_seconds"),
     )
     publish_faults = context.bus.publisher_for("part-fault")
 

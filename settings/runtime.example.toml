@@ -728,6 +728,11 @@ value = 10
 unit  = "priority rank"
 note  = "operator, 2026-08-23: parts whose stated priority rank is at or below this number (lower is more important; the unstated middle is 50) are given a guaranteed resource floor by resource-reservation-ledger. Ten leaves room for the operator to rank the feed reader, the recorders and the collector among the first ten without every part stated in part-priority.toml taking a floor."
 
+[never_switched_off_priority_ceiling]
+value = 27
+unit  = "priority rank"
+note  = "Claude, 2026-08-26: parts whose stated priority rank is at or below this number are never switched off by switching-planner, for any reason. Distinct from reservation_priority_ceiling (10), which additionally guarantees each such part a CPU and memory floor -- a floor costs capacity that nothing else may then use, and this ceiling costs none. Measured, which is why it exists: across eight unattended hours from 2026-08-25 20:05 the governor wrote 152 switch-records, every one an off and every one hog-under-contention, with switched_on 0 across 30,150 plans; among the 42 parts left off were its own instruments -- memory-pressure-forecaster, duty-cycle-planner, part-restart-budgeter -- and order-book-reader, venue-quote-stream-reader and tick-size-resolver, after which the bot placed no order for eight hours. Twenty-seven covers the twelve ranks already stated in part-priority.toml plus the fourteen resource-governor parts and control-recorder, which together are the control path: a governor that sheds its own instruments decides the next question against levels nobody is publishing any more. Raise it only for a part whose absence stops the governor or the feed from measuring; every other part earns its place on the machine by not being the worst hog."
+
 [reserved_cpu_cores_per_critical_part]
 value = 0.5
 unit  = "cores"
@@ -3774,6 +3779,11 @@ note  = "operator, 2026-08-24: the kernel's own default weight, stated rather th
 value = 64
 unit  = "tasks allowed in each part scope"
 note  = "operator, 2026-08-24: measured live across 57 running parts the same day: at most 5 threads in any part (median 1), with BLAS thread caps applied at the forkserver. 64 is twelve times the worst observed -- no healthy part can touch it, and a part that spawns threads without bound is stopped by the kernel instead of taking the box down."
+
+[part_usage_reading_maximum_age_seconds]
+value = 10.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how old a part-resource-usage reading may be before the part it names is no longer evidence that the part is running. part-appetite-meter sweeps once a second (part_usage_cadence_seconds), so ten seconds is ten missed sweeps -- the same figure and the same reasoning as heartbeat_silent_after_seconds, which is five supervision intervals of the live spine, so a part that died reads as gone here before the supervisor has restarted it. Measured why it is needed: LatestByKey holds a key's last value forever unless bounded, so on 2026-08-26 05:11 all 214 parts the governor had switched off were still in switching-planner's 'what is running' -- sheds_still_stopping 214, sheds_confirmed_gone 0 -- and off-state-verifier had recorded 167 faults and verified 0, because the reading it checks for a released part never expired. Four parts read this bound: switching-planner, off-state-verifier, hog-detector and duty-cycle-planner; hog-detector divides fair share among the parts it believes are running, so a stale key there makes every real part look greedier than it is."
 
 [part_usage_cadence_seconds]
 value = 1.0

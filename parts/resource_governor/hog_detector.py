@@ -172,7 +172,14 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import LatestByKey, LatestValue
 
-    usages = LatestByKey(read=context.bus.reader("part-resource-usage"), key_of=lambda u: u.part_id)
+    # Fair share is one part's slice among the parts running, so a key that
+    # outlives the part divides the machine among ghosts and makes every real
+    # part look greedier than it is.
+    usages = LatestByKey(
+        read=context.bus.reader("part-resource-usage"),
+        key_of=lambda u: u.part_id,
+        maximum_age_seconds=context.number("part_usage_reading_maximum_age_seconds"),
+    )
     capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
     publish_reports = context.bus.publisher_for("hog-report")
     detector = HogDetector(

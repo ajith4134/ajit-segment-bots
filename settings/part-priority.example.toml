@@ -37,6 +37,36 @@
 #                              something irreplaceable for something that
 #                              reappears on the next message.
 
+#
+# Ranks 13 to 27 added by Claude 2026-08-26, and they are what
+# never_switched_off_priority_ceiling (27) covers: the control path itself. They
+# take no resource floor -- that stops at reservation_priority_ceiling (10) --
+# they are simply never shed. Written after an unattended night in which the
+# governor switched off memory-pressure-forecaster, duty-cycle-planner and
+# part-restart-budgeter for being hogs, and then went on planning against the
+# last levels those three managed to publish.
+#
+#   hardware-scanner           the planner refuses to plan at all without a
+#                              complete capacity reading; off, the governor stops.
+#   part-appetite-meter        the same, for the metering: no usage sweep and
+#                              what is running is unknown rather than nothing.
+#   hog-detector               the only evidence a part is shed on -- and, since
+#                              2026-08-26, the only evidence it comes back on.
+#   part-priority-reader       publishes this file. Off, every rank in it is the
+#                              unstated middle and this ceiling protects nobody.
+#   switching-planner          the one part that decides.
+#   gate-actuator              the one part that flips a switch (T-2).
+#   off-state-verifier         proves a part told to stop actually let go (T-3).
+#   memory-pressure-forecaster the runway. Shed on 2026-08-25 21:08.
+#   io-pressure-meter          the other pressure the planner weighs.
+#   resource-reservation-ledger the floor the ten above it stand on.
+#   part-restart-budgeter      what stops a crash loop being answered forever.
+#   switch-oscillation-damper  what stops the new return path becoming a flap.
+#   duty-cycle-planner         the hours a part is allowed. Shed on 2026-08-25.
+#   accelerator-scheduler      grants the one scarce device; nothing else can.
+#   control-recorder           the journal every switch is written to. Off, the
+#                              governor acts and no record of it exists.
+
 [priority]
 "venue-trade-stream-reader" = 1
 "price-level-sampler" = 2
@@ -50,3 +80,18 @@
 "symbol-catalogue-reader" = 10
 "venue-quote-stream-reader" = 11
 "quote-level-sampler" = 12
+"hardware-scanner" = 13
+"part-appetite-meter" = 14
+"hog-detector" = 15
+"part-priority-reader" = 16
+"switching-planner" = 17
+"gate-actuator" = 18
+"off-state-verifier" = 19
+"memory-pressure-forecaster" = 20
+"io-pressure-meter" = 21
+"resource-reservation-ledger" = 22
+"part-restart-budgeter" = 23
+"switch-oscillation-damper" = 24
+"duty-cycle-planner" = 25
+"accelerator-scheduler" = 26
+"control-recorder" = 27
