@@ -815,6 +815,52 @@ def a_halt_decider(healthy=True):
     return decider
 
 
+# The halt that could never clear. `is_known` was read as `not
+# view.unmeasured_pairs`, and `cross-segment-exposure-watch` consumes `position`
+# alone, so it reports every cross-underlying pair as unmeasured by design.
+# Measured on the live spine at 19:24 on 2026-08-26: 33,390 of 33,390 decisions
+# halted, 34,669 zero risk limits issued, 19,499 intents refused for no risk
+# allowed, and not one order placed since the run began.
+
+
+def test_an_exposure_view_that_reported_is_knowing_what_is_open():
+    from parts.autonomous.trading_halt_decider import exposure_is_known
+
+    class ViewWithUnmeasuredCorrelations:
+        positions_counted = 8
+        unmeasured_pairs = (("BTC", "ETH"), ("BTC", "SOL"))
+
+    assert exposure_is_known(ViewWithUnmeasuredCorrelations()) is True, (
+        "a correlation nobody measured was read as not knowing what is open"
+    )
+
+
+def test_no_exposure_view_at_all_is_still_not_knowing():
+    """Missing inputs halt, unchanged: that is the rule this part is built on."""
+    from parts.autonomous.trading_halt_decider import exposure_is_known
+
+    assert exposure_is_known(object()) is False
+
+
+def test_unmeasured_correlations_do_not_stop_the_system_trading():
+    """The end-to-end shape of the defect, through the decider itself."""
+    from parts.autonomous.trading_halt_decider import exposure_is_known
+
+    class ViewWithUnmeasuredCorrelations:
+        positions_counted = 8
+        unmeasured_pairs = (("BTC", "ETH"),)
+
+    subject = a_halt_decider(healthy=False)
+    subject.observe_override(False)
+    subject.observe_envelope(may_trade=True)
+    subject.observe_survival_tier(COMFORTABLE)
+    subject.observe_exposure_view(
+        is_known=exposure_is_known(ViewWithUnmeasuredCorrelations())
+    )
+
+    assert subject.decide().state == TRADING
+
+
 def test_a_missing_input_halts():
     """Trading without knowing what is open is the state that ends accounts."""
     subject = a_halt_decider(healthy=False)

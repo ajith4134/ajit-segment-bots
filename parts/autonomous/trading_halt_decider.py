@@ -76,6 +76,34 @@ CLEARED_BY = {
     NO_RUNWAY: "the survival tier recovering",
 }
 
+def exposure_is_known(view) -> bool:
+    """Whether the exposure view has told this part what is open.
+
+    **The view reporting is the knowledge.** That is what `CLEARED_BY` says
+    clears this halt, and it is the honest reading: every open position is in the
+    view it counted.
+
+    This read `not view.unmeasured_pairs` until 2026-08-26, which is a different
+    question -- whether the *correlation between underlyings* has been measured.
+    `cross-segment-exposure-watch` consumes `position` and nothing else (R-01), so
+    no correlation can ever reach it and it reports every cross-underlying pair as
+    unmeasured **by design**. The result was a halt that could never clear:
+    measured on the live spine at 19:24, 33,390 of 33,390 decisions halted on
+    `this-system-does-not-know-what-is-open` and `halt-enforcer` issued 34,669
+    zero risk limits, so `position-sizer` refused 19,499 intents for want of any
+    risk allowed and not one order was placed. The system was stopped by a
+    limitation it had correctly reported about itself.
+
+    A correlation nobody has measured is a real constraint and it belongs where it
+    already is: `exposure-limiter` holds cluster exposure down while
+    `clusters_known` is zero. It is not a reason to refuse to trade at all.
+
+    Missing still halts, unchanged: no view at all leaves `_exposure_known` None,
+    and `is not True` halts on it.
+    """
+    return getattr(view, "positions_counted", None) is not None
+
+
 # Causes that must still allow closing: a halt that blocks exits cannot reduce risk.
 STILL_ALLOW_CLOSING = (
     VENUE_UNREACHABLE_WITH_EXPOSURE, REGIME_BROKE, MARKET_ANOMALY, NO_RUNWAY,
@@ -349,7 +377,7 @@ def start_part(context) -> int:
             decider.observe_envelope(may_trade=envelope.may_trade)
         view = exposures.value()
         if view is not None:
-            decider.observe_exposure_view(is_known=not view.unmeasured_pairs)
+            decider.observe_exposure_view(is_known=exposure_is_known(view))
         tier = tiers.value()
         if tier is not None:
             decider.observe_survival_tier(tier.tier, getattr(tier, "is_measured", True))
