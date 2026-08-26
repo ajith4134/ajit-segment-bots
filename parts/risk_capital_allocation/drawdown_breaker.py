@@ -70,6 +70,7 @@ class DrawdownBreaker:
         self._allowed = allowed_fraction_when_trading
         self._now_ns = now_ns
         self.standing = BreakerStanding()
+        self._standing_limit: RiskLimit | None = None
 
     def observe_equity(self, equity: float) -> RiskLimit:
         """One equity reading; returns the limit that follows from it."""
@@ -90,13 +91,13 @@ class DrawdownBreaker:
             self.standing.state = TRIPPED
             self.standing.trips += 1
             self.standing.tripped_at_equity = equity
-            return self._limit(
+            return self._decide_limit(
                 NO_RISK_ALLOWED,
                 f"equity is {drawdown:.1%} below its high-water mark of {peak:,.2f}, "
                 f"past the {self._maximum_drawdown:.1%} floor",
             )
 
-        return self._limit(
+        return self._decide_limit(
             self._allowed,
             f"drawdown {drawdown:.1%} of a {self._maximum_drawdown:.1%} floor",
         )
@@ -111,26 +112,49 @@ class DrawdownBreaker:
             self.standing.state = TRADING
             self.standing.releases += 1
             self.standing.tripped_at_equity = None
-            return self._limit(
+            return self._decide_limit(
                 self._allowed,
                 f"recovered {recovered:.0%} of the drawdown, past the {self._recovery:.0%} needed",
             )
 
         self.standing.state = TRIPPED
-        return self._limit(
+        return self._decide_limit(
             NO_RISK_ALLOWED,
             f"stopped after a {drawdown:.1%} drawdown; {recovered:.0%} recovered of the "
             f"{self._recovery:.0%} needed to resume",
         )
 
-    def _limit(self, fraction: float, reason: str) -> RiskLimit:
-        return RiskLimit(
+    def _decide_limit(self, fraction: float, reason: str) -> RiskLimit:
+        """Build this limiter's word and remember it, so `read_limit` can restate it.
+
+        Named for the deciding rather than for the limit, because it writes: every
+        path that returns a limit passes through here, and a name that hid that
+        would leave `read_limit` restating whichever decision happened to have
+        been recorded last by hand.
+        """
+        self._standing_limit = RiskLimit(
             limiter=PART_ID,
             fraction_of_allotment=fraction,
             reason=reason,
             is_binding=fraction <= NO_RISK_ALLOWED,
             decided_at_ns=self._now_ns(),
         )
+        return self._standing_limit
+
+    def read_limit(self) -> RiskLimit | None:
+        """This limiter's current word, restated without a new observation.
+
+        A limit is a level -- true until the limiter says otherwise -- and this
+        part decides one only when its input arrives, which is an equity reading, not a tick. Publishing
+        only then makes a limiter that is holding a brake on indistinguishable
+        from one that has stopped, and the sizer holds a limiter's word for a
+        bounded time precisely because it cannot tell those apart.
+
+        None until the first decision: never decided is not the same as clear, and
+        a limiter with nothing to say must say nothing rather than all-clear.
+        """
+        return self._standing_limit
+
 
     @property
     def is_tripped(self) -> bool:
@@ -159,7 +183,16 @@ def run_drawdown_breaker(
     def tick() -> None:
         equity = read_equity()
         if equity is not None:
-            publish_limit(breaker.observe_equity(equity))
+            breaker.observe_equity(equity)
+        # Restated on every tick, whether or not equity arrived. Its five sibling
+        # limiters already publish unconditionally; this one published only on a
+        # reading, so a brake it had applied went quiet between readings and the
+        # sizer -- which holds a limiter's word for a bounded time, because a
+        # silent limiter and a stopped one are the same thing on the wire --
+        # would have let the trade the brake was stopping through.
+        standing = breaker.read_limit()
+        if standing is not None:
+            publish_limit(standing)
 
     return run_part(
         declaration=PART_DECLARATION,

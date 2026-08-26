@@ -85,6 +85,7 @@ class StopFrequencyBreaker:
         )
         self._recent: list[bool] = []
         self.standing = FrequencyStanding()
+        self._standing_limit: RiskLimit | None = None
 
     def observe_closed_trade(self, was_stopped_out: bool) -> RiskLimit:
         """One finished trade; returns the limit that follows."""
@@ -106,10 +107,10 @@ class StopFrequencyBreaker:
                 self.standing.state = TRADING
                 self.standing.releases += 1
                 self.standing.trades_since_trip = 0
-                return self._limit(
+                return self._decide_limit(
                     self._allowed, f"{self._cooldown} trades have passed since the last cluster"
                 )
-            return self._limit(
+            return self._decide_limit(
                 NO_RISK_ALLOWED,
                 f"cooling down: {self.standing.trades_since_trip} of {self._cooldown} trades",
             )
@@ -120,7 +121,7 @@ class StopFrequencyBreaker:
         self.standing.baseline_stop_rate = baseline.value
 
         if len(self._recent) < self._window:
-            return self._limit(
+            return self._decide_limit(
                 self._allowed,
                 f"{len(self._recent)} of {self._window} trades in the window so far",
             )
@@ -130,14 +131,14 @@ class StopFrequencyBreaker:
             self.standing.state = TRIPPED
             self.standing.trips += 1
             self.standing.trades_since_trip = 0
-            return self._limit(
+            return self._decide_limit(
                 NO_RISK_ALLOWED,
                 f"{window_rate:.0%} of the last {self._window} trades were stopped out, against "
                 f"a {'learned' if baseline.is_fitted else 'prior'} rate of {baseline.value:.0%} "
                 f"and a threshold of {threshold:.0%}",
             )
 
-        return self._limit(
+        return self._decide_limit(
             self._allowed,
             f"stop rate {window_rate:.0%} against a threshold of {threshold:.0%}",
         )
@@ -145,14 +146,37 @@ class StopFrequencyBreaker:
     def _baseline_estimate(self) -> Estimate:
         return self._baseline.estimate(self._minimum_observations)
 
-    def _limit(self, fraction: float, reason: str) -> RiskLimit:
-        return RiskLimit(
+    def _decide_limit(self, fraction: float, reason: str) -> RiskLimit:
+        """Build this limiter's word and remember it, so `read_limit` can restate it.
+
+        Named for the deciding rather than for the limit, because it writes: every
+        path that returns a limit passes through here, and a name that hid that
+        would leave `read_limit` restating whichever decision happened to have
+        been recorded last by hand.
+        """
+        self._standing_limit = RiskLimit(
             limiter=PART_ID,
             fraction_of_allotment=fraction,
             reason=reason,
             is_binding=fraction <= NO_RISK_ALLOWED,
             decided_at_ns=self._now_ns(),
         )
+        return self._standing_limit
+
+    def read_limit(self) -> RiskLimit | None:
+        """This limiter's current word, restated without a new observation.
+
+        A limit is a level -- true until the limiter says otherwise -- and this
+        part decides one only when its input arrives, which is a trade closing, and trades close hours apart. Publishing
+        only then makes a limiter that is holding a brake on indistinguishable
+        from one that has stopped, and the sizer holds a limiter's word for a
+        bounded time precisely because it cannot tell those apart.
+
+        None until the first decision: never decided is not the same as clear, and
+        a limiter with nothing to say must say nothing rather than all-clear.
+        """
+        return self._standing_limit
+
 
     @property
     def is_tripped(self) -> bool:
@@ -183,7 +207,15 @@ def run_stop_frequency_breaker(
 ) -> int:
     def tick() -> None:
         for was_stopped_out in read_closed_trades():
-            publish_limit(breaker.observe_closed_trade(was_stopped_out))
+            breaker.observe_closed_trade(was_stopped_out)
+        # Restated on every tick, not only when a trade closes. Trades close hours
+        # apart, so a breaker that spoke only then was silent for essentially all
+        # of the time it was holding a brake on -- and the sizer cannot tell a
+        # silent limiter from a stopped one, so it stops believing one that has
+        # gone quiet.
+        standing = breaker.read_limit()
+        if standing is not None:
+            publish_limit(standing)
 
     return run_part(
         declaration=PART_DECLARATION,

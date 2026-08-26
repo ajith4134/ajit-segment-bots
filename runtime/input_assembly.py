@@ -4,10 +4,14 @@ The bus delivers messages; a part's logic wants a state of the world. Those are 
 the same thing, and the gap between them is where a part would otherwise grow its
 own quiet cache with its own quiet bugs.
 
-Three shapes cover what the parts in this blueprint actually ask for:
+Four shapes cover what the parts in this blueprint actually ask for:
 
     LatestValue    one current reading -- hardware capacity, a memory forecast
     LatestByKey    the current reading per key -- usage per part, priority per part
+    LatestStatementBySource
+                   the newest complete set a source published -- the risk limits
+                   one limiter holds at once, where an entry it stops making has
+                   been withdrawn rather than left unrepeated
     Batch          everything that arrived since the last tick -- trades, fills
 
 The distinction is not cosmetic. A part that treats a level (the machine has 12
@@ -191,6 +195,177 @@ class LatestByKey:
     def messages_seen(self) -> int:
         return self._messages_seen
 
+
+@dataclass
+class LatestStatementBySource:
+    """Every entry of the newest complete statement each source made.
+
+    For a source that speaks in *sets* rather than in single values. One tick of
+    `event-risk-limiter` is one risk limit for whatever affects the whole book plus
+    one per symbol with an event in force, and that whole set is its current word:
+    an entry it stops making has been withdrawn, not merely left unrepeated.
+
+    `LatestByKey` can hold one half of that or the other, never both, and both
+    halves were live defects on 2026-08-26:
+
+        keyed by the source        the last entry of a statement erases the rest,
+                                   so one limiter's set collapses to one limit
+        keyed by source and entry  an entry the source stops making is never
+                                   replaced by anything and binds forever --
+                                   halt-enforcer's scoped zero outliving the
+                                   all-clear it publishes with no scope at all,
+                                   which is a different key
+
+    So a statement is identified by its own stamp rather than by its entries. An
+    arrival stamped later than what a source has said replaces that source's whole
+    set; one stamped the same joins it; one stamped earlier is dropped, which is
+    what makes the shape safe against a statement split across two reads or
+    arriving out of order. The bus sends one datagram per item (`Publisher.publish`
+    loops over `items`), so a set published in one call is not a set that arrives
+    in one read, and a shape that assumed otherwise would silently hold half a
+    statement.
+
+    **The stamp is the source's own decision time, not the arrival time.** Two
+    entries decided together carry one stamp because the part that decided them
+    stamped them once; arrival times differ per datagram and would split every
+    statement into as many statements as it has entries.
+
+    `maximum_age_seconds` bounds the hold exactly as `LatestByKey` does, and for
+    the same reason: a source that dies stops having a current word. It is measured
+    against the newest message that carried the statement.
+    """
+
+    read: Callable[[], tuple[Message, ...]]
+    source_of: Callable[[object], Hashable]
+    stamp_of: Callable[[object], int]
+    entry_of: Callable[[object], Hashable]
+    maximum_age_seconds: float | None = None
+    _entries_by_source: dict = None  # type: ignore[assignment]
+    _stamp_by_source: dict = None  # type: ignore[assignment]
+    _observed_at_ns_by_source: dict = None  # type: ignore[assignment]
+    _messages_seen: int = 0
+    _statements_replaced: int = 0
+    _arrivals_already_superseded: int = 0
+    _fresh_sources: int = 0
+    _stale_sources: int = 0
+
+    def __post_init__(self) -> None:
+        if self._entries_by_source is None:
+            self._entries_by_source = {}
+        if self._stamp_by_source is None:
+            self._stamp_by_source = {}
+        if self._observed_at_ns_by_source is None:
+            self._observed_at_ns_by_source = {}
+        if self.maximum_age_seconds is not None and not self.maximum_age_seconds > 0:
+            # The same refusal LatestByKey makes: a bound of zero expires the
+            # message that just arrived and a negative one expires nothing, and
+            # both read as "staleness is handled" while doing the opposite.
+            raise ValueError(
+                "maximum_age_seconds must be a positive number of seconds, or None for a "
+                f"statement that never expires; got {self.maximum_age_seconds!r}"
+            )
+
+    def _take_in_what_arrived(self) -> None:
+        for message in self.read():
+            payload = message.payload
+            source = self.source_of(payload)
+            stamp = self.stamp_of(payload)
+            standing_stamp = self._stamp_by_source.get(source)
+            if standing_stamp is not None and stamp < standing_stamp:
+                # A datagram from a statement this source has already superseded.
+                # Counted rather than applied: putting it back would resurrect an
+                # entry the source has withdrawn.
+                self._arrivals_already_superseded += 1
+                self._messages_seen += 1
+                continue
+            if standing_stamp is None or stamp > standing_stamp:
+                self._entries_by_source[source] = {}
+                self._stamp_by_source[source] = stamp
+                # A new statement is observed now, not as recently as the one it
+                # replaced: taking the later of the two would let a statement
+                # published under a clock that stepped backwards inherit the age
+                # of the one before it, which is the staleness bound reading its
+                # own history instead of the message in front of it.
+                self._observed_at_ns_by_source[source] = message.published_at_ns
+                if standing_stamp is not None:
+                    self._statements_replaced += 1
+            else:
+                # Another entry of the statement already held. The statement is as
+                # fresh as its newest datagram.
+                self._observed_at_ns_by_source[source] = max(
+                    message.published_at_ns, self._observed_at_ns_by_source.get(source, 0)
+                )
+            self._entries_by_source[source][self.entry_of(payload)] = payload
+            self._messages_seen += 1
+
+    def mapping(self, now_ns: int | None = None) -> dict:
+        """Every entry of every source's current statement, keyed by source and entry.
+
+        With a bound set, a source whose statement is older than it is left out
+        whole -- half a statement is not a statement, and a source that has gone
+        quiet has no current word rather than an old one.
+        """
+        self._take_in_what_arrived()
+        sources = self._entries_by_source
+        if self.maximum_age_seconds is not None:
+            at = time.time_ns() if now_ns is None else now_ns
+            oldest_believable_ns = at - int(self.maximum_age_seconds * 1e9)
+            sources = {
+                source: entries
+                for source, entries in self._entries_by_source.items()
+                if self._observed_at_ns_by_source.get(source, 0) >= oldest_believable_ns
+            }
+        self._fresh_sources = len(sources)
+        self._stale_sources = len(self._entries_by_source) - len(sources)
+        return {
+            (source, entry): payload
+            for source, entries in sources.items()
+            for entry, payload in entries.items()
+        }
+
+    def values(self, now_ns: int | None = None) -> tuple:
+        return tuple(self.mapping(now_ns=now_ns).values())
+
+    def statement_of(self, source: Hashable) -> tuple:
+        """One source's current statement, in the order its entries arrived."""
+        return tuple(self._entries_by_source.get(source, {}).values())
+
+    def observed_at_ns(self, source: Hashable) -> int | None:
+        """When the newest message of this source's statement was published."""
+        return self._observed_at_ns_by_source.get(source)
+
+    def forget(self, source: Hashable) -> None:
+        """Drop a source that is gone, so the map does not only grow."""
+        self._entries_by_source.pop(source, None)
+        self._stamp_by_source.pop(source, None)
+        self._observed_at_ns_by_source.pop(source, None)
+
+    @property
+    def sources_seen(self) -> int:
+        return len(self._entries_by_source)
+
+    @property
+    def fresh_sources(self) -> int:
+        """Sources whose statement was believed on the last mapping()."""
+        return self._fresh_sources
+
+    @property
+    def stale_sources(self) -> int:
+        """Sources whose statement was too old to believe on the last mapping()."""
+        return self._stale_sources
+
+    @property
+    def statements_replaced(self) -> int:
+        return self._statements_replaced
+
+    @property
+    def arrivals_already_superseded(self) -> int:
+        """Messages dropped for belonging to a statement their source has replaced."""
+        return self._arrivals_already_superseded
+
+    @property
+    def messages_seen(self) -> int:
+        return self._messages_seen
 
 @dataclass
 class Batch:

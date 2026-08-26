@@ -174,6 +174,45 @@ def test_the_breaker_is_sticky_until_enough_is_recovered():
     assert subject.is_tripped is False
 
 
+# A limit is a level, and these two limiters decide one only when their input
+# arrives -- an equity reading, a trade closing. Publishing only then leaves a
+# limiter that is holding a brake on indistinguishable from one that has stopped,
+# and the sizer stops believing a limiter that has gone quiet (it holds each
+# limiter's word for `risk_limit_maximum_age_seconds`, because that is the only
+# way to tell a stopped limiter from a silent one). Trades close hours apart, so
+# stop-frequency-breaker was silent for essentially all of the time it was
+# braking.
+
+
+def test_a_breaker_restates_its_word_without_a_new_reading():
+    subject = breaker(maximum=0.2)
+    subject.observe_equity(1000.0)
+    subject.observe_equity(700.0)
+    assert subject.is_tripped
+
+    restated = subject.read_limit()
+    assert restated.fraction_of_allotment == NO_RISK_ALLOWED
+    assert subject.read_limit() is restated, "a restatement is the same word, not a new decision"
+
+
+def test_a_breaker_that_has_never_decided_says_nothing():
+    """Never decided is not all-clear, and a limiter with nothing to say says nothing."""
+    assert breaker().read_limit() is None
+
+
+def test_a_stop_frequency_breaker_restates_its_word_between_trades():
+    subject = frequency_breaker(window=10, prior=0.2, excess=1.5)
+    for _ in range(11):
+        subject.observe_closed_trade(was_stopped_out=True)
+    assert subject.is_tripped
+
+    assert subject.read_limit().fraction_of_allotment == NO_RISK_ALLOWED
+
+
+def test_a_stop_frequency_breaker_that_has_seen_no_trade_says_nothing():
+    assert frequency_breaker().read_limit() is None
+
+
 # ---- halt-enforcer -----------------------------------------------------------
 
 def test_a_human_override_outranks_everything():
@@ -346,7 +385,10 @@ def event_limiter(clock):
 
 
 def test_a_calm_market_is_unshrunk():
-    assert event_limiter(Clock()).read_limit().fraction_of_allotment == 1.0
+    limits = event_limiter(Clock()).read_limits()
+    assert len(limits) == 1, "with nothing in force there is one limit, about everything"
+    assert limits[0].fraction_of_allotment == 1.0
+    assert limits[0].symbols == ()
 
 
 def test_overlapping_causes_multiply_rather_than_taking_the_worst():
@@ -355,7 +397,7 @@ def test_overlapping_causes_multiply_rather_than_taking_the_worst():
     subject = event_limiter(clock)
     subject.register_announcement("listing", shrink_to=0.5, seconds=60, reason="new listing")
     subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
-    assert subject.read_limit().fraction_of_allotment == pytest.approx(0.25)
+    assert subject.read_limits()[0].fraction_of_allotment == pytest.approx(0.25)
 
 
 def test_a_scheduled_events_window_opens_before_it_happens():
@@ -364,20 +406,20 @@ def test_a_scheduled_events_window_opens_before_it_happens():
     subject.register_scheduled_event(
         "funding", seconds_until=60, window_seconds=30, shrink_to=0.5, reason="funding settles"
     )
-    assert subject.read_limit().fraction_of_allotment == 1.0
+    assert subject.read_limits()[0].fraction_of_allotment == 1.0
     clock.now += 31
-    assert subject.read_limit().fraction_of_allotment == pytest.approx(0.5)
+    assert subject.read_limits()[0].fraction_of_allotment == pytest.approx(0.5)
 
 
 def test_an_anomaly_decays_back_rather_than_releasing_at_a_cliff():
     clock = Clock()
     subject = event_limiter(clock)
     subject.register_anomaly("gap", shrink_to=0.2, decay_seconds=100, reason="unexplained gap")
-    first = subject.read_limit().fraction_of_allotment
+    first = subject.read_limits()[0].fraction_of_allotment
     clock.now += 50
-    middle = subject.read_limit().fraction_of_allotment
+    middle = subject.read_limits()[0].fraction_of_allotment
     clock.now += 60
-    assert first < middle < subject.read_limit().fraction_of_allotment
+    assert first < middle < subject.read_limits()[0].fraction_of_allotment
 
 
 # ---- leverage-selector -------------------------------------------------------
@@ -1170,3 +1212,193 @@ def test_a_scope_that_cannot_be_read_binds_everything():
     enforcer = HaltEnforcer(allowed_fraction_when_clear=1.0)
     enforcer.raise_halt(TRADING_HALT, "", "a source that named no scope")
     assert enforcer.read_limit().applies_to("BTCUSDT")
+
+
+# ---- an event on one symbol must not shrink the others ------------------------
+#
+# Measured on the live spine at 12:45 on 2026-08-26. market-anomaly-detector had
+# raised 2,899 anomalies of the kind "one venue moved and the others did not"
+# across 100 venue-symbols. 636 were active at once, and event-risk-limiter
+# multiplied all 636 into a single unscoped limit: `smallest_shrink` 2.7e-237, a
+# limit indistinguishable from zero on every symbol -- including the ninety-odd
+# that had no event at all. position-sizer refused 1,284 intents with
+# `refused_no_risk_allowed` while opinion-arbiter was forming 479 actionable ones
+# at conviction 0.95.
+#
+# The multiplication is not the bug and is kept: a listing during a turbulent hour
+# really is riskier than either alone. What was wrong is *what* was multiplied.
+# That reasoning is about causes overlapping on one symbol, and applying it across
+# symbols is a different operation wearing the same arithmetic -- one that does
+# not converge. This is the defect halt-enforcer was fixed for on 2026-08-25, in a
+# second part.
+
+
+def test_an_anomaly_on_one_symbol_leaves_the_others_alone():
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.register_anomaly(
+        "binance-usdm:ETHUSDT", shrink_to=0.2, decay_seconds=100,
+        reason="one venue moved and the others did not", symbols=("ETHUSDT",),
+    )
+    limits = subject.read_limits()
+
+    for_eth = [limit for limit in limits if limit.applies_to("ETHUSDT")]
+    for_btc = [limit for limit in limits if limit.applies_to("BTCUSDT")]
+    assert min(limit.fraction_of_allotment for limit in for_eth) < 1.0
+    assert min(limit.fraction_of_allotment for limit in for_btc) == 1.0, (
+        "an anomaly on ETHUSDT shrank the risk allowed on BTCUSDT"
+    )
+
+
+def test_many_symbols_each_with_an_anomaly_do_not_compound_into_nothing():
+    """636 active events multiplied to 2.7e-237. This is that, in miniature."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    for index in range(200):
+        subject.register_anomaly(
+            f"binance-usdm:SYM{index}USDT", shrink_to=0.2, decay_seconds=1000,
+            reason="unexplained gap", symbols=(f"SYM{index}USDT",),
+        )
+    limits = subject.read_limits()
+
+    for index in (0, 100, 199):
+        symbol = f"SYM{index}USDT"
+        binding = min(
+            limit.fraction_of_allotment for limit in limits if limit.applies_to(symbol)
+        )
+        assert binding == pytest.approx(0.2), (
+            f"{symbol} was shrunk to {binding} -- its own anomaly shrinks to 0.2, and the "
+            f"other 199 symbols' anomalies are not about it"
+        )
+    untouched = min(
+        limit.fraction_of_allotment for limit in limits if limit.applies_to("BTCUSDT")
+    )
+    assert untouched == 1.0, "a symbol with no event of its own was shrunk anyway"
+
+
+def test_two_causes_on_one_symbol_still_multiply():
+    """The design intent, preserved: overlapping causes on a symbol compound."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.register_anomaly(
+        "binance-usdm:ETHUSDT", shrink_to=0.5, decay_seconds=1000,
+        reason="gap", symbols=("ETHUSDT",),
+    )
+    subject.register_announcement(
+        "ETHUSDT", shrink_to=0.5, seconds=1000, reason="listing", symbols=("ETHUSDT",),
+    )
+    binding = min(
+        limit.fraction_of_allotment
+        for limit in subject.read_limits()
+        if limit.applies_to("ETHUSDT")
+    )
+    assert binding == pytest.approx(0.25)
+
+
+def test_a_market_wide_cause_still_reaches_every_symbol():
+    """Turbulence is about the whole book and must keep binding everything."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
+    limits = subject.read_limits()
+    for symbol in ("BTCUSDT", "ETHUSDT", "SOMETHINGELSEUSDT"):
+        binding = min(
+            limit.fraction_of_allotment for limit in limits if limit.applies_to(symbol)
+        )
+        assert binding == pytest.approx(0.5)
+
+
+# ---- a condition restated is not a second condition ---------------------------
+#
+# Measured on the live spine at 13:28 on 2026-08-26, three minutes after a
+# restart: 165 events registered and 165 still active, 35 of them scoped to a
+# symbol and the rest the same market-wide turbulence over and over, and
+# `smallest_shrink` 2.2e-53. A detector of an ongoing condition repeats itself --
+# turbulence on every index reading, an anomaly on every trade that disagrees --
+# and every repeat was being registered as another independent cause and
+# multiplied in. Scoping the symbol-level causes (above) fixed one half of the
+# non-convergence; this is the other half, and it bites the market-wide limit
+# that binds every symbol.
+
+
+def test_the_same_turbulence_restated_does_not_compound():
+    clock = Clock()
+    subject = event_limiter(clock)
+    for _ in range(200):
+        subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
+    limits = subject.read_limits()
+
+    assert len(subject.active_events) == 1, "one continuing condition became many"
+    assert subject.standing.events_restated == 199
+    assert min(
+        limit.fraction_of_allotment for limit in limits if limit.applies_to("BTCUSDT")
+    ) == pytest.approx(0.5)
+
+
+def test_the_same_anomaly_seen_again_is_the_same_anomaly():
+    clock = Clock()
+    subject = event_limiter(clock)
+    for _ in range(50):
+        subject.register_anomaly(
+            "binance-usdm:ETHUSDT:one venue moved and the others did not",
+            shrink_to=0.2, decay_seconds=1000, reason="gap of 3.1%",
+            symbols=("ETHUSDT",),
+        )
+    binding = min(
+        limit.fraction_of_allotment
+        for limit in subject.read_limits()
+        if limit.applies_to("ETHUSDT")
+    )
+    assert binding == pytest.approx(0.2), (
+        f"one anomaly seen fifty times shrank ETHUSDT to {binding}"
+    )
+
+
+def test_two_different_anomalies_on_one_symbol_are_two_conditions():
+    """Restating must not merge causes that are genuinely distinct."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.register_anomaly(
+        "binance-usdm:ETHUSDT:one venue moved and the others did not",
+        shrink_to=0.5, decay_seconds=1000, reason="gap", symbols=("ETHUSDT",),
+    )
+    subject.register_anomaly(
+        "binance-usdm:ETHUSDT:the book crossed",
+        shrink_to=0.5, decay_seconds=1000, reason="crossed book", symbols=("ETHUSDT",),
+    )
+    binding = min(
+        limit.fraction_of_allotment
+        for limit in subject.read_limits()
+        if limit.applies_to("ETHUSDT")
+    )
+    assert binding == pytest.approx(0.25)
+    assert len(subject.active_events) == 2
+
+
+def test_a_restatement_carries_the_newest_window():
+    """A condition that is still going on must not expire on its first window."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
+    clock.now += 50
+    subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
+    clock.now += 20
+
+    assert len(subject.active_events) == 1, "the restated condition expired on the old window"
+
+
+def test_a_symbols_own_cause_stacks_on_top_of_a_market_wide_one():
+    """A symbol with an event is never treated as calmer than the market."""
+    clock = Clock()
+    subject = event_limiter(clock)
+    subject.observe_turbulence(index=2.0, normal_index=1.0, seconds=60)
+    subject.register_anomaly(
+        "binance-usdm:ETHUSDT", shrink_to=0.5, decay_seconds=1000,
+        reason="gap", symbols=("ETHUSDT",),
+    )
+    limits = subject.read_limits()
+
+    eth = min(limit.fraction_of_allotment for limit in limits if limit.applies_to("ETHUSDT"))
+    btc = min(limit.fraction_of_allotment for limit in limits if limit.applies_to("BTCUSDT"))
+    assert eth == pytest.approx(0.25), "the symbol's own cause did not stack on the market's"
+    assert btc == pytest.approx(0.5)

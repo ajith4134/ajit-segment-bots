@@ -118,6 +118,19 @@ class SizerStanding:
     # was made upstream -- but counted, because a bot whose every opinion is a
     # stand-aside and a bot with no opinions look the same from here.
     stood_aside: int = 0
+    # Every actionable intent that reached the sizer, and the input each one was
+    # missing when it could not be sized. Until 2026-08-26 an intent missing any
+    # of the four was dropped by a bare `continue` with nothing counted, so a run
+    # that sized nothing looked identical whether the arbiter had said nothing,
+    # the stop planner had nothing for that symbol, or the account had never been
+    # read -- three different faults with three different answers, and no way to
+    # tell which was happening. A refusal nobody can see is indistinguishable from
+    # an input that never came.
+    intents_seen: int = 0
+    missing_entry_price: int = 0
+    missing_stop_price: int = 0
+    missing_account_balance: int = 0
+    missing_risk_limit: int = 0
 
 
 class PositionSizer:
@@ -386,6 +399,11 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "shrunk_by_free_capital": sizer.standing.shrunk_by_free_capital,
         "largest_risk_taken": sizer.standing.largest_risk_taken,
         "intents_that_stood_aside": sizer.standing.stood_aside,
+        "actionable_intents_seen": sizer.standing.intents_seen,
+        "missing_entry_price": sizer.standing.missing_entry_price,
+        "missing_stop_price": sizer.standing.missing_stop_price,
+        "missing_account_balance": sizer.standing.missing_account_balance,
+        "missing_risk_limit": sizer.standing.missing_risk_limit,
     }
 
 
@@ -423,7 +441,7 @@ def start_part(context) -> int:
     the system: every venue publishes a per-symbol lot size and nothing consumes it
     yet. It is named as temporary where it is set.
     """
-    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.input_assembly import Batch, LatestByKey, LatestStatementBySource
 
     intents = Batch(read=context.bus.reader("trade-intent"))
     publish_sized_orders = context.bus.publisher_for("sized-order")
@@ -456,32 +474,53 @@ def start_part(context) -> int:
     # The binding limit is the smallest fraction any limiter allows, so they are
     # kept per limiter and the minimum is taken: a limiter that says nothing must
     # not be able to raise a limit another one lowered.
-    # Keyed by the limiter, and only by the limiter. Each of the seven publishes
-    # exactly one limit per tick -- `publish_limit(x.read_limit())`, singular --
-    # so a limiter has one current word and its next word must replace it.
     #
-    # It was keyed on `(limiter, symbols)` until 2026-08-26, which turned one
-    # limiter's *sequence* of limits into a set of immortal per-scope entries.
-    # halt-enforcer zeroes risk scoped to the symbols an anomaly was seen on, and
-    # publishes its all-clear with no scope at all -- a different key. So the zero
-    # was never replaced, and `LatestByKey` holds a key's last value forever
-    # unless bounded, so it never expired either.
+    # **A limiter's whole tick is one statement, and its next statement replaces
+    # it.** Not a level per limiter and not a level per scope, because both of
+    # those were live defects on the same day:
     #
-    # Measured on the live spine at 11:47 on 2026-08-26: 443 halts raised and 443
-    # released, `is_halted` 0, and still every one of 838 intents refused --
-    # `refused_no_risk_allowed` 14, `intents_that_stood_aside` 824, `sized` 0.
-    # 2,899 anomalies of the kind "one venue moved and the others did not" across
-    # 100 venue-symbols, so essentially every symbol had been scoped-to-zero once
-    # and was permanently untradeable. No order was ever filled, no position ever
-    # got a stop, and nothing reported a fault: each of those zeros was a limit a
-    # limiter was entitled to issue, and only its immortality was wrong.
+    #   keyed by the limiter alone -- event-risk-limiter publishes one limit for
+    #   whatever affects the whole book plus one per symbol with an event in
+    #   force, and the last of them erased the rest.
+    #
+    #   keyed by `(limiter, symbols)` -- a scope that stops being republished is
+    #   never replaced by anything. halt-enforcer zeroes risk scoped to the
+    #   symbols an anomaly was seen on and publishes its all-clear with no scope
+    #   at all, which is a different key, so the zero outlived the all-clear and
+    #   `LatestByKey` holds a key's last value forever unless bounded.
+    #
+    # Measured on the live spine at 11:47 on 2026-08-26, under the second of
+    # those: 443 halts raised and 443 released, `is_halted` 0, and still every one
+    # of 838 intents refused -- `refused_no_risk_allowed` 14,
+    # `intents_that_stood_aside` 824, `sized` 0. 2,899 anomalies of the kind "one
+    # venue moved and the others did not" across 100 venue-symbols, so essentially
+    # every symbol had been scoped-to-zero once and was permanently untradeable.
+    # No order was ever filled, no position ever got a stop, and nothing reported
+    # a fault: each of those zeros was a limit a limiter was entitled to issue, and
+    # only its immortality was wrong.
+    #
+    # So a statement is told from the next by the limiter's own `decided_at_ns`,
+    # which every limit decided in one tick carries identically. A limit the
+    # limiter stops issuing is gone the moment it issues its next word -- an
+    # all-clear withdraws a scoped zero immediately rather than waiting for it to
+    # age out.
     #
     # The scope has not gone anywhere -- it travels inside the limit and
     # `applies_to` still decides per symbol, which is what stops a two-symbol halt
     # zeroing the other ninety-eight.
-    limits = LatestByKey(
+    limits = LatestStatementBySource(
         read=context.bus.reader("risk-limit"),
-        key_of=lambda limit: limit.limiter,
+        source_of=lambda limit: limit.limiter,
+        stamp_of=lambda limit: limit.decided_at_ns,
+        entry_of=lambda limit: limit.symbols,
+        # Bounded as well, for the limiter that stops speaking altogether rather
+        # than the scope that stops being repeated: a part that is off or wedged
+        # has no current word, and its last one must not bind forever. Every
+        # limiter publishes unconditionally on every tick, so the bound is tens of
+        # missed publishes. It fails in the safe direction -- with no limit
+        # applying to a symbol `binding_limit_for` returns None and the sizer
+        # refuses to size, so expiry withdraws permission rather than granting it.
+        maximum_age_seconds=context.number("risk_limit_maximum_age_seconds"),
     )
     timed = Batch(read=context.bus.reader("timed-intent"))
 
@@ -544,7 +583,23 @@ def start_part(context) -> int:
             entry_price = entry_price_for(plan, instrument)
             stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
             binding = binding_limit_for(intent.symbol)
-            if entry_price is None or stop_price is None or balance is None or binding is None:
+            sizer.standing.intents_seen += 1
+            # Named one by one rather than as one condition: each is a different
+            # part not producing, and which one it is decides what to go and look
+            # at. Counted in a fixed order and only once per intent, so the
+            # counters add up to the intents that could not be sized rather than
+            # to the inputs that happened to be missing at the same moment.
+            if entry_price is None:
+                sizer.standing.missing_entry_price += 1
+                continue
+            if stop_price is None:
+                sizer.standing.missing_stop_price += 1
+                continue
+            if balance is None:
+                sizer.standing.missing_account_balance += 1
+                continue
+            if binding is None:
+                sizer.standing.missing_risk_limit += 1
                 continue
             sizable.append(
                 {

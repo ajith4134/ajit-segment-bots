@@ -16,7 +16,12 @@ from __future__ import annotations
 import pytest
 
 from runtime.bus import Message
-from runtime.input_assembly import Batch, LatestByKey, LatestValue
+from runtime.input_assembly import (
+    Batch,
+    LatestByKey,
+    LatestStatementBySource,
+    LatestValue,
+)
 
 ONE_SECOND_NS = 1_000_000_000
 
@@ -205,3 +210,155 @@ def test_a_batch_is_emptied_by_reading_it():
     assert len(batch.payloads()) == 1
     assert batch.payloads() == ()
     assert batch.messages_seen == 1
+
+
+# ---- LatestStatementBySource -------------------------------------------------
+#
+# The second half of the same lesson, from 2026-08-26. A source that speaks in
+# sets has no key that works: keyed by the source, the last entry of a statement
+# erases the rest; keyed by source and entry, an entry the source stops making is
+# never replaced by anything and binds forever. Both were live defects in
+# `position-sizer`'s hold on risk limits on the same day, and the second one
+# refused all 838 intents of a run.
+
+
+class Limit:
+    """A statement's entry, reduced to what identifies it."""
+
+    def __init__(self, source: str, scope: str, fraction: float, decided_at_ns: int) -> None:
+        self.source = source
+        self.scope = scope
+        self.fraction = fraction
+        self.decided_at_ns = decided_at_ns
+
+
+def _statements(read, maximum_age_seconds: float | None = None):
+    return LatestStatementBySource(
+        read=read,
+        source_of=lambda entry: entry.source,
+        stamp_of=lambda entry: entry.decided_at_ns,
+        entry_of=lambda entry: entry.scope,
+        maximum_age_seconds=maximum_age_seconds,
+    )
+
+
+def test_a_later_statement_replaces_the_whole_previous_one():
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (
+                _message(Limit("halt-enforcer", "BTCUSDT", 0.0, at), at),
+                _message(Limit("halt-enforcer", "ETHUSDT", 0.0, at), at, sequence=1),
+            ),
+            (_message(Limit("halt-enforcer", "", 0.02, at + ONE_SECOND_NS), at + ONE_SECOND_NS),),
+        )
+    )
+    held.mapping()
+    every = held.mapping()
+
+    assert [entry.fraction for entry in every.values()] == [0.02]
+    assert held.statements_replaced == 1
+
+
+def test_the_same_statement_arriving_in_pieces_is_held_whole():
+    """The bus sends one datagram per item, so a set published at once need not arrive at once."""
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (_message(Limit("event-risk-limiter", "", 0.5, at), at),),
+            (_message(Limit("event-risk-limiter", "BTCUSDT", 0.1, at), at, sequence=1),),
+        )
+    )
+    held.mapping()
+    every = held.mapping()
+
+    assert sorted(entry.fraction for entry in every.values()) == [0.1, 0.5]
+    assert held.statements_replaced == 0
+
+
+def test_an_entry_of_a_superseded_statement_is_dropped():
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (_message(Limit("halt-enforcer", "", 0.02, at + ONE_SECOND_NS), at + ONE_SECOND_NS),),
+            (_message(Limit("halt-enforcer", "BTCUSDT", 0.0, at), at),),
+        )
+    )
+    held.mapping()
+    every = held.mapping()
+
+    assert [entry.fraction for entry in every.values()] == [0.02]
+    assert held.arrivals_already_superseded == 1
+    assert held.messages_seen == 2
+
+
+def test_a_source_that_goes_quiet_is_absent_whole():
+    """Half a statement is not a statement, so a stale source leaves entirely."""
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (
+                _message(Limit("halt-enforcer", "BTCUSDT", 0.0, at), at),
+                _message(Limit("halt-enforcer", "ETHUSDT", 0.0, at), at, sequence=1),
+            ),
+        ),
+        maximum_age_seconds=30.0,
+    )
+    assert len(held.mapping(now_ns=at)) == 2
+
+    every = held.mapping(now_ns=at + 31 * ONE_SECOND_NS)
+    assert every == {}
+    assert held.stale_sources == 1
+    assert held.fresh_sources == 0
+    assert held.sources_seen == 1, "the source went quiet, it did not cease to exist"
+
+
+def test_a_quiet_source_comes_back_when_it_speaks_again():
+    at = 1_000 * ONE_SECOND_NS
+    later = at + 40 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (_message(Limit("halt-enforcer", "BTCUSDT", 0.0, at), at),),
+            (_message(Limit("halt-enforcer", "", 0.02, later), later),),
+        ),
+        maximum_age_seconds=30.0,
+    )
+    held.mapping(now_ns=at)
+    every = held.mapping(now_ns=later)
+
+    assert [entry.fraction for entry in every.values()] == [0.02]
+
+
+def test_one_sources_statement_does_not_touch_anothers():
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(
+        _delivering(
+            (
+                _message(Limit("halt-enforcer", "", 0.05, at), at),
+                _message(Limit("exposure-limiter", "", 0.01, at), at, sequence=1),
+            ),
+            (_message(Limit("halt-enforcer", "", 1.0, at + ONE_SECOND_NS), at + ONE_SECOND_NS),),
+        )
+    )
+    held.mapping()
+    every = held.mapping()
+
+    assert sorted(entry.fraction for entry in every.values()) == [0.01, 1.0]
+    assert held.statement_of("exposure-limiter")[0].fraction == 0.01
+
+
+def test_forget_drops_a_source_whole():
+    at = 1_000 * ONE_SECOND_NS
+    held = _statements(_delivering((_message(Limit("halt-enforcer", "", 0.0, at), at),)))
+    held.mapping()
+
+    held.forget("halt-enforcer")
+    assert held.mapping() == {}
+    assert held.sources_seen == 0
+    assert held.observed_at_ns("halt-enforcer") is None
+
+
+def test_a_statement_bound_that_is_not_a_positive_number_is_refused():
+    for refused in (0.0, -1.0):
+        with pytest.raises(ValueError):
+            _statements(_delivering(), maximum_age_seconds=refused)
