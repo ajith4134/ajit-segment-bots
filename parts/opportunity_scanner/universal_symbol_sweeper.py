@@ -299,7 +299,7 @@ def start_part(context) -> int:
 
     from runtime.input_assembly import Batch, LatestByKey
     from runtime.rolling_statistics import RollingWindow
-    from runtime.sweep_measurements import measure
+    from runtime.sweep_measurements import add_cross_sectional, measure_symbol
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     universe = LatestByKey(read=context.bus.reader("symbol-universe"), key_of=lambda e: (e.venue_id, e.symbol))
@@ -320,6 +320,9 @@ def start_part(context) -> int:
         ),
     )
     window_length = int(context.number("detector_window_length"))
+    minimum_observations = int(context.number("detector_minimum_observations"))
+    short_window_fraction = context.number("sweep_short_window_fraction")
+    minimum_symbols = int(context.number("sweep_minimum_symbols_for_cross_section"))
     windows: dict[tuple[str, str], RollingWindow] = {}
     last_sweep = [float("-inf")]
 
@@ -336,17 +339,34 @@ def start_part(context) -> int:
             sweeper.set_tradeable(grade.venue_id, grade.symbol, grade.grade in (DEEP_GRADE, TRADEABLE_GRADE))
         for position in positions.payloads():
             sweeper.set_held(position.venue_id, position.symbol, not position.is_flat)
-        consolidated_by_symbol = consolidated.mapping()
-        for key, window in windows.items():
-            price = consolidated_by_symbol.get(key[1])
-            sweeper.observe_measurements(
-                key[0], key[1],
-                measure(window.latest, window.values[0] if window.values else None, None if price is None else price.price),
-            )
+        # Windows are fed on every tick -- a price not observed is a price gone --
+        # but measuring is guarded by the same due-check as the sweep itself.
+        # Measuring is the expensive half: it walks every window and sorts the
+        # whole universe four times, and doing that on every tick to answer a
+        # question asked once a second is how heartbeat-collector came to spend
+        # 73% of a core. The governor was already shedding this part as a hog.
         now = _time.monotonic()
         if now - last_sweep[0] < context.health_interval_seconds:
             return (), ()
         last_sweep[0] = now
+
+        consolidated_by_symbol = consolidated.mapping()
+        # Measured per symbol first, then completed across the universe. The
+        # cross-sectional half cannot be computed one symbol at a time, and this
+        # part is the only one in the block holding every symbol at once -- which
+        # is why a universe-relative measurement belongs here and in no detector.
+        measured: dict[tuple[str, str], dict] = {}
+        for key, window in windows.items():
+            price = consolidated_by_symbol.get(key[1])
+            measured[key] = measure_symbol(
+                window,
+                consolidated=None if price is None else price.price,
+                minimum_observations=minimum_observations,
+                short_window_fraction=short_window_fraction,
+            )
+        add_cross_sectional(measured, minimum_symbols=minimum_symbols)
+        for key, found in measured.items():
+            sweeper.observe_measurements(key[0], key[1], found)
         return tuple(sorted(universe.mapping())), tuple(conditions.mapping().values())
 
     def publish(candidates, _report) -> None:

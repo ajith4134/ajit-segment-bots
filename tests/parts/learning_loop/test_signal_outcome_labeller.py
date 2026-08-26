@@ -150,7 +150,11 @@ def test_a_move_in_the_claimed_direction_labels_the_setup_right(real_prices):
     assert label.resolved_within_horizon is True
     assert label.seconds_to_resolve == pytest.approx(1.0)
     assert label.claimed_at_ns > 0
-    assert label.features == {"spread_z": 2.5}
+    # NOT the detector's own evidence. A pair detector's spread_z is meaningful
+    # only inside that detector, so a formula mined over it names something no
+    # scanner can evaluate on an arbitrary symbol -- which is why every mined
+    # formula was refused as NO_MEASUREMENT until 2026-08-26.
+    assert "spread_z" not in label.features
     assert labeller.standing.resolved_right == 1
     assert labeller.standing.measured_hit_rate == 1.0
 
@@ -348,3 +352,53 @@ def test_a_labeller_told_no_bound_labels_against_whatever_it_has():
 
     claim, reason = labeller.observe_candidate(a_claim())
     assert claim is not None, reason
+
+
+def test_a_label_carries_the_universal_vocabulary_not_the_detector_s_own_evidence(real_prices):
+    """What the miner may mine over has to be what the scanner can watch.
+
+    The measurements are computed by the caller -- start_part holds a window per
+    symbol and the whole universe at once -- and handed in, because the
+    cross-sectional half of the vocabulary is a statement about every symbol and
+    no single claim can make it.
+    """
+    from runtime.sweep_measurements import KNOWN_MEASUREMENTS, RETURN_OVER_WINDOW
+
+    clock = Clock()
+    labeller = a_labeller(clock)
+    opening_price = real_prices[0]
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
+
+    measured = {RETURN_OVER_WINDOW: 0.031, "return_rank": 0.94}
+    claim, reason = labeller.observe_candidate(a_claim(LONG), measurements=measured)
+    assert reason == CLAIM_OPENED
+    assert claim is not None
+
+    clock.advance_seconds(1.0)
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.1), clock.at_ns)
+    label = labeller.resolve_settled_claims()[0]
+
+    assert label.features == measured
+    assert set(label.features) <= set(KNOWN_MEASUREMENTS)
+
+
+def test_a_claim_with_no_measurements_still_resolves(real_prices):
+    """It trains the conviction model on its outcome; it just carries no features.
+
+    That is a lesser thing than a claim that never opened, and the difference is
+    why an absent measurement is not a reason to refuse.
+    """
+    clock = Clock()
+    labeller = a_labeller(clock)
+    opening_price = real_prices[0]
+    labeller.observe_price(VENUE, SYMBOL, opening_price, clock.at_ns)
+
+    claim, reason = labeller.observe_candidate(a_claim(LONG))
+    assert reason == CLAIM_OPENED
+
+    clock.advance_seconds(1.0)
+    labeller.observe_price(VENUE, SYMBOL, opening_price * (1 + MOVE_FRACTION * 1.1), clock.at_ns)
+    label = labeller.resolve_settled_claims()[0]
+
+    assert label.features == {}
+    assert label.labels == {THE_SETUP_WAS_RIGHT: True}

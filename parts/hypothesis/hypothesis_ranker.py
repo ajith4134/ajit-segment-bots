@@ -42,7 +42,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="hypothesis-ranker",
     consumes=(
         "expectancy-breakdown", "instruction-scorecard", "exit-quality", "edge-half-life",
-        "novelty-score", "required-sample-size",
+        "novelty-score", "required-sample-size", "candidate-formula",
     ),
     produces=("hypothesis-priority", "part-health"),
     resource_class="compute-bound",
@@ -287,6 +287,7 @@ def start_part(context) -> int:
 
     breakdowns = Batch(read=context.bus.reader("expectancy-breakdown"))
     scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
+    formulas = Batch(read=context.bus.reader("candidate-formula"))
     qualities = Batch(read=context.bus.reader("exit-quality"))
     half_lives = Batch(read=context.bus.reader("edge-half-life"))
     novelties = Batch(read=context.bus.reader("novelty-score"))
@@ -301,6 +302,20 @@ def start_part(context) -> int:
 
     def read_inputs(_ranker):
         qualities.payloads()
+        for formula in formulas.payloads():
+            # A mined formula's expected edge, before it has ever traded: how much
+            # better than the base rate it did on data it was not fitted on, less
+            # the penalty its own complexity earns. Measured, not assumed.
+            #
+            # Without this the ranker had no edge for any hypothesis that had not
+            # already produced trades -- which is every hypothesis it exists to
+            # rank -- so `information_per_trade` returned None for all of them and
+            # every priority it published carried nothing. Measured on the live
+            # spine: hypotheses_ranked 0, not_enough_inputs 602,112.
+            excess = formula.held_out_excess
+            if excess is not None:
+                ranker.observe_expected_edge(formula.formula_id, excess, formula.mined_at_ns)
+                known.add(formula.formula_id)
         for breakdown in breakdowns.payloads():
             ranker.observe_expected_edge(breakdown.detector, breakdown.total_expectancy, breakdown.decomposed_at_ns)
             known.add(breakdown.detector)

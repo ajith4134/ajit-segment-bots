@@ -83,6 +83,16 @@ class OpenClaim:
     regime: str
     horizon_seconds: float
     evidence: dict
+    # The universal per-symbol measurements as they stood when the claim was
+    # made, in the vocabulary `runtime.sweep_measurements` defines. This is what
+    # becomes the label's features, and it is deliberately NOT the detector's own
+    # evidence: a pair detector's `spread_z` and `hedge_ratio` are meaningful
+    # only inside that detector, so a formula mined over them names something no
+    # scanner can evaluate on an arbitrary symbol. What is learned here has to be
+    # stated in terms the scanner can watch everywhere, or it cannot be acted on
+    # anywhere. The detector's own evidence is not lost -- it stays on the
+    # entry-candidate, which the recorders read.
+    measurements: dict
     price_at_claim: float
     claimed_at_ns: int
     deadline_ns: int
@@ -181,8 +191,17 @@ class SignalOutcomeLabeller:
             claim.best_favourable_fraction = max(claim.best_favourable_fraction, moved)
             claim.worst_adverse_fraction = min(claim.worst_adverse_fraction, moved)
 
-    def observe_candidate(self, candidate, regime_name: str = "any") -> tuple[OpenClaim | None, str]:
-        """Open a claim on one candidate, or refuse it and say why."""
+    def observe_candidate(
+        self, candidate, regime_name: str = "any", measurements: dict | None = None
+    ) -> tuple[OpenClaim | None, str]:
+        """Open a claim on one candidate, or refuse it and say why.
+
+        `measurements` is what the universal vocabulary said about this symbol at
+        the moment of the claim. Absent, the claim still resolves and still trains
+        the conviction model on its outcome -- it simply carries no features a
+        formula could be mined from, which is a different and lesser thing than a
+        claim that never opened.
+        """
         self.standing.candidates_seen += 1
 
         if candidate.direction not in (LONG, SHORT):
@@ -224,6 +243,7 @@ class SignalOutcomeLabeller:
             regime=regime_name,
             horizon_seconds=candidate.horizon_seconds,
             evidence=dict(candidate.evidence),
+            measurements=dict(measurements or {}),
             price_at_claim=price,
             claimed_at_ns=claimed_at,
             deadline_ns=claimed_at + int(candidate.horizon_seconds * 1e9),
@@ -304,7 +324,9 @@ class SignalOutcomeLabeller:
             horizon_seconds=claim.horizon_seconds,
             seconds_to_resolve=(now_ns - claim.claimed_at_ns) / 1e9,
             resolved_within_horizon=now_ns < claim.deadline_ns,
-            features=dict(claim.evidence),
+            # The universal vocabulary, not the detector's private evidence --
+            # see OpenClaim.measurements for why the two are not interchangeable.
+            features=dict(claim.measurements),
             built_at_ns=now_ns,
             claimed_at_ns=claim.claimed_at_ns,
             # What the claim measured while it was open. Reported rather than
@@ -385,11 +407,20 @@ def start_part(context) -> int:
     otherwise be measured against a price from before the detector saw anything.
     """
     from runtime.input_assembly import Batch
+    from runtime.rolling_statistics import RollingWindow
+    from runtime.sweep_measurements import add_cross_sectional, measure_symbol
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("entry-candidate"))
     publish_labels = context.bus.publisher_for("training-label")
     price_staleness = price_staleness_from(context)
+    window_length = int(context.number("detector_window_length"))
+    minimum_observations = int(context.number("detector_minimum_observations"))
+    short_window_fraction = context.number("sweep_short_window_fraction")
+    minimum_symbols = int(context.number("sweep_minimum_symbols_for_cross_section"))
+    maximum_gap_seconds = context.number("price_series_maximum_gap_seconds")
+    gap_patience_multiple = context.number("price_gap_patience_multiple")
+    windows: dict[tuple[str, str], RollingWindow] = {}
 
     def read_prices_and_candidates(labeller: SignalOutcomeLabeller) -> None:
         for trade in levels_in(trades.payloads()):
@@ -400,8 +431,37 @@ def start_part(context) -> int:
                 price_staleness.observe_price(
                     trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
-        for candidate in candidates.payloads():
-            labeller.observe_candidate(candidate)
+            key = (trade.venue_id, trade.symbol)
+            window = windows.get(key)
+            if window is None:
+                window = windows[key] = RollingWindow(
+                    length=window_length,
+                    maximum_gap_seconds=maximum_gap_seconds,
+                    gap_patience_multiple=gap_patience_multiple,
+                )
+            window.observe(trade.price, trade.observed_at_ns)
+
+        opening = candidates.payloads()
+        if not opening:
+            return
+        # Measured once for the whole universe rather than once per candidate:
+        # the cross-sectional half is a statement about every symbol at once, so
+        # computing it per candidate would both cost more and let two candidates
+        # in one batch disagree about what the market did.
+        measured: dict[tuple[str, str], dict] = {
+            key: measure_symbol(
+                window,
+                minimum_observations=minimum_observations,
+                short_window_fraction=short_window_fraction,
+            )
+            for key, window in windows.items()
+        }
+        add_cross_sectional(measured, minimum_symbols=minimum_symbols)
+        for candidate in opening:
+            labeller.observe_candidate(
+                candidate,
+                measurements=measured.get((candidate.venue_id, candidate.symbol)),
+            )
 
     return run_signal_outcome_labeller(
         labeller=SignalOutcomeLabeller(

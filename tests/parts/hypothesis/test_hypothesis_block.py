@@ -16,6 +16,7 @@ import importlib
 import pytest
 
 from parts.hypothesis.expectancy_decomposer import ExpectancyDecomposer, TradeContribution
+from parts.hypothesis.hypothesis_deduplicator import _shape_of
 from parts.hypothesis.hypothesis_deduplicator import (
     AN_EXACT_DUPLICATE, A_REGIME_VARIANT, A_TUNED_DUPLICATE, HypothesisDeduplicator,
     HypothesisShape, NOVEL,
@@ -40,8 +41,10 @@ from parts.hypothesis.instruction_retirer import (
 )
 from parts.hypothesis.instruction_writer import (
     DOES_NOT_CLEAR_ITS_TRIALS, EDGE_DIES_BEFORE_IT_IS_CONFIRMED, InstructionWriter,
-    NOT_NOVEL, NOT_REFUTATION_TESTED, NO_FALSIFICATION_CRITERION, NO_MEASUREMENT,
-    NO_REGIME_TAG, NO_SAMPLE_SIZE as WRITER_NO_SAMPLE_SIZE, SAMPLE_UNREACHABLE, WAS_REFUTED,
+    EVERY_TESTED_REGIME, NOT_NOVEL, NO_FALSIFICATION_CRITERION, NO_MEASUREMENT,
+    NO_REGIME_TAG, NO_SAMPLE_SIZE as WRITER_NO_SAMPLE_SIZE, REGIME_EVIDENCE_TOO_THIN,
+    SAMPLE_UNREACHABLE, SEVERAL_REGIMES_NEEDS_AN_INSTRUCTION_EACH,
+    TESTED_AND_WORKS_NOWHERE,
 )
 from parts.hypothesis.loss_inverter import (
     INVERTED, LossCause, LossInverter, LOST_TO_COSTS, LOST_TO_EXECUTION, LOST_TO_NOISE,
@@ -799,13 +802,29 @@ def a_hypothesis(hypothesis_id="h-1", measurement="z_score", trials=3):
     )
 
 
+TAG_STATE_UNTAGGED = "too-little-evidence-in-any-regime-to-say"
+TAG_STATE_REGIME_INDEPENDENT = "works-in-every-regime-it-has-been-tested-in"
+
+
+class _RegimeTag:
+    """A tagger verdict, in the shape instruction-writer reads it."""
+
+    def __init__(self, state, fires_in):
+        self.hypothesis_id = "h-1"
+        self.state = state
+        self.regimes_it_may_fire_in = fires_in
+
+
+def a_regime_tag(state="tagged-for-the-regime-its-evidence-came-from", fires_in=("trending",)):
+    return _RegimeTag(state, fires_in)
+
+
 def a_ready_writer(**kwargs):
     subject = a_writer(**kwargs)
     subject.observe_falsification_criterion("h-1", Criterion())
     subject.observe_required_sample("h-1", 400)
     subject.observe_trial_verdict("h-1", True)
     subject.observe_novelty("h-1", 0.9)
-    subject.observe_refutation_verdict("h-1", "not-refuted")
     subject.observe_regime_tag("h-1", "trending")
     subject.observe_edge_half_life("h-1", 5000.0)
     return subject
@@ -853,22 +872,85 @@ def test_the_same_idea_in_three_wordings_is_not_three_confirmations():
     assert NOT_NOVEL in subject.write(a_hypothesis())[1]
 
 
-def test_an_untested_hypothesis_is_refused():
-    subject = a_ready_writer()
-    subject._verdicts.clear()
-    assert NOT_REFUTATION_TESTED in subject.write(a_hypothesis())[1]
+def test_refutation_is_not_a_condition_for_writing_because_it_cannot_be_one():
+    """The verdict only exists after an instruction has traded, and trading needs one.
 
-
-def test_a_refuted_hypothesis_is_refused():
-    subject = a_ready_writer()
-    subject.observe_refutation_verdict("h-1", "refuted")
-    assert WAS_REFUTED in subject.write(a_hypothesis())[1]
+    This part is the gate INTO paper testing; instruction-promotion-gate is the
+    gate out of it, and it consumes refutation-verdict. Requiring the verdict here
+    made zero instructions a stable fixed point of the whole pipeline: 479,323
+    requests and 479,323 refusals measured on the live spine.
+    """
+    instruction, failing = a_ready_writer().write(a_hypothesis())
+    assert failing == ()
+    assert instruction is not None
+    assert "refutation_verdict" not in instruction.evidence
+    assert "refutation did not break it" not in instruction.reason
 
 
 def test_an_untagged_hypothesis_is_refused():
     subject = a_ready_writer()
-    subject.observe_regime_tag("h-1", None)
+    subject._tags.clear()
     assert NO_REGIME_TAG in subject.write(a_hypothesis())[1]
+
+
+def test_a_tag_is_never_replaced_by_an_absence():
+    """A hypothesis re-arriving on its own input names no regime; the tagger's does.
+
+    Letting the absence win would make the writer forget, every tick, what it had
+    just been told by the part that measured it.
+    """
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", None)
+    assert subject.write(a_hypothesis())[1] == ()
+
+
+def test_a_tag_with_too_little_evidence_is_refused_by_its_own_name():
+    """Different from never having been tagged, and the refusal says which."""
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", a_regime_tag(state=TAG_STATE_UNTAGGED))
+    failing = subject.write(a_hypothesis())[1]
+    assert REGIME_EVIDENCE_TOO_THIN in failing
+    assert NO_REGIME_TAG not in failing
+
+
+def test_a_regime_independent_tag_is_carried_as_such_not_as_no_tag():
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", a_regime_tag(state=TAG_STATE_REGIME_INDEPENDENT))
+    instruction, failing = subject.write(a_hypothesis())
+    assert failing == ()
+    assert instruction.regime_tag == EVERY_TESTED_REGIME
+
+
+def test_a_tag_naming_one_regime_becomes_that_regime():
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", a_regime_tag(fires_in=("reverting",)))
+    instruction, failing = subject.write(a_hypothesis())
+    assert failing == ()
+    assert instruction.regime_tag == "reverting"
+
+
+def test_a_hypothesis_tested_everywhere_and_working_nowhere_is_refused_by_its_own_name():
+    """A stronger fact than never having been measured, and the refusal says which.
+
+    The tagger states it as a tag that is not UNTAGGED and names no regime it may
+    fire in -- its own reason reads "tagged for no regime". Refusing it as
+    too-thin evidence would report a hypothesis the system actually refuted as one
+    it simply has not got round to.
+    """
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", a_regime_tag(
+        state="tagged-for-the-regimes-it-works-in", fires_in=(),
+    ))
+    failing = subject.write(a_hypothesis())[1]
+    assert TESTED_AND_WORKS_NOWHERE in failing
+    assert REGIME_EVIDENCE_TOO_THIN not in failing
+
+
+def test_a_tag_naming_several_regimes_is_refused_rather_than_narrowed():
+    """Taking the first would narrow the claim; taking None would widen it."""
+    subject = a_ready_writer()
+    subject.observe_regime_tag("h-1", a_regime_tag(fires_in=("trending", "reverting")))
+    assert SEVERAL_REGIMES_NEEDS_AN_INSTRUCTION_EACH in subject.write(a_hypothesis())[1]
 
 
 def test_an_edge_that_decays_before_its_own_sample_size_is_refused():
@@ -888,3 +970,60 @@ def test_a_writer_with_no_known_measurements_is_refused():
         InstructionWriter(
             minimum_novelty=0.5, maximum_reachable_trades=10_000, known_measurements=()
         )
+
+
+# ---- the shape a mined formula is read through ------------------------------
+#
+# This is the read that silently returned None for every candidate-formula the
+# system ever produced: 228 received, hypotheses_scored 0, and not one
+# novelty-score published -- which failed instruction-writer's novelty bar for
+# every hypothesis, because a hypothesis with no score is scored 0.0.
+
+def a_mined_formula(terms, formula_id="f-1", regime_tag=None):
+    """A candidate-formula in the shape the miner publishes it.
+
+    Built here rather than imported: hypothesis-deduplicator may not import the
+    miner (T-4), so what is tested is exactly the duck-typed read the part does.
+    """
+    class _Term:
+        def __init__(self, measurement, comparison, threshold):
+            self.measurement = measurement
+            self.comparison = comparison
+            self.threshold = threshold
+
+    class _Formula:
+        def __init__(self):
+            self.formula_id = formula_id
+            self.terms = tuple(_Term(*term) for term in terms)
+            self.regime_tag = regime_tag
+
+    return _Formula()
+
+
+def test_a_mined_formula_has_a_shape():
+    shape = _shape_of(a_mined_formula([("return_z", "above", 2.0)]))
+    assert shape is not None
+    assert shape.measurement == "return_z"
+    assert shape.comparison == "above"
+    assert shape.threshold == 2.0
+
+
+def test_a_conjunction_has_no_single_shape_and_is_refused():
+    """Naming it by its first term would make two formulas sharing one look alike.
+
+    The same answer instruction-writer gives it, for the same reason: the scanner
+    watches one comparison, not a conjunction.
+    """
+    assert _shape_of(a_mined_formula([
+        ("return_z", "above", 2.0),
+        ("realised_volatility", "below", 0.01),
+    ])) is None
+
+
+def test_a_mined_formula_is_actually_scored_for_novelty():
+    """The end-to-end fact: a formula in, a novelty score out."""
+    subject = a_deduplicator()
+    score = subject.score("f-1", _shape_of(a_mined_formula([("return_rank", "above", 0.9)])), ())
+    assert score is not None
+    assert 0.0 < score.novelty <= 1.0
+    assert subject.standing.hypotheses_scored == 1

@@ -266,7 +266,43 @@ def run_hypothesis_deduplicator(
     )
 
 def _shape_of(item):
-    """A hypothesis's comparable shape, from whichever type carries it."""
+    """A hypothesis's comparable shape, from whichever type carries it.
+
+    Three shapes reach this part and they carry their claim differently. A
+    mutation and an instruction state `measurement`/`comparison`/`threshold`
+    directly or through a `context` mapping. **A mined formula states neither: it
+    carries `terms`**, each one a measurement, a comparison and a threshold, and
+    it was the only producer this part actually had.
+
+    Until 2026-08-26 this function looked only for `measurement` and a `context`,
+    so every `candidate-formula` returned None and was silently skipped -- 228
+    received, `hypotheses_scored` 0, and not one `novelty-score` ever published.
+    `hypothesis-ranker` reads novelty from here, `instruction-writer` reads it
+    from the ranker, and a hypothesis with no novelty score fails the writer's
+    novelty bar at 0.0, so this one unreadable field refused every hypothesis the
+    system ever mined. The reads went through `getattr(..., None)` defaults, which
+    is exactly the shape `check_payload_reads.py` cannot see -- a default turns a
+    field nobody carries into a value everybody accepts.
+
+    A formula's shape is its **first** term. A conjunction has no single
+    measurement, and calling it by its first term would make two formulas sharing
+    an opening term look like duplicates; so a multi-term formula is refused here
+    rather than mis-shaped, which is the same answer `instruction-writer` gives it
+    for the same reason -- the scanner watches one comparison, not a conjunction.
+    """
+    terms = getattr(item, "terms", None)
+    if terms:
+        if len(terms) != 1:
+            return None
+        term = terms[0]
+        return HypothesisShape(
+            measurement=str(term.measurement),
+            comparison=str(term.comparison),
+            threshold=float(term.threshold),
+            direction="",
+            regime=getattr(item, "regime_tag", None),
+        )
+
     context = getattr(item, "context", None) or {}
     if not isinstance(context, dict):
         context = {}

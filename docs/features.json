@@ -3635,7 +3635,10 @@
         "falsification-criterion",
         "knowledge-link",
         "regime-memory",
-        "horizon-profile"
+        "horizon-profile",
+        "novelty-score",
+        "required-sample-size",
+        "hypothesis-regime-tag"
       ],
       "produces": [
         "opportunity-instruction",
@@ -5943,7 +5946,8 @@
         "exit-quality",
         "edge-half-life",
         "novelty-score",
-        "required-sample-size"
+        "required-sample-size",
+        "candidate-formula"
       ],
       "produces": [
         "hypothesis-priority",
