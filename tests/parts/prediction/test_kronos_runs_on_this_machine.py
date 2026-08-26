@@ -167,3 +167,87 @@ def test_a_window_shorter_than_the_model_asks_for_is_refused_not_padded(
         ),
     )
     assert forecaster.forecast(window_off_the_tape).state == WINDOW_TOO_SHORT
+
+
+@pytest.mark.slow
+def test_the_window_builder_seeds_itself_from_the_tape():
+    """A window that starts empty is 64 wall-clock minutes from being usable, and
+    kronos-forecaster refused all 585 windows it was asked about on 2026-08-26
+    while it waited. The history is on the tape; this reads it."""
+    from parts.prediction.kline_window_builder import KlineWindowBuilder
+    from runtime.candle_history import closed_candles_on_the_tape
+
+    entries = runtime_settings()
+    wanted = int(entries["kline_window_length"].value)
+    interval = str(entries["candle_interval"].value)
+    builder = KlineWindowBuilder(interval=interval, maximum_window=wanted)
+
+    day = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    sized = [
+        (path.stat().st_size, path.parent.name)
+        for path in (TAPE_ROOT / VENUE).glob(f"*/{day}.candle.index")
+        if path.stat().st_size > 0
+    ]
+    if not sized:
+        pytest.skip("no candle tape for today yet")
+    _, symbol = max(sized)
+
+    history = closed_candles_on_the_tape(
+        tape_root=TAPE_ROOT,
+        venue_id=VENUE,
+        symbol=symbol,
+        interval_ns=builder.interval_ns,
+        wanted=wanted,
+        read_candles=load_venue_adapter(VENUE).read_candles,
+    )
+    if len(history) < 2:
+        pytest.skip(f"{symbol} has {len(history)} closed candle(s) of contiguous history")
+
+    # Contiguous, oldest first, and every one of them closed -- the three things
+    # that make it a series rather than a pile of bars.
+    assert all(candle.is_closed for candle in history)
+    spacings = {
+        later.open_time_ns - earlier.open_time_ns
+        for earlier, later in zip(history, history[1:])
+    }
+    assert spacings == {builder.interval_ns}
+
+    seeded = builder.seed_history(
+        VENUE,
+        symbol,
+        tuple(
+            Candle(
+                open_time_ns=candle.open_time_ns, open=candle.open, high=candle.high,
+                low=candle.low, close=candle.close, volume=candle.volume,
+                quote_volume=candle.quote_volume, trades=candle.trades or 0, is_closed=True,
+            )
+            for candle in history
+        ),
+    )
+    assert seeded == len(history)
+    window = builder.build(VENUE, symbol, len(history))
+    assert window.gaps == ()
+    assert len(window.candles) == len(history)
+
+
+@pytest.mark.slow
+def test_history_that_does_not_reach_the_live_candle_is_refused_whole():
+    """One hole and the seed goes: a window with a gap is a different series, and
+    a model handed it learns that time moves at whatever rate the feed managed."""
+    from parts.prediction.kline_window_builder import KlineWindowBuilder
+
+    builder = KlineWindowBuilder(interval="1m", maximum_window=16)
+    minute = builder.interval_ns
+
+    def candle(index: int) -> Candle:
+        return Candle(
+            open_time_ns=index * minute, open=1.0, high=1.0, low=1.0, close=1.0,
+            volume=1.0, quote_volume=1.0, trades=1, is_closed=True,
+        )
+
+    builder.observe_candle("a-venue", "ABCUSDT", candle(10))
+    # History ending at minute 8 leaves minute 9 missing.
+    assert builder.seed_history("a-venue", "ABCUSDT", (candle(7), candle(8))) == 0
+    assert builder.standing.seeds_refused_for_a_gap == 1
+    # History ending at minute 9 runs straight into it.
+    assert builder.seed_history("a-venue", "ABCUSDT", (candle(8), candle(9))) == 2

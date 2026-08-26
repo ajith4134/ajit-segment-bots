@@ -79,6 +79,13 @@ class BuilderStanding:
     windows_still_filling: int = 0
     aggregations_refused: int = 0
     symbols_tracked: int = 0
+    # Candles taken from the tape to fill a window that started empty, and the
+    # symbols whose history was refused for having a hole in it. Counted apart
+    # from candles_observed because one arrived live and the other was recorded
+    # earlier, and a window is a different claim depending on which it holds.
+    candles_seeded_from_history: int = 0
+    symbols_seeded: int = 0
+    seeds_refused_for_a_gap: int = 0
     by_interval: dict = field(default_factory=dict)
 
 
@@ -111,6 +118,11 @@ class KlineWindowBuilder:
     def interval(self) -> str:
         return self._interval
 
+    @property
+    def interval_ns(self) -> int:
+        """The interval in nanoseconds, for a caller reading history off the tape."""
+        return self._interval_ns
+
     def observe_candle(self, venue_id: str, symbol: str, candle: Candle) -> None:
         """One candle. A repeat of the same open time replaces it -- streams revise."""
         self.standing.candles_observed += 1
@@ -122,6 +134,38 @@ class KlineWindowBuilder:
             candles.append(candle)
         del candles[: max(0, len(candles) - self._maximum)]
         self.standing.symbols_tracked = len(self._candles)
+
+    def seed_history(self, venue_id: str, symbol: str, candles) -> int:
+        """Put recorded candles in front of what has arrived live, or nothing.
+
+        Prepended and never appended: the stream is the newest and the most
+        authoritative, and history is only ever what came before it. A seed is
+        kept only while it runs contiguously into the earliest live candle --
+        one hole and the whole seed is refused, because a window with a hole in
+        it is a different series and the model cannot tell.
+
+        Seeding once per symbol is the caller's business; this counts what it
+        was given either way.
+        """
+        key = (venue_id, symbol)
+        live = self._candles.get(key, [])
+        if not candles:
+            return 0
+        usable = [candle for candle in candles if candle.is_closed]
+        if live:
+            earliest = live[0].open_time_ns
+            usable = [candle for candle in usable if candle.open_time_ns < earliest]
+            if usable and earliest - usable[-1].open_time_ns != self._interval_ns:
+                self.standing.seeds_refused_for_a_gap += 1
+                return 0
+        if not usable:
+            return 0
+        self._candles[key] = usable + live
+        del self._candles[key][: max(0, len(self._candles[key]) - self._maximum)]
+        self.standing.candles_seeded_from_history += len(usable)
+        self.standing.symbols_seeded += 1
+        self.standing.symbols_tracked = len(self._candles)
+        return len(usable)
 
     def build(self, venue_id: str, symbol: str, length: int) -> KlineWindow:
         """The last `length` candles, with any missing intervals named."""
@@ -242,6 +286,9 @@ def describe_window_building(builder: KlineWindowBuilder) -> dict:
             - builder.standing.windows_still_filling
         ),
         "windows_still_filling": builder.standing.windows_still_filling,
+        "candles_seeded_from_history": builder.standing.candles_seeded_from_history,
+        "symbols_seeded": builder.standing.symbols_seeded,
+        "seeds_refused_for_a_gap": builder.standing.seeds_refused_for_a_gap,
         "open_candles_excluded": builder.standing.open_candles_excluded,
         "gaps_found": builder.standing.gaps_found,
         "aggregations_refused_for_a_missing_candle": builder.standing.aggregations_refused,
@@ -279,9 +326,23 @@ def start_part(context) -> int:
     Candles arrive on `candle` from the candle reader with the venue's
     closed flag; a window is rebuilt and published for a symbol when a
     closed candle lands on it.
+
+    **The first candle for a symbol brings its history with it.** This part
+    starts every process holding nothing, so without a seed the first full window
+    is a full window's worth of wall-clock minutes away -- 64 of them on
+    2026-08-26, during which kronos-forecaster refused every window it was asked
+    about. The history is read from the tape rather than from a venue endpoint,
+    which is `historical-bar-store`'s rule and its reason: an endpoint returns the
+    venue's current view of the past, and the tape is what arrived. It is read
+    once per symbol, on that symbol's first live candle, so the cost is spread
+    across the first minute instead of landing at start.
     """
+    import pathlib
+
+    from runtime.candle_history import closed_candles_on_the_tape
     from runtime.forecast_types import Candle
     from runtime.input_assembly import Batch
+    from runtime.venues.adapter_registry import load_venue_adapter
     from runtime.venues.venue_adapter import NormalisedCandle
 
     updates = Batch(read=context.bus.reader("candle"))
@@ -292,12 +353,48 @@ def start_part(context) -> int:
         include_open_candle=bool(context.setting("kline_include_open_candle").value),
     )
     length = int(context.number("kline_window_length"))
+    tape_root = pathlib.Path(str(context.setting("tape_root").value)).expanduser()
+    seeded: set[tuple[str, str]] = set()
+    adapters: dict[str, object] = {}
+
+    def seed_once(venue_id: str, symbol: str) -> None:
+        """History for a symbol the first time it says anything, and never again."""
+        key = (venue_id, symbol)
+        if key in seeded:
+            return
+        seeded.add(key)
+        adapter = adapters.get(venue_id)
+        if adapter is None:
+            adapter = load_venue_adapter(venue_id)
+            adapters[venue_id] = adapter
+        history = closed_candles_on_the_tape(
+            tape_root=tape_root,
+            venue_id=venue_id,
+            symbol=symbol,
+            interval_ns=builder.interval_ns,
+            wanted=int(context.number("kline_maximum_window")),
+            read_candles=adapter.read_candles,
+        )
+        builder.seed_history(
+            venue_id,
+            symbol,
+            tuple(
+                Candle(
+                    open_time_ns=candle.open_time_ns, open=candle.open, high=candle.high,
+                    low=candle.low, close=candle.close, volume=candle.volume,
+                    quote_volume=candle.quote_volume, trades=candle.trades or 0,
+                    is_closed=True,
+                )
+                for candle in history
+            ),
+        )
 
     def read_candles(_builder):
         touched = set()
         for update in updates.payloads():
             if not isinstance(update, NormalisedCandle):
                 continue
+            seed_once(update.venue_id, update.symbol)
             builder.observe_candle(
                 update.venue_id, update.symbol,
                 Candle(
