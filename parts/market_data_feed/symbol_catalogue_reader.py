@@ -320,6 +320,11 @@ class SymbolCatalogueReader:
         return facts
 
     @property
+    def selection(self) -> tuple:
+        """What this reader last selected, so a caller can see what is missing."""
+        return self._selection
+
+    @property
     def venue_id(self) -> str:
         """Which venue this reader reads, so a caller need not open its adapter."""
         return self._adapter.venue_id
@@ -503,6 +508,18 @@ def start_part(context) -> int:
     ]
     refresh_interval_seconds = context.number("symbol_catalogue_refresh_interval")
     last_read_at = [None]
+    # What was handed to each reader at its last read, so a held symbol that could
+    # not be kept is not asked for again on the next tick.
+    asked_for: dict[str, frozenset] = {}
+    # Held symbols this venue refused to capture, per venue, for health.
+    uncapturable: dict[str, list] = {}
+
+    def held_by_venue(held: dict, venue_id: str) -> frozenset:
+        return frozenset(
+            symbol
+            for (its_venue, symbol), position in held.items()
+            if its_venue == venue_id and not position.is_flat
+        )
 
     def read_if_due() -> None:
         # Drained every tick, not only when a catalogue read is due: the position
@@ -510,25 +527,61 @@ def start_part(context) -> int:
         # 900 seconds would mean acting on a picture that old.
         held = positions.mapping()
         now = clock.monotonic()
-        if last_read_at[0] is not None and now - last_read_at[0] < refresh_interval_seconds:
+        due = last_read_at[0] is None or now - last_read_at[0] >= refresh_interval_seconds
+        # A held symbol missing from what is currently selected is read for now,
+        # rather than at the next refresh. Two moments need it and both leave a
+        # position unpriced for up to the whole interval: the first tick, where
+        # the catalogue is read before fill-reconciler has republished the
+        # restored book; and a symbol whose volume slips out of the cut while it
+        # is held. Fifteen minutes without a price is fifteen minutes in which a
+        # resting stop cannot trigger.
+        #
+        # Only for a symbol not already asked for. Some held symbols cannot be
+        # captured at all -- measured 2026-08-26, binance-usdm still *lists*
+        # STORJUSDT while `is_symbol_capturable` refuses it, so asking again can
+        # never change the answer. Without this the condition never clears and the
+        # part re-reads the catalogue every tick: 39 reads in five minutes, each
+        # of them two or more requests to the venue, which is how a fix for a
+        # silent gap becomes a rate-limit ban.
+        wanted = {
+            reader.venue_id: held_by_venue(held, reader.venue_id) for reader in readers
+        }
+        newly_missing = any(
+            wanted[reader.venue_id]
+            - {entry.symbol for entry in reader.selection}
+            - asked_for.get(reader.venue_id, frozenset())
+            for reader in readers
+        )
+        if not (due or newly_missing):
             return
         last_read_at[0] = now
         for reader in readers:
-            held_here = frozenset(
-                symbol
-                for (venue_id, symbol), position in held.items()
-                if venue_id == reader.venue_id and not position.is_flat
-            )
+            held_here = wanted[reader.venue_id]
+            asked_for[reader.venue_id] = held_here
             publish_universe(reader.read_catalogue(held_here))
+            # A symbol the bot holds that this venue will not let us capture. Not
+            # a fault in this part and not something asking again can fix -- but a
+            # position on it can never be priced from this venue's stream, so it
+            # is named rather than left to look like an ordinary rotation.
+            uncapturable[reader.venue_id] = sorted(
+                held_here - {entry.symbol for entry in reader.selection}
+            )
 
     def describe_all_catalogues() -> dict:
         # One recorder per venue in one process; a heartbeat standing keeps
         # top-level numbers, so each venue's facts travel under a suffixed key.
         merged: dict = {"part_id": PART_ID, "venues": len(readers)}
+        for venue, symbols in uncapturable.items():
+            # A held position on a symbol the venue will not stream is a position
+            # that cannot be priced, stopped out, or measured from that venue.
+            merged[f"held_but_uncapturable.{venue}"] = float(len(symbols))
         for reader in readers:
             one = describe_catalogue(reader)
             venue = one["venue_id"] or "unread"
-            for field in ("reads_completed", "listings_seen", "capturable_seen", "selected"):
+            for field in (
+                "reads_completed", "listings_seen", "capturable_seen", "selected",
+                "kept_because_held",
+            ):
                 merged[f"{field}.{venue}"] = one[field]
         return merged
 

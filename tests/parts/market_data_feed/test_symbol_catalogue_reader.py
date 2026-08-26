@@ -511,3 +511,35 @@ def test_a_symbol_the_venue_does_not_list_cannot_be_kept(venue_id, read_captured
     )
     assert "NOTHINGLISTEDUSDT" not in {entry.symbol for entry in kept}
     assert len(kept) == 5
+
+
+def test_a_reader_reports_what_it_last_selected(read_captured_json):
+    """The caller needs it to notice a held symbol that is missing, and re-read now.
+
+    Two moments leave a position unpriced for the whole 900-second interval
+    otherwise: the first tick, where the catalogue is read before fill-reconciler
+    has republished the restored book; and a symbol whose volume slips out of the
+    cut while it is held. Fifteen minutes without a price is fifteen minutes in
+    which a resting stop cannot trigger.
+    """
+    reader = build_reader("binance-usdm", read_captured_json)
+    assert reader.selection == (), "a reader that has not read has selected nothing"
+    selected = reader.read_catalogue()
+    assert reader.selection == selected
+    assert reader.selection, "the fixture catalogue selected nothing at all"
+
+
+def test_reading_with_a_held_symbol_puts_it_in_the_selection(read_captured_json):
+    """End to end on the reader itself, not only on the pure selection function."""
+    # A cut well inside the captured subset, which holds fewer symbols than the
+    # live catalogue: the point is a symbol below the cut, not the cut's real size.
+    cut = 5
+    reader = build_reader("binance-usdm", read_captured_json, count=cut)
+    everything = build_reader("binance-usdm", read_captured_json, count=0).read_catalogue()
+    assert len(everything) > cut, "need more symbols than the cut for this to mean anything"
+    below_the_cut = everything[cut].symbol
+
+    assert below_the_cut not in {e.symbol for e in reader.read_catalogue()}
+    kept = reader.read_catalogue(frozenset({below_the_cut}))
+    assert below_the_cut in {e.symbol for e in kept}
+    assert reader.selection == kept, "the reader kept a selection it did not publish"
