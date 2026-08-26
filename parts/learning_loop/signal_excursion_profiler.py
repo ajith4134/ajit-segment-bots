@@ -395,7 +395,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    from runtime.level_publishing import LevelPublisherByKey
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
 
     labels = Batch(read=context.bus.reader("training-label"))
     # Keyed by exactly what makes one profile a different profile, so a label for
@@ -403,6 +403,10 @@ def start_part(context) -> int:
     profile_levels = LevelPublisherByKey(
         publish=context.bus.publisher_for("excursion-profile"),
         refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        # An ExcursionProfile is restamped on every fit, so compared whole no two
+        # are ever equal and nothing would be skipped -- measured: 565,409
+        # published against 268,978 fitted, with the skip counter reading zero.
+        identity_of=without_observation_time,
     )
 
     def publish_profiles(profile) -> None:

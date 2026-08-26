@@ -300,12 +300,13 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     health = Batch(read=context.bus.reader("part-health"))
     gaps = Batch(read=context.bus.reader("feed-gap"))
-    from runtime.level_publishing import LevelPublisherByKey
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
 
     # Keyed by venue: one venue going dark must not restate the other's standing.
     outage_levels = LevelPublisherByKey(
         publish=context.bus.publisher_for("outage-state"),
         refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=without_observation_time,
     )
 
     rider = VenueOutageRider(

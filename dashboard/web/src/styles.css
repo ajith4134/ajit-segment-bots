@@ -270,17 +270,22 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
 .trade-empty { padding: 16px 15px; color: var(--muted); font-size: 12px; line-height: 1.6; background: var(--sunk); }
 .trade-proof { padding: 8px 15px 10px; color: var(--faint); font-size: 9.5px; line-height: 1.5; border-top: 1px solid #161C27; }
 
+/* The open-positions table carries seventeen columns since 2026-08-26 -- the
+   excursion, the realised leg, and what this symbol has historically done to a
+   call of this side. It is wider than any viewport and scrolls inside its own
+   panel rather than widening the page, which is why overflow-x lives here and
+   not on anything above it. */
 .trade-scroll { overflow-x: auto; max-height: 340px; overflow-y: auto; }
 .trade-scroll-tall { max-height: 560px; }
 .trade-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .trade-table th {
   position: sticky; top: 0; background: var(--sunk); z-index: 1;
-  text-align: left; padding: 7px 10px; font: 500 9.5px/1 "IBM Plex Mono", monospace;
+  text-align: left; padding: 7px 7px; font: 500 9.5px/1 "IBM Plex Mono", monospace;
   text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
   border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 .trade-table th.n, .trade-table td.n { text-align: right; }
-.trade-table td { padding: 6px 10px; border-top: 1px solid #161C27; white-space: nowrap; }
+.trade-table td { padding: 6px 7px; border-top: 1px solid #161C27; white-space: nowrap; }
 .trade-table tbody tr:hover { background: #161C27; }
 .trade-table .sym { font-weight: 600; }
 .trade-table .faint { color: var(--faint); }

@@ -264,19 +264,30 @@ def run_correlation_cluster_mapper(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    mapping_is_due=lambda: True,
 ) -> int:
-    """Read what moved, and say the clustering when the clustering changes.
+    """Read what moved, and remap when a remap is due.
 
     Which symbols move together is a level, and it changes on the timescale
     correlations change on -- not on the timescale prices arrive on. Measured on
     the live spine at 10:26 on 2026-08-26: 160 messages a second built from 3
     price frames a second, remapping and restating the same clusters.
 
-    The mapping still runs on every tick; only the restating is skipped.
+    The mapping is paced, not just the publish, and that is the whole point here.
+    `map()` correlates every pair: at 67 symbols that is 2,211 correlations over
+    256-long windows, and at roughly eighteen ticks a second it cost 76% of a core
+    on 2026-08-26 -- the second busiest process on the machine. Skipping only the
+    send would have paid all of that and thrown the answer away.
+
+    Observing prices stays on every tick. A window that missed the prices between
+    two remaps would correlate a series with holes in it, which is a different
+    series, not a cheaper one.
     """
 
     def tick() -> None:
         read_prices(mapper)
+        if not mapping_is_due():
+            return
         publish_clusters(mapper.map())
 
     return run_part(
@@ -305,11 +316,24 @@ def start_part(context) -> int:
     # on top of it would be keeping the latest of the latest. Read as a batch and
     # flattened to its levels.
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
-    from runtime.level_publishing import LevelPublisher
+    from runtime.level_publishing import (
+        LevelPublisher,
+        PacedPublisher,
+        without_observation_time,
+    )
+
+    # Paces the mapping, not just the send: correlating every pair is the
+    # expensive half, and a publisher that only refused to send it would pay all
+    # of that and discard the answer. Same shape as heartbeat-collector's.
+    remaps = PacedPublisher(
+        publish=lambda _items: None,
+        interval_seconds=context.number("level_refresh_interval_seconds"),
+    )
 
     cluster_levels = LevelPublisher(
         publish=context.bus.publisher_for("correlation-cluster"),
         refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=without_observation_time,
     )
     mapper = CorrelationClusterMapper(
         window_length=int(context.number("correlation_window_length")),
@@ -331,11 +355,24 @@ def start_part(context) -> int:
         if kept:
             cluster_levels.publish_level(kept)
 
+    def mapping_is_due() -> bool:
+        """Whether a remap is due, and record it as taken if so.
+
+        The reading and the recording are one call because a caller that asked
+        and then did not remap would push the next remap out by a full interval
+        for nothing.
+        """
+        if not remaps.is_due():
+            return False
+        remaps.publish_snapshot(())
+        return True
+
     return run_correlation_cluster_mapper(
         mapper=mapper,
         control_socket=context.control_socket,
         read_prices=read_prices,
         publish_clusters=publish,
+        mapping_is_due=mapping_is_due,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

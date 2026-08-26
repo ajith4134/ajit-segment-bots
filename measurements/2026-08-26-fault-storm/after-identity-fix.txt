@@ -1,0 +1,32 @@
+load: ['15.75', '18.51', '18.47']
+Mem:           30070        8266       16737          10        5519       21803
+TOTAL 46,589 msg/s   reporting 325 late 1 silent 1
+ true pub/s   recv/s  part / type
+       3155        1  venue-quote-stream-reader / market-quote
+        701        1  venue-trade-stream-reader / market-data
+        399      100  fill-volume-capper / fillable-size
+        399      187  intra-bar-fill-sequencer / fill-sequence
+        338        0  signal-excursion-profiler / excursion-profile
+        290     1275  market-anomaly-detector / market-anomaly
+        290      995  ground-truth-snapshot-builder / verified-snapshot
+        280      295  part-appetite-meter / part-resource-usage
+        274      106  order-book-reader / order-book-snapshot
+        259      275  tick-size-resolver / price-increment
+
+top CPU parts:
+   83.2%  probe-runner
+   45.4%  stream-budget-planner
+   35.1%  venue-quote-stream-reader
+   30.1%  folded-circuit-view
+   29.9%  venue-trade-stream-reader
+   27.1%  correlation-cluster-mapper
+   19.4%  order-book-reader
+   19.0%  cointegration-pair-finder
+   18.8%  ?
+   13.3%  spread-reversion-detector
+
+skip counters:
+  signal-excursion-profiler: {"claims_recorded": 29717.0, "claims_that_came_right": 29717.0, "claims_that_came_wrong": 28541.0, "keys_fitted": 193.0, "keys_tracked": 403.0, "labels_seen": 45.0, "profiles_fitted": 46895.0, "profiles_published": 98332.0, "refused": 0.0, "widest_adverse_frac
+  correlation-cluster-mapper: {"clusters_now": 66.0, "largest_cluster": 2.0, "mappings": 363.0, "observations": 36556.0, "strongest_correlation_seen": 0.9166560003143364, "symbols_tracked": 67.0, "unmeasured_pairs": 885.0}
+  venue-outage-rider: {"connections_lost": 0.0, "flowing": 48614.0, "longest_silence_seconds": 60.723284122, "quiet_markets": 78.0, "readings": 48692.0, "reconnects": 0.0, "reconnects_attempted": 0.0, "treats_silence_as_no_information": 0.0, "unreachable_with_exposure": 0.0, "venue
+  failing-part-detector: {"checks": 70174.0, "faults_found": 2158.0, "levels_published": 1947.0, "part-fault_published": 1947.0, "part-fault_unchanged_skipped": 211.0, "parts_watched": 326.0, "parts_with_too_little_history": 2282.0, "raises_a_fault_that_nothing_can_clear": 0.0, "silen

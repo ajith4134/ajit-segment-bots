@@ -66,13 +66,49 @@ class RunnerStanding:
 class ProbeRunner:
     """Runs registered probes, bounding each one and keeping its command with its output."""
 
-    def __init__(self, timeout_seconds: float, monotonic=time.monotonic, now_ns=time.time_ns) -> None:
+    def __init__(
+        self,
+        timeout_seconds: float,
+        rest_multiple: float = 0.0,
+        monotonic=time.monotonic,
+        now_ns=time.time_ns,
+    ) -> None:
+        """`rest_multiple` is how many times its own cost a probe rests before rerunning.
+
+        Zero keeps the old behaviour -- every probe on every sweep -- and is the
+        default so nothing that constructs a runner without an opinion changes
+        meaning. The live part passes the setting.
+
+        Paced by each probe's own measured duration rather than by a number per
+        probe, for the reason every other threshold here is measured rather than
+        chosen: nobody knows what a probe costs until it has run, and a list of
+        per-probe intervals is a list that goes stale silently as the probes
+        change. Measured on the live spine at 11:16 on 2026-08-26 -- one sweep of
+        fourteen probes cost 7.93s, and 7.51s of that was `trading:readiness_to_trade`
+        alone, which walks the whole source tree to answer which blocks have code.
+        Run once a second, as it was, that one probe is 95% of the sweep and
+        probe-runner was the busiest process on a twelve-core machine at 83% of a
+        core -- recomputing, every second, an answer that changes only when
+        somebody writes a file.
+        """
         if timeout_seconds <= 0:
             raise ValueError("a probe with no deadline can stop every probe behind it")
+        if rest_multiple < 0:
+            raise ValueError(
+                f"rest_multiple is how many times its own cost a probe rests before it is "
+                f"rerun, so it cannot be negative -- got {rest_multiple!r}"
+            )
         self._timeout = timeout_seconds
+        self._rest_multiple = rest_multiple
         self._monotonic = monotonic
         self._now_ns = now_ns
         self._probes: dict[str, tuple[object, str]] = {}
+        # When each probe may next run, and what it last answered. The last answer
+        # is kept so a sweep still reports every probe: a probe resting is not a
+        # probe with nothing to say, and dropping it from the sweep would make a
+        # board go blank for a measurement that is merely a few seconds old.
+        self._may_run_at: dict[str, float] = {}
+        self._last_result: dict[str, ProbeResult] = {}
         self.standing = RunnerStanding()
 
     def register(self, name: str, probe, command: str) -> None:
@@ -140,8 +176,32 @@ class ProbeRunner:
             duration_seconds=duration, failure=None, measured_at_ns=self._now_ns(),
         )
 
+    def is_due(self, name: str) -> bool:
+        """Whether this probe has rested long enough to be worth running again."""
+        if self._rest_multiple <= 0:
+            return True
+        return self._monotonic() >= self._may_run_at.get(name, float("-inf"))
+
     def run_all(self) -> tuple[ProbeResult, ...]:
-        return tuple(self.run(name) for name in sorted(self._probes))
+        """Every probe's current answer, rerunning only the ones that are due.
+
+        Always one entry per registered probe. A probe that is resting hands back
+        the result it last measured, timestamp and all, so a reader can see for
+        itself how old it is -- which is the whole of Rule 8's staleness rule, and
+        the reason a resting probe is not simply omitted.
+        """
+        results = []
+        for name in sorted(self._probes):
+            if self.is_due(name):
+                result = self.run(name)
+                self._last_result[name] = result
+                self._may_run_at[name] = (
+                    self._monotonic() + result.duration_seconds * self._rest_multiple
+                )
+            else:
+                result = self._last_result[name]
+            results.append(result)
+        return tuple(results)
 
 
 def describe_probes(runner: ProbeRunner) -> dict:
@@ -192,7 +252,10 @@ def start_part(context) -> int:
     tables = LatestValue(read=context.bus.reader("heartbeat-table"))
     gaps = Batch(read=context.bus.reader("journal-gap"))
     publish_results = context.bus.publisher_for("probe-result")
-    runner = ProbeRunner(timeout_seconds=context.number("probe_timeout"))
+    runner = ProbeRunner(
+        timeout_seconds=context.number("probe_timeout"),
+        rest_multiple=context.number("probe_rest_multiple"),
+    )
     gaps_seen = [0]
 
     for module, prefix in ((capture_probes, "capture"), (substrate_probes, "substrate"), (trading_probes, "trading")):

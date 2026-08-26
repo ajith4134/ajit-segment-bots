@@ -707,3 +707,99 @@ def test_the_written_table_carries_the_standing_a_reader_will_look_for():
         beat for beat in document["heartbeats"] if beat["part_id"] == "instrument-selector"
     )
     assert row["standing"]["refused_for_a_stale_price"] == 12.0
+
+
+# ---- a probe rests in proportion to what it costs ------------------------------
+#
+# Measured on the live spine at 11:16 on 2026-08-26: one sweep of fourteen probes
+# cost 7.93s, and 7.51s of that was `trading:readiness_to_trade` alone, which walks
+# the whole source tree to answer which blocks have code. Run once a second, as it
+# was, that one probe was 95% of the sweep and probe-runner was the busiest process
+# on a twelve-core machine at 83% of a core -- recomputing every second an answer
+# that changes only when somebody writes a file.
+
+
+class SteppingClock:
+    """Monotonic time the test moves by hand, so no test waits on a real second."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_an_expensive_probe_rests_and_a_cheap_one_does_not():
+    """The cost of a sweep must not be the cost of its slowest probe, every time."""
+    clock = SteppingClock()
+    runner = ProbeRunner(timeout_seconds=30.0, rest_multiple=20.0, monotonic=clock)
+
+    def slow():
+        clock.advance(7.5)          # what readiness_to_trade actually costs
+        return "slow answer"
+
+    def quick():
+        clock.advance(0.1)
+        return "quick answer"
+
+    slow_runs, quick_runs = [0], [0]
+    runner.register("trading:slow", lambda: (slow_runs.__setitem__(0, slow_runs[0] + 1), slow())[1],
+                    command="reproduce the slow probe")
+    runner.register("capture:quick", lambda: (quick_runs.__setitem__(0, quick_runs[0] + 1), quick())[1],
+                   command="reproduce the quick probe")
+
+    runner.run_all()
+    assert (slow_runs[0], quick_runs[0]) == (1, 1)
+
+    # A minute of sweeps, one a second, the way the part drives it.
+    for _ in range(60):
+        clock.advance(1.0)
+        runner.run_all()
+
+    assert slow_runs[0] == 1, (
+        f"the 7.5s probe ran {slow_runs[0]} times in a minute; at a rest of 20x its own "
+        f"cost it may not run again for 150s"
+    )
+    assert quick_runs[0] > 25, (
+        f"the 0.1s probe ran only {quick_runs[0]} times; resting 20x 0.1s is 2s, so it "
+        f"should have run most of those sweeps"
+    )
+
+
+def test_a_resting_probe_still_reports_its_last_answer_with_its_own_timestamp():
+    """A tile going blank because a probe is resting is the Rule 8 failure, not the fix."""
+    clock = SteppingClock()
+    runner = ProbeRunner(timeout_seconds=30.0, rest_multiple=20.0, monotonic=clock)
+    runner.register("trading:slow", lambda: (clock.advance(7.5), "slow answer")[1],
+                    command="reproduce the slow probe")
+
+    first = runner.run_all()
+    assert len(first) == 1 and first[0].value == "slow answer"
+
+    clock.advance(1.0)
+    resting = runner.run_all()
+    assert len(resting) == 1, "a resting probe was dropped from the sweep"
+    assert resting[0].value == "slow answer"
+    assert resting[0].measured_at_ns == first[0].measured_at_ns, (
+        "a resting probe was restamped, which would present an old measurement as new"
+    )
+
+
+def test_resting_is_off_unless_asked_for():
+    """A runner built with no opinion behaves exactly as it did before."""
+    clock = SteppingClock()
+    runner = ProbeRunner(timeout_seconds=30.0, monotonic=clock)
+    runs = [0]
+    runner.register("x", lambda: (runs.__setitem__(0, runs[0] + 1), clock.advance(5.0), "v")[2],
+                    command="x")
+    for _ in range(4):
+        runner.run_all()
+    assert runs[0] == 4
+
+
+def test_a_negative_rest_multiple_is_refused():
+    with pytest.raises(ValueError, match="rest_multiple"):
+        ProbeRunner(timeout_seconds=1.0, rest_multiple=-1.0)

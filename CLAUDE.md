@@ -412,6 +412,89 @@ Two decisions inside the planner worth not undoing:
   produced 17 `PartAlreadyRunning` refusals, which is the 2026-08-24 defect in a
   new place.
 
+## A level is not an event, on the write side too — since 2026-08-26
+
+`runtime/input_assembly.py` has always stated the difference on the **read** side:
+a level is true until it changes, an event happened once. There was no shape for
+it on the **write** side, and 23 parts ended their tick with an unconditional
+`publish(thing.read_all())`. Every part publishes health once a second, so a part
+consuming `part-health` wakes 327 times a second — and each of those wakes
+republished a level nobody had changed.
+
+    failing-part-detector    26,575 msg/s published from    283 received
+    part-restart-budgeter    17,106 msg/s published from  6,963 received
+    order-flow-state-encoder 10,353 msg/s published from    773 received
+    spine total              89,747 msg/s, load 28.7 on twelve cores
+
+Seven parts read as silent because they could not get the CPU to send the
+heartbeat that would have proved them alive — and the detector was firing on
+exactly that, so the storm fed itself.
+
+`runtime/level_publishing.py` is the missing half. Three shapes, and picking the
+wrong one is the mistake to avoid:
+
+| | |
+|---|---|
+| `LevelPublisher` | publish when the value changed, or when the refresh interval is due |
+| `LevelPublisherByKey` | the same per subject, so one part changing does not restate the other 326 |
+| `PacedPublisher` | for a level whose every field really does move — a heartbeat table of climbing counters. A rate, not a change check |
+
+**`identity_of` is not optional in practice.** Nearly every payload here carries
+`measured_at_ns` or `observed_at_ns`, stamped when the part looked — 17 and 14 of
+them respectively. Compared whole, two statements of one unchanged level are
+never equal, so nothing is skipped and **the skip counter reads zero while the
+fix appears to be in**. That is not hypothetical: it is what the first version of
+this did to `PartFault` and `ExcursionProfile`. `without_observation_time` drops
+that fixed list of names and nothing else — `next_settlement_at_ns` is content,
+not noticing, and a rule over `*_at_ns` would have stopped publishing it.
+
+**Pace the work, not just the send, when building the answer is the expensive
+half.** `heartbeat-collector` cost 73% of a core rebuilding a 327-row table
+(4.2 ms), rendering it (1.3 ms) and writing 209 KB of JSON (4.2 ms) seventeen
+times a second; `correlation-cluster-mapper` cost 76% correlating 2,211 pairs on
+every tick. Both guard the build with `is_due()`, not only the publish.
+
+**A resend is not loss repair — it is usually the cause of the loss.**
+`order-flow-state-encoder` republished a 120-state window per trade batch to
+convey one new second, and `flow-entropy-meter` — which keeps its own window,
+keyed by second — had dropped **158,902** of them. Sending only what is new
+conveys strictly more.
+
+    after:  spine 36,974 msg/s, load 12.5, 327 of 327 running, 0 silent
+
+## A control loop never switches off its own instrument — since 2026-08-26
+
+The governor learned this about itself earlier the same day. The survival tier
+had not.
+
+`survival-tier-monitor` reports `SHUTDOWN` whenever nothing has been measured, and
+that is correct — assuming runway you have not measured is how a system finds out
+it is broke by stopping. `conservation-planner` acted on it and stopped 182 parts
+per plan. Among them were `subscription-quota-watch` and `paid-spend-ledger`, the
+**only** producers of `llm-quota-state` and `llm-spend-state` — the two readings
+the tier is computed from. Their processes were released (T-3), so nothing could
+ever measure again and the tier stayed `SHUTDOWN` permanently:
+
+    145 of 327 parts alive, every conservation block dark, 9 GB of 29 GB used,
+    and no fault reported anywhere -- every one of those stops was a decision the
+    planner was entitled to make. Only the measuring was gone.
+
+`never_switched_off_priority_ceiling` is **29** now and both sensors are ranked
+inside it. Deliberately not `conservation_protected_parts`: naming a part there
+refuses the **whole plan**, which would disable conservation outright. The ceiling
+refuses to shed without refusing the plan.
+
+Ask of any new control loop: *what does it measure itself with, and can it switch
+that off?*
+
+**A crash can be invisible until a restart.** The previous session added an
+abstract `read_premiums` to `VenueAdapter` and implemented it for Binance only, so
+`BybitLinearAdapter` could not be constructed and every part loading a venue
+adapter crash-looped. Nothing showed it for hours, because the running spine held
+the pre-change code in memory. **After changing anything a live part imports,
+restart the spine and read the journal — a green test suite does not prove the
+thing that is running can still start.**
+
 ## What this box actually holds
 
 **All 327 parts on measured a load average of 30.6 one minute after start**, on

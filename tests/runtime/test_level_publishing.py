@@ -328,3 +328,90 @@ def test_a_non_positive_snapshot_interval_is_refused(interval):
 
     with pytest.raises(ValueError, match="interval_seconds must be positive"):
         PacedPublisher(publish=lambda _items: None, interval_seconds=interval)
+
+
+# ---- the "when I looked" fields, which defeat a whole-payload comparison -------
+
+
+def test_a_payload_stamped_fresh_every_read_is_still_recognised_as_unchanged():
+    """The defect that made the first version of this module do nothing at all.
+
+    Nearly every payload here carries `measured_at_ns` or `observed_at_ns`,
+    stamped at the moment the part looked. Compared whole, two statements of one
+    unchanged level are never equal -- so nothing is skipped, the storm survives,
+    and the skip counter says zero while claiming the fix is in.
+    """
+    import dataclasses
+
+    from runtime.level_publishing import without_observation_time
+
+    @dataclasses.dataclass(frozen=True)
+    class Profile:
+        symbol: str
+        adverse_excursion: float
+        measured_at_ns: int
+
+    publisher, sent, _clock = _recording_publisher(refresh_interval_seconds=1.0)
+    publisher.identity_of = without_observation_time
+
+    for stamp in range(1, 328):
+        publisher.publish_level((Profile("BTCUSDT", 0.0019, stamp),))
+
+    assert len(sent) == 1, f"a level restamped on every read went out {len(sent)} times"
+    assert publisher.standing.unchanged_publishes_skipped == 326
+    # What went on the wire keeps its timestamp: a reader judging staleness needs
+    # the moment the part actually looked.
+    assert sent[0][0].measured_at_ns == 1
+
+
+def test_a_real_change_still_gets_through_with_the_stamp_stripped():
+    """Stripping the noticing must not strip the finding."""
+    import dataclasses
+
+    from runtime.level_publishing import without_observation_time
+
+    @dataclasses.dataclass(frozen=True)
+    class Profile:
+        symbol: str
+        adverse_excursion: float
+        measured_at_ns: int
+
+    publisher, sent, _clock = _recording_publisher(refresh_interval_seconds=1.0)
+    publisher.identity_of = without_observation_time
+
+    publisher.publish_level((Profile("BTCUSDT", 0.0019, 1),))
+    publisher.publish_level((Profile("BTCUSDT", 0.0019, 2),))
+    publisher.publish_level((Profile("BTCUSDT", 0.0031, 3),))
+
+    assert len(sent) == 2
+    assert sent[-1][0].adverse_excursion == 0.0031
+
+
+def test_a_timestamp_that_is_content_is_not_stripped():
+    """`next_settlement_at_ns` is when the venue will charge, not when we looked."""
+    import dataclasses
+
+    from runtime.level_publishing import without_observation_time
+
+    @dataclasses.dataclass(frozen=True)
+    class Premium:
+        symbol: str
+        mark_price: float
+        next_settlement_at_ns: int
+        measured_at_ns: int
+
+    publisher, sent, _clock = _recording_publisher(refresh_interval_seconds=1.0)
+    publisher.identity_of = without_observation_time
+
+    publisher.publish_level((Premium("BTCUSDT", 79041.5, 1_000, 1),))
+    publisher.publish_level((Premium("BTCUSDT", 79041.5, 1_000, 2),))   # only we moved
+    publisher.publish_level((Premium("BTCUSDT", 79041.5, 2_000, 3),))   # the venue moved
+
+    assert len(sent) == 2, "a settlement time moving is a change a reader acts on"
+
+
+def test_a_payload_that_is_not_a_dataclass_is_left_alone():
+    """Nothing to strip, and nothing to guess about."""
+    from runtime.level_publishing import without_observation_time
+
+    assert without_observation_time((1, "two", (3,))) == (1, "two", (3,))

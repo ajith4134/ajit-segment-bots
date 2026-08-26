@@ -61,6 +61,7 @@ only what genuinely says "still true", never anything a reader acts on.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import pickle
 import time
@@ -324,3 +325,58 @@ class PacedPublisher:
         self.standing.refreshes += 1
         self._last_published_at = self.monotonic()
         return True
+
+
+# The field names that mean "when this part looked", as opposed to when anything
+# in the market or the machine happened. Every payload in this system carries one
+# -- 17 `measured_at_ns`, 14 `observed_at_ns`, and a handful each of decided,
+# detected, recorded, planned and read -- and each is stamped fresh on every read.
+#
+# Compared whole, two statements of one unchanged level are therefore never equal,
+# so nothing is ever skipped and a change check silently does nothing while its
+# skip counter reports zero. That is not a hypothetical: it is how the first
+# version of this module behaved against PartFault and ExcursionProfile, and the
+# tests caught it only because they asserted the skip count rather than the
+# absence of a crash.
+#
+# Deliberately a fixed list of exact names rather than a pattern over `_at_ns`.
+# `next_settlement_at_ns` on a VenuePremium and `resets_at_ns` on a quota are
+# content -- a reader acts differently when they move -- and a rule that dropped
+# every timestamp would quietly stop publishing the thing the reader was waiting
+# for. Anything not on this list is compared.
+OBSERVATION_TIME_FIELDS = frozenset(
+    {
+        "measured_at_ns",
+        "observed_at_ns",
+        "decided_at_ns",
+        "detected_at_ns",
+        "recorded_at_ns",
+        "planned_at_ns",
+        "read_at_ns",
+    }
+)
+
+
+def without_observation_time(items):
+    """The payloads with their "when I looked" fields left out, for comparison only.
+
+    Returns a comparison key, never something to publish: what goes on the wire is
+    always the original payload, timestamp and all, because a reader judging
+    staleness needs the moment this part actually looked.
+
+    A payload that is not a dataclass is returned unchanged -- there is nothing to
+    strip and nothing to guess about.
+    """
+    stripped = []
+    for item in items:
+        if not dataclasses.is_dataclass(item) or isinstance(item, type):
+            stripped.append(item)
+            continue
+        stripped.append(
+            tuple(
+                (field.name, getattr(item, field.name))
+                for field in dataclasses.fields(item)
+                if field.name not in OBSERVATION_TIME_FIELDS
+            )
+        )
+    return tuple(stripped)
