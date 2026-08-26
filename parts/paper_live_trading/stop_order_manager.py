@@ -210,6 +210,14 @@ class StopOrderManager:
         self.standing.stops_resting = len(self._resting)
         return self.standing.stops_resting
 
+    def is_stop_resting(self, venue_id: str, symbol: str) -> bool:
+        """Whether this part has a stop order out on that position right now.
+
+        Asked before an unchanged stop is skipped: "the lock left it where it
+        was" is a reason to send nothing only when something is already there.
+        """
+        return (venue_id, symbol) in self._resting
+
     def observe_position_closed(self, venue_id: str, symbol: str) -> tuple:
         """The position is flat; withdraw whatever exits were protecting it.
 
@@ -489,7 +497,7 @@ def run_stop_order_manager(
 SKIP = object()
 
 
-def read_adjustment(adjustment, held_quantity: dict) -> dict | None:
+def read_adjustment(adjustment, held_quantity: dict, is_already_resting=None) -> dict | None:
     """One `stop-adjustment`, whichever of its two shapes it is.
 
     `stop-adjustment` is one wire carrying two payloads, which is the shape that
@@ -547,10 +555,22 @@ def read_adjustment(adjustment, held_quantity: dict) -> dict | None:
     direction = getattr(adjustment, "direction", None)
     if new_stop is None or direction not in (LONG, SHORT):
         return None
-    if not getattr(adjustment, "did_move", False):
-        # The lock looked and left the stop where it was. Sending that would
-        # replace a resting order with an identical one, and every replace is a
-        # window in which the position is unprotected.
+    stop_is_resting = (
+        is_already_resting is not None and is_already_resting(venue_id, symbol)
+    )
+    if not getattr(adjustment, "did_move", False) and stop_is_resting:
+        # The lock looked and left the stop where it was, and this part already
+        # has one resting on that position. Sending it again would replace a
+        # resting order with an identical one, and every replace is a window in
+        # which the position is unprotected.
+        #
+        # Only when one is actually resting. Since 2026-08-26 profit-lock states
+        # every open position's stop on a cadence rather than only when it moves
+        # -- a stop is a level -- so "did not move" now arrives for positions
+        # that have no stop at all, and skipping those is how a position stays
+        # naked forever. Measured that day: 12 open positions, 0 stops resting,
+        # 4,982 adjustments received here and not one order placed, with every
+        # refusal counter at zero because nothing was ever refused.
         return SKIP
     quantity = held_quantity.get((venue_id, symbol))
     if not quantity:
@@ -636,7 +656,7 @@ def start_part(context) -> int:
 
         readable = []
         for adjustment in adjustments.payloads():
-            read = read_adjustment(adjustment, held_quantity)
+            read = read_adjustment(adjustment, held_quantity, manager.is_stop_resting)
             if read is None:
                 unreadable["count"] += 1
                 unreadable["last"] = type(adjustment).__name__

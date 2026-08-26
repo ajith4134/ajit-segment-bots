@@ -29,6 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.level_publishing import LevelPublisherByKey
 from runtime.price_frames import levels_in
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
@@ -236,6 +237,23 @@ def describe_profit_lock(lock: ProfitLock) -> dict:
     }
 
 
+def decide_every_stop(lock: ProfitLock, positions) -> tuple[StopAdjustment, ...]:
+    """Where every open position's stop is now, whether or not this tick moved it.
+
+    A stop is a level. It was published only when it moved, and a position under
+    water never moves its stop, so nothing downstream was ever told where the
+    stops were: measured on the live spine at 15:34 on 2026-08-26, 140,924
+    adjustments decided, 0 published, stop-order-manager holding 0 stops against
+    12 open positions, and exposure-limiter -- which counts a position with no
+    stop at its full notional -- reading the book at 199% of a 5% cap and allowing
+    nothing new on any symbol.
+
+    `did_move` is still on the payload and still means what it said; what changed
+    is that it is no longer what decides whether anybody hears about the stop.
+    """
+    return tuple(lock.adjust(**position) for position in positions)
+
+
 def run_profit_lock(
     lock: ProfitLock, control_socket, read_positions, publish_adjustments,
     health_interval_seconds: float, emit_health,
@@ -243,8 +261,17 @@ def run_profit_lock(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        adjustments = [lock.adjust(**position) for position in read_positions()]
-        publish_adjustments(tuple(a for a in adjustments if a.did_move))
+        # Every open position's stop, not only the ones that moved. Where a
+        # position's stop is, is a level: it stays true until something moves it,
+        # and the parts downstream need it whether or not this tick changed it.
+        #
+        # Measured on the live spine at 15:34 on 2026-08-26: 140,924 adjustments
+        # decided and none published, because none had moved -- the positions were
+        # all under water, so every one of them held. stop-order-manager had
+        # placed 0 stops against 12 open positions, and exposure-limiter, which
+        # counts a position with no stop at its full notional, read the book at
+        # 199% of a 5% cap and allowed nothing new anywhere.
+        publish_adjustments(decide_every_stop(lock, read_positions()))
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -316,11 +343,27 @@ def start_part(context) -> int:
             })
         return tuple(requests)
 
+    stated = LevelPublisherByKey(
+        publish=publish_adjustments,
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        # What makes two statements the same standing stop: where it is, and why
+        # it is there. Deliberately not the whole payload -- `current_price` and
+        # `gain_fraction` move on every print, so comparing those would republish
+        # a stop that has not moved on every tick, which is the storm this shape
+        # exists to prevent.
+        identity_of=lambda items: tuple(
+            (item.venue_id, item.symbol, item.direction, item.new_stop, item.outcome)
+            for item in items
+        ),
+    )
+
     def publish(adjustments) -> None:
         for adjustment in adjustments:
             stops[(adjustment.venue_id, adjustment.symbol)] = adjustment.new_stop
-        if adjustments:
-            publish_adjustments(adjustments)
+            # Per position, so one symbol's stop moving does not restate the other
+            # eleven, and so a position whose stop is holding still gets said
+            # again on the refresh rather than going silent.
+            stated.publish_level((adjustment.venue_id, adjustment.symbol), (adjustment,))
 
     return run_profit_lock(
         lock=lock,

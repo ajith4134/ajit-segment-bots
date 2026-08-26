@@ -1111,14 +1111,35 @@ def test_a_trail_on_a_short_is_sized_from_the_absolute_quantity():
     assert read["direction"] == SHORT
 
 
-def test_a_trail_that_did_not_move_is_not_sent():
+def test_a_trail_that_did_not_move_is_not_sent_when_a_stop_is_already_resting():
     """Replacing a resting stop with an identical one is a window with no stop."""
     from parts.paper_live_trading.stop_order_manager import SKIP, read_adjustment
 
     read = read_adjustment(
-        _Trail(VENUE, SYMBOL, LONG, 98.0, did_move=False), {(VENUE, SYMBOL): 1.5}
+        _Trail(VENUE, SYMBOL, LONG, 98.0, did_move=False), {(VENUE, SYMBOL): 1.5},
+        is_already_resting=lambda venue, symbol: True,
     )
     assert read is SKIP
+
+
+def test_a_stop_that_did_not_move_is_sent_when_nothing_is_resting():
+    """"It did not move" is a reason to send nothing only if something is there.
+
+    Since 2026-08-26 profit-lock states every open position's stop on a cadence
+    rather than only when it moves, so an unchanged stop now arrives for a
+    position that has none at all. Measured that day before this: 12 open
+    positions, 0 stops resting, 4,982 adjustments read here, `placed` 0, and
+    every refusal counter at zero -- nothing was refused, it was skipped.
+    """
+    from parts.paper_live_trading.stop_order_manager import SKIP, read_adjustment
+
+    read = read_adjustment(
+        _Trail(VENUE, SYMBOL, LONG, 98.0, did_move=False), {(VENUE, SYMBOL): 1.5},
+        is_already_resting=lambda venue, symbol: False,
+    )
+    assert read is not SKIP and read is not None
+    assert read["stop_price"] == 98.0
+    assert read["quantity"] == 1.5
 
 
 def test_a_trail_for_a_position_this_part_does_not_know_is_refused():

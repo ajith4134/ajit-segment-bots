@@ -28,7 +28,10 @@ PART_ID = "exposure-limiter"
 
 PART_DECLARATION = PartDeclaration(
     part_id="exposure-limiter",
-    consumes=("position", "exposure-view", "correlation-cluster", "trade-cluster", "account-balance"),
+    consumes=(
+        "account-balance", "correlation-cluster", "exposure-view", "position",
+        "stop-adjustment", "trade-cluster",
+    ),
     produces=("risk-limit", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -54,6 +57,11 @@ class ExposureStanding:
     largest_cluster_share: float = 0.0
     clusters_known: int = 0
     unclustered_symbols: int = 0
+    # Open positions with no stop anybody has named, counted at their full
+    # notional because a position with no stop resting can lose all of it. Named
+    # apart from the total, so a board can tell a book that is risking a lot from
+    # a book nobody has protected.
+    positions_without_a_stop: int = 0
 
 
 class ExposureLimiter:
@@ -81,6 +89,20 @@ class ExposureLimiter:
         # What each position is worth, kept beside the fraction so a change of
         # allotment re-measures the book rather than reinterpreting old fractions.
         self._notional: dict[tuple[str, str], float] = {}
+        # What each position loses if it goes to its stop, in quote currency, and
+        # what the entry and quantity behind that were. The caps are the
+        # operator's risk numbers -- "the most one position may risk" -- and this
+        # part summed notional against them until 2026-08-26: a position sized to
+        # risk 1% of the allotment at a 0.5% stop is about 200% of it in notional,
+        # so twelve open positions read as 199% against a 5% cap and nothing new
+        # was allowed on any symbol. Measured at 15:16 that day: position-sizer
+        # refused 62,935 of 71,233 actionable intents with `refused_no_risk_allowed`.
+        self._risk_quote: dict[tuple[str, str], float] = {}
+        # The stop last named for a position, from `stop-adjustment`. A position
+        # with no stop here is not counted as safe -- see `_risk_of`.
+        self._stop_price: dict[tuple[str, str], float] = {}
+        self._entry_price: dict[tuple[str, str], float] = {}
+        self._quantity: dict[tuple[str, str], float] = {}
         self._allotment: float | None = None
         self._cluster_of: dict[str, str] = {}
         self.standing = ExposureStanding()
@@ -98,10 +120,56 @@ class ExposureLimiter:
         self.standing.allotment = allotment
         self._allotment = allotment
         self._exposure = {
-            key: notional / allotment for key, notional in self._notional.items() if notional > 0
+            key: self._risk_of(key) / allotment
+            for key, notional in self._notional.items()
+            if notional > 0
         }
 
-    def observe_position(self, venue_id: str, symbol: str, notional: float) -> None:
+    def observe_stop(self, venue_id: str, symbol: str, stop_price: float | None) -> None:
+        """Where this position's stop is, so what it risks can be measured.
+
+        From `stop-adjustment`, which is what the parts that move a stop publish.
+        A position that has never been offered one is absent here rather than at
+        zero, and `_risk_of` counts it at its full notional.
+        """
+        key = (venue_id, symbol)
+        if stop_price is None or stop_price <= 0:
+            self._stop_price.pop(key, None)
+        else:
+            self._stop_price[key] = stop_price
+        if key in self._notional and self._allotment:
+            self._exposure[key] = self._risk_of(key) / self._allotment
+
+    def _risk_of(self, key: tuple[str, str]) -> float:
+        """What this position loses if it goes to its stop, in quote currency.
+
+        **A position whose stop nobody can name is counted at its full notional.**
+        Not excluded and not assumed small: a position with no stop resting can
+        lose all of it, so its notional is its risk. On 2026-08-26 that was not a
+        defensive default but the state of the book -- `stop-order-manager` had
+        placed 0 stops against 12 open positions.
+        """
+        notional = self._notional.get(key, 0.0)
+        entry = self._entry_price.get(key)
+        quantity = self._quantity.get(key)
+        stop = self._stop_price.get(key)
+        if stop is None or entry is None or not quantity:
+            self.standing.positions_without_a_stop = sum(
+                1 for held in self._notional if held not in self._stop_price
+            )
+            return notional
+        self.standing.positions_without_a_stop = sum(
+            1 for held in self._notional if held not in self._stop_price
+        )
+        # Never more than the position is worth: a stop placed the wrong side of
+        # the entry would otherwise measure as more risk than the whole position
+        # can lose, and that is a fault in the stop rather than a bigger position.
+        return min(abs(entry - stop) * abs(quantity), notional)
+
+    def observe_position(
+        self, venue_id: str, symbol: str, notional: float,
+        entry_price: float | None = None, quantity: float | None = None,
+    ) -> None:
         """One position's exposure, as what it is worth at what it cost.
 
         Given a notional rather than a fraction, because the producer of `position`
@@ -116,14 +184,21 @@ class ExposureLimiter:
         if notional <= 0:
             self._notional.pop(key, None)
             self._exposure.pop(key, None)
+            self._entry_price.pop(key, None)
+            self._quantity.pop(key, None)
+            self._stop_price.pop(key, None)
             return
         self._notional[key] = notional
+        if entry_price:
+            self._entry_price[key] = entry_price
+        if quantity:
+            self._quantity[key] = quantity
         if self._allotment is None:
             # Not recorded as an exposure of zero: an unmeasurable position is
             # absent from the book rather than free, and the count says so.
             self.standing.positions_without_a_balance += 1
             return
-        self._exposure[key] = notional / self._allotment
+        self._exposure[key] = self._risk_of(key) / self._allotment
 
     def set_correlation_cluster(self, symbol: str, cluster: str) -> None:
         """Which cluster a symbol belongs to, from the correlation part upstream."""
@@ -204,6 +279,7 @@ def describe_exposure(limiter: ExposureLimiter) -> dict:
         "largest_cluster_share": limiter.standing.largest_cluster_share,
         "unclustered_symbols_seen": limiter.standing.unclustered_symbols,
         "positions_without_a_balance": limiter.standing.positions_without_a_balance,
+        "positions_without_a_stop": limiter.standing.positions_without_a_stop,
         "allotment": limiter.standing.allotment,
     }
 
@@ -247,6 +323,10 @@ def start_part(context) -> int:
         key_of=lambda balance: balance.segment,
     )
     views = Batch(read=context.bus.reader("exposure-view"))
+    # Where each open position's stop is, which is what turns a position into an
+    # amount of risk. Read since 2026-08-26; before it this part summed notional
+    # and judged it against the operator's risk caps.
+    stops = Batch(read=context.bus.reader("stop-adjustment"))
     clusters = Batch(read=context.bus.reader("correlation-cluster"))
     trade_clusters = Batch(read=context.bus.reader("trade-cluster"))
     publish_limit = context.bus.publisher_for("risk-limit")
@@ -262,11 +342,22 @@ def start_part(context) -> int:
         balance = balances.mapping().get(segment)
         if balance is not None:
             limiter.set_allotment(balance.equity)
+        for adjustment in stops.payloads():
+            # Whichever stop is current: `new_stop` is where the position's stop
+            # is after this decision, including the decision to leave it where it
+            # was, so `previous_stop` is only read when there is no new one.
+            limiter.observe_stop(
+                adjustment.venue_id,
+                adjustment.symbol,
+                getattr(adjustment, "new_stop", None) or getattr(adjustment, "previous_stop", None),
+            )
         for position in positions.payloads():
             limiter.observe_position(
                 position.venue_id,
                 position.symbol,
                 abs(position.quantity) * position.average_entry_price,
+                entry_price=position.average_entry_price,
+                quantity=position.quantity,
             )
 
     return run_exposure_limiter(

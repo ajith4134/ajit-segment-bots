@@ -56,6 +56,7 @@ from parts.risk_capital_allocation.position_sizer import (
 )
 from parts.risk_capital_allocation.profit_lock import (
     HELD, MOVED_TO_BREAK_EVEN, NOT_YET_PROFITABLE, TRAILED, ProfitLock,
+    decide_every_stop,
 )
 from parts.risk_capital_allocation.stop_frequency_breaker import StopFrequencyBreaker
 from parts.risk_capital_allocation.stop_target_placer import (
@@ -285,6 +286,101 @@ def test_total_exposure_binds_before_any_single_position_does():
     for index in range(5):
         hold(subject, f"S{index}", 0.1)
     assert subject.read_limit().fraction_of_allotment == pytest.approx(0.0)
+
+
+def hold_with_a_stop(subject, symbol, entry, quantity, stop):
+    """A position, and where its stop is -- what the caps are actually about."""
+    subject.observe_position(
+        VENUE, symbol, abs(quantity) * entry, entry_price=entry, quantity=quantity,
+    )
+    subject.observe_stop(VENUE, symbol, stop)
+
+
+def test_a_position_is_measured_by_what_it_risks_not_by_what_it_is_worth():
+    """The operator's own example, from `risk_maximum_per_position_fraction`.
+
+    "at the 10000 USDT paper balance that is 100 USDT at risk per trade, and a
+    stop 0.5% away therefore buys about 20000 USDT of notional". Summed as
+    notional that one position is 200% of the allotment; as risk it is 1%.
+
+    Measured on the live spine at 15:16 on 2026-08-26 with the notional
+    arithmetic: 12 open positions read as 199% against a 5% total cap and
+    position-sizer refused 62,935 of 71,233 actionable intents.
+    """
+    subject = exposure(per_position=0.01, total=0.05, per_cluster=0.02)
+    entry = 100.0
+    # 20,000 USDT of notional at a stop 0.5% away: 100 USDT at risk.
+    hold_with_a_stop(subject, "BTCUSDT", entry=entry, quantity=200.0, stop=entry * 0.995)
+
+    assert subject.total_exposure == pytest.approx(0.01)
+    assert subject.read_limit("ETHUSDT").fraction_of_allotment > 0.0, (
+        "one position risking 1% of the allotment used up a 5% book"
+    )
+
+
+def test_five_positions_at_full_risk_fill_the_book():
+    """What the operator said the total cap is for: five trades at full size."""
+    subject = exposure(per_position=0.01, total=0.05, per_cluster=1.0)
+    for index in range(5):
+        hold_with_a_stop(
+            subject, f"S{index}USDT", entry=100.0, quantity=200.0, stop=99.5,
+        )
+    assert subject.total_exposure == pytest.approx(0.05)
+    assert subject.read_limit("NEWUSDT").fraction_of_allotment == pytest.approx(0.0)
+
+
+def test_a_position_with_no_stop_is_counted_at_everything_it_could_lose():
+    """A position with no stop resting can lose all of it, so its notional is its risk.
+
+    Measured 2026-08-26: stop-order-manager had placed 0 stops against 12 open
+    positions, so this is the state of the book rather than a defensive default.
+    """
+    subject = exposure(per_position=0.01, total=0.05, per_cluster=1.0)
+    hold(subject, "BTCUSDT", 0.2)
+
+    assert subject.total_exposure == pytest.approx(0.2)
+    assert subject.standing.positions_without_a_stop == 1
+    assert subject.read_limit("ETHUSDT").fraction_of_allotment == pytest.approx(0.0)
+
+
+def test_a_stop_moved_up_gives_the_book_its_room_back():
+    """What profit-lock trailing a stop is worth to the rest of the book."""
+    # The total cap is the one under test, so it is the tightest of the three.
+    subject = exposure(per_position=0.05, total=0.05, per_cluster=1.0)
+    hold_with_a_stop(subject, "BTCUSDT", entry=100.0, quantity=200.0, stop=99.0)
+    assert subject.total_exposure == pytest.approx(0.02)
+    assert subject.read_limit().fraction_of_allotment == pytest.approx(0.03)
+
+    # profit-lock trails the stop three quarters of the way to the entry.
+    subject.observe_stop(VENUE, "BTCUSDT", 99.75)
+
+    assert subject.total_exposure == pytest.approx(0.005)
+    assert subject.read_limit().fraction_of_allotment == pytest.approx(0.045), (
+        "a position that now risks a quarter of what it did left the book no roomier"
+    )
+
+
+def test_a_stop_beyond_the_position_cannot_risk_more_than_the_position():
+    """A stop the wrong side of entry is a fault in the stop, not a bigger position."""
+    subject = exposure(per_position=1.0, total=1.0, per_cluster=1.0)
+    # Short 10 at 100 -- 1000 USDT of position -- with its stop 200 above, which
+    # is a loss of 2000 if it is ever reached.
+    hold_with_a_stop(subject, "BTCUSDT", entry=100.0, quantity=-10.0, stop=300.0)
+
+    assert subject.total_exposure == pytest.approx(0.1), (
+        "a 1000 USDT position measured as risking more than 1000 USDT"
+    )
+
+
+def test_a_position_that_closes_forgets_its_stop():
+    subject = exposure(per_position=0.01, total=0.05, per_cluster=1.0)
+    hold_with_a_stop(subject, "BTCUSDT", entry=100.0, quantity=200.0, stop=99.5)
+    subject.observe_position(VENUE, "BTCUSDT", 0.0)
+    # Reopened at the same size, with no stop yet: it must not inherit the old one.
+    hold(subject, "BTCUSDT", 0.2)
+
+    assert subject.total_exposure == pytest.approx(0.2)
+    assert subject.standing.positions_without_a_stop == 1
 
 
 # ---- margin-liquidation-watch ------------------------------------------------
@@ -774,6 +870,46 @@ def test_the_trail_follows_this_symbols_own_retracements():
     adjustment = subject.adjust(VENUE, SYMBOL, LONG, 100.0, 120.0, 98.0)
     assert adjustment.retracement_estimate.is_fitted is True
     assert adjustment.new_stop == pytest.approx(114.0)
+
+
+def a_position(symbol, entry, price, stop, direction=LONG):
+    return {
+        "venue_id": VENUE, "symbol": symbol, "direction": direction,
+        "entry_price": entry, "current_price": price, "current_stop": stop,
+    }
+
+
+def test_a_stop_that_did_not_move_is_still_where_the_stop_is():
+    """A stop is a level, and a position under water never moves its own.
+
+    Measured on the live spine at 15:34 on 2026-08-26: 140,924 adjustments
+    decided and none published, because publishing was gated on `did_move`.
+    stop-order-manager held 0 stops against 12 open positions, and
+    exposure-limiter -- which counts a position with no stop at its full
+    notional -- read the book at 199% of a 5% cap and allowed nothing anywhere.
+    """
+    subject = profit_lock(trigger=0.02)
+    stated = decide_every_stop(subject, (
+        a_position("SINKINGUSDT", entry=100.0, price=97.0, stop=95.0),
+        a_position("WINNINGUSDT", entry=100.0, price=103.0, stop=95.0),
+    ))
+
+    assert len(stated) == 2, "a position whose stop held was not stated at all"
+    by_symbol = {adjustment.symbol: adjustment for adjustment in stated}
+    assert by_symbol["SINKINGUSDT"].did_move is False
+    assert by_symbol["SINKINGUSDT"].new_stop == 95.0, (
+        "the stop that is actually resting on this position was not the one stated"
+    )
+    assert by_symbol["WINNINGUSDT"].did_move is True
+
+
+def test_stating_every_stop_still_says_which_ones_moved():
+    """`did_move` still means what it said; it just no longer decides who hears."""
+    subject = profit_lock(trigger=0.02)
+    held = decide_every_stop(subject, (a_position(SYMBOL, 100.0, 100.1, 98.0),))[0]
+
+    assert held.outcome == NOT_YET_PROFITABLE
+    assert held.did_move is False
 
 
 # ---- exit-order-chainer ------------------------------------------------------

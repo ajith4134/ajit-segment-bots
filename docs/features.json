@@ -6671,11 +6671,12 @@
       "role": "cap what may be risked from open positions, total exposure, correlated bets",
       "category": "risk-capital-allocation",
       "consumes": [
-        "position",
-        "exposure-view",
+        "account-balance",
         "correlation-cluster",
-        "trade-cluster",
-        "account-balance"
+        "exposure-view",
+        "position",
+        "stop-adjustment",
+        "trade-cluster"
       ],
       "produces": [
         "risk-limit",
