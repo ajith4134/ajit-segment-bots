@@ -400,6 +400,44 @@ class NormalisedQuote:
 
 
 @dataclass(frozen=True)
+class VenuePremium:
+    """What a perpetual is marked at against its index, and what that costs.
+
+    The premium -- mark minus index, as a fraction of the index -- is what a
+    venue averages into the next funding rate, so a system that wants to know
+    what holding a position will cost before it opens one has to see both
+    numbers. Neither is on any other wire: `market-data` is what printed and
+    `market-quote` is what is resting, and a perpetual's mark price is neither.
+
+    `declared_funding_rate` and `next_settlement_at_ns` ride along because both
+    venues send them in the same message and a reader that dropped them would be
+    asking for them again a moment later. They are the venue's own statement of
+    the rate it will charge, not a forecast of it.
+
+    Any of the four may be None: Bybit amends rather than restates, so a delta
+    can carry a mark price and nothing else. Missing is not zero here, for the
+    reason it never is -- a premium of zero says the perpetual is trading exactly
+    at its index, which is a claim about the market rather than about the
+    message.
+    """
+
+    venue_id: str
+    symbol: str
+    mark_price: float | None
+    index_price: float | None
+    declared_funding_rate: float | None
+    next_settlement_at_ns: int | None
+    venue_time_ns: int
+
+    @property
+    def premium_fraction(self) -> float | None:
+        """How far the perpetual sits from its index, as a fraction of the index."""
+        if self.mark_price is None or not self.index_price:
+            return None
+        return (self.mark_price - self.index_price) / self.index_price
+
+
+@dataclass(frozen=True)
 class BanSignal:
     """The venue telling us to stop, in whatever form that venue tells us.
 
@@ -576,6 +614,19 @@ class VenueAdapter(abc.ABC):
         read_trades is: a caller never has to ask what kind of message it holds.
         A tuple because Bybit packs the closing update of one minute and the
         opening update of the next into one message.
+        """
+
+    @abc.abstractmethod
+    def read_premiums(self, payload: bytes) -> tuple[VenuePremium, ...]:
+        """What one stream message says about mark price, index price and funding.
+
+        Empty for a message carrying none, for the same reason read_trades is: a
+        caller never has to ask what kind of message it holds.
+
+        A tuple because the venues differ by three orders of magnitude in how
+        they pack it -- Binance sends every listed symbol in one frame once a
+        second, Bybit one symbol per frame -- and a caller written for many is
+        correct for both.
         """
 
     @abc.abstractmethod
@@ -764,6 +815,7 @@ QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_candles",
     "read_book_update",
     "read_quote_changes",
+    "read_premiums",
     "read_previous_sequence",
     "read_catalogue_cursor",
     "read_quote_volumes",

@@ -142,6 +142,10 @@ def read_open_positions() -> tuple[list[dict], dict]:
     entry_cost = state.get("entry_cost") or {}
     entered = state.get("entered_quantity") or {}
     excursion = state.get("excursion") or {}
+    # Realised so far on a position that is still open: a lot sold back before the
+    # rest. Zero and absent are different -- absent means this key was never
+    # scaled out of -- so the key's presence is what decides, not the number.
+    realised = state.get("realised") or {}
 
     positions = []
     for key, lots in sorted(books.items()):
@@ -165,6 +169,9 @@ def read_open_positions() -> tuple[list[dict], dict]:
                 "lots": len(lots),
                 "best_unrealised": best,
                 "worst_unrealised": worst,
+                "realised_so_far": (
+                    float(realised[key]) if key in realised else None
+                ),
             }
         )
 
@@ -175,6 +182,152 @@ def read_open_positions() -> tuple[list[dict], dict]:
             f"ago -- the same file position-close-detector restores from"
         ),
         "saved_at_ns": document.get("saved_at_ns"),
+    }
+
+
+def read_excursion_settings() -> dict | None:
+    """Where the profiler checkpoints and which quantiles it prices, or None.
+
+    The quantiles are read from settings rather than defaulted here, because a
+    default would be a number nobody chose being reported as what the bot plans
+    against (RL-061). They are not on the checkpoint -- it carries only
+    `minimum_claims` and `window` -- so settings is the one place that has them,
+    and it is the same place the profiler itself reads them from.
+    """
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+        targets = list(document.read_value("bull_exit_target_quantiles"))
+        return {
+            "root": pathlib.Path(str(document.read_value("learned_state_root"))).expanduser(),
+            # The first target is the one a plan reaches first, so it is the one a
+            # board showing a single expected move should show.
+            "target_quantile": float(targets[0]),
+            "adverse_quantile": float(document.read_value("signal_excursion_adverse_quantile")),
+        }
+    except Exception:
+        return None
+
+
+def attach_learned_excursions(positions: list[dict]) -> dict:
+    """Attach what this symbol has historically done to a call of this direction.
+
+    Read from `signal-excursion-profiler`'s own checkpoint -- the same file that
+    part restores from -- rather than from a second measurement kept for the
+    board, which would be free to disagree with the one the bot acts on. That is
+    the rule the learning tile already follows for the conviction model.
+
+    Two numbers per position, both in the units a reader can act on:
+
+      * the favourable move this symbol reached on calls of this side that came
+        right, at the quantile `bull_exit_target_quantiles` names first -- which
+        is where `bull-exit-plan-proposer` looks its own targets up;
+      * the adverse move a correct call survived, at
+        `signal_excursion_adverse_quantile` -- which is the only honest basis for
+        a stop, because a stop inside it converts winners into losers.
+
+    Both are fractions of the entry price, so they are also shown against this
+    position's own capital. The claim count rides along: a quantile over four
+    settled claims is a number, not a measurement, and the profiler itself
+    refuses to publish one below `signal_excursion_minimum_claims`. A position
+    whose symbol and side have not settled that many claims is marked
+    NOT MEASURED rather than shown a quantile nobody should size against.
+    """
+    from runtime.trade_profiles import quantile_of
+
+    chosen = read_excursion_settings()
+    if chosen is None:
+        for position in positions:
+            position["prediction_proof"] = (
+                f"{NOT_MEASURED}: settings refused learned_state_root, "
+                f"bull_exit_target_quantiles or signal_excursion_adverse_quantile"
+            )
+        return {
+            "ok": False,
+            "proof": (
+                "settings refused learned_state_root, bull_exit_target_quantiles or "
+                "signal_excursion_adverse_quantile -- the quantiles are not defaulted "
+                "here, because a default is a number nobody chose reported as a plan"
+            ),
+        }
+
+    path = chosen["root"] / "signal-excursion-profiler.excursions.json"
+    if not path.exists():
+        for position in positions:
+            position["prediction_proof"] = (
+                f"{NOT_MEASURED}: signal-excursion-profiler has not checkpointed, "
+                f"which is a different fact from having learned nothing"
+            )
+        return {
+            "ok": False,
+            "proof": (
+                f"no checkpoint at {path}: signal-excursion-profiler has not written one, "
+                f"which is a different fact from having learned nothing"
+            ),
+        }
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as failure:
+        for position in positions:
+            position["prediction_proof"] = f"{NOT_MEASURED}: {path} could not be read"
+        return {"ok": False, "proof": f"{path} could not be read: {failure}"}
+
+    state = document.get("state") or {}
+    favourable = state.get("favourable") or {}
+    adverse = state.get("adverse") or {}
+    settings = document.get("settings") or {}
+    # The quantiles come from settings, which is where the profiler reads them
+    # from too. `minimum_claims` comes off the checkpoint, because that is the
+    # bar the sample in this file was actually gathered against -- a setting
+    # changed since it was written would describe a different sample.
+    target_quantile = chosen["target_quantile"]
+    adverse_quantile = chosen["adverse_quantile"]
+    minimum_claims = int(settings.get("minimum_claims") or 0)
+
+    for position in positions:
+        key = f"{position['venue_id']}|{position['symbol']}|{position.get('direction')}"
+        favourable_moves = favourable.get(key) or []
+        adverse_moves = adverse.get(key) or []
+        claims = len(favourable_moves)
+        position["prediction_claims"] = claims
+        if claims < max(minimum_claims, 1):
+            position["expected_favourable_fraction"] = None
+            position["expected_adverse_fraction"] = None
+            position["expected_favourable_quote"] = None
+            position["expected_adverse_quote"] = None
+            position["prediction_proof"] = (
+                f"{NOT_MEASURED}: {claims} settled claim(s) for {position['symbol']} "
+                f"{position.get('direction')}, below the {minimum_claims} this profiler "
+                f"takes a quantile over"
+            )
+            continue
+        up = quantile_of(favourable_moves, target_quantile)
+        down = quantile_of(adverse_moves, adverse_quantile) if adverse_moves else None
+        capital = position.get("capital_in") or 0.0
+        position["expected_favourable_fraction"] = up
+        position["expected_adverse_fraction"] = down
+        position["expected_favourable_quote"] = None if up is None else up * capital
+        position["expected_adverse_quote"] = None if down is None else down * capital
+        position["prediction_proof"] = (
+            f"{path.name}: {claims} settled claim(s) for {position['symbol']} "
+            f"{position.get('direction')}; favourable at the {target_quantile:.0%} "
+            f"quantile, adverse a correct call survived at {adverse_quantile:.0%}"
+        )
+
+    return {
+        "ok": True,
+        "proof": (
+            f"{path}, written "
+            f"{(time.time_ns() - int(document.get('saved_at_ns') or 0)) / 1e9:.0f}s ago -- "
+            f"the same file signal-excursion-profiler restores from. "
+            f"{len(favourable)} symbol-and-side key(s) learned, "
+            f"{state.get('claims_recorded', 0):,} claim(s) recorded"
+        ),
+        "keys_learned": len(favourable),
+        "target_quantile": target_quantile,
+        "adverse_quantile": adverse_quantile,
     }
 
 
@@ -375,6 +528,10 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     positions, position_provenance = read_open_positions()
     if with_prices and positions:
         attach_live_prices(positions)
+    # Attached whether or not prices are: what a symbol has historically done to a
+    # call of this direction is read off a checkpoint, not off the tape, so it
+    # costs nothing the price marking does and is the same answer either way.
+    prediction_provenance = attach_learned_excursions(positions)
     closed, closed_provenance = read_closed_trades()
     return {
         "generated_at_ns": time.time_ns(),
@@ -386,6 +543,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
                 p["unrealised_pnl"] for p in positions if p.get("unrealised_pnl") is not None
             ) if any(p.get("unrealised_pnl") is not None for p in positions) else None,
             "provenance": position_provenance,
+            "prediction_provenance": prediction_provenance,
         },
         "closed": {
             "trades": closed,

@@ -1,0 +1,22 @@
+load: 28.68 27.15 23.16 41/662 236864
+               total        used        free      shared  buff/cache   available
+Mem:           30070        9274       15815           9        5431       20795
+Swap:              0           0           0
+
+total messages published across all parts since start: 106,265,290
+     published     received  part
+    23,048,220        1,713  venue-trade-stream-reader [late]
+    19,501,798    3,311,515  part-restart-budgeter [reporting]
+    13,261,092      468,480  failing-part-detector [reporting]
+    12,386,778      959,498  order-flow-state-encoder [reporting]
+     7,022,285      136,775  order-book-reader [reporting]
+     5,590,123        1,719  venue-quote-stream-reader [reporting]
+     2,574,792    1,322,880  ground-truth-snapshot-builder [reporting]
+     2,554,775           99  signal-excursion-profiler [reporting]
+     2,141,325      468,343  part-appetite-meter [reporting]
+     1,786,056      973,469  symbol-profile-store [reporting]
+     1,137,982      990,572  cross-venue-price-consolidator [reporting]
+     1,104,689    1,209,459  market-anomaly-detector [reporting]
+       947,276      414,059  ban-signal-detector [reporting]
+       931,797        1,703  regime-classifier [reporting]
+       778,254      468,867  survival-tier-monitor [reporting]

@@ -86,6 +86,10 @@ function OpenPositions({ open }) {
                 <th className="n">quantity</th><th className="n">entry</th>
                 <th className="n">price now</th><th className="n">age</th>
                 <th className="n">capital in</th><th className="n">unrealised</th>
+                <th className="n">peak</th><th className="n">worst</th>
+                <th className="n">realised</th>
+                <th className="n">predicted up</th><th className="n">predicted down</th>
+                <th className="n">tailgating</th>
                 <th className="n">fees</th><th className="n">held for</th>
               </tr>
             </thead>
@@ -111,6 +115,61 @@ function OpenPositions({ open }) {
                   </td>
                   <td className="n mono">{p.capital_in?.toFixed(2)}</td>
                   <td className="n mono"><Pnl value={p.unrealised_pnl} digits={3} /></td>
+                  {/* The best and worst this position has been through, from the
+                      excursion the closing part checkpoints alongside the lots.
+                      Never zero for "we did not watch": the key's absence is what
+                      says nothing was recorded, and that renders as not measured. */}
+                  <td className="n mono">
+                    {p.best_unrealised === null || p.best_unrealised === undefined
+                      ? <em className="unmeasured" title="peak-excursion-tracker has recorded no excursion for this position">not measured</em>
+                      : <Pnl value={p.best_unrealised} digits={3} />}
+                  </td>
+                  <td className="n mono">
+                    {p.worst_unrealised === null || p.worst_unrealised === undefined
+                      ? <em className="unmeasured" title="peak-excursion-tracker has recorded no excursion for this position">not measured</em>
+                      : <Pnl value={p.worst_unrealised} digits={3} />}
+                  </td>
+                  {/* Realised on a position still open: a lot sold back before the
+                      rest. Absent means this position was never scaled out of, which
+                      is not the same fact as having realised zero on one that was. */}
+                  <td className="n mono">
+                    {p.realised_so_far === null || p.realised_so_far === undefined
+                      ? <span className="faint">—</span>
+                      : <Pnl value={p.realised_so_far} digits={3} />}
+                  </td>
+                  {/* What this symbol has historically done to a call of this side,
+                      from signal-excursion-profiler's own checkpoint -- the file that
+                      part restores from, not a second count kept for the board. Up is
+                      the favourable move at the first exit-target quantile; down is
+                      the adverse move a correct call survived, which is the only
+                      honest basis for a stop. Below the profiler's own claim minimum
+                      it says so rather than showing a quantile nobody should size on. */}
+                  <td className="n mono">
+                    {p.expected_favourable_quote === null || p.expected_favourable_quote === undefined
+                      ? <em className="unmeasured" title={p.prediction_proof}>not measured</em>
+                      : <span title={p.prediction_proof}>
+                          +{p.expected_favourable_quote.toFixed(2)}
+                          <span className="faint"> ({(p.expected_favourable_fraction * 100).toFixed(2)}%)</span>
+                        </span>}
+                  </td>
+                  <td className="n mono">
+                    {p.expected_adverse_quote === null || p.expected_adverse_quote === undefined
+                      ? <em className="unmeasured" title={p.prediction_proof}>not measured</em>
+                      : <span title={p.prediction_proof}>
+                          −{p.expected_adverse_quote.toFixed(2)}
+                          <span className="faint"> ({(p.expected_adverse_fraction * 100).toFixed(2)}%)</span>
+                        </span>}
+                  </td>
+                  {/* Tailgating, and every other per-position plan -- the stop, the
+                      target, the trailing level, the conviction behind the entry --
+                      lives on the bus and nowhere else. This process is not on the
+                      bus, so it cannot read them, and a column that guessed would be
+                      exactly the failure Rule 8 exists to prevent. NOT BUILT rather
+                      than NOT MEASURED: nothing writes it anywhere a board could
+                      look, which is a fact about the system, not about this reading. */}
+                  <td className="n mono">
+                    <em className="unmeasured" title="tail-follow-conviction-model and tail-trailing-exit-planner publish on the bus only; no part writes a per-position tailgating state to disk, so no board can read one">not built</em>
+                  </td>
                   <td className="n mono faint">{p.fees_paid?.toFixed(3)}</td>
                   <td className="n mono faint">
                     {p.opened_at_ns

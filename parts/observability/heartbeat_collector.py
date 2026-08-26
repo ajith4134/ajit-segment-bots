@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.level_publishing import PacedPublisher
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -267,11 +268,27 @@ def run_heartbeat_collector(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    snapshot_is_due=lambda: True,
 ) -> int:
+    """Collect what arrived, and take a snapshot when one is due.
+
+    The build is guarded, not just the send. Measured on the live spine at 10:14
+    on 2026-08-26 this was the busiest process on a twelve-core machine at 73% of
+    a core, because the tick woke on every one of 327 parts' health messages and
+    each wake rebuilt the 327-row table (4.2 ms), rendered it (1.3 ms) and wrote
+    209 KB of JSON to disk (4.2 ms) -- just under ten milliseconds, seventeen
+    times a second, restating a table its consumers read once a second.
+
+    Observing what arrived stays on every tick: a report dropped because the
+    snapshot was not due would be a part reading as silent when it had just
+    spoken, which is the exact failure the table exists to make visible.
+    """
+
     def tick() -> None:
         for health in read_health():
             collector.observe_health(health)
-        publish_table(collector.read_table())
+        if snapshot_is_due():
+            publish_table(collector.read_table())
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -398,9 +415,20 @@ def start_part(context) -> int:
         silent_after_seconds=context.number("heartbeat_silent_after_seconds"),
     )
 
-    def publish_and_write(table: HeartbeatTable) -> None:
+    # The table carries every part's message counts and the age of its last
+    # report, so every field in it moves on every tick: there is no unchanged
+    # snapshot to skip, only a rate to state. PacedPublisher is that rate.
+    snapshots = PacedPublisher(
+        publish=lambda tables: _send_and_write(tables[0]),
+        interval_seconds=context.number("level_refresh_interval_seconds"),
+    )
+
+    def _send_and_write(table: HeartbeatTable) -> None:
         publish_table((table,))
         write_heartbeat_table(table_path, table, collector.standing)
+
+    def publish_and_write(table: HeartbeatTable) -> None:
+        snapshots.publish_snapshot((table,))
 
     def emit_and_observe_own_health(health) -> None:
         # A part never receives its own message (wiring rule 1), so the collector
@@ -418,4 +446,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=emit_and_observe_own_health,
+        snapshot_is_due=snapshots.is_due,
     )

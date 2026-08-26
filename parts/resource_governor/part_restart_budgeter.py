@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.level_publishing import LevelPublisher, describe_level_publishing
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -114,6 +115,21 @@ class PartRestartBudgeter:
         return tuple(budgets)
 
 
+def standing_of(budgets) -> tuple:
+    """What makes a budget a different budget, with the clock left out.
+
+    `decided_at_ns` is stamped fresh on every read, and
+    `seconds_until_allowance_returns` is a countdown that changes on every read
+    while nothing about the allowance has changed. Neither is something a reader
+    acts on differently from one tick to the next; what it acts on is whether a
+    part may be restarted, how many restarts it has spent, and out of how many.
+    """
+    return tuple(
+        (budget.part_id, budget.verdict, budget.restarts_in_window, budget.allowance)
+        for budget in budgets
+    )
+
+
 def describe_budgets(budgeter: PartRestartBudgeter) -> dict:
     return {
         "part_id": PART_ID,
@@ -168,9 +184,20 @@ def start_part(context) -> int:
         ids.extend(fault.part_id for fault in faults.payloads())
         return tuple(ids)
 
+    # The standing of every part's restart budget is a level: it is true until a
+    # restart or a fault moves it. Measured on the live spine at 10:14 on
+    # 2026-08-26, republished on every tick, it was 17,106 messages a second from
+    # 6,963 received -- the single largest publisher on the machine after the tape
+    # itself, and every one of them a restatement.
+    budget_levels = LevelPublisher(
+        publish=publish_budgets,
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=standing_of,
+    )
+
     def publish(budgets) -> None:
         if budgets:
-            publish_budgets(budgets)
+            budget_levels.publish_level(budgets)
 
     return run_part_restart_budgeter(
         budgeter=budgeter,

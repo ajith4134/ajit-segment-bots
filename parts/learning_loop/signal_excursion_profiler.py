@@ -352,10 +352,24 @@ def run_signal_excursion_profiler(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    """Observe what arrived, and publish the profiles that moved because of it.
+
+    A profile is a level: "this symbol travels this far against a correct long
+    call" is true until a new label changes it. Measured on the live spine at
+    10:26 on 2026-08-26, the full set of 403 profiles went out on every tick --
+    381 messages a second built from 0 training labels a second, describing
+    nothing that had changed since the tick before.
+
+    Profiling every key stays on every tick. It is the publish that is skipped,
+    not the measurement: a profiler that stopped profiling would answer the next
+    label with a stale distribution.
+    """
+
     def tick() -> None:
         for label in read_labels():
             profiler.observe_label(label)
-        publish_profiles(profiler.profile_all())
+        for profile in profiler.profile_all():
+            publish_profiles(profile)
         if checkpoint is not None:
             checkpoint(profiler)
 
@@ -381,8 +395,20 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
+    from runtime.level_publishing import LevelPublisherByKey
+
     labels = Batch(read=context.bus.reader("training-label"))
-    publish_profiles = context.bus.publisher_for("excursion-profile")
+    # Keyed by exactly what makes one profile a different profile, so a label for
+    # one symbol does not restate the other four hundred.
+    profile_levels = LevelPublisherByKey(
+        publish=context.bus.publisher_for("excursion-profile"),
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+    )
+
+    def publish_profiles(profile) -> None:
+        profile_levels.publish_level(
+            (profile.venue_id, profile.symbol, profile.side), (profile,)
+        )
 
     # The quantiles the proposer looks its targets up by, exactly. It reads them
     # from `favourable_quantiles` by key, so a profile that priced 0.5 when the

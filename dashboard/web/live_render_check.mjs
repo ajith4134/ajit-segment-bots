@@ -23,7 +23,13 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`))
 page.on('requestfailed', (r) => failed.push(`${r.url().slice(0, 90)} :: ${r.failure()?.errorText}`))
 
 await page.goto(url, { waitUntil: 'domcontentloaded' })
-await page.waitForSelector('.live-grid', { timeout: 20000 })
+// Waited for as long as the shape route can actually take, not as long as it
+// takes when warm. `/api/board` measures 327 rungs off the filesystem, and on a
+// cold cache with every part running it was timed at 70s on 2026-08-26 -- the
+// same order as the trades route below, and the reason that one already waits
+// 60s. At 20s this failed against a board that was merely still measuring, which
+// reads exactly like a board that is broken.
+await page.waitForSelector('.live-grid', { timeout: 120000 })
 
 // The first poll can only ever say NOT MEASURED -- one table is not a rate. Wait for
 // a second one so the thing being verified is the live column, not the empty state.
@@ -60,9 +66,27 @@ if (await page.locator('.part-row-open').count()) {
   countersShown = await page.locator('.counter').count()
 }
 
-// Every view must draw. The live view is one of four, not a replacement for the
-// others, and a tab that renders nothing is the failure this check exists to catch.
-await page.locator('.view').nth(1).click()          // Trading
+// Every view must draw. The live view is one of several, not a replacement for
+// the others, and a tab that renders nothing is the failure this check exists to
+// catch.
+//
+// Views are found by their label, never by position. They used to be clicked by
+// index, and when a Settings view was added between Server load and How far
+// built every later index shifted by one: the check went on clicking nth(3),
+// landed on Settings, found no `.panel` there and reported "the build view drew
+// nothing" -- against a build view that was drawing perfectly. A check that has
+// silently stopped checking the thing it names is worse than no check, which is
+// the whole reason this file exists.
+const openView = async (label) => {
+  const button = page.locator('.view', { hasText: label })
+  if (await button.count() !== 1) {
+    console.error(`RENDER FAILED: expected exactly one view button labelled ${JSON.stringify(label)}, found ${await button.count()}`)
+    process.exit(1)
+  }
+  await button.click()
+}
+
+await openView('Trading')
 // Waited for, not slept through. The trades payload reads the tape per held
 // position and can take seconds on a cold cache; a fixed sleep caught the loading
 // state and reported a render failure for a page that was working.
@@ -72,7 +96,7 @@ const tradePanels = await page.locator('.trade-panel').count()
 const tradeRows = await page.locator('.trade-table tbody tr').count()
 const tradeEmpty = await page.locator('.trade-empty').count()
 
-await page.locator('.view').nth(2).click()          // Server load
+await openView('Server load')
 await page.waitForTimeout(4000)
 const gauges = await page.locator('.gauge').count()
 const cores = await page.locator('.core').count()
@@ -81,7 +105,7 @@ const gaugeHeadlines = await page.evaluate(() =>
   [...document.querySelectorAll('.gauge')].map((g) =>
     `${g.querySelector('.gauge-label').textContent}=${g.querySelector('.gauge-headline').textContent}`))
 
-await page.locator('.view').nth(3).click()          // How far built
+await openView('How far built')
 await page.waitForTimeout(300)
 const buildPanels = await page.locator('.panel').count()
 

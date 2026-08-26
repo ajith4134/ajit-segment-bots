@@ -253,11 +253,22 @@ def run_venue_outage_rider(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    """Watch every venue, and say a venue's standing when that standing changes.
+
+    An outage is a level -- this venue is reachable, or it is not -- and it was
+    restated for every venue on every tick: 227 messages a second on the live
+    spine at 10:26 on 2026-08-26 to describe two venues that were both fine.
+
+    Measuring every venue stays on every tick. An outage is detected by silence,
+    so a rider that only measured the venues that just spoke could never notice
+    the one that stopped.
+    """
+
     def tick() -> None:
         for venue_id, symbol, at_ns in read_messages():
             rider.observe_message(venue_id, symbol, at_ns)
         for venue_id in list(rider._symbols):
-            publish_states(rider.measure(venue_id).outage)
+            publish_states(venue_id, rider.measure(venue_id).outage)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -289,7 +300,13 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     health = Batch(read=context.bus.reader("part-health"))
     gaps = Batch(read=context.bus.reader("feed-gap"))
-    publish_states = context.bus.publisher_for("outage-state")
+    from runtime.level_publishing import LevelPublisherByKey
+
+    # Keyed by venue: one venue going dark must not restate the other's standing.
+    outage_levels = LevelPublisherByKey(
+        publish=context.bus.publisher_for("outage-state"),
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+    )
 
     rider = VenueOutageRider(
         silence_seconds=context.number("outage_silence_seconds"),
@@ -311,7 +328,9 @@ def start_part(context) -> int:
         rider=rider,
         control_socket=context.control_socket,
         read_messages=read_messages,
-        publish_states=lambda outage: publish_states((outage,)),
+        publish_states=lambda venue_id, outage: outage_levels.publish_level(
+            venue_id, (outage,)
+        ),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.autonomy_types import PartFault
+from runtime.level_publishing import describe_level_publishing
 from runtime.rolling_statistics import RollingWindow
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -252,7 +253,27 @@ class FailingPartDetector:
         )
 
 
-def describe_detection(detector: FailingPartDetector) -> dict:
+def verdict_of(faults) -> tuple:
+    """What makes a fault a different fault, with the noticing left out.
+
+    A PartFault carries three fields that restate when the detector last looked
+    rather than what it found: `detected_at_ns`, `observations`, and a `detail`
+    whose text is "5 tick(s) with no error of any kind" -- a number that climbs
+    on every tick. Compared whole, two reports of one unchanging verdict are
+    never equal, so nothing would ever be skipped and the storm would survive the
+    fix while the skip counter claimed otherwise.
+
+    What a reader acts on is which part, what is wrong with it, and how badly. A
+    change in any of those is published at once; a fault that has merely been
+    true for longer waits for the refresh interval, which is the correct reading
+    of it -- "still suspect" is not news.
+    """
+    return tuple(
+        (fault.part_id, fault.kind, fault.severity, fault.is_silent) for fault in faults
+    )
+
+
+def describe_detection(detector: FailingPartDetector, levels=None) -> dict:
     return {
         "part_id": PART_ID,
         "parts_watched": detector.standing.parts_watched,
@@ -266,6 +287,7 @@ def describe_detection(detector: FailingPartDetector) -> dict:
         "fault_kinds": list(FAULT_KINDS),
         "uses_one_global_threshold": False,
         "raises_a_fault_that_nothing_can_clear": False,
+        **(describe_level_publishing({"part-fault": levels}) if levels else {}),
     }
 
 
@@ -274,14 +296,47 @@ def run_failing_part_detector(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    clear_fault=None,
+    levels=None,
 ) -> int:
+    """Judge the parts this tick heard from, and say only what changed.
+
+    Two things this loop used to do on every tick, and the cost of each measured
+    on the live spine at 10:14 on 2026-08-26:
+
+    **It re-checked every part it had ever seen.** 327 parts against roughly 18
+    ticks a second is 5,967 checks a second, and 5,966 of every 5,967 were of a
+    part about which nothing new had arrived. A part's verdict is computed from
+    its tick count, its durations and its error count, and all three move only
+    when that part's health arrives -- so a part nobody heard from cannot have
+    changed its mind, and checking it can only produce the answer it produced
+    last time. Judging what arrived is the same verdict for a hundredth of the
+    work.
+
+    **It republished the verdict every time.** SUSPICIOUSLY_PERFECT is true of
+    almost every part in this system and stays true -- errors=0 over a long run
+    is the normal condition of a part that is working -- so the detector was
+    putting 5,315 identical faults a second onto the bus. The warden escalated
+    each one, the restart budgeter republished every budget on each, and the
+    result was 89,747 messages a second and seven parts too starved of CPU to
+    send the heartbeat that would have proved them alive.
+
+    `clear_fault` is how a part that recovers stops being reported: without it
+    the level publisher would go on holding that part's last fault as the thing
+    it most recently said, and a part that faulted again identically inside one
+    refresh interval would be silently skipped.
+    """
     def tick() -> None:
+        judged = set()
         for report in read_health():
             detector.observe_health(**report)
-        for part_id in list(detector._ticks):
+            judged.add(report["part_id"])
+        for part_id in judged:
             outcome = detector.check(part_id)
             if outcome.is_usable:
                 publish_faults(outcome.fault)
+            elif clear_fault is not None:
+                clear_fault(part_id)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -291,7 +346,7 @@ def run_failing_part_detector(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_detection(detector),
+        read_standing=lambda: describe_detection(detector, levels),
     )
 
 
@@ -311,8 +366,18 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
+    from runtime.level_publishing import LevelPublisherByKey
+
     health = Batch(read=context.bus.reader("part-health"))
-    publish_faults = context.bus.publisher_for("part-fault")
+    # A fault is a level, not an event: "this part is currently suspect" is true
+    # until it stops being true, and saying it again changes nothing downstream.
+    # Keyed by part so one part changing its verdict does not restate every other
+    # part's -- see runtime/level_publishing.py for what that cost when measured.
+    fault_levels = LevelPublisherByKey(
+        publish=context.bus.publisher_for("part-fault"),
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=verdict_of,
+    )
 
     detector = FailingPartDetector(
         window=int(context.number("detector_window")),
@@ -347,9 +412,11 @@ def start_part(context) -> int:
         detector=detector,
         control_socket=context.control_socket,
         read_health=read_health,
-        publish_faults=lambda fault: publish_faults((fault,)),
+        publish_faults=lambda fault: fault_levels.publish_level(fault.part_id, (fault,)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        clear_fault=fault_levels.forget,
+        levels=fault_levels,
     )

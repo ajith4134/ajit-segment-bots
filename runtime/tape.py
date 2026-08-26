@@ -90,6 +90,11 @@ class StreamKind(enum.IntEnum):
     # nobody traded had no fresh price and could not be sized against. Stored as
     # one byte like the others, so files written before it read back unchanged.
     QUOTE = 4
+    # Mark price, index price and the venue's declared funding rate for one
+    # symbol. Added 2026-08-26: funding-rate-forecaster computes the next
+    # settlement from the premium -- mark minus index -- and neither number was
+    # on any wire, so it forecast nothing at all and said so in its standing.
+    PREMIUM = 5
 
 
 class TradeFidelity(enum.StrEnum):

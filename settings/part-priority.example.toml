@@ -95,3 +95,26 @@
 "duty-cycle-planner" = 25
 "accelerator-scheduler" = 26
 "control-recorder" = 27
+
+#   subscription-quota-watch   and paid-spend-ledger are the survival tier's own
+#   paid-spend-ledger          sensors, added 2026-08-26. survival-tier-monitor
+#                              computes the tier from llm-quota-state and
+#                              llm-spend-state and these two are their only
+#                              producers; before either has published, the
+#                              monitor reports SHUTDOWN on purpose, because
+#                              assuming unmeasured runway is how a system finds
+#                              out it is broke by stopping. Measured on the live
+#                              spine at 10:38 on 2026-08-26: 364 such unmeasured
+#                              readings drove conservation-planner to stop 182
+#                              parts -- 182 per plan across 1,251 plans -- and
+#                              both sensors were in them. Their processes were
+#                              released (T-3), so neither could publish a reading
+#                              again and the tier stayed SHUTDOWN permanently:
+#                              145 of 327 parts alive, every conservation block
+#                              dark, the machine at 9 GB of 29, and no fault
+#                              reported anywhere, because every one of those
+#                              stops was a decision the planner was entitled to
+#                              make. A loop must not be able to switch off the
+#                              instrument it reads itself with.
+"subscription-quota-watch" = 28
+"paid-spend-ledger" = 29

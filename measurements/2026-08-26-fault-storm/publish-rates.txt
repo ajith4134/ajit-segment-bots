@@ -1,0 +1,23 @@
+window 20.1s   total publish rate 89,747 msg/s across all parts
+
+     pub/s    recv/s  part                              types
+     26575       283  failing-part-detector             part-fault
+     17106      6963  part-restart-budgeter             restart-budget
+     11834         1  venue-trade-stream-reader         market-data
+      9313       651  order-flow-state-encoder          order-flow-state
+      3314        90  order-book-reader                 order-book-snapshot
+      2532         1  venue-quote-stream-reader         market-quote
+      2311         0  signal-excursion-profiler         excursion-profile
+      2217         4  regime-classifier                 market-regime
+      1399       302  part-appetite-meter               part-resource-usage
+      1367       677  ground-truth-snapshot-builder     verified-snapshot
+      1202       677  symbol-profile-store              symbol-profile
+       891       435  ban-signal-detector               venue-standing
+       837       942  market-anomaly-detector           market-anomaly
+       601       523  cross-venue-price-consolidator    consolidated-price
+       520        89  entropy-magnitude-forecaster      volatility-forecast
+       475       296  survival-tier-monitor             survival-tier
+       436       433  execution-cost-model              cost-estimate
+       297       734  trading-halt-decider              trading-halt
+       250       312  venue-outage-rider                outage-state
+       244         0  hypothesis-ranker                 hypothesis-priority

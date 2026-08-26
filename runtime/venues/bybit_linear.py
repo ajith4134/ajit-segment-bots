@@ -51,6 +51,7 @@ from runtime.venues.venue_adapter import (
     VenueAdapter,
     VenueFact,
     VenueMessageNotRecognised,
+    VenuePremium,
 )
 
 VENUE_ID = "bybit-linear"
@@ -84,6 +85,16 @@ TRADE_TOPIC_PREFIX = "publicTrade"
 CANDLE_TOPIC_PREFIX = "kline"
 BOOK_TOPIC_PREFIX = "orderbook"
 QUOTE_TOPIC_PREFIX = "tickers"
+# The premium arrives on the topic the quote reader already subscribes to. This
+# venue puts mark price, index price, the funding rate it will charge next and
+# the moment it charges it into the same `tickers` message as the best bid and
+# ask, so nothing new is subscribed to -- unlike Binance, which carries the same
+# four on a separate `!markPrice@arr@1s` stream. Measured 2026-08-24 against
+# tests/captured/bybit-linear/2026-08-24-public-linear-tickers-through-one-sided-delta.jsonl.
+PREMIUM_TOPIC_PREFIX = QUOTE_TOPIC_PREFIX
+# The four fields a premium is read from. A tickers delta that carries none of
+# them is a quote-only amend and yields no premium at all.
+PREMIUM_FIELDS = ("markPrice", "indexPrice", "fundingRate", "nextFundingTime")
 SUBSCRIBE_OPERATION = "subscribe"
 UNSUBSCRIBE_OPERATION = "unsubscribe"
 PING_OPERATION = "ping"
@@ -237,7 +248,13 @@ class BybitLinearAdapter(VenueAdapter):
         venue (T-1) and because the venue that does split its endpoints is the
         one where forgetting costs a silent, healthy-looking connection.
         """
-        if stream_kind in (StreamKind.TRADE, StreamKind.CANDLE, StreamKind.BOOK, StreamKind.QUOTE):
+        if stream_kind in (
+            StreamKind.TRADE,
+            StreamKind.CANDLE,
+            StreamKind.BOOK,
+            StreamKind.QUOTE,
+            StreamKind.PREMIUM,
+        ):
             return LINEAR_PUBLIC_STREAM
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no endpoint for {stream_kind!r}")
 
@@ -259,6 +276,18 @@ class BybitLinearAdapter(VenueAdapter):
                     f"nothing, which is the failure this refusal exists to prevent."
                 )
             return f"{QUOTE_TOPIC_PREFIX}.{symbol}"
+        if request.stream_kind is StreamKind.PREMIUM:
+            if request.symbol == EVERY_SYMBOL:
+                raise VenueMessageNotRecognised(
+                    f"{VENUE_ID} has no all-market premium topic, so every symbol is named "
+                    f"-- the same as its quote, because it is the same topic. A caller "
+                    f"reaching here asked for one anyway; subscribing to a symbol called "
+                    f"'*' would look subscribed and deliver nothing."
+                )
+            # Deliberately the quote topic. This venue packs mark price, index
+            # price and funding into the same `tickers` message as the best bid
+            # and ask, so a reader wanting both subscribes once.
+            return f"{PREMIUM_TOPIC_PREFIX}.{symbol}"
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no stream for {request.stream_kind!r}")
 
     def resolve_candle_interval(self, canonical_interval: str | None) -> str:
@@ -392,6 +421,12 @@ class BybitLinearAdapter(VenueAdapter):
             return SequenceContinuity.INCREMENTS_BY_ONE
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.NON_DECREASING
+        if stream_kind is StreamKind.PREMIUM:
+            # The same tickers message as the quote, so the same `cs` and the same
+            # promise. Stated separately rather than folded in with QUOTE: they
+            # share a topic today by this venue's choice, not by a rule, and a
+            # reader of one must not inherit the other's promise silently.
+            return SequenceContinuity.NON_DECREASING
         if stream_kind is StreamKind.QUOTE:
             # `cs` on a tickers message is a cross sequence, the same counter the
             # trade stream carries, and the venue promises no step size for it.
@@ -451,6 +486,82 @@ class BybitLinearAdapter(VenueAdapter):
                 ask_quantity=number("ask1Size"),
                 venue_time_ns=int(message["ts"]) * MILLISECONDS_TO_NANOSECONDS,
                 is_snapshot=message.get("type") == SNAPSHOT_MESSAGE_TYPE,
+            ),
+        )
+
+    def read_premiums(self, payload: bytes) -> tuple[VenuePremium, ...]:
+        """What one tickers message says about mark, index and funding.
+
+        The same message the quote reader reads. This venue packs the premium
+        into `tickers` alongside the best bid and ask, so a premium costs no
+        extra subscription here -- where Binance carries the same four fields on
+        a separate `!markPrice@arr@1s` stream, one frame for every listed symbol.
+        One symbol per message either way for this venue.
+
+        Measured 2026-08-24, a real snapshot from this venue, trimmed:
+
+            {"topic":"tickers.BTCUSDT","type":"snapshot",
+             "data":{"symbol":"BTCUSDT","markPrice":"79041.51",
+                     "indexPrice":"79065.05","nextFundingTime":"1787616000000",
+                     "fundingRate":"0.00001984", ...},
+             "cs":793104107391,"ts":1787590743883}
+
+        and a real delta, which is why every field on VenuePremium is optional:
+
+            {"topic":"tickers.BTCUSDT","type":"delta",
+             "data":{"symbol":"BTCUSDT","markPrice":"79029.65",
+                     "indexPrice":"79063.98", ...},
+             "cs":793104118729,"ts":1787590744183}
+
+        Mark and index moved; the funding rate did not, so the venue did not
+        resend it. Reporting it as zero there would say this venue is about to
+        charge nothing, which is a claim about the market rather than about the
+        message -- so it is None and whoever assembles premiums merges, exactly
+        as `quote_stream_amends_rather_than_restates` already tells them to for
+        the quote.
+
+        A tickers amend carrying none of the four -- a bid moving on its own --
+        yields no premium rather than one made entirely of None. An empty tuple
+        says "this message was not about the premium"; four Nones would say "the
+        premium is unknown", and those are different facts.
+        """
+        message = json.loads(payload)
+        if not isinstance(message, dict):
+            return ()
+        topic = message.get("topic")
+        if not topic or not topic.startswith(f"{PREMIUM_TOPIC_PREFIX}."):
+            return ()
+        premium = message.get("data")
+        if not isinstance(premium, dict):
+            return ()
+        if not any(field in premium for field in PREMIUM_FIELDS):
+            return ()
+
+        def number(field: str) -> float | None:
+            """The venue's number, or None when this message did not carry the field.
+
+            An empty string is absent too: this venue sends "" for a field it has
+            no value for, and float("") raises rather than meaning zero.
+            """
+            raw = premium.get(field)
+            if raw is None or raw == "":
+                return None
+            return float(raw)
+
+        settlement = premium.get("nextFundingTime")
+        return (
+            VenuePremium(
+                venue_id=VENUE_ID,
+                symbol=premium.get("symbol", topic.split(".")[-1]),
+                mark_price=number("markPrice"),
+                index_price=number("indexPrice"),
+                declared_funding_rate=number("fundingRate"),
+                next_settlement_at_ns=(
+                    int(settlement) * MILLISECONDS_TO_NANOSECONDS
+                    if settlement not in (None, "")
+                    else None
+                ),
+                venue_time_ns=int(message["ts"]) * MILLISECONDS_TO_NANOSECONDS,
             ),
         )
 

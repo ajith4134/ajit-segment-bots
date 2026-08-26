@@ -155,6 +155,34 @@ class OrderFlowStateEncoder:
     def states_for(self, venue_id: str, symbol: str, length: int) -> tuple:
         return tuple(self._states.get((venue_id, symbol), [])[-length:])
 
+    def states_after(self, venue_id: str, symbol: str, after_second_ns: int, length: int) -> tuple:
+        """This symbol's closed seconds newer than one already sent, newest last.
+
+        The encoder holds a rolling window and the meter that reads it keeps its
+        own, keyed by `second_ns`. Sending the whole window on every tick
+        therefore restated up to 119 seconds the reader already had, to convey
+        the one that was new -- and the restating is what made the new one
+        unreachable. Measured on the live spine at 10:26 on 2026-08-26:
+
+            trades_seen        541 a second
+            seconds_encoded    105 a second   the real rate of new facts
+            published       10,353 a second   the window, resent per trade batch
+            flow-entropy-meter input_loss  158,902 order-flow-state, 210 a second
+
+        99% of what went onto the bus was a restatement, and the bus was dropping
+        210 a second of it into the one consumer that wanted it. Sending only
+        what is new conveys strictly more, because nothing is lost carrying it.
+
+        Capped at `length` for the same reason the window is: a symbol that went
+        quiet for an hour and traded again must not dump an hour of seconds into
+        one datagram burst. Past that cap the reader has a gap, which is the
+        honest reading -- those seconds are older than the window it measures
+        over anyway.
+        """
+        held = self._states.get((venue_id, symbol), [])
+        fresh = [state for state in held if state.second_ns > after_second_ns]
+        return tuple(fresh[-length:])
+
     def _close_second(self, key, building: SecondUnderConstruction) -> None:
         self._encode(key, building.second_ns, building.close, building.volume, building.trades)
 
@@ -235,10 +263,22 @@ def run_order_flow_state_encoder(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
+    """Encode what traded, and publish only the seconds that have closed since.
+
+    `read_trades` returns one entry per symbol touched this tick, carrying the
+    second that symbol was last published through. A symbol trading ten times a
+    second closes one second a second, so nine of those ten ticks find nothing
+    new for it and publish nothing at all -- which is the whole difference
+    between 10,353 messages a second and 105.
+    """
+
     def tick() -> None:
         symbols = read_trades(encoder)
         publish_states(
-            tuple(encoder.states_for(venue_id, symbol, length) for venue_id, symbol, length in symbols)
+            tuple(
+                encoder.states_after(venue_id, symbol, published_through, length)
+                for venue_id, symbol, published_through, length in symbols
+            )
         )
 
     return run_part(
@@ -267,6 +307,15 @@ def start_part(context) -> int:
     )
     length = int(context.number("order_flow_state_length"))
 
+    # The newest second already published, per symbol. A high-water mark rather
+    # than a set: seconds only ever move forward, so one number per symbol says
+    # everything a set of them would, and it does not grow with the run.
+    published_through: dict[tuple[str, str], int] = {}
+    # Before anything has been published for a symbol there is no mark, and every
+    # second the encoder holds for it is new. -1 rather than 0 so a venue that
+    # ever stamped the epoch is still newer than "nothing sent yet".
+    NOTHING_PUBLISHED_YET = -1
+
     def read_trades(_encoder):
         books.payloads()
         touched = set()
@@ -274,12 +323,28 @@ def start_part(context) -> int:
             if isinstance(trade, NormalisedTrade):
                 encoder.observe_trade(trade.venue_id, trade.symbol, trade.price, trade.quantity, trade.venue_time_ns)
                 touched.add((trade.venue_id, trade.symbol))
-        return tuple((venue_id, symbol, length) for venue_id, symbol in sorted(touched))
+        return tuple(
+            (
+                venue_id,
+                symbol,
+                published_through.get((venue_id, symbol), NOTHING_PUBLISHED_YET),
+                length,
+            )
+            for venue_id, symbol in sorted(touched)
+        )
 
     def publish(state_tuples) -> None:
         flat = tuple(state for states in state_tuples for state in states)
-        if flat:
-            publish_states(flat)
+        if not flat:
+            return
+        publish_states(flat)
+        # Advanced only after the send: a mark moved first would silently skip
+        # the seconds a failed publish never carried.
+        for state in flat:
+            key = (state.venue_id, state.symbol)
+            published_through[key] = max(
+                published_through.get(key, NOTHING_PUBLISHED_YET), state.second_ns
+            )
 
     return run_order_flow_state_encoder(
         encoder=encoder,

@@ -52,6 +52,7 @@ from runtime.venues.venue_adapter import (
     VenueAdapter,
     VenueFact,
     VenueMessageNotRecognised,
+    VenuePremium,
 )
 
 VENUE_ID = "binance-usdm"
@@ -95,6 +96,18 @@ AGGREGATED_TRADE_STREAM = "aggTrade"
 CANDLE_STREAM_PREFIX = "kline"
 PARTIAL_BOOK_STREAM_PREFIX = "depth"
 QUOTE_STREAM = "bookTicker"
+# One subscription carrying every listed symbol's mark price, index price and
+# declared funding rate, once a second. Measured 2026-08-26: 740 symbols in one
+# frame -- and it answers on the /market/ws route alone, silent on /ws and
+# /public/ws, which is the same route-dependence the quote stream has in the
+# other direction.
+EVERY_SYMBOL_PREMIUM_STREAM = "!markPrice@arr@1s"
+# The same stream for one named symbol, at the same once-a-second cadence. The
+# all-market form is what the reader actually subscribes to -- one frame for
+# every listed symbol costs one subscription instead of hundreds -- but a caller
+# naming a symbol must get that symbol rather than a refusal.
+PREMIUM_STREAM = "markPrice@1s"
+PREMIUM_EVENT = "markPriceUpdate"
 # One subscription for the whole market, present and future. Measured 2026-08-24:
 # 693 symbols in ten seconds and 768 in ninety-nine, against a universe this venue
 # lists at 872. A symbol listed tomorrow arrives on it without a resubscribe,
@@ -196,6 +209,18 @@ _LIMITS: dict[str, VenueFact] = {
 }
 
 
+def _optional_float(value) -> float | None:
+    """A venue field as a number, or None when the venue did not send it.
+
+    None rather than zero, because zero is a price and an absence is not: a mark
+    price of zero says the contract is worthless and a missing one says the
+    message did not carry it.
+    """
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 def build_venue_adapter() -> "BinanceUsdmAdapter":
     """The factory `adapter_registry` looks for. Every venue module exposes this."""
     return BinanceUsdmAdapter()
@@ -235,6 +260,11 @@ class BinanceUsdmAdapter(VenueAdapter):
             return PUBLIC_ROUTE
         if stream_kind is StreamKind.QUOTE:
             return QUOTE_ROUTE
+        if stream_kind is StreamKind.PREMIUM:
+            # Measured 2026-08-26: `!markPrice@arr@1s` answers on /market/ws and is
+            # silent on /ws and /public/ws -- the same route-dependence the trade
+            # and candle streams have, and the opposite of the quote stream's.
+            return MARKET_ROUTE
         raise VenueMessageNotRecognised(
             f"{VENUE_ID} has no endpoint for stream kind {stream_kind!r}"
         )
@@ -259,6 +289,10 @@ class BinanceUsdmAdapter(VenueAdapter):
             if request.symbol == EVERY_SYMBOL:
                 return EVERY_SYMBOL_QUOTE_STREAM
             return f"{symbol}@{QUOTE_STREAM}"
+        if request.stream_kind is StreamKind.PREMIUM:
+            if request.symbol == EVERY_SYMBOL:
+                return EVERY_SYMBOL_PREMIUM_STREAM
+            return f"{symbol}@{PREMIUM_STREAM}"
         raise VenueMessageNotRecognised(f"{VENUE_ID} has no stream for {request.stream_kind!r}")
 
     def resolve_book_depth_levels(self, requested_levels: int | None) -> int:
@@ -456,6 +490,11 @@ class BinanceUsdmAdapter(VenueAdapter):
             return SequenceContinuity.CHAINED_TO_PREVIOUS
         if stream_kind is StreamKind.TRADE:
             return SequenceContinuity.INCREMENTS_BY_ONE
+        if stream_kind is StreamKind.PREMIUM:
+            # A markPriceUpdate carries no sequence of any kind: `E` is the event
+            # time and nothing counts the events. Silence is the only detector,
+            # which is what NOT_NUMBERED says and what feed_gap_threshold catches.
+            return SequenceContinuity.NOT_NUMBERED
         if stream_kind is StreamKind.QUOTE:
             # `u` on a bookTicker frame is the order book update id, which counts
             # book events rather than quote events: it rises with every depth
@@ -536,6 +575,41 @@ class BinanceUsdmAdapter(VenueAdapter):
                 is_snapshot=True,
             ),
         )
+
+    def read_premiums(self, payload: bytes) -> tuple[VenuePremium, ...]:
+        """Every listed symbol's mark price, index price and funding, in one frame.
+
+        `!markPrice@arr@1s` is an array: measured 2026-08-26, 740 symbols in a
+        single message once a second. Fields, from the venue's own naming --
+        `p` mark, `i` index, `P` the estimated settlement price, `r` the funding
+        rate it will charge next, `T` the moment it charges it.
+
+        `P` is deliberately not read as the index. It is what the venue estimates
+        the settlement price will be, which is a forecast of its own; using it
+        where the index belongs would compute a premium against a number the
+        venue made up rather than against the basket it marks to.
+        """
+        message = json.loads(payload)
+        entries = message if isinstance(message, list) else [message]
+        premiums = []
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("e") != PREMIUM_EVENT:
+                continue
+            settlement = entry.get("T")
+            premiums.append(
+                VenuePremium(
+                    venue_id=VENUE_ID,
+                    symbol=entry["s"],
+                    mark_price=_optional_float(entry.get("p")),
+                    index_price=_optional_float(entry.get("i")),
+                    declared_funding_rate=_optional_float(entry.get("r")),
+                    next_settlement_at_ns=(
+                        int(settlement) * MILLISECONDS_TO_NANOSECONDS if settlement else None
+                    ),
+                    venue_time_ns=int(entry["E"]) * MILLISECONDS_TO_NANOSECONDS,
+                )
+            )
+        return tuple(premiums)
 
     def quote_stream_amends_rather_than_restates(self) -> bool:
         """False: every frame carries both sides in full.
