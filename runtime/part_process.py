@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import select
 import time
+from typing import Mapping
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -133,6 +134,12 @@ def wait_for_control_or_data(control_socket, input_descriptors, timeout_seconds:
 # so this is a ceiling on what one part can spend of that. Thirty-two is more
 # counters than any describe_* in this system currently produces.
 MOST_STANDING_COUNTERS = 32
+# How many keys a map in a part's standing may have before it is reported as a
+# count instead of flattened. A refusal-by-reason map is a closed set of names --
+# the largest in this codebase is under a dozen -- while a per-symbol map is the
+# whole universe. Sixteen separates the two without needing either to declare
+# which it is.
+MOST_KEYS_IN_A_STANDING_MAP = 16
 
 
 def countable_standing(standing) -> tuple[tuple[str, float], ...]:
@@ -146,6 +153,22 @@ def countable_standing(standing) -> tuple[tuple[str, float], ...]:
     Sorted by name so the same keys survive from one report to the next -- a cap
     that dropped a different counter each time would make a rising count look like
     a falling one.
+
+    **A small map of counters is flattened one level, as `name.key`** (2026-08-26).
+    Every part in this system that refuses things counts them by reason, and every
+    one of those counters was being dropped here -- so a gate refusing 100% of
+    what it saw showed a refusal total on the board and no way to see which
+    condition did it. Measured that day: `instruction-writer` reported
+    `requests 494, refused 494, written 0` and its `by_failing_condition` reached
+    nothing, which is Rule 8's failure exactly -- a number nobody can trace to a
+    reason is a number nobody can act on.
+
+    **A map larger than `MOST_KEYS_IN_A_STANDING_MAP` is still left behind**, and
+    its size is reported in its place as `name.keys_not_reported`. That bound is
+    what keeps a per-symbol map off this channel: at the full universe such a map
+    is ~1,500 entries, and flattening one would evict every other counter the part
+    has under the cap below. Reporting the count rather than nothing means an
+    omission still shows up as an omission.
     """
     if not standing:
         return ()
@@ -155,7 +178,21 @@ def countable_standing(standing) -> tuple[tuple[str, float], ...]:
             numeric.append((name, float(value)))
         elif isinstance(value, (int, float)):
             numeric.append((name, float(value)))
+        elif isinstance(value, Mapping):
+            numeric.extend(_flattened_counters(name, value))
     return tuple(sorted(numeric)[:MOST_STANDING_COUNTERS])
+
+
+def _flattened_counters(name: str, mapping) -> list[tuple[str, float]]:
+    """One level of a bounded counter map, or a count of what was left behind."""
+    if len(mapping) > MOST_KEYS_IN_A_STANDING_MAP:
+        return [(f"{name}.keys_not_reported", float(len(mapping)))]
+    flattened = []
+    for key, value in mapping.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        flattened.append((f"{name}.{key}", float(value)))
+    return flattened
 
 
 def run_part(

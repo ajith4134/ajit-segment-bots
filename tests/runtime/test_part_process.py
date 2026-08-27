@@ -441,9 +441,14 @@ def test_a_standing_is_flattened_to_countable_facts():
     The bus refuses a datagram over 128 KiB, and one part's standing already holds
     a per-symbol map that would grow with the universe. So what rides on health is
     the countable part of it: how many times this part refused, lost, cleared or
-    fired. A dict, a string or a nested structure is left behind rather than
-    truncated, because a number that arrived half-serialised is worse than one
-    that did not arrive.
+    fired. A string or a nested structure is left behind rather than truncated,
+    because a number that arrived half-serialised is worse than one that did not
+    arrive.
+
+    A **bounded** map of counters does ride, flattened one level, since
+    2026-08-26: every part here that refuses things counts them by reason, and
+    dropping those left a gate refusing 100% of what it saw showing a total on the
+    board with no way to see which condition did it.
     """
     from runtime.part_process import countable_standing
 
@@ -462,6 +467,10 @@ def test_a_standing_is_flattened_to_countable_facts():
         "chosen": 481.0,
         "widest_z": 3.25,
         "is_learning": 1.0,
+        # Bounded and countable, so it rides.
+        "refused_by_reason.nothing-listed": 3.0,
+        # A map whose values are themselves maps is not a counter map, and
+        # nothing in it is a number to flatten.
     }
 
 
@@ -481,3 +490,52 @@ def test_a_part_with_nothing_to_say_about_itself_says_nothing():
     assert countable_standing(None) == ()
     assert countable_standing({}) == ()
     assert countable_standing({"part_id": "x", "notes": "words"}) == ()
+
+
+# ---- a refusal nobody can trace to a reason is a number nobody can act on -----
+
+def test_a_bounded_counter_map_reaches_the_board_one_level_flattened():
+    """Measured 2026-08-26: instruction-writer reported requests 494, refused 494,
+    written 0 -- and its by_failing_condition reached nothing, so which of its
+    eight conditions refused everything was invisible on every board. Rule 8.
+    """
+    from runtime.part_process import countable_standing
+
+    reported = dict(countable_standing({
+        "requests": 494,
+        "refused": 494,
+        "by_failing_condition": {"nothing-tried-to-break-it": 300, "no-regime-tag": 194},
+    }))
+
+    assert reported["by_failing_condition.nothing-tried-to-break-it"] == 300.0
+    assert reported["by_failing_condition.no-regime-tag"] == 194.0
+    assert reported["refused"] == 494.0
+
+
+def test_a_map_that_grows_with_the_universe_is_counted_rather_than_flattened():
+    """Flattening one would evict every other counter the part has under the cap.
+
+    Reported as a count rather than dropped silently, so an omission still shows
+    up as an omission.
+    """
+    from runtime.part_process import MOST_KEYS_IN_A_STANDING_MAP, countable_standing
+
+    per_symbol = {f"SYM{index}": index for index in range(MOST_KEYS_IN_A_STANDING_MAP + 1)}
+    reported = dict(countable_standing({"observed": 7, "by_symbol": per_symbol}))
+
+    assert reported["by_symbol.keys_not_reported"] == float(len(per_symbol))
+    assert reported["observed"] == 7.0
+    assert not any(name.startswith("by_symbol.SYM") for name in reported)
+
+
+def test_a_map_of_names_is_still_left_behind():
+    """Numbers only -- a reason string on this channel is a reason on every tick."""
+    from runtime.part_process import countable_standing
+
+    reported = dict(countable_standing({
+        "last_refusal": "a string",
+        "by_venue": {"binance-usdm": "healthy"},
+        "counted": 3,
+    }))
+
+    assert reported == {"counted": 3.0}

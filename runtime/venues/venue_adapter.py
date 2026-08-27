@@ -148,6 +148,24 @@ class StreamRequest:
 
 
 @dataclass(frozen=True)
+class VenueRequest:
+    """One REST call an adapter asks the reader to make on its behalf.
+
+    Headers exist because a private endpoint needs them: the adapter knows how
+    this venue authenticates and the reader knows how to fetch, and neither
+    should have to learn the other's half. A public request carries none.
+
+    `describes` names what the response is expected to contain -- a symbol, or
+    the whole venue -- so a reader can attribute a failure to the thing it was
+    asking about rather than to a URL.
+    """
+
+    url: str
+    describes: str
+    headers: dict | None = None
+
+
+@dataclass(frozen=True)
 class SymbolListing:
     """One contract a venue lists, as the venue describes it.
 
@@ -730,6 +748,50 @@ class VenueAdapter(abc.ABC):
         The order is the adapter's own and is fed straight back to
         `read_funding_facts`, which is the only thing that has to know it.
         """
+
+    # -- the maintenance margin ladder ---------------------------------------
+    #
+    # Deliberately NOT abstract, and the reason is a measured one. On 2026-08-25
+    # an abstract `read_premiums` was added and implemented for Binance only, so
+    # `BybitLinearAdapter` could not be constructed and every part that loads a
+    # venue adapter crash-looped -- invisibly, for hours, because the running
+    # spine held the pre-change code in memory. A default that answers "this
+    # adapter has no schedule to offer" cannot do that to a venue nobody got to
+    # yet, and the reader already distinguishes an empty ladder from a zero rate.
+
+    def margin_schedule_requests(self, symbols: Sequence[str]) -> tuple["VenueRequest", ...]:
+        """The REST calls this venue needs before its maintenance margin can be stated.
+
+        Empty for an adapter that cannot state one, which is not the same as a
+        venue with no maintenance margin -- every perpetual venue has one, so an
+        empty tuple here is always a fact about this process rather than about
+        the market. `margin_schedule_unavailable_reason` says which.
+
+        `symbols` are the ones actually being captured. A venue that serves its
+        whole schedule in one call may ignore them; a venue that serves one
+        symbol per call must not ask for the eight hundred nobody is watching.
+        """
+        return ()
+
+    def margin_schedule_unavailable_reason(self) -> str | None:
+        """Why `margin_schedule_requests` is empty, or None when it is not.
+
+        Always safe to print. A venue whose schedule sits behind a signed
+        endpoint says so and names what is missing; it never includes any part of
+        a credential that was found.
+        """
+        return None
+
+    def read_margin_tiers(self, responses: Sequence[object]) -> Mapping[str, tuple]:
+        """This venue's maintenance margin ladder per symbol, from its own responses.
+
+        Keyed by the venue's own symbol string. A symbol absent from the mapping
+        has no ladder that could be read, and a reader must carry that absence
+        rather than filling it: a maintenance margin of zero puts a liquidation
+        price at the entry, so a defaulted ladder does not make a map slightly
+        wrong, it makes every cluster in it wrong in the same direction.
+        """
+        return {}
 
     @abc.abstractmethod
     def read_funding_facts(

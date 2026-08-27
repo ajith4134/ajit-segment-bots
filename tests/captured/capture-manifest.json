@@ -322,6 +322,22 @@
         0.07939
       ],
       "how": "the first 1200 trade frames of BTRUSDT on bybit-linear, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
+    },
+    {
+      "path": "bybit-linear/2026-08-26-risk-limit-btcusdt.json",
+      "venue": "bybit-linear",
+      "source": "https://api.bybit.com/v5/market/risk-limit?category=linear&symbol=BTCUSDT",
+      "captured_on": "2026-08-26",
+      "how": "one public REST call, kept verbatim. This venue serves its maintenance margin ladder per symbol and needs no API key; asking without a symbol returns 407 rows covering 15 symbols and a cursor, so reading the whole venue that way is ~56 paged calls for ~840 symbols against the 50 this system captures. BTCUSDT is the fixture because its ladder is the longest and spans the widest range of notional, which is what exercises the floor-from-the-ceiling-below reading: this venue states riskLimitValue as a tier CEILING, and reading it as a floor would price every position under the first ceiling with the wrong rate.",
+      "tiers": 35,
+      "maintenance_margin_range": [
+        0.0033,
+        0.6
+      ],
+      "risk_limit_value_range": [
+        300000.0,
+        1200000000.0
+      ]
     }
   ]
 }

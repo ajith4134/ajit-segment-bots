@@ -35,6 +35,8 @@ from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 from runtime.trading_types import BUY, DATED_FUTURE, PERPETUAL_FUTURE, SELL
+from runtime.symbol_universe import MarginTier
+from runtime.venues.venue_signing import signer_for
 from runtime.venues.venue_adapter import (
     BookUpdate,
     NormalisedCandle,
@@ -52,6 +54,7 @@ from runtime.venues.venue_adapter import (
     VenueAdapter,
     VenueFact,
     VenueMessageNotRecognised,
+    VenueRequest,
     VenuePremium,
 )
 
@@ -75,6 +78,24 @@ CATALOGUE_URL = f"{REST_HOST}/fapi/v1/exchangeInfo"
 # individually -- at 570 symbols the per-symbol form would cost fourteen times
 # the entire minute's budget.
 TICKER_URL = f"{REST_HOST}/fapi/v1/ticker/24hr"
+# The maintenance margin ladder. Unlike every other endpoint this adapter names,
+# it is SIGNED: measured 2026-08-26, an unsigned GET returns
+# {"code":-2014,"msg":"API-key format invalid."}. One call returns every symbol,
+# so a key buys the whole venue's schedule in a single request.
+LEVERAGE_BRACKET_URL = f"{REST_HOST}/fapi/v1/leverageBracket"
+# How far this venue lets a signed request's timestamp be from its own clock.
+# Sent explicitly rather than left to the venue's 5000 ms default: a request that
+# arrives late is rejected as a signature error, which reads like a bad key.
+SIGNED_REQUEST_WINDOW_MILLISECONDS = 5000
+
+
+def milliseconds_now(now_ns=time.time_ns) -> int:
+    """This machine's clock in the units a signed request states its timestamp in.
+
+    Injectable so a test can sign against a fixed clock: a signature is only
+    reproducible if the timestamp inside it is.
+    """
+    return now_ns() // 1_000_000
 # Where a perpetual's funding comes from, which is neither of the two above.
 # `premiumIndex` carries `lastFundingRate` for every listed symbol -- 875 of 875
 # on 2026-08-22 -- and `fundingInfo` carries `fundingIntervalHours` for the 760
@@ -848,6 +869,76 @@ class BinanceUsdmAdapter(VenueAdapter):
             )
             for entry in symbols
         )
+
+    def margin_schedule_requests(self, symbols) -> tuple[VenueRequest, ...]:
+        """One signed call for the whole venue, or none at all when no key is set.
+
+        `symbols` is ignored on purpose: this venue serves every symbol's ladder
+        in one response, so asking per symbol would spend one request per captured
+        symbol to receive the same payload each time.
+
+        **No key means no request, not an unsigned one.** An unsigned attempt is a
+        request spent against a rate limit to be told what is already known here,
+        and a rate limit is shared with the endpoints that keep the tape running.
+        """
+        signer, _ = signer_for(self.venue_id)
+        if signer is None:
+            return ()
+        query = signer.signed_query({
+            "timestamp": milliseconds_now(),
+            "recvWindow": SIGNED_REQUEST_WINDOW_MILLISECONDS,
+        })
+        return (
+            VenueRequest(
+                url=f"{LEVERAGE_BRACKET_URL}?{query}",
+                describes=EVERY_SYMBOL,
+                headers=signer.authentication_headers,
+            ),
+        )
+
+    def margin_schedule_unavailable_reason(self) -> str | None:
+        """Why there is no request to make. Names the variables, never a value."""
+        signer, reason = signer_for(self.venue_id)
+        return None if signer is not None else reason
+
+    def read_margin_tiers(self, responses):
+        """Each symbol's ladder, from the leverage-bracket response.
+
+        This venue states a tier by both ends -- `notionalFloor` and
+        `notionalCap` -- so the floor is read directly rather than derived from
+        the tier below, which is where the other venue's shape differs.
+
+        `cum` is not used: it is this venue's precomputed maintenance amount for
+        charging one blended rate, and this ladder is read tier by tier.
+        """
+        schedule = {}
+        for response in responses:
+            entries = response if isinstance(response, (list, tuple)) else ()
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                symbol = entry.get("symbol")
+                brackets = entry.get("brackets") or ()
+                if not symbol or not brackets:
+                    continue
+                tiers = []
+                for bracket in brackets:
+                    floor = bracket.get("notionalFloor")
+                    rate = bracket.get("maintMarginRatio")
+                    if floor is None or rate is None:
+                        continue
+                    tiers.append(
+                        MarginTier(
+                            notional_floor=float(floor),
+                            maintenance_margin_rate=float(rate),
+                            maximum_leverage=float(bracket.get("initialLeverage") or 0.0),
+                        )
+                    )
+                if tiers:
+                    schedule[symbol] = tuple(
+                        sorted(tiers, key=lambda tier: tier.notional_floor)
+                    )
+        return schedule
 
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
         """TRADING and nothing else.

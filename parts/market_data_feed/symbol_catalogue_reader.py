@@ -110,14 +110,45 @@ class CatalogueStanding:
     # one refresh -- so the first keeps the previous selection and the second
     # publishes the symbols anyway.
     funding_failure: str | None = None
+    # What happened when the maintenance margin ladder was last read. The
+    # unavailable-reason is the venue's own, and is safe to print: it names the
+    # environment variables that were looked for, never any value found in them.
+    margin_symbols_read: int = 0
+    margin_requests_made: int = 0
+    margin_failure: str | None = None
+    margin_unavailable_reason: str | None = None
     read_at_ns: int | None = None
 
 
-def fetch_json(url: str, timeout_seconds: float) -> object:
-    """One public GET, decoded. No key is held anywhere in phase 1."""
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+def fetch_json(url: str, timeout_seconds: float, headers: dict | None = None) -> object:
+    """One GET, decoded.
+
+    `headers` carries whatever the adapter says this venue's endpoint needs --
+    an authentication header for a signed endpoint, nothing for a public one.
+    The adapter builds them because it knows how its venue authenticates; this
+    function only knows how to fetch, and neither has to learn the other's half.
+    Nothing here logs a header: an authentication header is a credential.
+    """
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", **(headers or {})}
+    )
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _with_margin_tiers(
+    symbol: CapturableSymbol, tiers: tuple, source: str | None
+) -> CapturableSymbol:
+    """The same symbol, carrying the maintenance margin ladder the venue published.
+
+    Unchanged when the venue's schedule could not be read. An empty ladder is
+    never filled in: a maintenance margin of zero puts a liquidation price at the
+    entry, so a defaulted ladder does not make a liquidation map slightly wrong,
+    it makes every cluster in it wrong in the same direction.
+    """
+    if not tiers:
+        return symbol
+    return dataclasses.replace(symbol, margin_tiers=tuple(tiers), margin_source=source)
 
 
 def _with_funding(
@@ -330,6 +361,58 @@ class SymbolCatalogueReader:
         """Which venue this reader reads, so a caller need not open its adapter."""
         return self._adapter.venue_id
 
+    def _read_margin_tiers(
+        self, selection: tuple[CapturableSymbol, ...]
+    ) -> tuple[CapturableSymbol, ...]:
+        """Attach each captured symbol's maintenance margin ladder, or say why not.
+
+        **A failure here never costs the selection.** The ladder is one input to
+        one downstream map; the selection is what the whole capture runs on, and
+        dropping it because a margin endpoint timed out would stop the tape for a
+        number nothing else needs. So a failure is recorded and the symbols are
+        returned without the ladder, which downstream tells apart from a zero rate
+        because an absent ladder is an empty tuple and never a zero.
+        """
+        self.standing.margin_unavailable_reason = self._adapter.margin_schedule_unavailable_reason()
+        requests = self._adapter.margin_schedule_requests(
+            [symbol.symbol for symbol in selection]
+        )
+        self.standing.margin_requests_made = len(requests)
+        if not requests:
+            self.standing.margin_symbols_read = 0
+            return selection
+
+        responses = []
+        for request in requests:
+            try:
+                responses.append(
+                    self._fetch(request.url, self._request_timeout_seconds, request.headers)
+                )
+            except (urllib.error.URLError, OSError, TimeoutError, ValueError) as failure:
+                # Named by what it was asking about rather than by URL: a signed
+                # URL carries a signature, and a signature in a log is a
+                # credential in a log.
+                self.standing.margin_failure = (
+                    f"{type(failure).__name__} reading the margin schedule for "
+                    f"{request.describes}: {failure}"
+                )
+                break
+
+        if not responses:
+            self.standing.margin_symbols_read = 0
+            return selection
+
+        schedule = self._adapter.read_margin_tiers(responses)
+        source = f"{self._adapter.venue_id} margin schedule, {len(responses)} response(s)"
+        attached = tuple(
+            _with_margin_tiers(symbol, schedule.get(symbol.symbol, ()), source)
+            for symbol in selection
+        )
+        self.standing.margin_symbols_read = sum(1 for s in attached if s.margin_tiers)
+        if self.standing.margin_symbols_read:
+            self.standing.margin_failure = None
+        return attached
+
     def read_catalogue(self, held_symbols=()) -> tuple[CapturableSymbol, ...]:
         """Fetch both responses, apply the policy, and keep what came back.
 
@@ -352,7 +435,7 @@ class SymbolCatalogueReader:
 
         volumes = dict(self._adapter.read_quote_volumes(tickers))
         funding = self._read_funding(listings, tickers)
-        self._selection = select_capturable_symbols(
+        selection = select_capturable_symbols(
             adapter=self._adapter,
             listings=listings,
             quote_volumes=volumes,
@@ -362,6 +445,10 @@ class SymbolCatalogueReader:
             standing=self.standing,
             held_symbols=held_symbols,
         )
+        # The ladder is read for the symbols actually being captured, after the
+        # selection has chosen them. Asked before, this would be one request per
+        # symbol the venue lists -- ~840 on Bybit against the 50 anything watches.
+        self._selection = self._read_margin_tiers(selection)
         self.standing.reads_completed += 1
         self.standing.read_at_ns = self._time_ns()
         self.standing.last_failure = None
@@ -451,6 +538,14 @@ def describe_catalogue(reader: SymbolCatalogueReader) -> dict:
         "selected_without_funding_rate": reader.standing.without_funding_rate,
         "selected_without_funding_interval": reader.standing.without_funding_interval,
         "funding_failure": reader.standing.funding_failure,
+        # Rule 8: a liquidation map built without a margin schedule is not a
+        # smaller map, it is a wrong one -- so how many symbols actually got a
+        # ladder, and the reason when none did, are on the board rather than
+        # inferable only from an empty map downstream.
+        "margin_symbols_read": reader.standing.margin_symbols_read,
+        "margin_requests_made": reader.standing.margin_requests_made,
+        "margin_failure": reader.standing.margin_failure,
+        "margin_unavailable_reason": reader.standing.margin_unavailable_reason,
         "contract_types_seen": dict(reader.standing.contract_types_seen),
         "last_failure": reader.standing.last_failure,
         "symbols": [entry.symbol for entry in reader.selection],

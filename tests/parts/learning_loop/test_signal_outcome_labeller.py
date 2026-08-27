@@ -402,3 +402,84 @@ def test_a_claim_with_no_measurements_still_resolves(real_prices):
 
     assert label.features == {}
     assert label.labels == {THE_SETUP_WAS_RIGHT: True}
+
+
+# ---- the regime every label ever carried -------------------------------------
+#
+# observe_candidate took `regime_name: str = "any"` and start_part never passed
+# one, so TrainingLabel.regime has been that constant on every label the system
+# has ever built -- and everything that learns per regime (the signal calibrator,
+# the regime tagger, the conviction models) was pooling regimes it could not tell
+# apart into one number that describes none of them.
+
+def test_an_unpassed_regime_reads_as_not_known_rather_than_as_a_market(real_prices):
+    """"any" reads like a claim about the market; this is an admission about the reader."""
+    from parts.learning_loop.signal_outcome_labeller import REGIME_NOT_KNOWN
+
+    clock = Clock()
+    labeller = a_labeller(clock)
+    labeller.observe_price(VENUE, SYMBOL, real_prices[0], clock.at_ns)
+    claim, _ = labeller.observe_candidate(a_claim(LONG))
+
+    assert claim.regime == REGIME_NOT_KNOWN
+    assert claim.regime != "any"
+
+
+def test_a_classified_regime_reaches_the_label(real_prices):
+    clock = Clock()
+    labeller = a_labeller(clock)
+    opening = real_prices[0]
+    labeller.observe_price(VENUE, SYMBOL, opening, clock.at_ns)
+    labeller.observe_candidate(a_claim(LONG), regime_name="trending")
+
+    clock.advance_seconds(1.0)
+    labeller.observe_price(VENUE, SYMBOL, opening * (1 + MOVE_FRACTION * 1.1), clock.at_ns)
+    label = labeller.resolve_settled_claims()[0]
+
+    assert label.regime == "trending"
+
+
+# ---- a staleness bound answering the wrong question --------------------------
+
+def test_the_labellers_price_bound_is_its_own_barrier_not_a_round_trip_fee():
+    """Measured live: 1,053 of 1,397 claims refused for a stale price.
+
+    The bound was not wrong, it was answering a different question -- how old may
+    a price be before ACTING on it costs more than the round trip. This part never
+    acts; its price is contaminated when it has drifted far enough to distort the
+    barrier the claim will be judged against, and that barrier is wider than a
+    fee. The bound goes as the SQUARE of the materiality, so the difference is
+    more than threefold rather than marginal.
+    """
+    from runtime.price_staleness import price_staleness_from
+
+    class Settings:
+        health_interval_seconds = 1.0
+
+        def number(self, name):
+            return {
+                "taker_fee_rate": 0.00055,
+                "signal_label_move_fraction": 0.002,
+                "reference_price_move_anchor_seconds": 1.0,
+                "reference_price_move_quantile": 0.95,
+                "reference_price_move_window": 3600,
+                "reference_price_move_observations_needed": 300,
+                "reference_price_prior_one_second_move": 0.000898,
+                "reference_price_minimum_age_seconds": 1.0,
+                "reference_price_maximum_age_seconds": 60.0,
+            }[name]
+
+    context = Settings()
+    trading = price_staleness_from(context)
+    labelling = price_staleness_from(
+        context, materiality_fraction=context.number("signal_label_move_fraction")
+    )
+
+    tighter = trading.believable_age_seconds(VENUE, SYMBOL).value
+    wider = labelling.believable_age_seconds(VENUE, SYMBOL).value
+
+    assert tighter == pytest.approx(1.50, abs=0.01)
+    assert wider == pytest.approx(4.96, abs=0.01)
+    assert wider > tighter
+    # Still derived and still bounded -- not a number chosen to admit more claims.
+    assert labelling.believable_age_seconds(VENUE, SYMBOL).bound_high == 60.0

@@ -13,6 +13,25 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class MarginTier:
+    """One step of a venue's maintenance margin schedule, as the venue published it.
+
+    Lives here rather than in the part that uses it because it is data (T-4), and
+    because two things need it that may not import each other: the adapters that
+    parse it out of a venue response, and `liquidation-cluster-mapper`, which
+    turns it into the distance a position at a given leverage is liquidated at.
+
+    `notional_floor` is where this tier starts. A venue states the ladder as
+    "up to this size, this rate", so the tier that applies to a position is the
+    highest floor at or below its notional.
+    """
+
+    notional_floor: float
+    maintenance_margin_rate: float
+    maximum_leverage: float
+
+
+@dataclass(frozen=True)
 class CapturableSymbol:
     """One symbol chosen for capture, with the figure that chose it.
 
@@ -49,3 +68,15 @@ class CapturableSymbol:
     # them because a carry cost is a number a position is priced against, and
     # RL-061 does not stop at the venue boundary.
     funding_source: str | None = None
+    # This contract's maintenance margin ladder, as the venue published it.
+    # Empty when the venue's schedule could not be read -- Binance serves its
+    # brackets from a signed endpoint, so an empty tuple there means no API key
+    # is configured, not that the contract has no maintenance margin. Read the
+    # reader's own standing for which of the two it is; an empty ladder must
+    # never be treated as a zero rate, because a zero maintenance margin puts
+    # every liquidation price at the entry.
+    margin_tiers: tuple = ()
+    # Where the ladder came from, or why it is empty. Same contract as
+    # funding_source: a number a position is priced against carries its
+    # provenance (RL-061).
+    margin_source: str | None = None

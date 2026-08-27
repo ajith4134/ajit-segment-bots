@@ -53,7 +53,7 @@ PART_ID = "signal-outcome-labeller"
 
 PART_DECLARATION = PartDeclaration(
     part_id="signal-outcome-labeller",
-    consumes=("entry-candidate", "symbol-price-frame"),
+    consumes=("entry-candidate", "symbol-price-frame", "market-regime"),
     produces=("training-label", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -70,6 +70,17 @@ REFUSED_UNKNOWN_DIRECTION = "the-candidate-names-no-tradeable-direction"
 REFUSED_AT_CAPACITY = "too-many-claims-are-already-open"
 REFUSED_ALREADY_OPEN = "this-detector-already-has-an-open-claim-on-this-symbol"
 REFUSED_STALE_PRICE = "the-last-price-for-this-symbol-is-too-old-to-label-against"
+
+# What a label's regime says when regime-classifier has not classified this
+# symbol. Named rather than the bare "any" it used to be: **every label this part
+# has ever built carried "any"**, because start_part called observe_candidate
+# without a regime and the default said so in a word that reads like a claim
+# about the market rather than an admission about the reader. Everything that
+# learns per regime -- the calibrator, the regime tagger, the conviction model --
+# was therefore learning one pooled number over regimes it could not tell apart.
+# `regime-classifier` reports UNCLASSIFIED as its own state for exactly this
+# reason, and this is that state seen from the consuming side.
+REGIME_NOT_KNOWN = "no-regime-was-classified-for-this-symbol"
 
 
 @dataclass
@@ -192,7 +203,7 @@ class SignalOutcomeLabeller:
             claim.worst_adverse_fraction = min(claim.worst_adverse_fraction, moved)
 
     def observe_candidate(
-        self, candidate, regime_name: str = "any", measurements: dict | None = None
+        self, candidate, regime_name: str = REGIME_NOT_KNOWN, measurements: dict | None = None
     ) -> tuple[OpenClaim | None, str]:
         """Open a claim on one candidate, or refuse it and say why.
 
@@ -406,14 +417,31 @@ def start_part(context) -> int:
     candidate that arrived in the same batch as the trade that triggered it would
     otherwise be measured against a price from before the detector saw anything.
     """
-    from runtime.input_assembly import Batch
+    from runtime.input_assembly import Batch, LatestByKey
     from runtime.rolling_statistics import RollingWindow
     from runtime.sweep_measurements import add_cross_sectional, measure_symbol
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("entry-candidate"))
+    # A level, and one that must expire: a regime read hours ago describes a
+    # market that has moved on, and an unbounded LatestByKey would hand it to
+    # every claim for as long as the part runs. That is the shape that cost
+    # position-sizer a fifty-six minute stale price on 2026-08-23 and made every
+    # shed part look alive to the governor on 2026-08-26.
+    regimes = LatestByKey(
+        read=context.bus.reader("market-regime"),
+        key_of=lambda regime: (regime.venue_id, regime.symbol),
+        maximum_age_seconds=context.number("regime_reading_maximum_age_seconds"),
+    )
     publish_labels = context.bus.publisher_for("training-label")
-    price_staleness = price_staleness_from(context)
+    # This part's own barrier, not the round trip's fee. A price is too old here
+    # when it has drifted far enough to distort the move the claim will be judged
+    # against -- see price_staleness_from. The default bound refused 1,053 of
+    # 1,397 claims on 2026-08-26 for a reason that belongs to a part placing an
+    # order, which this one never does.
+    price_staleness = price_staleness_from(
+        context, materiality_fraction=context.number("signal_label_move_fraction")
+    )
     window_length = int(context.number("detector_window_length"))
     minimum_observations = int(context.number("detector_minimum_observations"))
     short_window_fraction = context.number("sweep_short_window_fraction")
@@ -442,6 +470,7 @@ def start_part(context) -> int:
             window.observe(trade.price, trade.observed_at_ns)
 
         opening = candidates.payloads()
+        regime_by_symbol = regimes.mapping()
         if not opening:
             return
         # Measured once for the whole universe rather than once per candidate:
@@ -458,9 +487,20 @@ def start_part(context) -> int:
         }
         add_cross_sectional(measured, minimum_symbols=minimum_symbols)
         for candidate in opening:
+            key = (candidate.venue_id, candidate.symbol)
+            classified = regime_by_symbol.get(key)
             labeller.observe_candidate(
                 candidate,
-                measurements=measured.get((candidate.venue_id, candidate.symbol)),
+                # `is_classified` rather than the raw name: regime-classifier
+                # publishes UNCLASSIFIED as a real reading, and passing that
+                # through would make "the estimator could not decide" and "no
+                # reading arrived" two different words for one fact.
+                regime_name=(
+                    classified.regime
+                    if classified is not None and classified.is_classified
+                    else REGIME_NOT_KNOWN
+                ),
+                measurements=measured.get(key),
             )
 
     return run_signal_outcome_labeller(
@@ -485,6 +525,7 @@ __all__ = [
     "OpenClaim",
     "PART_DECLARATION",
     "PART_ID",
+    "REGIME_NOT_KNOWN",
     "RESOLVED_RIGHT",
     "RESOLVED_WRONG",
     "SignalOutcomeLabeller",

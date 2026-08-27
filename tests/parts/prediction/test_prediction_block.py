@@ -1181,8 +1181,8 @@ def binance_tiers():
 def test_a_liquidation_price_uses_the_venues_schedule_not_a_rule_of_thumb():
     """At 20x the liquidation is not 5% away, and the difference is what a cascade trades."""
     subject = a_liquidation_mapper()
-    subject.observe_margin_schedule(VENUE, binance_tiers())
-    price = subject.liquidation_price(VENUE, entry=100.0, leverage=20.0, side="long")
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
+    price = subject.liquidation_price(VENUE, SYMBOL, entry=100.0, leverage=20.0, side="long")
     assert price == pytest.approx(100.0 * (1 - (0.05 - 0.004)))
     assert price > 95.0
 
@@ -1195,21 +1195,21 @@ def test_no_margin_schedule_produces_no_map():
 
 def test_no_open_interest_produces_no_map():
     subject = a_liquidation_mapper()
-    subject.observe_margin_schedule(VENUE, binance_tiers())
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
     assert subject.map(VENUE, SYMBOL, 100.0).state == NO_OPEN_INTEREST
 
 
 def test_no_volume_profile_produces_no_map():
     """A single assumed entry price would put every cluster in one place."""
     subject = a_liquidation_mapper()
-    subject.observe_margin_schedule(VENUE, binance_tiers())
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
     subject.observe_open_interest(VENUE, SYMBOL, 1_000_000.0)
     assert subject.map(VENUE, SYMBOL, 100.0).state == NO_VOLUME_PROFILE
 
 
 def test_clusters_are_placed_where_volume_actually_traded():
     subject = a_liquidation_mapper()
-    subject.observe_margin_schedule(VENUE, binance_tiers())
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
     subject.observe_open_interest(VENUE, SYMBOL, 1_000_000.0)
     subject.observe_traded_volume(VENUE, SYMBOL, 100.0, 500_000.0)
     subject.observe_traded_volume(VENUE, SYMBOL, 110.0, 500_000.0)
@@ -1221,7 +1221,7 @@ def test_clusters_are_placed_where_volume_actually_traded():
 
 def test_each_cluster_carries_the_confidence_of_the_band_mix():
     subject = a_liquidation_mapper(minimum=1000)
-    subject.observe_margin_schedule(VENUE, binance_tiers())
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
     subject.observe_open_interest(VENUE, SYMBOL, 1_000_000.0)
     subject.observe_traded_volume(VENUE, SYMBOL, 100.0, 1_000_000.0)
     result = subject.map(VENUE, SYMBOL, 100.0)
@@ -1230,7 +1230,7 @@ def test_each_cluster_carries_the_confidence_of_the_band_mix():
 
 def test_the_map_produces_no_direction():
     subject = a_liquidation_mapper()
-    subject.observe_margin_schedule(VENUE, binance_tiers())
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
     subject.observe_open_interest(VENUE, SYMBOL, 1_000_000.0)
     subject.observe_traded_volume(VENUE, SYMBOL, 100.0, 1_000_000.0)
     result = subject.map(VENUE, SYMBOL, 100.0)
@@ -1480,3 +1480,40 @@ def test_headroom_below_one_is_refused():
         ForecastDistributionGate(
             deviation_threshold=3.0, volatility_deviation_threshold=3.0, forecast_headroom=0.5
         )
+
+
+# ---- the ladder is per symbol, and an absent one is never a zero -------------
+#
+# This part published 544,798 maps in one live run, every one
+# refused-no-margin-schedule and none carrying a cluster, because nothing ever
+# called observe_margin_schedule. Its own maps_published standing read 0 while
+# the bus counted 544,798: the wire carried, and carried nothing.
+
+def test_a_ladder_is_kept_per_symbol_not_per_venue():
+    """Bybit's BTCUSDT starts at 0.33% and its thin contracts several times higher.
+
+    A venue-wide ladder taken from one symbol puts every other symbol's
+    liquidation price in the wrong place, and wrong in the same direction for all
+    of them -- which is worse than no map, because a map is acted on.
+    """
+    subject = a_liquidation_mapper()
+    subject.observe_margin_schedule(VENUE, SYMBOL, binance_tiers())
+
+    assert subject.liquidation_price(VENUE, SYMBOL, entry=100.0, leverage=20.0, side="long")
+    # A symbol nobody supplied a ladder for gets no price, not the other one's.
+    assert subject.liquidation_price(VENUE, "ETHUSDT", entry=100.0, leverage=20.0, side="long") is None
+
+
+def test_an_empty_ladder_is_not_observed_at_all():
+    """symbol-catalogue-reader carries an unread schedule as an empty tuple.
+
+    Recording that would make the mapper say a symbol is known when nothing is
+    known about it, and the refusal downstream would stop being reachable.
+    """
+    subject = a_liquidation_mapper()
+    subject.observe_margin_schedule(VENUE, SYMBOL, ())
+
+    result = subject.map(VENUE, SYMBOL, mark_price=100.0)
+    assert result.state == NO_MARGIN_SCHEDULE
+    assert result.clusters == ()
+    assert subject.standing.refused_no_schedule == 1

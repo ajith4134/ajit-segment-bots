@@ -186,17 +186,39 @@ class PriceStalenessEstimator:
         }
 
 
-def price_staleness_from(context) -> PriceStalenessEstimator:
+def price_staleness_from(context, materiality_fraction: float | None = None) -> PriceStalenessEstimator:
     """The estimator a part builds from its settings, assembled in one place.
 
     Every part that judges a price needs the same seven numbers, and seven
     settings read separately in each of them is seven chances for two parts to
     disagree about how old a price may be. What makes a stale price material is
-    the same threshold that makes a cost material, so the materiality is the round
-    trip's taker fee rather than a number of its own (RL-061).
+    the same threshold that makes a cost material, so the materiality defaults to
+    the round trip's taker fee rather than being a number of its own (RL-061).
+
+    **`materiality_fraction` exists because "material" is not one question.** The
+    default asks how old a price may be before acting on it costs more than the
+    round trip does -- which is the right question for a part about to size or
+    place an order, and the wrong one for a part that is only recording where
+    price stood when a claim was made. A labeller's price is contaminated when it
+    has drifted far enough to distort the barrier the claim will be judged
+    against, and that barrier is wider than a fee: measured on the live spine on
+    2026-08-26, `signal-outcome-labeller` refused 1,053 of 1,397 claims for a
+    stale price against a 1.5-second bound derived from a 0.11% round trip, while
+    the move it actually judges is 0.2%. Because the bound goes as the square of
+    the materiality, that fee-derived bound is more than three times tighter than
+    the labeller's own question warrants, and it was discarding most of the
+    training signal the system has.
+
+    A caller passing this states what "material" means for the judgement it is
+    about to make. It is still derived from a measured quantity -- never a number
+    chosen to admit more claims.
     """
     return PriceStalenessEstimator(
-        materiality_fraction=2 * context.number("taker_fee_rate"),
+        materiality_fraction=(
+            2 * context.number("taker_fee_rate")
+            if materiality_fraction is None
+            else materiality_fraction
+        ),
         anchor_seconds=context.number("reference_price_move_anchor_seconds"),
         quantile=context.number("reference_price_move_quantile"),
         window=int(context.number("reference_price_move_window")),

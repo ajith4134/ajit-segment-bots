@@ -34,6 +34,7 @@ from typing import Mapping, Sequence
 
 from runtime.tape import NOT_SENT, StreamKind, TradeFidelity
 from runtime.trading_types import BUY, DATED_FUTURE, PERPETUAL_FUTURE, SELL
+from runtime.symbol_universe import MarginTier
 from runtime.venues.venue_adapter import (
     BanSignal,
     ConnectionDiscipline,
@@ -51,6 +52,7 @@ from runtime.venues.venue_adapter import (
     VenueAdapter,
     VenueFact,
     VenueMessageNotRecognised,
+    VenueRequest,
     VenuePremium,
 )
 
@@ -69,6 +71,12 @@ CATALOGUE_URL = f"{REST_HOST}/v5/market/instruments-info?category=linear&limit={
 # 600-requests-per-5-seconds IP limit -- this venue publishes no per-endpoint
 # figure for its public market-data calls at all.
 TICKER_URL = f"{REST_HOST}/v5/market/tickers?category=linear"
+# Public, unauthenticated, one call per symbol. Measured 2026-08-26: asking
+# without a symbol returns 407 rows covering 15 symbols and a cursor, so reading
+# the whole venue that way is ~56 paged calls for ~840 symbols -- and this system
+# captures 50 of them. Asked per captured symbol instead: BTCUSDT returns its 35
+# tiers with an empty cursor, in one call.
+RISK_LIMIT_URL = f"{REST_HOST}/v5/market/risk-limit?category=linear&symbol={{symbol}}"
 
 _DOCS = "https://bybit-exchange.github.io/docs/v5"
 _CONNECT_PAGE = f"{_DOCS}/ws/connect"
@@ -914,6 +922,59 @@ class BybitLinearAdapter(VenueAdapter):
                 ),
             )
         return facts
+
+    def margin_schedule_requests(self, symbols) -> tuple[VenueRequest, ...]:
+        """One public call per captured symbol. This venue needs no key at all."""
+        return tuple(
+            VenueRequest(url=RISK_LIMIT_URL.format(symbol=symbol), describes=symbol)
+            for symbol in symbols
+        )
+
+    def read_margin_tiers(self, responses):
+        """Each symbol's ladder, from the risk-limit responses.
+
+        This venue states a tier as "up to `riskLimitValue`, this maintenance
+        margin", so `riskLimitValue` is a **ceiling** and the floor of a tier is
+        the ceiling of the one below it. Read as a floor directly, the lowest
+        tier's rate would apply only above the first ceiling and every position
+        under it would be priced by the wrong rate -- which is every position this
+        bot takes.
+
+        `mmDeduction` is not used. It is the venue's arithmetic shortcut for
+        charging one blended rate across tiers rather than a rate per tier, and
+        this ladder is read tier by tier.
+        """
+        ladders: dict[str, list] = {}
+        for response in responses:
+            if not isinstance(response, Mapping):
+                continue
+            rows = (response.get("result") or {}).get("list") or ()
+            for row in rows:
+                symbol = row.get("symbol")
+                ceiling = row.get("riskLimitValue")
+                rate = row.get("maintenanceMargin")
+                if not symbol or ceiling in (None, "") or rate in (None, ""):
+                    continue
+                ladders.setdefault(symbol, []).append(
+                    (float(ceiling), float(rate), float(row.get("maxLeverage") or 0.0))
+                )
+
+        schedule = {}
+        for symbol, rows in ladders.items():
+            rows.sort()
+            floor = 0.0
+            tiers = []
+            for ceiling, rate, leverage in rows:
+                tiers.append(
+                    MarginTier(
+                        notional_floor=floor,
+                        maintenance_margin_rate=rate,
+                        maximum_leverage=leverage,
+                    )
+                )
+                floor = ceiling
+            schedule[symbol] = tuple(tiers)
+        return schedule
 
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
         """Trading and nothing else. The venue spells it with one capital letter."""

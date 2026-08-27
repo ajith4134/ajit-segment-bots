@@ -30,13 +30,14 @@ from dataclasses import dataclass, field
 
 from runtime.learned_estimator import Estimate, RateEstimator
 from runtime.part_declaration import PartDeclaration
+from runtime.symbol_universe import MarginTier
 from runtime.part_process import run_part
 
 PART_ID = "liquidation-cluster-mapper"
 
 PART_DECLARATION = PartDeclaration(
     part_id="liquidation-cluster-mapper",
-    consumes=("market-data", "order-book-snapshot"),
+    consumes=("market-data", "order-book-snapshot", "symbol-universe"),
     produces=("liquidation-map", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -50,15 +51,6 @@ NO_VOLUME_PROFILE = "no-traded-volume-profile-to-attribute-positions-across"
 
 LONG = "long"
 SHORT = "short"
-
-
-@dataclass(frozen=True)
-class MarginTier:
-    """One tier of a venue's maintenance margin schedule, as published."""
-
-    notional_floor: float
-    maintenance_margin_rate: float
-    maximum_leverage: float
 
 
 @dataclass(frozen=True)
@@ -150,9 +142,25 @@ class LiquidationClusterMapper:
         self._volume_profile: dict[tuple[str, str], dict] = {}
         self.standing = MapperStanding()
 
-    def observe_margin_schedule(self, venue_id: str, tiers) -> None:
-        """The venue's published maintenance margin tiers. Never assumed."""
-        self._schedules[venue_id] = tuple(sorted(tiers, key=lambda tier: tier.notional_floor))
+    def observe_margin_schedule(self, venue_id: str, symbol: str, tiers) -> None:
+        """One contract's published maintenance margin ladder. Never assumed.
+
+        Per symbol rather than per venue, because that is how both venues publish
+        it and the difference is not cosmetic: measured 2026-08-26, Bybit's
+        BTCUSDT starts at a 0.33% maintenance margin and its thinner contracts
+        start several times higher. A venue-wide ladder taken from one symbol
+        would put every other symbol's liquidation price in the wrong place, and
+        wrong in the same direction for all of them.
+
+        An empty ladder is not observed at all. `symbol-catalogue-reader` carries
+        an absent schedule as an empty tuple, and recording that would make
+        `_schedules` say a symbol is known when nothing is known about it.
+        """
+        if not tiers:
+            return
+        self._schedules[(venue_id, symbol)] = tuple(
+            sorted(tiers, key=lambda tier: tier.notional_floor)
+        )
 
     def observe_open_interest(self, venue_id: str, symbol: str, notional: float) -> None:
         self._open_interest[(venue_id, symbol)] = notional
@@ -178,19 +186,21 @@ class LiquidationClusterMapper:
         if mark_at_open <= 0:
             return
         distance = abs(price - mark_at_open) / mark_at_open
-        band = self._band_from_distance(venue_id, distance)
+        band = self._band_from_distance(venue_id, symbol, distance)
         for candidate in self._bands:
             self._band_share[candidate].observe(candidate == band)
         self.standing.by_leverage_band[band] = self.standing.by_leverage_band.get(band, 0) + 1
 
-    def liquidation_price(self, venue_id: str, entry: float, leverage: float, side: str) -> float | None:
+    def liquidation_price(
+        self, venue_id: str, symbol: str, entry: float, leverage: float, side: str
+    ) -> float | None:
         """Where a position at this leverage is force-closed, from the venue's schedule.
 
         The formula rather than a rule of thumb: at 20x the liquidation is not at
         5% away, it is at 5% minus the maintenance margin rate, and the
         difference is exactly the region a cascade trades through.
         """
-        tiers = self._schedules.get(venue_id)
+        tiers = self._schedules.get((venue_id, symbol))
         if not tiers or leverage <= 1.0 or entry <= 0:
             return None
         rate = self._maintenance_rate(tiers, entry, leverage)
@@ -203,12 +213,12 @@ class LiquidationClusterMapper:
         self.standing.maps_made += 1
         key = (venue_id, symbol)
 
-        if venue_id not in self._schedules:
+        if key not in self._schedules:
             self.standing.refused_no_schedule += 1
             return self._map(
                 venue_id, symbol, NO_MARGIN_SCHEDULE, mark_price, (), 0.0,
-                f"{venue_id}'s maintenance margin schedule is not known here, and without it "
-                f"a liquidation price is a rule of thumb rather than a calculation",
+                f"{venue_id} {symbol}'s maintenance margin ladder is not known here, and "
+                f"without it a liquidation price is a rule of thumb rather than a calculation",
             )
 
         open_interest = self._open_interest.get(key)
@@ -236,7 +246,7 @@ class LiquidationClusterMapper:
             for entry_price, volume in profile.items():
                 weight = volume / total_volume
                 for side in (LONG, SHORT):
-                    price = self.liquidation_price(venue_id, entry_price, band, side)
+                    price = self.liquidation_price(venue_id, symbol, entry_price, band, side)
                     if price is None or price <= 0:
                         continue
                     distance = abs(price - mark_price) / mark_price if mark_price else 0.0
@@ -312,9 +322,9 @@ class LiquidationClusterMapper:
                 rate = tier.maintenance_margin_rate
         return rate
 
-    def _band_from_distance(self, venue_id: str, distance: float) -> float:
+    def _band_from_distance(self, venue_id: str, symbol: str, distance: float) -> float:
         """Which leverage band a liquidation at this distance implies."""
-        tiers = self._schedules.get(venue_id)
+        tiers = self._schedules.get((venue_id, symbol))
         rate = tiers[0].maintenance_margin_rate if tiers else 0.0
         implied = 1.0 / (distance + rate) if distance + rate > 0 else self._bands[-1]
         return min(self._bands, key=lambda band: abs(band - implied))
@@ -337,7 +347,8 @@ def describe_liquidation_mapping(mapper: LiquidationClusterMapper) -> dict:
     return {
         "part_id": PART_ID,
         "leverage_bands": list(mapper._bands),
-        "venues_with_a_margin_schedule": sorted(mapper._schedules),
+        "symbols_with_a_margin_schedule": len(mapper._schedules),
+        "venues_with_a_margin_schedule": sorted({venue for venue, _ in mapper._schedules}),
         "maps_made": mapper.standing.maps_made,
         "maps_published": mapper.standing.maps_published,
         "refused_no_margin_schedule": mapper.standing.refused_no_schedule,
@@ -378,17 +389,30 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
     Traded volume per price comes from the trade stream; the mark is the
-    latest print. Open interest and the margin schedule are not on any input
-    this part declares, so the map is built from the volume profile and the
-    prior band shares, and says so in its reason.
+    latest print. The maintenance margin ladder rides on the symbol universe
+    since 2026-08-26, because `symbol-catalogue-reader` already makes the
+    venue's REST calls and a ladder is a fact about a listed contract.
+
+    Before that nothing called `observe_margin_schedule` at all, and this part
+    published 544,798 maps in a single run with `refused-no-margin-schedule` on
+    every one and not a single cluster in any of them -- while its own
+    `maps_published` standing read 0. The wire carried, and carried nothing.
+
+    Open interest is still on no input this part declares, so a map is still
+    refused without it and says so in its reason.
     """
     import time as _time
 
-    from runtime.input_assembly import Batch
+    from runtime.input_assembly import Batch, LatestByKey
     from runtime.venues.venue_adapter import NormalisedTrade
 
     trades = Batch(read=context.bus.reader("market-data"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
+    universe = LatestByKey(
+        read=context.bus.reader("symbol-universe"),
+        key_of=lambda entry: (entry.venue_id, entry.symbol),
+        maximum_age_seconds=context.number("margin_schedule_maximum_age_seconds"),
+    )
     publish_maps = context.bus.publisher_for("liquidation-map")
     mapper = LiquidationClusterMapper(
         leverage_bands=tuple(float(b) for b in context.setting("liquidation_leverage_bands").value),
@@ -403,6 +427,8 @@ def start_part(context) -> int:
 
     def read_market(_mapper):
         books.payloads()
+        for entry in universe.mapping().values():
+            mapper.observe_margin_schedule(entry.venue_id, entry.symbol, entry.margin_tiers)
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
                 mapper.observe_traded_volume(trade.venue_id, trade.symbol, trade.price, trade.quote_volume)

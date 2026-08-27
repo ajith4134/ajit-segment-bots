@@ -35,7 +35,8 @@ from parts.profit_tailgating_bot.tail_opinion_composer import (
 from parts.profit_tailgating_bot.tail_setup_weight_learner import TailSetupWeightLearner
 from parts.profit_tailgating_bot.tail_trailing_exit_planner import (
     NO_EXCURSION_PROFILE, TRAIL_WOULD_EXCEED_WHAT_IS_LEFT, ExitCounterfactual,
-    RetracementProfile, TailTrailingExitPlanner,
+    NO_MOVE_REMAINING, RetracementProfile, TailTrailingExitPlanner,
+    describe_trailing,
 )
 from parts.profit_tailgating_bot.tail_winner_selector import (
     ALREADY_CONCENTRATED, GIVING_PROFIT_BACK, NOT_IN_PROFIT, NOT_THE_WINNING_LEG,
@@ -903,3 +904,48 @@ def test_a_restarted_learner_adopts_the_scorecard():
     subject = a_tail_weight_learner()
     subject.observe_scorecard(scorecard)
     assert subject.weight_for(FROM_A_SCANNER_MOVE).trades_judged == 60
+
+
+# ---- the crash that needed a candidate to become visible ---------------------
+#
+# start_part handed every candidate a literal None and plan() read
+# `remaining.remaining_fraction` off it unconditionally, so the first
+# follow-candidate tail-mover-qualifier ever produced crash-looped this part with
+# AttributeError: 'NoneType' object has no attribute 'remaining_fraction'.
+#
+# It had never arrived before. The qualifier had seen 1,197 entry-candidates and
+# qualified its first 3 on the day the scanner's vocabulary was widened -- the
+# defect was written long before and only became reachable when something
+# upstream started working.
+
+def test_a_candidate_with_no_estimate_of_the_move_left_is_refused_not_crashed_on():
+    """Refused and named rather than planned without the check.
+
+    A tailgater joining a move already running has no target of its own, which is
+    exactly why how much of the move is left is the one thing it must not guess
+    at. tail-move-remaining-estimator publishes it; until 2026-08-26 nothing but
+    the conviction model consumed it.
+    """
+    subject = a_prepared_planner()
+    plan, reason = subject.plan(a_follow(), None)
+
+    assert plan is None
+    assert reason == NO_MOVE_REMAINING
+
+
+def test_the_refusal_is_counted_so_a_bot_planning_nothing_is_visible():
+    """A tailgater that refuses every candidate looks identical to a quiet market."""
+    subject = a_prepared_planner()
+    for _ in range(3):
+        subject.plan(a_follow(), None)
+
+    described = describe_trailing(subject)
+    assert described["plans_requested"] == 3
+    assert described["plans_built"] == 0
+    assert described["refused_by_reason"][NO_MOVE_REMAINING] == 3
+
+
+def test_an_estimate_that_is_present_still_plans():
+    """The guard must not have made the ordinary path unreachable."""
+    plan, reason = a_prepared_planner().plan(a_follow(), a_remaining(fraction=0.05))
+    assert plan is not None, reason

@@ -47,7 +47,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="tail-trailing-exit-planner",
     consumes=(
         "follow-candidate", "symbol-price-frame", "symbol-profile",
-        "exit-counterfactual", "excursion-profile",
+        "exit-counterfactual", "excursion-profile", "move-remaining",
     ),
     produces=("tail-exit-plan", "part-health"),
     resource_class="compute-bound",
@@ -56,6 +56,7 @@ PART_DECLARATION = PartDeclaration(
 )
 
 NO_EXCURSION_PROFILE = "no-retracement-record-for-this-symbol"
+NO_MOVE_REMAINING = "nothing-has-estimated-how-much-of-this-move-is-left"
 NO_PRICE = "no-price-for-this-symbol"
 TRAIL_WOULD_EXCEED_WHAT_IS_LEFT = "the-trail-is-wider-than-the-move-has-left"
 
@@ -217,6 +218,17 @@ class TailTrailingExitPlanner:
         width, counterfactual = self.trail_width(*key)
         if width is None:
             return None, self._refuse(NO_EXCURSION_PROFILE)
+
+        if remaining is None:
+            # `tail-move-remaining-estimator` publishes this and until 2026-08-26
+            # nothing consumed it: start_part handed every candidate a literal
+            # None and `plan` dereferenced it, so the first follow-candidate the
+            # qualifier ever produced crash-looped this part. Refused and named
+            # rather than planned without the check -- a trail this bot cannot
+            # compare against what the move has left is the one thing a tailgater
+            # must not guess at, because joining a move already running is the
+            # whole reason it has no target of its own.
+            return None, self._refuse(NO_MOVE_REMAINING)
 
         left = remaining.remaining_fraction
         if left is not None and width > left:
@@ -388,7 +400,16 @@ def start_part(context) -> int:
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
     excursions = Batch(read=context.bus.reader("excursion-profile"))
-    remaining = LatestByKey(read=context.bus.reader("move-remaining"), key_of=lambda r: (r.venue_id, r.symbol)) if "move-remaining" in context.declaration.consumes else None
+    # Bounded, like every level here: an estimate of how much of a move is left
+    # is a statement about a move that is still running, and one held past the
+    # move it described would trail a position against a number from a different
+    # market. The estimator publishes per follow-candidate, so an ordinary
+    # reading is far inside this and reaching it means the move is over.
+    remaining = LatestByKey(
+        read=context.bus.reader("move-remaining"),
+        key_of=lambda estimate: (estimate.venue_id, estimate.symbol),
+        maximum_age_seconds=context.number("tail_move_remaining_maximum_age_seconds"),
+    )
     publish_plans = context.bus.publisher_for("tail-exit-plan")
     planner = TailTrailingExitPlanner(
         trail_safety_multiple=context.number("tail_trail_safety_multiple"),
@@ -431,7 +452,11 @@ def start_part(context) -> int:
                     is_fitted=profile.is_fitted,
                 )
             )
-        return tuple((candidate, None) for candidate in candidates.payloads())
+        left_by_symbol = remaining.mapping()
+        return tuple(
+            (candidate, left_by_symbol.get((candidate.venue_id, candidate.symbol)))
+            for candidate in candidates.payloads()
+        )
 
     def publish(items) -> None:
         if items:

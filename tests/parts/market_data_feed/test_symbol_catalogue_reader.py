@@ -70,9 +70,15 @@ def build_reader(
     for url in adapter.funding_request_urls():
         responses[url] = read_captured_json(venue_id, FUNDING_FIXTURES[venue_id][url])
 
-    def fetch(url, _timeout):
+    def fetch(url, _timeout, _headers=None):
         if funding_fails and url in adapter.funding_request_urls():
             raise TimeoutError(f"{url} did not answer")
+        if url not in responses:
+            # A margin-schedule URL this fixture does not stub. Raised rather
+            # than KeyError'd so it travels the same path a real timeout does --
+            # the reader must return its selection either way, because the
+            # capture runs on the selection and not on the ladder.
+            raise TimeoutError(f"{url} is not stubbed in this fixture")
         return responses[url]
 
     return SymbolCatalogueReader(
@@ -233,6 +239,10 @@ def test_the_description_reports_only_what_was_counted(read_captured_json):
     assert description["last_failure"] is None
 
 
+def _unreachable(url):
+    raise TimeoutError(f"{url} is not stubbed in this fixture")
+
+
 def test_a_paginated_catalogue_is_followed_to_the_end(read_captured_json):
     """Bybit serves 500 of 837 by default, and a prefix looks like a whole universe.
 
@@ -263,7 +273,13 @@ def test_a_paginated_catalogue_is_followed_to_the_end(read_captured_json):
         captured_symbol_count=CAPTURE_EVERY_SYMBOL,
         selection_metric=QUOTE_VOLUME_24H,
         request_timeout_seconds=REQUEST_TIMEOUT,
-        fetch=lambda url, _timeout: pages[url],
+        # A url this fixture does not stub is the margin schedule, and it
+        # answers the way an unreachable endpoint does -- the point of the test
+        # is the pagination, and a KeyError here would be the fixture failing
+        # rather than the reader.
+        fetch=lambda url, _timeout, _headers=None: (
+            pages[url] if url in pages else _unreachable(url)
+        ),
     )
     selection = reader.read_catalogue()
     assert reader.standing.catalogue_pages == 2
@@ -283,7 +299,7 @@ def test_a_catalogue_that_never_ends_is_refused_rather_than_truncated(read_captu
         captured_symbol_count=CAPTURE_EVERY_SYMBOL,
         selection_metric=QUOTE_VOLUME_24H,
         request_timeout_seconds=REQUEST_TIMEOUT,
-        fetch=lambda url, _timeout: tickers if url == adapter.ticker_url() else endless,
+        fetch=lambda url, _timeout, _headers=None: tickers if url == adapter.ticker_url() else endless,
     )
     with pytest.raises(CatalogueIncomplete) as refusal:
         reader.read_catalogue()

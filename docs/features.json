@@ -6105,7 +6105,8 @@
       "category": "prediction",
       "consumes": [
         "market-data",
-        "order-book-snapshot"
+        "order-book-snapshot",
+        "symbol-universe"
       ],
       "produces": [
         "liquidation-map",
@@ -9194,7 +9195,8 @@
         "symbol-price-frame",
         "symbol-profile",
         "exit-counterfactual",
-        "excursion-profile"
+        "excursion-profile",
+        "move-remaining"
       ],
       "produces": [
         "tail-exit-plan",
@@ -11868,7 +11870,8 @@
       "category": "learning-loop",
       "consumes": [
         "entry-candidate",
-        "symbol-price-frame"
+        "symbol-price-frame",
+        "market-regime"
       ],
       "produces": [
         "training-label",
