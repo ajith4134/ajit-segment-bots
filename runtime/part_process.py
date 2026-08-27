@@ -141,6 +141,40 @@ MOST_STANDING_COUNTERS = 32
 # which it is.
 MOST_KEYS_IN_A_STANDING_MAP = 16
 
+# A name ending `_at_ns` states a point in wall-clock time, and a point in time is
+# not a counter. Measured 2026-08-27 on the live board: the busiest counter across
+# the whole spine read `hardware-scanner capacity.measured_at_ns 900,251,934/s`,
+# and nothing was working that hard. Every board here rates a standing counter as
+# delta over elapsed seconds; a nanosecond clock advances a billion per second by
+# definition, so a timestamp outranks every real counter by six orders of magnitude
+# and wins "busiest" permanently. Worse, a part is judged WORKING when any counter
+# moved, so a clock alone would paint a part green while it did nothing -- Rule 8's
+# failure exactly.
+#
+# Left behind here rather than filtered where the rate is taken: every board that
+# rates these counters would otherwise need the same rule, and the payload on the
+# bus still carries the timestamp for any reader judging staleness.
+#
+# Deliberately a pattern here, where `level_publishing.OBSERVATION_TIME_FIELDS` is
+# a fixed list, because the two ask different questions. There the question is
+# whether a field says "still true" or says something a reader acts on, and
+# `next_settlement_at_ns` is content -- so a pattern would have stopped publishing
+# what a reader was waiting for. Here the question is only whether a number is a
+# count, and no wall-clock reading is, content or not. The pattern is `_at_ns` and
+# not `_ns`: cumulative time spent is a genuine counter whose rate is the fraction
+# of a core a part is using, which is exactly what a board should show.
+CLOCK_NAME_ENDINGS = ("_at_ns",)
+
+
+def is_a_clock_rather_than_a_counter(name) -> bool:
+    """Whether a standing key states a moment in time instead of a quantity.
+
+    A key that is not a name is never a clock: a counter map may be keyed by
+    anything a part counts by, and `duty-cycle-planner` keys one by an integer
+    rung. Asking such a key how it ends crashed every part that had one.
+    """
+    return isinstance(name, str) and name.endswith(CLOCK_NAME_ENDINGS)
+
 
 def countable_standing(standing) -> tuple[tuple[str, float], ...]:
     """The numeric facts in a part's standing, flattened, sorted and capped.
@@ -163,6 +197,10 @@ def countable_standing(standing) -> tuple[tuple[str, float], ...]:
     nothing, which is Rule 8's failure exactly -- a number nobody can trace to a
     reason is a number nobody can act on.
 
+    **A wall-clock timestamp is left behind whatever its level** (2026-08-27). A
+    `*_at_ns` name states a moment, not a quantity, and every board here rates a
+    standing counter as delta over elapsed seconds -- see `CLOCK_NAME_ENDINGS`.
+
     **A map larger than `MOST_KEYS_IN_A_STANDING_MAP` is still left behind**, and
     its size is reported in its place as `name.keys_not_reported`. That bound is
     what keeps a per-symbol map off this channel: at the full universe such a map
@@ -174,6 +212,8 @@ def countable_standing(standing) -> tuple[tuple[str, float], ...]:
         return ()
     numeric = []
     for name, value in standing.items():
+        if is_a_clock_rather_than_a_counter(name):
+            continue
         if isinstance(value, bool):
             numeric.append((name, float(value)))
         elif isinstance(value, (int, float)):
@@ -190,6 +230,8 @@ def _flattened_counters(name: str, mapping) -> list[tuple[str, float]]:
     flattened = []
     for key, value in mapping.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if is_a_clock_rather_than_a_counter(key):
             continue
         flattened.append((f"{name}.{key}", float(value)))
     return flattened

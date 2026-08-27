@@ -539,3 +539,73 @@ def test_a_map_of_names_is_still_left_behind():
     }))
 
     assert reported == {"counted": 3.0}
+
+
+# ---- a clock is not a counter -----------------------------------------------
+
+def test_a_wall_clock_timestamp_never_reaches_the_standing_channel():
+    """Measured 2026-08-27 on the live board: the busiest counter in the whole
+    spine read `hardware-scanner capacity.measured_at_ns 900,251,934/s`.
+
+    Nothing was working that hard. A rate is delta over elapsed seconds, and a
+    nanosecond clock advances a billion per second by definition, so a timestamp
+    on this channel outranks every real counter by six orders of magnitude and
+    wins "busiest" forever. Worse, `judge_is_working` calls a part WORKING when
+    any counter moved -- so a clock alone would paint a part green while it did
+    nothing, which is Rule 8's failure exactly.
+
+    Left behind on the write side rather than special-cased on the read side:
+    every board that rates these counters would otherwise need the same rule, and
+    the payload on the bus still carries the timestamp for any reader judging
+    staleness.
+    """
+    from runtime.part_process import countable_standing
+
+    reported = dict(countable_standing({
+        "readings": 2068,
+        "is_complete": True,
+        "capacity": {"measured_at_ns": 1_787_813_045_707_939_000, "logical_cpus": 12},
+        "checkpoint_saved_at_ns": 1_787_810_413_530_649_900,
+        "checkpoints_written": 9,
+        "last_published_at_ns": 1_787_813_002_495_597_800,
+    }))
+
+    assert reported == {
+        "readings": 2068.0,
+        "is_complete": 1.0,
+        "capacity.logical_cpus": 12.0,
+        "checkpoints_written": 9.0,
+    }
+
+
+def test_a_nanosecond_duration_is_a_counter_and_still_rides():
+    """The rule is about `_at_ns` -- a point in time -- not about nanoseconds.
+
+    Cumulative time spent is a genuine counter: its rate is the fraction of a
+    core the part is using, which is exactly what the board should show. A rule
+    over every name ending `_ns` would have thrown that away.
+    """
+    from runtime.part_process import countable_standing
+
+    reported = dict(countable_standing({
+        "cpu_time_ns": 4_200_000_000,
+        "slowest_tick_ns": 1_300_000,
+        "next_settlement_at_ns": 1_787_813_045_707_939_000,
+    }))
+
+    assert reported == {"cpu_time_ns": 4.2e9, "slowest_tick_ns": 1.3e6}
+
+
+def test_a_counter_map_keyed_by_something_other_than_a_name_still_flattens():
+    """A counter map may be keyed by whatever the part counts by.
+
+    `duty-cycle-planner` keys one by an integer rung, and the first version of
+    the clock rule asked every key how it ended -- so every part holding such a
+    map crash-looped on its first health report. A key that is not a name cannot
+    be a clock.
+    """
+    from runtime.part_process import countable_standing
+
+    reported = dict(countable_standing({"by_rung": {1: 4, 2: 9}, "planned": 13}))
+
+    assert reported == {"by_rung.1": 4.0, "by_rung.2": 9.0, "planned": 13.0}
