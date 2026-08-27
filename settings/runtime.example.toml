@@ -524,14 +524,14 @@ unit  = "fraction of the allotment"
 note  = "operator, 2026-08-22: the most one position may risk, as a fraction of the segment's allotment. One percent is the conventional single-trade risk and it is the number the position sizer turns into a quantity: at the 10000 USDT paper balance that is 100 USDT at risk per trade, and a stop 0.5% away therefore buys about 20000 USDT of notional -- which the per-trade capital ceiling then cuts to 1000. The two limits are deliberately both live: one bounds the loss, the other bounds the exposure."
 
 [risk_maximum_total_fraction]
-value = 0.05
+value = inf
 unit  = "fraction of the allotment"
-note  = "operator, 2026-08-22: the most every open position may risk together. Five times the single-position limit, so five trades at full size is the point at which nothing new is opened -- a bot that is right about one symbol is usually right about five correlated ones, and the total limit is what stops that being one bet wearing five names."
+note  = "operator, 2026-08-22: the most every open position may risk together. Five times the single-position limit, so five trades at full size is the point at which nothing new is opened -- a bot that is right about one symbol is usually right about five correlated ones, and the total limit is what stops that being one bet wearing five names. Changed from 0.05 to inf -- no total cap -- on operator instruction at 2026-08-27 04:47 UTC: how many trades may be open at once is the bot's decision, twenty or forty or more if it judges them worth taking. This was the binding limit: at 04:12 that day the book held 13.1% against the 5% cap and position-sizer had refused 531 of 2,338 actionable intents with no risk allowed. What still bounds the book is per-trade: risk_maximum_per_position_fraction (1% of the allotment) sizes each one, and maximum_capital_per_trade (100 USDT of a 10,000 USDT paper allotment) is the capital behind it. The segment is on paper money (RL-005). Restore 0.05 before money_mode is ever set to live, or state a number chosen for real money."
 
 [risk_maximum_per_cluster_fraction]
-value = 0.02
+value = inf
 unit  = "fraction of the allotment"
-note  = "operator, 2026-08-22: the most one correlated cluster may risk. Twice a single position and well under the total: symbols that move together are one bet, and this is the limit that says so before the total limit has to. Nothing measures clusters yet -- correlation-cluster has no producer running -- so in the first runs every position is its own cluster, which is the permissive reading and is recorded here as such."
+note  = "operator, 2026-08-22: the most one correlated cluster may risk. Twice a single position and well under the total: symbols that move together are one bet, and this is the limit that says so before the total limit has to. Nothing measures clusters yet -- correlation-cluster has no producer running -- so in the first runs every position is its own cluster, which is the permissive reading and is recorded here as such. Changed from 0.02 to inf -- no cluster cap -- on operator instruction at 2026-08-27 04:47 UTC, with the total cap, because a cluster cap of 2% against no total cap would simply become the limit that refuses the twentieth trade instead. It caps nothing today in any case: with no producer of correlation-cluster every symbol is its own cluster. Restore 0.02 with the total cap the moment clusters are actually measured, and before live money."
 
 [tick_size_minimum_observations]
 value = 20

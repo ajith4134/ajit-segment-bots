@@ -2,6 +2,7 @@
 
 import dataclasses
 import importlib
+import time
 
 import pytest
 
@@ -489,15 +490,14 @@ def test_a_reserved_part_is_never_switched_off_for_being_a_hog(capacity):
 
 
 def test_a_flapping_part_is_held_rather_than_started(capacity):
-    from parts.resource_governor.switch_oscillation_damper import FlapReport
-
-    plan = planner().plan(
+    plan = plan_after_a_full_sweep(
+        planner(),
         GovernorInputs(
             capacity=capacity,
             usages=(usage("hardware-scanner"),),
             admitted_parts=("flappy",),
-            flap_reports={"flappy": FlapReport("flappy", 4, 60.0, 1.0, 30.0, 1)},
-        )
+            flap_reports={"flappy": flap_report("flappy")},
+        ),
     )
     assert plan.held == ("flappy",)
     assert plan.decisions == ()
@@ -721,8 +721,6 @@ def test_a_restored_part_that_flaps_is_held_rather_than_started(capacity):
     """The return path is not allowed to become an oscillation: what shed a part
     can be true again the moment it is back, and switch-oscillation-damper is
     what says so."""
-    from parts.resource_governor.switch_oscillation_damper import FlapReport
-
     subject = planner()
     subject.plan(
         GovernorInputs(
@@ -732,7 +730,7 @@ def test_a_restored_part_that_flaps_is_held_rather_than_started(capacity):
     )
     quiet = GovernorInputs(
         capacity=capacity, usages=(usage("quiet"),),
-        flap_reports={"greedy": FlapReport("greedy", 4, 60.0, 1.0, 30.0, 1)},
+        flap_reports={"greedy": flap_report("greedy")},
     )
     plan = plan_after_a_full_sweep(subject, quiet)
     assert plan.decisions == () and "greedy" in plan.held
@@ -854,3 +852,71 @@ def test_only_a_successful_off_is_watched():
     clock.now += 6
     assert check.verify([]) == ()
     assert check.standing.pending == 0
+
+
+# ---- a flap hold is a hold for a stated time, not a permanent one ------------
+
+def flap_report(part_id, hold_for_seconds=30.0, observed_at_ns=None):
+    """A damper report as the damper actually stamps it: at the moment of the flap."""
+    from parts.resource_governor.switch_oscillation_damper import FlapReport
+
+    return FlapReport(
+        part_id=part_id,
+        transitions_in_window=4,
+        window_seconds=120.0,
+        shortest_on_seconds=1.0,
+        hold_for_seconds=hold_for_seconds,
+        observed_at_ns=time.time_ns() if observed_at_ns is None else observed_at_ns,
+    )
+
+
+def test_a_flap_hold_that_has_elapsed_no_longer_holds_the_part(capacity):
+    """Measured live 2026-08-27: position-sizer was shed at 22:17:27 after four
+    flips in 26 seconds, the damper asked for a 60 second hold, and the part was
+    still off six hours later. `_hold_reason` read the report's presence and
+    never its `hold_for_seconds`, and `flap-report` is a LatestByKey with no age
+    bound, so the report never went away. Twelve other parts went with it."""
+    stale = flap_report("flappy", hold_for_seconds=60.0, observed_at_ns=time.time_ns() - 3600 * 1_000_000_000)
+    plan = plan_after_a_full_sweep(
+        planner(),
+        GovernorInputs(
+            capacity=capacity,
+            usages=(usage("hardware-scanner"),),
+            admitted_parts=("flappy",),
+            flap_reports={"flappy": stale},
+        ),
+    )
+    assert [(d.part_id, d.action) for d in plan.decisions] == [("flappy", TURN_ON)]
+    assert plan.held == ()
+
+
+def test_a_flap_hold_still_running_holds_the_part(capacity):
+    """The other side of the same reading: a hold that has not elapsed is a hold."""
+    plan = plan_after_a_full_sweep(
+        planner(),
+        GovernorInputs(
+            capacity=capacity,
+            usages=(usage("hardware-scanner"),),
+            admitted_parts=("flappy",),
+            flap_reports={"flappy": flap_report("flappy", hold_for_seconds=600.0)},
+        ),
+    )
+    assert plan.decisions == () and plan.held == ("flappy",)
+
+
+def test_a_part_shed_for_hogging_comes_back_once_its_flap_hold_elapses(capacity):
+    """The whole path, as it failed live: shed for hogging, flap-reported on the
+    way out, and then started again once the contention stops and the hold ends."""
+    subject = planner()
+    subject.plan(
+        GovernorInputs(
+            capacity=capacity, running_parts=("greedy",), usages=(usage("greedy"),),
+            hog_reports=(hog_report("greedy"),),
+        )
+    )
+    elapsed = flap_report("greedy", hold_for_seconds=60.0, observed_at_ns=time.time_ns() - 600 * 1_000_000_000)
+    quiet = GovernorInputs(
+        capacity=capacity, usages=(usage("quiet"),), flap_reports={"greedy": elapsed},
+    )
+    plan = plan_after_a_full_sweep(subject, quiet)
+    assert [(d.part_id, d.action) for d in plan.decisions] == [("greedy", TURN_ON)]

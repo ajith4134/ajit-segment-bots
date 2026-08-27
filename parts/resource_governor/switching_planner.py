@@ -43,6 +43,8 @@ TURN_OFF = "off"
 # the failed flips of parts that were running all along (2026-08-24, twice).
 PLANS_ABSENT_BEFORE_START = 2
 
+NANOSECONDS_PER_SECOND = 1_000_000_000
+
 # Reasons a part is switched, in the order they beat each other. First match
 # wins, so the list is the policy: a flapping part is held even if capacity
 # would allow it, and a reservation floor beats a hog report.
@@ -468,7 +470,7 @@ class SwitchingPlanner:
         return tuple(ordered)
 
     def _hold_reason(self, part_id, inputs) -> str | None:
-        if part_id in inputs.flap_reports:
+        if self._flap_hold_is_still_running(inputs.flap_reports.get(part_id)):
             return "flapping"
         budget = inputs.restart_budgets.get(part_id)
         if budget is not None and budget.verdict == "exhausted":
@@ -477,6 +479,31 @@ class SwitchingPlanner:
         if duty is not None and inputs.current_hour is not None and inputs.current_hour not in duty.allowed_hours:
             return "outside its duty cycle"
         return None
+
+    def _flap_hold_is_still_running(self, report) -> bool:
+        """Whether the damper's hold on this part has actually elapsed.
+
+        The report carries its own expiry -- switch-oscillation-damper stamps
+        `observed_at_ns` at the flap and states `hold_for_seconds`, which grows
+        with the count so a part that keeps flapping is held longer. Reading the
+        report's mere presence throws both away.
+
+        Measured live 2026-08-27: `position-sizer` flipped four times in 26
+        seconds, was shed at 22:17:27 for hogging, and the damper asked for a 60
+        second hold. Six hours later it was still off, because `flap-report` is
+        a LatestByKey with no age bound and a level held forever made a 60
+        second hold permanent. Thirteen parts were stuck that way, and with the
+        sizer among them no order could be sized, so the bot placed nothing for
+        the whole six hours. A flap report is an event the bus hands over as a
+        level: the expiry has to come from the report, because nothing else
+        knows when the hold the damper asked for is over.
+        """
+        if report is None:
+            return False
+        hold_ends_at_ns = report.observed_at_ns + int(
+            report.hold_for_seconds * NANOSECONDS_PER_SECOND
+        )
+        return self._now_ns() < hold_ends_at_ns
 
     def _on_reason(self, part_id, reserved, cleared) -> str:
         if part_id in reserved:

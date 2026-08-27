@@ -9,6 +9,8 @@ limiter, and nothing on any board said so.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from parts.risk_capital_allocation.exposure_limiter import ExposureLimiter
@@ -76,3 +78,53 @@ def test_a_closed_position_stops_using_the_book():
     one.observe_position("binance-usdm", "BTCUSDT", 2_000.0)
     one.observe_position("binance-usdm", "BTCUSDT", 0.0)
     assert one.total_exposure == 0.0
+
+
+# ---- a cap the operator has removed -------------------------------------------
+
+def uncapped_limiter() -> ExposureLimiter:
+    """The book as the operator set it on 2026-08-27: each trade still risks at
+    most its own cap, and how many may be open at once is not capped at all."""
+    return ExposureLimiter(
+        maximum_per_position_fraction=0.01,
+        maximum_total_fraction=math.inf,
+        maximum_per_cluster_fraction=math.inf,
+        now_ns=lambda: 1,
+    )
+
+
+def test_an_infinite_total_cap_never_runs_out_of_room():
+    """Forty positions open, and the forty-first is still allowed its full
+    per-position risk. With the total cap at 5% and each trade risking 1%, the
+    sixth trade was refused -- which is what `refused_no_risk_allowed` counted
+    531 times on 2026-08-27 while the book held 13.1% against that 5% cap."""
+    subject = uncapped_limiter()
+    subject.set_allotment(10_000.0)
+    for index in range(40):
+        subject.observe_position("binance-usdm", f"SYM{index}", 1_000.0, entry_price=100.0, quantity=10.0)
+        subject.observe_stop("binance-usdm", f"SYM{index}", 99.0)
+
+    limit = subject.read_limit("FRESHUSDT")
+    assert limit.fraction_of_allotment == pytest.approx(0.01)
+    assert not limit.is_binding
+
+
+def test_a_removed_cap_says_so_rather_than_printing_an_infinity():
+    """The reason is read by an operator asking why a trade was refused, so a
+    cap that no longer exists must not appear there as 'inf%'."""
+    subject = uncapped_limiter()
+    subject.set_allotment(10_000.0)
+    subject.observe_position("binance-usdm", "BTCUSDT", 1_000.0, entry_price=100.0, quantity=10.0)
+    subject.observe_stop("binance-usdm", "BTCUSDT", 99.0)
+    assert "inf" not in subject.read_limit("BTCUSDT").reason
+
+
+def test_a_cap_of_zero_is_still_refused():
+    """Removing a cap is 'no cap', never 'a cap of nothing': a zero would refuse
+    every trade while reading like permission."""
+    with pytest.raises(ValueError):
+        ExposureLimiter(
+            maximum_per_position_fraction=0.0,
+            maximum_total_fraction=math.inf,
+            maximum_per_cluster_fraction=math.inf,
+        )

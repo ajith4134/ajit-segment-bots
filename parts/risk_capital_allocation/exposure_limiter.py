@@ -17,6 +17,7 @@ drawdown.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -79,8 +80,17 @@ class ExposureLimiter:
             ("total", maximum_total_fraction),
             ("per cluster", maximum_per_cluster_fraction),
         ):
-            if not 0.0 < value <= 1.0:
-                raise ValueError(f"the {name} cap must be a fraction of the allotment in (0, 1]")
+            # `inf` is a cap the operator has removed, and it is spelled as its
+            # own value rather than as a large number: a cap of 1000% would still
+            # bind somewhere and would read as an estimate of something. Zero is
+            # still refused, because "no cap" and "a cap of nothing" are opposite
+            # instructions and one of them refuses every trade while looking like
+            # permission.
+            if math.isnan(value) or (not 0.0 < value <= 1.0 and value != math.inf):
+                raise ValueError(
+                    f"the {name} cap must be a fraction of the allotment in (0, 1], "
+                    f"or inf for no cap at all"
+                )
         self._per_position = maximum_per_position_fraction
         self._total = maximum_total_fraction
         self._per_cluster = maximum_per_cluster_fraction
@@ -250,12 +260,26 @@ class ExposureLimiter:
         )
 
     def _reason(self, binding_cap, allowed, total_used, cluster, cluster_used) -> str:
+        """Why this much and no more, in the words an operator asking would use.
+
+        A removed cap is named as removed rather than printed: `{inf:.0%}` reads
+        "inf%", which looks like a measurement of something nobody measured.
+        """
         if binding_cap == PER_POSITION:
             return f"no single position may exceed {self._per_position:.0%} of the allotment"
         if binding_cap == TOTAL_GROSS:
+            if self._total == math.inf:
+                return (
+                    f"{total_used:.0%} of the allotment is exposed and no total cap is set, "
+                    f"so how many positions may be open at once is not limited here"
+                )
             return (
                 f"{total_used:.0%} of the allotment is already exposed against a "
                 f"{self._total:.0%} total cap, leaving {allowed:.0%}"
+            )
+        if self._per_cluster == math.inf:
+            return (
+                f"cluster {cluster!r} holds {cluster_used:.0%} and no cluster cap is set"
             )
         return (
             f"cluster {cluster!r} already holds {cluster_used:.0%} against a "
