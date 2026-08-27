@@ -127,6 +127,46 @@ def describe_capture(reader: OrderBookReader) -> dict:
     return description
 
 
+def describe_all_captures(readers: dict) -> dict:
+    """One standing across every venue this part reads, keyed so both survive.
+
+    The live part runs one recorder per venue in one process, and a heartbeat's
+    standing keeps only top-level numbers -- so each venue's facts ride under a
+    suffixed key and the totals under the plain one. Same shape as the trade
+    reader's, and written for the same reason: this part had published 3,248,775
+    snapshots and reported `{}` (2026-08-27).
+
+    What only this part can drop rides too. A reader thinning nine of ten pushes
+    produces a tape indistinguishable from a venue pushing a tenth as often, so
+    what was thinned is a number on the board rather than a silence.
+    """
+    merged: dict = {"part_id": PART_ID, "venues": len(readers)}
+    totals = {
+        "records_written": 0,
+        "unreadable_messages": 0,
+        "symbols_written": 0,
+        "thinned_messages": 0,
+        "venues_thinning": 0,
+    }
+    for venue_id, reader in sorted(readers.items()):
+        one = describe_recorder(reader, PART_ID)
+        symbols = len(one["symbols_written"])
+        unexpected = sum(c["unexpected_close_count"] for c in one["connections"])
+        merged[f"records_written.{venue_id}"] = one["records_written"]
+        merged[f"symbols_written.{venue_id}"] = symbols
+        merged[f"unreadable_messages.{venue_id}"] = one["unreadable_messages"]
+        merged[f"unexpected_closes.{venue_id}"] = unexpected
+        merged[f"thinned_messages.{venue_id}"] = reader.thinned_messages
+        merged[f"thins_this_venue.{venue_id}"] = reader.thins_this_venue
+        totals["records_written"] += one["records_written"]
+        totals["unreadable_messages"] += one["unreadable_messages"]
+        totals["symbols_written"] += symbols
+        totals["thinned_messages"] += reader.thinned_messages
+        totals["venues_thinning"] += 1 if reader.thins_this_venue else 0
+    merged.update(totals)
+    return merged
+
+
 def run_order_book_reader(
     adapter: VenueAdapter,
     plan: StreamPlan,
@@ -162,6 +202,7 @@ def run_order_book_reader(
             health_interval_seconds=health_interval_seconds,
             input_descriptors=input_descriptors,
             tick_floor_seconds=tick_floor_seconds,
+            read_standing=lambda: describe_capture(reader),
         )
     finally:
         reader.close()
@@ -172,6 +213,7 @@ __all__ = [
     "OrderBookReader",
     "PART_DECLARATION",
     "PART_ID",
+    "describe_all_captures",
     "describe_capture",
     "run_order_book_reader",
     "start_part",
@@ -251,6 +293,7 @@ def start_part(context) -> int:
             health_interval_seconds=context.health_interval_seconds,
             input_descriptors=context.input_descriptors,
             tick_floor_seconds=context.tick_floor_seconds,
+            read_standing=lambda: describe_all_captures(readers),
         )
     finally:
         for reader in readers.values():

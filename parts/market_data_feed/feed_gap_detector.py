@@ -196,6 +196,27 @@ def describe_gaps(detector: FeedGapDetector) -> dict:
     }
 
 
+def describe_all_gaps(detectors: dict) -> dict:
+    """One standing across every venue this part watches, keyed so all survive.
+
+    Continuity is a venue's property -- Binance numbers aggregate trades and
+    Bybit does not -- so the live part holds one detector per venue, and a
+    standing built from any single one would report a fraction of what it saw.
+    """
+    merged: dict = {"part_id": PART_ID, "venues": len(detectors)}
+    totals = {"messages_seen": 0, "gaps_found": 0, "silence_gaps": 0, "sequence_gaps": 0}
+    for venue_id, detector in sorted(detectors.items()):
+        one = describe_gaps(detector)
+        merged[f"messages_seen.{venue_id}"] = one["messages_seen"]
+        merged[f"gaps_found.{venue_id}"] = one["gaps_found"]
+        merged[f"tracked_streams.{venue_id}"] = one["tracked_streams"]
+        merged[f"resyncs_seen.{venue_id}"] = one["resyncs_seen"]
+        for name in totals:
+            totals[name] += one[name]
+    merged.update(totals)
+    return merged
+
+
 def run_feed_gap_detector(
     detector: FeedGapDetector, control_socket, read_messages, publish_gap,
     health_interval_seconds: float, emit_health,
@@ -272,4 +293,5 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        read_standing=lambda: describe_all_gaps(detectors),
     )

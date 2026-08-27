@@ -95,6 +95,30 @@ def describe_capture(reader: StreamTapeRecorder) -> dict:
     return describe_recorder(reader, PART_ID)
 
 
+def describe_all_captures(readers: dict) -> dict:
+    """One standing across every venue this part reads, keyed so both survive.
+
+    Same shape and same reason as the trade reader's: the live part runs one
+    recorder per venue in one process, and a standing built from any single one
+    reports a fraction of what was captured.
+    """
+    merged: dict = {"part_id": PART_ID, "venues": len(readers)}
+    totals = {"records_written": 0, "unreadable_messages": 0, "symbols_written": 0}
+    for venue_id, reader in sorted(readers.items()):
+        one = describe_recorder(reader, PART_ID)
+        symbols = len(one["symbols_written"])
+        unexpected = sum(c["unexpected_close_count"] for c in one["connections"])
+        merged[f"records_written.{venue_id}"] = one["records_written"]
+        merged[f"symbols_written.{venue_id}"] = symbols
+        merged[f"unreadable_messages.{venue_id}"] = one["unreadable_messages"]
+        merged[f"unexpected_closes.{venue_id}"] = unexpected
+        totals["records_written"] += one["records_written"]
+        totals["unreadable_messages"] += one["unreadable_messages"]
+        totals["symbols_written"] += symbols
+    merged.update(totals)
+    return merged
+
+
 def run_candle_stream_reader(
     adapter: VenueAdapter,
     plan: StreamPlan,
@@ -128,6 +152,7 @@ def run_candle_stream_reader(
             health_interval_seconds=health_interval_seconds,
             input_descriptors=input_descriptors,
             tick_floor_seconds=tick_floor_seconds,
+            read_standing=lambda: describe_capture(reader),
         )
     finally:
         reader.close()
@@ -204,6 +229,7 @@ def start_part(context) -> int:
             health_interval_seconds=context.health_interval_seconds,
             input_descriptors=context.input_descriptors,
             tick_floor_seconds=context.tick_floor_seconds,
+            read_standing=lambda: describe_all_captures(readers),
         )
     finally:
         for reader in readers.values():

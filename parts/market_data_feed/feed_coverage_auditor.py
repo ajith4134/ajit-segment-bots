@@ -271,4 +271,8 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        # Read through the list, not captured: the auditor is replaced whenever a
+        # new stream widens the expectation, and a lambda holding the old one
+        # would report the coverage of an object nothing observes any more.
+        read_standing=lambda: describe_coverage(auditors[0]),
     )
