@@ -285,8 +285,30 @@ class BullFeatureBuilder:
         return (series[-1] - series[0]) / series[0]
 
     def _volatility_fraction(self, window: RollingWindow) -> float | None:
+        """The minimum is in observations, and it is counted in observations here.
+
+        A window of N values yields N-1 returns, so a window whose length *is*
+        the minimum can never hold `minimum` returns -- and comparing the return
+        count against the observation minimum made this feature impossible to
+        compute rather than merely hard. `bull_feature_short_window` and
+        `bull_feature_minimum_observations` are both 64, which is a legal
+        configuration and every other feature in this part reads it as such: a
+        64-value window yields 63 returns, 63 < 64 is always true, and
+        `volatility_ratio_short_to_long` was therefore missing on 100% of the
+        2,828 vectors built in the 28 minutes measured on 2026-08-28 -- and on
+        every vector before that. `complete_vectors` was 0, which is what the
+        conviction model's `forecasts_the_gate_could_not_judge` was counting.
+
+        `window.count` is the same unit `_return_over` and `z_score` already
+        compare against, so the three now agree about what "enough" means. The
+        second check is not a threshold: a sample variance divides by
+        `len - 1`, so it needs two returns to be defined at all, and `returns()`
+        drops any pair whose earlier value was zero.
+        """
+        if window.count < self._minimum:
+            return None
         returns = window.returns()
-        if len(returns) < self._minimum:
+        if len(returns) < 2:
             return None
         mean = sum(returns) / len(returns)
         variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)

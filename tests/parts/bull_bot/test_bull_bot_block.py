@@ -1401,3 +1401,50 @@ def test_a_hole_in_the_feed_is_not_a_return(read_captured_trades):
         "one print after a 56-minute hole cannot support a return, a volatility ratio "
         "or anything else the window is asked for"
     )
+
+
+def test_a_full_short_window_can_actually_measure_its_own_volatility():
+    """`volatility_ratio_short_to_long` was unmeasurable by arithmetic, not by market.
+
+    A window of N values yields N-1 returns.
+    `bull_feature_short_window` and `bull_feature_minimum_observations` are both
+    64 -- a legal configuration every other feature in the part reads as such --
+    so a completely full short window held 63 returns against a minimum of 64 and
+    the ratio was missing on 100% of the 2,828 vectors built in the 28 minutes
+    measured on 2026-08-28. `complete_vectors` was 0 the whole time.
+    """
+    from parts.bull_bot.bull_feature_builder import BullFeatureBuilder
+    from runtime.rolling_statistics import RollingWindow
+
+    short = 64
+    builder = BullFeatureBuilder(
+        short_window=short,
+        long_window=512,
+        minimum_observations=short,
+        reference_order_size_quote=1000.0,
+        maximum_gap_seconds=3600.0,
+        gap_patience_multiple=4.0,
+    )
+    window = RollingWindow(length=short, maximum_gap_seconds=3600.0)
+    for index in range(short * 4):
+        window.observe(100.0 + (index % 9) * 0.1, index * 1_000_000_000)
+
+    assert window.count == short
+    # The fact behind the defect, stated so a future change to `returns()` fails here.
+    assert len(window.returns()) == short - 1
+    assert builder._volatility_fraction(window) is not None
+
+
+def test_volatility_is_refused_while_the_window_is_still_filling():
+    """The bound is real -- it is counted in observations, not weakened."""
+    from parts.bull_bot.bull_feature_builder import BullFeatureBuilder
+    from runtime.rolling_statistics import RollingWindow
+
+    builder = BullFeatureBuilder(
+        short_window=64, long_window=512, minimum_observations=64,
+        reference_order_size_quote=1000.0, maximum_gap_seconds=3600.0, gap_patience_multiple=4.0,
+    )
+    window = RollingWindow(length=64, maximum_gap_seconds=3600.0)
+    for index in range(63):
+        window.observe(100.0 + index * 0.1, index * 1_000_000_000)
+    assert builder._volatility_fraction(window) is None

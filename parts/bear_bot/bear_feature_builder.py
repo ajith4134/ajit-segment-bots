@@ -196,7 +196,7 @@ class BearFeatureBuilder:
         record("return_over_window", self._return_over(observations.short_window), "short window")
         record(
             "realised_volatility_fraction",
-            self._volatility(observations.long_window.returns()),
+            self._volatility(observations.long_window),
             f"{self._long}-observation returns",
         )
         record(
@@ -286,8 +286,23 @@ class BearFeatureBuilder:
             return None
         return (series[-1] - series[0]) / series[0]
 
-    def _volatility(self, returns) -> float | None:
-        if len(returns) < self._minimum:
+    def _volatility(self, window: RollingWindow) -> float | None:
+        """Counted in observations, like the minimum itself. See the bull builder.
+
+        Takes the window rather than its returns for exactly that reason: a
+        window of N values yields N-1 returns, so a return count compared against
+        an observation minimum refuses a window that is completely full. It is
+        latent here -- this part only measures volatility over the long window,
+        which is 512 against a minimum of 64 -- and it was not latent in
+        `bull-feature-builder`, where the same comparison against the 64-length
+        short window made `volatility_ratio_short_to_long` unmeasurable on every
+        vector ever built.
+        """
+        if window.count < self._minimum:
+            return None
+        returns = window.returns()
+        # Not a threshold: a sample variance divides by `len - 1`.
+        if len(returns) < 2:
             return None
         mean = sum(returns) / len(returns)
         variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
@@ -299,9 +314,9 @@ class BearFeatureBuilder:
         One realised-volatility number treats a 3% drop and a 3% rally as the
         same event, and the short only gets paid by one of them.
         """
-        returns = window.returns()
-        if len(returns) < self._minimum:
+        if window.count < self._minimum:
             return None
+        returns = window.returns()
         total = sum(value * value for value in returns)
         if total <= 0:
             return None
@@ -341,7 +356,7 @@ class BearFeatureBuilder:
         """
         if not asks:
             return None
-        volatility = self._volatility(observations.long_window.returns())
+        volatility = self._volatility(observations.long_window)
         price = observations.long_window.latest
         if volatility is None or volatility <= 0 or price is None or price <= 0:
             return None
