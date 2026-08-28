@@ -565,6 +565,37 @@ def a_conviction_model(refuse_on_disagreement=True, minimum_training=20, calibra
     )
 
 
+def test_a_losing_trade_does_not_take_the_follow_model_down():
+    """The crash this replaced, measured on the spine on 2026-08-28.
+
+    `reward-shaper` shapes a closed trade into USDT times its components, so a
+    loss shapes to a negative figure. It was handed straight to
+    `observe_learning_reward`, whose guard is right -- a non-positive multiplier
+    would unlearn the example -- and the raise happened inside the tick. Refused
+    and counted now: a losing trade is ordinary traffic.
+    """
+    from parts.learning_loop.reward_shaper import RewardShaper
+    from parts.profit_tailgating_bot.tail_follow_conviction_model import (
+        describe_follow_conviction,
+    )
+
+    shaper = RewardShaper(
+        maximum_reward=10.0, risk_reference_fraction=0.02,
+        horizon_half_life_seconds=86400.0, minimum_significance=1.0,
+    )
+    shaper.observe_usdt_result(VENUE, SYMBOL, 0, -100.0, 1.0)
+    shaper.observe_peak_adverse_excursion(VENUE, SYMBOL, 0, 0.01)
+    reward = shaper.shape(VENUE, SYMBOL, "scanner-continuation", 0, 60.0)
+    assert reward.reward < 0
+
+    model = a_conviction_model()
+    model.note_uninterpretable_reward(
+        f"{reward.detector} sent a shaped reward of {reward.reward!r}"
+    )
+    assert model.standing.rewards_uninterpretable == 1
+    assert describe_follow_conviction(model)["rewards_uninterpretable"] == 1
+
+
 def teach_the_conviction_model(model, rounds=200):
     for index in range(rounds):
         left = 0.03 if index % 2 else 0.001

@@ -62,6 +62,8 @@ class ScorekeeperStanding:
     from_counterfactuals: int = 0
     clustered_entries_collapsed: int = 0
     rewards_applied: int = 0
+    rewards_uninterpretable: int = 0
+    last_uninterpretable_reward: str | None = None
     bots_tracked: int = 0
     by_bot: dict = field(default_factory=dict)
 
@@ -89,10 +91,29 @@ class BotScorekeeper:
         self.standing = ScorekeeperStanding()
 
     def observe_learning_reward(self, bot: str, multiplier: float) -> None:
+        """A positive weight, stating how much this bot's record should count."""
         if multiplier <= 0:
             raise ValueError("a non-positive multiplier would erase a bot's record")
         self._reward_multipliers[bot] = multiplier
         self.standing.rewards_applied += 1
+
+    def note_uninterpretable_reward(self, reason: str) -> None:
+        """A `learning-reward` arrived that cannot be read as a weight multiplier.
+
+        A shaped reward is signed -- it is USDT times a set of components, and a
+        losing trade shapes to a negative figure. A weight multiplier is a
+        positive number around one. Turning one into the other is a decision
+        nobody has made, and a wrong one would silently rescale every bot's
+        record, so it is refused and counted here rather than guessed at.
+
+        Refused rather than raised. Passing the signed figure in as a multiplier
+        crashed this part 13 times on 2026-08-28 and `tail-follow-conviction-model`
+        with it: the raise is right about the value and wrong about the response,
+        because a losing trade is ordinary traffic and a part may not fall over on
+        ordinary traffic.
+        """
+        self.standing.rewards_uninterpretable += 1
+        self.standing.last_uninterpretable_reward = reason
 
     def record_opinion_outcome(
         self,
@@ -183,6 +204,8 @@ def describe_scorekeeping(scorekeeper: BotScorekeeper) -> dict:
         "from_counterfactuals": scorekeeper.standing.from_counterfactuals,
         "clustered_entries_collapsed": scorekeeper.standing.clustered_entries_collapsed,
         "rewards_applied": scorekeeper.standing.rewards_applied,
+        "rewards_uninterpretable": scorekeeper.standing.rewards_uninterpretable,
+        "last_uninterpretable_reward": scorekeeper.standing.last_uninterpretable_reward,
         "bots_tracked": scorekeeper.standing.bots_tracked,
         "by_bot": dict(sorted(scorekeeper.standing.by_bot.items())),
         "scorecards": {
@@ -258,8 +281,11 @@ def start_part(context) -> int:
             for trade_id in cluster.trade_ids:
                 cluster_of[trade_id] = cluster.cluster_id
         for reward in rewards.payloads():
-            if reward.reward is not None:
-                scorekeeper.observe_learning_reward(reward.detector, reward.reward)
+            scorekeeper.note_uninterpretable_reward(
+                f"{reward.detector} sent a shaped reward of {reward.reward!r} in state "
+                f"{reward.state!r}; no conversion from a shaped reward to a weight "
+                f"multiplier has been decided, and a signed figure cannot be one"
+            )
         counterfactuals.payloads()
         verdicts.payloads()
         costs.payloads()

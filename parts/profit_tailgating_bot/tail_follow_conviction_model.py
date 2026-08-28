@@ -73,6 +73,8 @@ class ModelStanding:
     refused_views_disagree: int = 0
     refused_nothing_usable: int = 0
     labels_trained_on: int = 0
+    rewards_uninterpretable: int = 0
+    last_uninterpretable_reward: str | None = None
     checkpoints_written: int = 0
     checkpoint_verdict: str | None = None
     retrains: int = 0
@@ -199,9 +201,25 @@ class TailFollowConvictionModel:
                 self.observe_outcome(midpoint, False, "all-sources")
 
     def observe_learning_reward(self, source: str, multiplier: float) -> None:
+        """A positive weight, stating how much this source's examples should count."""
         if multiplier <= 0:
             raise ValueError("a non-positive multiplier would unlearn or erase the example")
         self._reward_multipliers[source] = min(multiplier, self._maximum_sample_weight)
+
+    def note_uninterpretable_reward(self, reason: str) -> None:
+        """A `learning-reward` arrived that cannot be read as a weight multiplier.
+
+        The shaped reward is signed: USDT times a set of components, negative for
+        a losing trade. The multiplier this model applies to a training example is
+        a positive number around one. No conversion between them has been decided,
+        and inventing one would silently rescale every future training step.
+
+        Counted rather than raised. Passing the signed figure straight in took
+        this part down on 2026-08-28 on the first losing trade it was told about,
+        and a losing trade is ordinary traffic.
+        """
+        self.standing.rewards_uninterpretable += 1
+        self.standing.last_uninterpretable_reward = reason
 
     def apply_champion_choice(self, chosen: str) -> None:
         if chosen not in self._models:
@@ -364,6 +382,8 @@ def describe_follow_conviction(model: TailFollowConvictionModel) -> dict:
         "refused_because_views_disagree": model.standing.refused_views_disagree,
         "refused_nothing_usable": model.standing.refused_nothing_usable,
         "labels_trained_on": model.standing.labels_trained_on,
+        "rewards_uninterpretable": model.standing.rewards_uninterpretable,
+        "last_uninterpretable_reward": model.standing.last_uninterpretable_reward,
         "checkpoints_written": model.standing.checkpoints_written,
         "checkpoint_verdict": model.standing.checkpoint_verdict,
         "trained_by_source": dict(sorted(model.standing.by_source.items())),
@@ -454,8 +474,11 @@ def start_part(context) -> int:
             if getattr(scorecard, "bot", None) == BOT:
                 model.observe_scorecard(scorecard)
         for reward in rewards.payloads():
-            if reward.reward is not None:
-                model.observe_learning_reward(reward.detector, reward.reward)
+            model.note_uninterpretable_reward(
+                f"{reward.detector} sent a shaped reward of {reward.reward!r} in state "
+                f"{reward.state!r}; no conversion from a shaped reward to a weight "
+                f"multiplier has been decided, and a signed figure cannot be one"
+            )
         for choice in champions.payloads():
             if getattr(choice, "model_name", None) == PART_ID:
                 # `promotes` rather than the decision string: the gate decides

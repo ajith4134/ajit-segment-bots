@@ -447,6 +447,41 @@ def a_prepared_shaper(usdt=100.0, rate=1.0, adverse=0.01, **kwargs):
     return subject
 
 
+def test_a_losing_trade_does_not_take_the_scorekeeper_down():
+    """The crash this replaced: 13 restarts on 2026-08-28, one per losing trade.
+
+    A shaped reward is USDT times its components and is negative for a loss. It
+    was passed straight in as a weight multiplier, which raises -- correctly, a
+    non-positive weight would erase a bot's record -- inside the tick. The value
+    is refused now and counted; falling over on ordinary traffic is not a
+    response a part is allowed to have.
+    """
+    reward = a_prepared_shaper(usdt=-100.0).shape(VENUE, SYMBOL, "momentum-burst", 0, 60.0)
+    assert reward.reward < 0
+
+    subject = a_scorekeeper()
+    subject.note_uninterpretable_reward(
+        f"{reward.detector} sent a shaped reward of {reward.reward!r} in state {reward.state!r}"
+    )
+    assert subject.standing.rewards_uninterpretable == 1
+    assert subject.standing.last_uninterpretable_reward is not None
+
+
+def test_a_refused_reward_leaves_every_bot_weighted_as_it_was():
+    """Refusing must not become a silent rescale of its own."""
+    from parts.learning_loop.bot_scorekeeper import describe_scorekeeping
+
+    subject = a_scorekeeper(minimum=1)
+    subject.record_opinion_outcome("bull-bot", "d", "trend", 0.7, True, 10.0)
+    before = describe_scorekeeping(subject)["scorecards"]
+    assert before, "the scorecard this compares must exist for the comparison to mean anything"
+
+    subject.note_uninterpretable_reward("a shaped reward of -3.0")
+
+    assert describe_scorekeeping(subject)["scorecards"] == before
+    assert subject.standing.rewards_applied == 0
+
+
 def test_the_same_profit_earned_with_more_risk_is_worth_less():
     """Profit alone teaches the system to take enormous risk."""
     safe = a_prepared_shaper(usdt=100.0, adverse=0.005, risk_reference=0.01)
