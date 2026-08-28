@@ -71,6 +71,11 @@ def position(quantity, entry=100.0, at=1, leverage=None):
         leverage=leverage,
     )
 
+# The venue quantity step these tests reason against, matching the shipped
+# `order_quantity_increment`. Stated rather than defaulted, because it is the
+# bound that decides when a round trip is over.
+QUANTITY_INCREMENT = 0.001
+
 
 @pytest.mark.parametrize("part_id", sorted(BLOCK_PARTS))
 def test_every_built_declaration_equals_the_blueprint(part_id):
@@ -82,7 +87,7 @@ def test_every_built_declaration_equals_the_blueprint(part_id):
 
 def test_the_average_is_weighted_by_quantity_not_by_fill_count():
     """1 at 100 and 3 at 200 averages 175, not 150."""
-    tracker = CostBasisTracker()
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
     tracker.observe_fill(fill("f1", BUY, 100.0, 1.0))
     basis = tracker.observe_fill(fill("f2", BUY, 200.0, 3.0))
     assert basis.quantity == 4.0
@@ -90,7 +95,7 @@ def test_the_average_is_weighted_by_quantity_not_by_fill_count():
 
 
 def test_a_repeated_fill_id_does_not_move_the_basis():
-    tracker = CostBasisTracker()
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
     tracker.observe_fill(fill("f1", BUY, 100.0, 1.0))
     basis = tracker.observe_fill(fill("f1", BUY, 100.0, 1.0))
     assert basis.quantity == 1.0
@@ -98,7 +103,7 @@ def test_a_repeated_fill_id_does_not_move_the_basis():
 
 
 def test_a_partial_close_leaves_the_oldest_lots_consumed_first():
-    tracker = CostBasisTracker()
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
     tracker.observe_fill(fill("f1", BUY, 100.0, 1.0))
     tracker.observe_fill(fill("f2", BUY, 200.0, 1.0))
     basis = tracker.observe_fill(fill("f3", SELL, 300.0, 1.0))
@@ -109,7 +114,7 @@ def test_a_partial_close_leaves_the_oldest_lots_consumed_first():
 
 def test_a_fill_through_flat_opens_the_other_side_at_its_own_price():
     """A long of 1 hit by a sell of 3 is a short of 2 at the sell price."""
-    tracker = CostBasisTracker()
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
     tracker.observe_fill(fill("f1", BUY, 100.0, 1.0))
     basis = tracker.observe_fill(fill("f2", SELL, 300.0, 3.0))
     assert basis.direction == SHORT
@@ -171,14 +176,14 @@ def test_no_venue_report_is_unchecked_not_agreed():
 # ---- position-close-detector -------------------------------------------------
 
 def test_a_partial_close_is_not_a_closed_trade():
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 2.0))
     assert detector.observe_fill(fill("f2", SELL, 150.0, 1.0)) is None
     assert detector.standing.partial_closes == 1
 
 
 def test_reaching_flat_emits_the_round_trip():
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 2.0, at=1))
     detector.observe_fill(fill("f2", SELL, 150.0, 1.0, at=2))
     trade = detector.observe_fill(fill("f3", SELL, 150.0, 1.0, at=3))
@@ -195,7 +200,7 @@ def test_a_round_trip_closed_in_slices_reaches_flat_and_emits_its_trade():
     `total_quantity` stayed above zero, and no closed trade was ever emitted. The
     position stayed open forever and the round trip could never be scored.
     """
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     assert detector.observe_fill(fill("f2", SELL, 110.0, 0.99, at=2)) is None
     trade = detector.observe_fill(fill("f3", SELL, 110.0, 0.01, at=3))
@@ -206,7 +211,7 @@ def test_a_round_trip_closed_in_slices_reaches_flat_and_emits_its_trade():
 
 
 def test_a_position_dribbled_out_in_ten_slices_still_closes():
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     trade = None
     for index in range(10):
@@ -226,7 +231,7 @@ def test_exits_mirroring_ragged_entry_fills_cancel_exactly():
     the reason `Fill.quantity` can stay a float while the book counts exactly.
     """
     ragged = [0.3, 0.3, 0.3, 0.07, 0.03]
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     for index, size in enumerate(ragged):
         detector.observe_fill(fill(f"in{index}", BUY, 100.0, size, at=1 + index))
     trade = None
@@ -238,7 +243,7 @@ def test_exits_mirroring_ragged_entry_fills_cancel_exactly():
 
 
 def test_a_cost_basis_returns_to_flat_when_a_position_is_closed_in_slices():
-    tracker = CostBasisTracker()
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
     tracker.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     tracker.observe_fill(fill("f2", SELL, 110.0, 0.99, at=2))
     tracker.observe_fill(fill("f3", SELL, 110.0, 0.01, at=3))
@@ -254,11 +259,11 @@ def test_the_round_trip_is_priced_by_what_it_entered_not_by_its_last_slice():
     profit was divided by whatever fraction happened to close last. A trade sold
     0.9 then 0.1 reported an entry the market never printed.
     """
-    whole = PositionCloseDetector()
+    whole = PositionCloseDetector(QUANTITY_INCREMENT)
     whole.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     in_one = whole.observe_fill(fill("f2", SELL, 110.0, 1.0, at=2))
 
-    sliced = PositionCloseDetector()
+    sliced = PositionCloseDetector(QUANTITY_INCREMENT)
     sliced.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     sliced.observe_fill(fill("f2", SELL, 110.0, 0.9, at=2))
     in_two = sliced.observe_fill(fill("f3", SELL, 110.0, 0.1, at=3))
@@ -271,7 +276,7 @@ def test_the_round_trip_is_priced_by_what_it_entered_not_by_its_last_slice():
 
 def test_the_entry_price_is_weighted_across_every_opening_fill():
     """Bought 1 at 90 and 1 at 110: the round trip entered at 100, not at either."""
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 90.0, 1.0, at=1))
     detector.observe_fill(fill("f2", BUY, 110.0, 1.0, at=2))
     trade = detector.observe_fill(fill("f3", SELL, 105.0, 2.0, at=3))
@@ -281,7 +286,7 @@ def test_the_entry_price_is_weighted_across_every_opening_fill():
 
 def test_a_reversal_prices_the_new_round_trip_from_its_own_entry():
     """The side opened by a reversal entered at the reversing fill's price."""
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     first = detector.observe_fill(fill("f2", SELL, 120.0, 3.0, at=2))
     second = detector.observe_fill(fill("f3", BUY, 110.0, 2.0, at=3))
@@ -293,7 +298,7 @@ def test_a_reversal_prices_the_new_round_trip_from_its_own_entry():
 
 def test_the_reported_entry_and_exit_reproduce_the_realised_profit():
     """A closed trade's four numbers must agree with each other."""
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 2.0, at=1))
     detector.observe_fill(fill("f2", SELL, 130.0, 1.5, at=2))
     trade = detector.observe_fill(fill("f3", SELL, 130.0, 0.5, at=3))
@@ -303,7 +308,7 @@ def test_the_reported_entry_and_exit_reproduce_the_realised_profit():
 
 def test_closing_fills_match_the_oldest_lots_first():
     """Bought at 100 then 200, sold once at 150: the 100 lot is what closed."""
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
     detector.observe_fill(fill("f2", BUY, 200.0, 1.0))
     assert detector.observe_fill(fill("f3", SELL, 150.0, 1.0)) is None
@@ -313,7 +318,7 @@ def test_closing_fills_match_the_oldest_lots_first():
 
 
 def test_a_reversal_closes_one_trade_and_opens_another():
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
     trade = detector.observe_fill(fill("f2", SELL, 120.0, 3.0))
     assert trade.realised_pnl == pytest.approx(20.0)
@@ -325,7 +330,7 @@ def test_a_reversal_closes_one_trade_and_opens_another():
 
 
 def test_a_closed_trade_carries_its_excursion():
-    detector = PositionCloseDetector()
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
     detector.observe_excursion(VENUE, SYMBOL, best=75.0, worst=-10.0)
     detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
     trade = detector.observe_fill(fill("f2", SELL, 110.0, 1.0))
@@ -1072,3 +1077,209 @@ def test_a_reconciler_that_has_never_checkpointed_says_so(durable_tmp_path):
 
     assert cold.standing.checkpoint_verdict, "a cold start recorded no verdict"
     assert cold.standing.restored_symbols == 0
+
+
+# The residue that held 13 round trips open -- against the numbers it actually
+# left behind. Read off the live checkpoint on 2026-08-28
+# (position-close-detector.positions.json), so these are fills the system
+# really took rather than quantities invented to make a bound look necessary.
+
+
+def test_a_close_a_hair_short_of_the_book_still_ends_the_round_trip():
+    """The shape of `binance-usdm|BTCUSDT`: 0.02 in, a fraction less out.
+
+    Before the bound, a remainder of 2.99262E-18 held that position open for
+    three days against a recorded cost of 1,577 USDT. What is left here is
+    1E-6 -- a thousandth of one quantity step, and still unsellable.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    assert detector.observe_fill(fill("in", BUY, 78848.37, 0.02)) is None
+    trade = detector.observe_fill(fill("out", SELL, 79510.5, 0.019999, at=2))
+    assert trade is not None
+    assert trade.quantity == pytest.approx(0.02)
+    assert detector.standing.residues_absorbed_into_the_close == 1
+    assert detector.standing.open_symbols == 0
+
+
+def test_a_close_leaving_more_than_a_step_is_still_only_a_partial_close():
+    """The bound must not end a round trip that is still genuinely held."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("in", BUY, 78848.37, 0.02))
+    assert detector.observe_fill(fill("out", SELL, 79510.5, 0.017, at=2)) is None
+    assert detector.standing.partial_closes == 1
+    assert detector.standing.residues_absorbed_into_the_close == 0
+    assert detector.standing.open_symbols == 1
+
+
+def test_a_dust_lot_left_by_an_older_build_does_not_hold_the_next_trip_open():
+    """How the 13 actually formed: an overshoot became a lot, then outlived a close.
+
+    `binance-usdm|BTCUSDT` carried `entered_quantity` of
+    0.01999999999999999999262 -- twenty-three significant digits, which no single
+    float fill can state. It is a sum: a real 0.02 alongside a 2.99262E-18 lot an
+    earlier reversal had opened. The real close took the real quantity and the
+    dust lot stayed. With the overshoot refused at the source, there is no dust
+    lot to outlive anything.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("open", BUY, 78816.5, 0.5))
+    detector.observe_fill(fill("through-flat", SELL, 78816.5, 0.5000004, at=2))
+    assert detector.standing.open_symbols == 0
+    detector.observe_fill(fill("next-in", BUY, 78848.37, 0.02, at=3))
+    trade = detector.observe_fill(fill("next-out", SELL, 79510.5, 0.02, at=4))
+    assert trade is not None
+    assert trade.quantity == pytest.approx(0.02)
+    assert detector.standing.open_symbols == 0
+
+
+def test_a_reversal_overshooting_by_less_than_a_step_opens_nothing():
+    """`binance-usdm|BTCUSDC` was opened by an overshoot of 4E-18 and never closed.
+
+    A position of 4E-18 BTC cannot be sold by any order the sizer can snap, so
+    it is not a position -- it is the same remainder arriving from the far side.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("in", BUY, 78816.5, 0.5))
+    trade = detector.observe_fill(fill("out", SELL, 78816.5, 0.5000004, at=2))
+    assert trade is not None
+    assert detector.standing.reversal_overshoots_too_small_to_open == 1
+    assert detector.standing.reversals == 0
+    assert detector.standing.open_symbols == 0
+
+
+def test_a_reversal_larger_than_a_step_still_opens_the_other_side():
+    """The bound must not swallow a real reversal, which is what it would cost."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("in", BUY, 100.0, 1.0))
+    trade = detector.observe_fill(fill("out", SELL, 110.0, 3.0, at=2))
+    assert trade is not None
+    assert detector.standing.reversals == 1
+    assert detector.standing.open_symbols == 1
+
+
+def test_a_residue_restored_from_an_older_checkpoint_closes_and_is_published():
+    """The 13 ghosts. Reconstructed from what was recorded, not from a price now.
+
+    The exit is backed out of the entry, the quantity and the realised profit --
+    the three fields the checkpoint already carried -- so the round trip that
+    reaches the scorers is the one that actually happened.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    restored = detector.restore_from_checkpoint(
+        {
+            "books": {
+                "binance-usdm|BTCUSDT": [
+                    {"quantity": "2.99262E-18", "price": 78848.37479931863,
+                     "opened_at_ns": 1787667948675880566, "fee": 0.0}
+                ]
+            },
+            "direction": {"binance-usdm|BTCUSDT": LONG},
+            "realised": {"binance-usdm|BTCUSDT": -1.7284959863728204},
+            "fees": {"binance-usdm|BTCUSDT": 1.7337135727925046},
+            "entered_quantity": {"binance-usdm|BTCUSDT": "0.02"},
+            "entry_cost": {"binance-usdm|BTCUSDT": 1576.9674959863726},
+            "opened_at": {"binance-usdm|BTCUSDT": 1787667948675880566},
+            "excursion": {"binance-usdm|BTCUSDT": [0.6308022904596289, -1.6955977095403933]},
+        }
+    )
+    assert restored == 0
+    assert detector.standing.residues_closed_at_restore == 1
+
+    recovered = detector.take_trades_recovered_at_restore()
+    assert len(recovered) == 1
+    trade = recovered[0]
+    assert trade.symbol == "BTCUSDT"
+    assert trade.quantity == pytest.approx(0.02)
+    assert trade.entry_price == pytest.approx(78848.37479931863)
+    # The stated entry and exit reproduce the realised profit that was recorded.
+    assert (trade.exit_price - trade.entry_price) * trade.quantity == pytest.approx(
+        -1.7284959863728204
+    )
+    assert trade.best_unrealised == pytest.approx(0.6308022904596289)
+    # Drained once: a second tick must not publish the same round trip again.
+    assert detector.take_trades_recovered_at_restore() == ()
+
+
+def test_a_real_position_restored_from_a_checkpoint_is_not_closed_as_a_residue():
+    """`binance-usdm|STORJUSDT` held 21,810.25 units. It must come back open."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    restored = detector.restore_from_checkpoint(
+        {
+            "books": {
+                "binance-usdm|STORJUSDT": [
+                    {"quantity": "21810.25", "price": 0.0458,
+                     "opened_at_ns": 1787739774000000000, "fee": 0.4}
+                ]
+            },
+            "direction": {"binance-usdm|STORJUSDT": LONG},
+            "entered_quantity": {"binance-usdm|STORJUSDT": "21810.25"},
+            "entry_cost": {"binance-usdm|STORJUSDT": 999.1},
+        }
+    )
+    assert restored == 1
+    assert detector.standing.residues_closed_at_restore == 0
+    assert detector.take_trades_recovered_at_restore() == ()
+
+
+def test_a_cost_basis_releases_its_side_when_only_a_residue_is_left():
+    """The same remainder kept `cost-basis` publishing a side that was closed."""
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
+    tracker.observe_fill(fill("in", BUY, 78848.37, 0.02))
+    basis = tracker.observe_fill(fill("out", SELL, 79510.5, 0.019999, at=2))
+    assert basis.direction == FLAT
+    assert basis.quantity == 0
+    assert tracker.standing.residues_released_with_the_side == 1
+
+
+def test_the_leverage_a_position_was_opened_at_is_carried_on_its_checkpoint():
+    """What a position ties up is its notional over its leverage, so both travel.
+
+    Weighted by notional across the entering fills rather than taken from the
+    last one: a position built at 10x and then added to at 2x commits neither.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("a", BUY, 100.0, 10.0, leverage=10.0))
+    detector.observe_fill(fill("b", BUY, 100.0, 10.0, at=2, leverage=2.0))
+    state = detector.read_checkpoint_state()
+    key = "binance-usdm|BTCUSDT"
+    # 1,000 of notional at 10x commits 100; 1,000 at 2x commits 500.
+    assert state["notional_at_leverage"][key] == pytest.approx(600.0)
+    assert state["entry_cost"][key] == pytest.approx(2000.0)
+
+
+def test_a_checkpoint_written_before_leverage_was_recorded_restores_as_unknown():
+    """Unlevered and unknown are different claims; the second must stay unknown."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.restore_from_checkpoint(
+        {
+            "books": {"binance-usdm|BTCUSDT": [
+                {"quantity": "1.0", "price": 100.0, "opened_at_ns": 1, "fee": 0.0}
+            ]},
+            "direction": {"binance-usdm|BTCUSDT": LONG},
+            "entered_quantity": {"binance-usdm|BTCUSDT": "1.0"},
+            "entry_cost": {"binance-usdm|BTCUSDT": 100.0},
+        }
+    )
+    assert detector.read_checkpoint_state()["notional_at_leverage"] == {}
+
+
+def test_a_cost_basis_restored_as_a_residue_is_released_without_waiting_for_a_fill():
+    """Nineteen books came back this way on 2026-08-28 and no fill was ever coming."""
+    tracker = CostBasisTracker(QUANTITY_INCREMENT)
+    restored = tracker.restore_from_checkpoint(
+        {
+            "books": {
+                "bybit-linear|WIFUSDT": [
+                    {"quantity": "1.21E-12", "price": 0.2087, "opened_at_ns": 1, "fee": 0.0}
+                ],
+                "binance-usdm|STORJUSDT": [
+                    {"quantity": "21810.25", "price": 0.0458, "opened_at_ns": 1, "fee": 0.4}
+                ],
+            },
+            "direction": {"bybit-linear|WIFUSDT": LONG, "binance-usdm|STORJUSDT": LONG},
+        }
+    )
+    assert restored == 1
+    assert tracker.standing.residues_released_with_the_side == 1
+    assert tracker.read("bybit-linear", "WIFUSDT").direction == FLAT
+    assert tracker.read("binance-usdm", "STORJUSDT").direction == LONG

@@ -40,7 +40,8 @@ from parts.paper_live_trading.paper_liquidation_simulator import (
     LIQUIDATED, NOT_WATCHED, SURVIVED, PaperLiquidationSimulator,
 )
 from parts.paper_live_trading.stop_order_manager import (
-    PLACE_NEW, REFUSED_NO_POSITION, REFUSED_WIDENING, REPLACE, StopOrderManager,
+    PLACE_NEW, REFUSED_NO_POSITION, REFUSED_WIDENING, REPLACE, RESIZE,
+    StopOrderManager,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trading_types import BUY, LONG, SELL, SHORT, Fill
@@ -1441,3 +1442,89 @@ def test_a_trail_does_not_ask_for_a_target_it_never_carried():
     manager = StopOrderManager()
     manager.apply_adjustment(VENUE, SYMBOL, LONG, 1.5, 98.0, Mode("paper"))
     assert manager.standing.refused_no_target == 0
+
+
+# ---- a stop is cut to the position it protects, not to the one it was proposed for
+
+# The step below which a stop and its position cannot be made to differ by any
+# order, matching the shipped `order_quantity_increment`.
+STOP_QUANTITY_INCREMENT = 0.001
+
+
+def test_a_position_that_grew_gets_its_stop_re_cut_to_the_whole_of_it():
+    """`binance-usdm|AKEUSDT`: 231,812 held, 198.634 behind the stop, board green.
+
+    The stop was placed for what was held when something upstream proposed it.
+    Every fill after that changed the position and proposed nothing.
+    """
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 198.634, 98.0, Mode("paper"))
+    action = manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=231812.256,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action is not None
+    assert action.action == RESIZE
+    assert action.quantity == pytest.approx(231812.256)
+    # The stop price is not this method's decision and must come across untouched.
+    assert action.stop_price == 98.0
+    assert manager.resting_stop(VENUE, SYMBOL) == 98.0
+    assert manager.resting_quantity(VENUE, SYMBOL) == pytest.approx(231812.256)
+    # Placed before cancelled, like every other replacement.
+    assert action.place_order_id and action.cancel_order_id
+
+
+def test_a_stop_that_already_fits_the_position_is_not_re_cut():
+    """Otherwise every fill churns an order that changes nothing."""
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 10.0, 98.0, Mode("paper"))
+    assert manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=10.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+    # Nor for a difference smaller than one tradeable step.
+    assert manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=10.0002,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+    assert manager.standing.resized_to_the_position == 0
+
+
+def test_nothing_is_re_cut_for_a_position_with_no_stop_resting():
+    """A resize places no new protection: an unprotected position stays unprotected
+    and is reported as such, rather than acquiring a stop nobody chose a price for."""
+    manager = StopOrderManager()
+    assert manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=5.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+
+
+def test_a_position_scaled_out_of_has_its_stop_cut_down_too():
+    """A stop for more than is held is a naked short the moment it fills."""
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 10.0, 98.0, Mode("paper"))
+    action = manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=4.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action.action == RESIZE
+    assert action.quantity == pytest.approx(4.0)
+    assert manager.resting_quantity(VENUE, SYMBOL) == pytest.approx(4.0)
+
+
+def test_a_short_position_has_its_stop_re_cut_too():
+    """`Position.quantity` is signed; an order's quantity is not.
+
+    A resize handed the signed number would read every short as having no
+    position to protect and would silently never re-cut one.
+    """
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, SHORT, 2.0, 102.0, Mode("paper"))
+    action = manager.resize_stop_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=SHORT, quantity=abs(-9.0),
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action.action == RESIZE
+    assert action.side == BUY
+    assert action.quantity == pytest.approx(9.0)

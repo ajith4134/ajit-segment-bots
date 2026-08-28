@@ -423,6 +423,47 @@ class LotBook:
         """Nothing held. An exact test, with no tolerance to get wrong."""
         return self.total_quantity == 0
 
+    def is_flat_within(self, quantity_increment) -> bool:
+        """Flat, counting a remainder no order could ever sell as flat.
+
+        `is_flat` above stays exact and is still the right test for the book
+        itself: zero is zero. But every order is snapped to the venue's quantity
+        step before it is sent, so a book holding less than one step cannot be
+        reduced by any order that could be placed. That is not a smaller
+        position -- it is an unsellable residue of a round trip that is already
+        over, and left open it never reaches zero, never emits a `closed-trade`
+        and can never be scored.
+
+        Measured on 2026-08-28: 13 of 19 "open positions" were exactly this.
+        `binance-usdm|BTCUSDT` held 2.99262E-18 of BTC against 0.02 entered and
+        a recorded cost of 1,577 USDT, and `bybit-linear|WIFUSDT` held 1.21E-12
+        against 19,168 entered. Between them they reported 19,862 USDT open
+        against a 10,000 allotment, which is what made the operator's capital
+        settings look ignored when the gate was in fact holding every trade to
+        99.99999996 of a 100 ceiling.
+
+        The bound is `order_quantity_increment` -- the same setting
+        `position-sizer` and `trade-capital-bounds-gate` snap every order to,
+        and the one `fill-reconciler` already reconciles against -- rather than
+        a tolerance invented here (RL-061). An increment of zero or less has
+        nothing to compare against and falls back to the exact test.
+        """
+        step = exact_quantity(quantity_increment)
+        if step <= 0:
+            return self.is_flat
+        return self.total_quantity < step
+
+    @property
+    def held_cost(self) -> float:
+        """What the lots still held cost to enter, at the prices they entered at.
+
+        Not the round trip's cumulative entry cost: a position scaled out of has
+        already returned part of that, and a board reporting the total as what is
+        currently at risk overstates it by whatever was sold. Float, because a
+        cost is a measurement of prices rather than a count of units.
+        """
+        return sum(float(lot.quantity) * lot.price for lot in self.lots)
+
     @property
     def average_price(self) -> float | None:
         """The weighted entry, as a float, because a price is measured not counted."""

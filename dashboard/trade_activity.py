@@ -106,16 +106,39 @@ def read_state_directory() -> pathlib.Path:
 
 
 def read_open_positions() -> tuple[list[dict], dict]:
-    """What the bot holds, from the checkpoint the closing part restores from."""
+    """What the bot holds, from the checkpoint the closing part restores from.
+
+    Everything a reader judges the position by is computed from **the lots still
+    held**, not from the round trip's running totals. The two are the same number
+    only for a position that has never been scaled out of, and on 2026-08-28 they
+    were not: `binance-usdm|AKEUSDT` had 410,652 units entered and 231,812 held,
+    so the cumulative entry cost overstated what was at risk by 44% and the
+    average entry it implied was an entry the remaining lots never paid.
+
+    The round trip's totals are still carried -- as `entered_capital` and
+    `entered_quantity` -- because what a position has cost so far is a real fact.
+    They are just not what "capital in" means for something still open.
+    """
     from runtime.lot_book_checkpoint import book_key_of
+    from runtime.trading_types import Lot, LotBook, exact_quantity
 
     try:
         from runtime.settings_reader import load_settings_document, settings_directory
 
         document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
         root = pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+        # The same bound `position-close-detector` decides flatness with. Read
+        # from settings rather than defaulted, so the board and the bot cannot
+        # disagree about what counts as holding nothing.
+        quantity_increment = float(document.read_value("order_quantity_increment"))
     except Exception as refusal:
-        return [], {"ok": False, "proof": f"settings refused position_state_root ({refusal})"}
+        return [], {
+            "ok": False,
+            "proof": (
+                f"settings refused position_state_root or order_quantity_increment "
+                f"({refusal})"
+            ),
+        }
 
     path = root / "position-close-detector.positions.json"
     if not path.exists():
@@ -146,15 +169,46 @@ def read_open_positions() -> tuple[list[dict], dict]:
     # rest. Zero and absent are different -- absent means this key was never
     # scaled out of -- so the key's presence is what decides, not the number.
     realised = state.get("realised") or {}
+    # Notional entered at each leverage. Absent on a checkpoint written before
+    # position-close-detector recorded it, and absent stays absent: unlevered and
+    # unknown are different claims and only one of them may render as a number.
+    notional_at_leverage = state.get("notional_at_leverage") or {}
 
     positions = []
+    residues_skipped = []
     for key, lots in sorted(books.items()):
         venue_id, symbol = book_key_of(key)
-        quantity = sum(float(lot["quantity"]) for lot in lots)
+        book = LotBook([
+            Lot(exact_quantity(lot["quantity"]), float(lot["price"]),
+                int(lot.get("opened_at_ns") or 0), float(lot.get("fee") or 0.0))
+            for lot in lots
+        ])
+        quantity = float(book.total_quantity)
         if quantity <= 0:
             continue
-        cost = float(entry_cost.get(key, 0.0))
+        # A book below one quantity step holds nothing any order could sell. It
+        # is not a small position and must not be shown as one: 13 such books
+        # reported 19,862 USDT open against a 10,000 allotment on 2026-08-28,
+        # each still carrying the full cost of a round trip that had ended.
+        if book.is_flat_within(quantity_increment):
+            residues_skipped.append(f"{symbol} ({quantity:.6g})")
+            continue
+        # What the lots still held cost, and what they averaged. Both from the
+        # book, so a position scaled out of reports what is still in it.
+        held_cost = book.held_cost
+        held_entry_price = book.average_price
+        entered_cost = float(entry_cost.get(key, 0.0))
         entered_quantity = float(entered.get(key, 0.0) or 0.0)
+        # The leverage this position was opened at, weighted by notional across
+        # its entering fills. `entry_cost / notional_at_leverage` inverts the sum
+        # the detector kept, because that sum is the notional divided by leverage
+        # fill by fill -- which is exactly what a blended multiplier means.
+        committed_when_entered = notional_at_leverage.get(key)
+        leverage = (
+            entered_cost / float(committed_when_entered)
+            if committed_when_entered and float(committed_when_entered) > 0
+            else None
+        )
         best, worst = (excursion.get(key) or [None, None])[:2]
         positions.append(
             {
@@ -162,11 +216,33 @@ def read_open_positions() -> tuple[list[dict], dict]:
                 "symbol": symbol,
                 "direction": direction.get(key),
                 "quantity": quantity,
-                "entry_price": cost / entered_quantity if entered_quantity else None,
-                "capital_in": cost,
+                "entry_price": held_entry_price,
+                # What is at risk now: the notional of the lots still held.
+                "capital_in": held_cost,
+                # And what that notional actually ties up, which is the number
+                # `maximum_capital_per_trade` bounds. NOT MEASURED, never 1x,
+                # when the checkpoint predates leverage being recorded.
+                "leverage": leverage,
+                "capital_committed": None if leverage is None else held_cost / leverage,
+                "leverage_proof": (
+                    f"weighted across this position's entering fills: "
+                    f"{entered_cost:,.2f} of notional committed "
+                    f"{float(committed_when_entered):,.2f}"
+                    if leverage is not None else
+                    f"{NOT_MEASURED}: this position was checkpointed before "
+                    f"position-close-detector recorded the leverage a fill was sized at"
+                ),
+                # The round trip so far, which is a different fact from what is
+                # held now and is kept rather than folded into it.
+                "entered_capital": entered_cost,
+                "entered_quantity": entered_quantity,
                 "fees_paid": float(fees.get(key, 0.0)),
                 "opened_at_ns": int(opened_at.get(key) or 0) or None,
-                "lots": len(lots),
+                "lots": len(book.lots),
+                "held_lots": [
+                    {"quantity": float(lot.quantity), "price": lot.price}
+                    for lot in book.lots
+                ],
                 "best_unrealised": best,
                 "worst_unrealised": worst,
                 "realised_so_far": (
@@ -175,11 +251,23 @@ def read_open_positions() -> tuple[list[dict], dict]:
             }
         )
 
+    residue_note = (
+        ""
+        if not residues_skipped
+        else (
+            f". {len(residues_skipped)} book(s) held less than one "
+            f"{quantity_increment:g}-unit order step and are not positions: "
+            + ", ".join(sorted(residues_skipped)[:6])
+            + ("…" if len(residues_skipped) > 6 else "")
+        )
+    )
     return positions, {
         "ok": True,
+        "residue_books_skipped": len(residues_skipped),
         "proof": (
             f"{path}, written {(time.time_ns() - int(document.get('saved_at_ns') or 0)) / 1e9:.0f}s "
             f"ago -- the same file position-close-detector restores from"
+            f"{residue_note}"
         ),
         "saved_at_ns": document.get("saved_at_ns"),
     }
@@ -397,7 +485,25 @@ def attach_resting_exits(positions: list[dict]) -> dict:
             continue
         position["stop_price"] = held.get("stop_price")
         position["target_price"] = held.get("target_price")
-        position["is_protected"] = True
+        # How much of the position the resting stop would actually close. A stop
+        # is not a yes-or-no fact: on 2026-08-28 `AKEUSDT` held 231,812 units
+        # with a stop resting for 198.634 -- 0.09% of it -- and the board painted
+        # that as protected. A partial stop is its own state, and it renders as
+        # the fraction rather than as a colour (Rule 8).
+        resting_quantity = held.get("quantity")
+        quantity = position.get("quantity") or 0.0
+        covered = (
+            None
+            if resting_quantity is None or quantity <= 0
+            else min(1.0, float(resting_quantity) / quantity)
+        )
+        position["stop_quantity"] = (
+            None if resting_quantity is None else float(resting_quantity)
+        )
+        position["stop_covers_fraction"] = covered
+        # Protected means the whole position is behind the stop. Anything less is
+        # partly unprotected and says by how much.
+        position["is_protected"] = covered is not None and covered >= 1.0
         entry = position.get("entry_price")
         stop = position.get("stop_price")
         # How far the stop sits from entry, which is what a reader actually judges
@@ -412,18 +518,35 @@ def attach_resting_exits(positions: list[dict]) -> dict:
                 if held.get("target_price") is not None
                 else ", no target"
             )
+            + (
+                ""
+                if covered is None or covered >= 1.0
+                else (
+                    f". It rests for {float(resting_quantity):,.6g} of "
+                    f"{quantity:,.6g} held -- {covered:.2%} of this position is "
+                    f"behind it and the rest is not"
+                )
+            )
         )
 
     protected = sum(1 for position in positions if position.get("is_protected"))
+    partly = sum(
+        1 for position in positions
+        if not position.get("is_protected")
+        and (position.get("stop_covers_fraction") or 0) > 0
+    )
     return {
         "ok": True,
         "protected": protected,
-        "unprotected": len(positions) - protected,
+        "partly_protected": partly,
+        "unprotected": len(positions) - protected - partly,
         "proof": (
             f"{path}, written "
             f"{(time.time_ns() - int(document.get('saved_at_ns') or 0)) / 1e9:.0f}s ago -- "
             f"the same file stop-order-manager restores from. "
-            f"{protected} of {len(positions)} open position(s) have a stop resting"
+            f"{protected} of {len(positions)} open position(s) are fully behind a "
+            f"stop, {partly} partly, "
+            f"{len(positions) - protected - partly} with none"
         ),
     }
 
@@ -460,14 +583,29 @@ def attach_live_prices(positions: list[dict]) -> None:
             continue
         price, read_at_ns = latest
         age_seconds = max(0.0, (time.time_ns() - read_at_ns) / 1e9)
-        entry = position.get("entry_price")
         is_short = position.get("direction") == "short"
-        moved = None
-        if entry:
-            moved = (entry - price) if is_short else (price - entry)
         position["price_now"] = price
         position["price_age_seconds"] = age_seconds
-        position["unrealised_pnl"] = None if moved is None else moved * position["quantity"]
+        # Marked lot by lot, against the price each lot actually entered at.
+        # Marking the whole position against one blended entry is only the same
+        # number while nothing has been sold: the blend includes lots that are
+        # gone, so on a position scaled out of it prices the remainder at an
+        # average the remainder never paid. `binance-usdm|AKEUSDT` held 231,812
+        # of 410,652 entered on 2026-08-28, and 44% of its entry basis belonged
+        # to lots the bot no longer owned.
+        lots = position.get("held_lots") or []
+        if not lots:
+            position["unrealised_pnl"] = None
+            position["price_proof"] = (
+                f"{NOT_MEASURED}: the checkpoint carries no lots for this position, "
+                f"so there is no entry price to mark against"
+            )
+            continue
+        position["unrealised_pnl"] = sum(
+            ((lot["price"] - price) if is_short else (price - lot["price"]))
+            * lot["quantity"]
+            for lot in lots
+        )
         position["price_proof"] = (
             f"tape, last print {age_seconds:.0f}s ago"
         )
@@ -670,6 +808,8 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     # costs nothing the price marking does and is the same answer either way.
     prediction_provenance = attach_learned_excursions(positions)
     exit_provenance = attach_resting_exits(positions)
+    for position in positions:
+        position.pop("held_lots", None)
     closed, closed_provenance = read_closed_trades()
     return {
         "generated_at_ns": time.time_ns(),
@@ -677,6 +817,16 @@ def build_trade_activity(with_prices: bool = True) -> dict:
             "positions": positions,
             "count": len(positions),
             "capital_in": sum(p["capital_in"] for p in positions),
+            # What those positions actually tie up, over only the ones whose
+            # leverage was recorded -- and how many that is, so a total over
+            # half the rows can never read as a total over all of them.
+            "capital_committed": sum(
+                p["capital_committed"] for p in positions
+                if p.get("capital_committed") is not None
+            ) if any(p.get("capital_committed") is not None for p in positions) else None,
+            "positions_with_a_known_leverage": sum(
+                1 for p in positions if p.get("leverage") is not None
+            ),
             "unrealised_pnl": sum(
                 p["unrealised_pnl"] for p in positions if p.get("unrealised_pnl") is not None
             ) if any(p.get("unrealised_pnl") is not None for p in positions) else None,

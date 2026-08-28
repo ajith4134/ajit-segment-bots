@@ -62,7 +62,27 @@ function OpenPositions({ open }) {
         <div className="trade-panel-figures mono">
           <span>{positions.length} held</span>
           <span className="sep">·</span>
-          <span>{open.capital_in?.toFixed(2)} USDT in</span>
+          {/* Notional and what it commits are two numbers, and only the second
+              is what `maximum_capital_per_trade` bounds. Showing the first alone
+              under the word "capital" made a 100 USDT ceiling read as breached
+              4.5x while the gate was holding every trade to 99.99999996. */}
+          <span>{open.capital_in?.toFixed(2)} USDT notional</span>
+          <span className="sep">·</span>
+          {open.capital_committed == null ? (
+            <span className="unmeasured">committed NOT MEASURED</span>
+          ) : (
+            <>
+              <span>{open.capital_committed.toFixed(2)} committed</span>
+              {open.positions_with_a_known_leverage !== positions.length && (
+                <>
+                  <span className="sep">·</span>
+                  <span className="unmeasured">
+                    over {open.positions_with_a_known_leverage} of {positions.length} rows
+                  </span>
+                </>
+              )}
+            </>
+          )}
           {unrealised !== null && (
             <>
               <span className="sep">·</span>
@@ -85,7 +105,9 @@ function OpenPositions({ open }) {
                 <th>symbol</th><th>venue</th><th>side</th>
                 <th className="n">quantity</th><th className="n">entry</th>
                 <th className="n">price now</th><th className="n">age</th>
-                <th className="n">capital in</th><th className="n">unrealised</th>
+                <th className="n">leverage</th>
+                <th className="n">notional</th><th className="n">committed</th>
+                <th className="n">unrealised</th>
                 <th className="n">peak / worst</th>
                 <th className="n">realised</th>
                 <th className="n">predicted up</th><th className="n">predicted down</th>
@@ -114,7 +136,35 @@ function OpenPositions({ open }) {
                     {p.price_age_seconds === null || p.price_age_seconds === undefined
                       ? '—' : `${p.price_age_seconds.toFixed(0)}s`}
                   </td>
-                  <td className="n mono">{p.capital_in?.toFixed(2)}</td>
+                  {/* The leverage this position was opened at, weighted across
+                      its entering fills. NOT MEASURED, never 1x, for a position
+                      checkpointed before position-close-detector recorded it:
+                      unlevered and unknown are different claims and only one of
+                      them may render as a number (Rule 8). */}
+                  <td className="n mono">
+                    {p.leverage === null || p.leverage === undefined
+                      ? <em className="unmeasured" title={p.leverage_proof}>not measured</em>
+                      : <span title={p.leverage_proof}>{p.leverage.toFixed(2)}×</span>}
+                  </td>
+                  {/* Notional is what is in the market; committed is what it ties
+                      up, which is notional over leverage and the number the
+                      operator's per-trade ceiling actually bounds. Both, because
+                      either one alone misleads about the other. */}
+                  <td className="n mono" title={
+                    p.entered_capital && p.entered_capital > p.capital_in
+                      ? `the lots still held. ${p.entered_capital.toFixed(2)} has been entered `
+                        + `across this round trip; the difference has already been sold back`
+                      : 'the lots still held'
+                  }>
+                    {p.capital_in?.toFixed(2)}
+                  </td>
+                  <td className="n mono">
+                    {p.capital_committed === null || p.capital_committed === undefined
+                      ? <em className="unmeasured" title={p.leverage_proof}>not measured</em>
+                      : <span title="notional over leverage -- what maximum_capital_per_trade bounds">
+                          {p.capital_committed.toFixed(2)}
+                        </span>}
+                  </td>
                   <td className="n mono"><Pnl value={p.unrealised_pnl} digits={3} /></td>
                   {/* Peak and worst in one cell, best/worst, because they are one
                       fact -- the range this position has travelled -- and reading
@@ -186,6 +236,16 @@ function OpenPositions({ open }) {
                           {p.stop_distance_fraction != null && (
                             <span className="faint"> ({(p.stop_distance_fraction * 100).toFixed(2)}%)</span>
                           )}
+                          {/* How much of the position is actually behind it. A
+                              stop is not a yes-or-no fact: AKEUSDT held 231,812
+                              with a stop resting for 198.634 on 2026-08-28 and
+                              this cell painted it protected. Shown only when it
+                              covers less than the whole, and loud when it does. */}
+                          {p.stop_covers_fraction != null && p.stop_covers_fraction < 1 && (
+                            <span className="unprotected">
+                              {' '}covers {(p.stop_covers_fraction * 100).toFixed(2)}%
+                            </span>
+                          )}
                         </span>}
                   </td>
                   <td className="n mono">
@@ -201,7 +261,7 @@ function OpenPositions({ open }) {
                       Rule 8 exists to prevent. NOT BUILT, not NOT MEASURED: this is a
                       fact about the system, not about this reading. */}
                   <td className="n mono">
-                    <em className="unmeasured" title="tail-trailing-exit-planner holds its trailing level in memory and publishes tail-exit-plan on the bus; nothing writes a per-position tailgating state to disk, so no board process can read one">not built</em>
+                    <em className="unmeasured" title="two facts, both true: tail-trailing-exit-planner holds its trailing level in memory and publishes tail-exit-plan on the bus, so nothing writes a per-position tailgating state any board process could read -- and on 2026-08-28 it had built no plans at all, because plans_requested was 0 and no follow-candidate has ever reached it. Neither is a gap in this reading.">not built</em>
                   </td>
                   <td className="n mono faint">{p.fees_paid?.toFixed(3)}</td>
                   <td className="n mono faint">

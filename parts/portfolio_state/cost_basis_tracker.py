@@ -60,6 +60,12 @@ class CostBasisStanding:
     duplicates_ignored: int = 0
     symbols_tracked: int = 0
     reversals: int = 0
+    # A closing fill that overshot by less than one quantity step. Not a
+    # reversal: no order could close the side it would have opened.
+    overshoots_too_small_to_reverse: int = 0
+    # Books whose last sellable unit was closed but which still held an
+    # arithmetic remainder. Released with the side rather than left holding it.
+    residues_released_with_the_side: int = 0
     restored_symbols: int = 0
     checkpoint_verdict: str = ""
 
@@ -75,7 +81,22 @@ class CostBasisTracker:
     is a short of 2 opened at the sell price, not a long at some blended figure.
     """
 
-    def __init__(self, now_ns=time.time_ns, remembered_fill_ids: int = 5000) -> None:
+    def __init__(
+        self,
+        quantity_increment: float,
+        now_ns=time.time_ns,
+        remembered_fill_ids: int = 5000,
+    ) -> None:
+        # The venue's quantity step, and with it the bound on what counts as
+        # holding nothing. `is_flat` alone left this part publishing a `cost-basis`
+        # of 4E-18 with the direction still set to the side that had already been
+        # closed -- see `LotBook.is_flat_within`.
+        if quantity_increment <= 0:
+            raise ValueError(
+                "a quantity increment of zero gives no bound on an unsellable "
+                "residue, and a basis that never reaches flat never releases its side"
+            )
+        self._quantity_increment = float(quantity_increment)
         self._now_ns = now_ns
         self._books: dict[tuple[str, str], LotBook] = {}
         self._direction: dict[tuple[str, str], str] = {}
@@ -105,8 +126,27 @@ class CostBasisTracker:
         self._seen_fills = RecentFillIds(
             self._remembered_fill_ids, state.get("seen_fills") or ()
         )
+        self._release_residues_left_by_an_older_build()
         self.standing.symbols_tracked = len(self._books)
         return len(self._books)
+
+    def _release_residues_left_by_an_older_build(self) -> None:
+        """Drop restored books holding less than one quantity step.
+
+        A residue is only noticed by `observe_fill` when another fill arrives for
+        that symbol, and for a symbol the bot has finished with none ever does.
+        On 2026-08-28 nineteen books came back this way -- all but three of them
+        unsellable remainders of round trips that had already closed -- and each
+        went on publishing a `cost-basis` naming a side that was no longer held.
+        """
+        for key in list(self._books):
+            book = self._books[key]
+            if not book.lots or not book.is_flat_within(self._quantity_increment):
+                continue
+            self.standing.residues_released_with_the_side += 1
+            self._books.pop(key, None)
+            self._direction[key] = FLAT
+            self._fees.pop(key, None)
 
     def observe_fill(self, fill) -> CostBasis:
         key = (fill.venue_id, fill.symbol)
@@ -132,14 +172,27 @@ class CostBasisTracker:
             book.add(Lot(filled, fill.price, fill.filled_at_ns, fill.fee))
             return self.read(fill.venue_id, fill.symbol)
 
+        step = exact_quantity(self._quantity_increment)
         remaining = filled - book.total_quantity
         book.take(min(filled, book.total_quantity))
+        # An overshoot below one quantity step is not a reversal: it is the
+        # arithmetic remainder between the venue's number and the book's, and no
+        # order could ever be placed to close the side it would open.
+        if remaining > 0 and remaining < step:
+            self.standing.overshoots_too_small_to_reverse += 1
+            remaining = exact_quantity(0)
         if remaining > 0:
             self.standing.reversals += 1
             self._direction[key] = fill_direction
             book.lots.clear()
             book.add(Lot(remaining, fill.price, fill.filled_at_ns, 0.0))
-        elif book.is_flat:
+        elif book.is_flat_within(step):
+            # Everything sellable is gone. The residue goes with the side it
+            # belonged to: leaving it behind kept the direction set to a side
+            # that was no longer held, and published a basis for it every tick.
+            if not book.is_flat:
+                self.standing.residues_released_with_the_side += 1
+                book.lots.clear()
             self._direction[key] = FLAT
         return self.read(fill.venue_id, fill.symbol)
 
@@ -171,6 +224,8 @@ def describe_cost_basis(tracker: CostBasisTracker) -> dict:
         "duplicates_ignored": tracker.standing.duplicates_ignored,
         "symbols_tracked": tracker.standing.symbols_tracked,
         "reversals": tracker.standing.reversals,
+        "overshoots_too_small_to_reverse": tracker.standing.overshoots_too_small_to_reverse,
+        "residues_released_with_the_side": tracker.standing.residues_released_with_the_side,
         "restored_symbols": tracker.standing.restored_symbols,
         # `countable_standing` carries numbers only, so the verdict travels as
         # one: 1 restored, 0 started cold. Which *kind* of cold stays in the
@@ -226,7 +281,8 @@ def start_part(context) -> int:
     publish_cost_basis = context.bus.publisher_for("cost-basis")
 
     tracker = CostBasisTracker(
-        remembered_fill_ids=int(context.number("remembered_fill_ids"))
+        quantity_increment=context.number("order_quantity_increment"),
+        remembered_fill_ids=int(context.number("remembered_fill_ids")),
     )
     write_checkpoint = restore_and_arm_lot_checkpoint(
         context, PART_ID, CHECKPOINT_COMPONENT, tracker

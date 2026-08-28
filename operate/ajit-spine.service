@@ -44,5 +44,17 @@ TimeoutStopSec=60
 # remains in the cgroup afterwards is killed at the timeout as before.
 KillMode=mixed
 
+# 327 parts, each with a control socket and a pipe pair the supervisor keeps its
+# end of, plus the bus, the tape and the journals. systemd's default soft limit
+# is 1024 and the supervisor reached 1020 of it on 2026-08-28: every restart
+# from then on failed with `OSError: [Errno 24] Too many open files`, the
+# heartbeat collector was among the parts that could not come back, and the
+# board went dark while the spine reported itself active. Nothing detected it,
+# because a supervisor that cannot start a part is not a supervisor that stopped.
+#
+# The hard limit on this box is 524,288; this asks for a fraction of it and
+# leaves headroom for every part running at once with its inputs open.
+LimitNOFILE=65536
+
 [Install]
 WantedBy=default.target

@@ -63,6 +63,9 @@ PART_DECLARATION = PartDeclaration(
 
 PLACE_NEW = "place-new-stop"
 REPLACE = "replace-existing-stop"
+# The stop stays where it is; only the quantity it closes moves, to match a
+# position that has grown or been scaled out of since it was placed.
+RESIZE = "resize-stop-to-the-position"
 # The other half of an exit. A position that can only close on its stop is a
 # position that can only lose: the plan that placed the stop named a target in
 # the same breath, and a target nobody places is a plan half carried out.
@@ -139,6 +142,11 @@ class ManagerStanding:
     exits_withdrawn: int = 0
     refused_no_target: int = 0
     refused_widening: int = 0
+    # Resting stops re-cut to the position they protect. A stop is placed for
+    # whatever was held when it was proposed, and nothing resized it afterwards:
+    # on 2026-08-28 `binance-usdm|AKEUSDT` held 231,812 units with a stop resting
+    # for 198.634 -- 0.09% of it -- and the board painted that position protected.
+    resized_to_the_position: int = 0
     refused_no_position: int = 0
     refused_no_mode: int = 0
     unprotected_windows: int = 0
@@ -387,6 +395,68 @@ class StopOrderManager:
             f"old one is cancelled, so the position is never briefly unprotected",
         )
 
+    def resize_stop_to_the_position(
+        self,
+        venue_id: str,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        money_mode,
+        quantity_increment: float,
+    ) -> StopOrderAction | None:
+        """Re-cut a resting stop to what the position now holds. None when it fits.
+
+        A stop is proposed for the quantity held at the moment something upstream
+        asked for one, and every later fill changes that quantity without
+        proposing anything. `apply_adjustment` cannot do this job: a position that
+        grew is protected by the same stop *price*, so the proposal that would
+        resize it is refused as a widening -- which is the right refusal about the
+        price and the wrong outcome for the quantity.
+
+        The stop price is carried across untouched. Nothing here decides where a
+        stop belongs; it decides only that whatever was decided applies to the
+        whole position. Below one quantity step the difference cannot be traded
+        anyway, so it is left alone rather than churning an order per fill.
+        """
+        key = (venue_id, symbol)
+        held = self._resting.get(key)
+        if held is None or not held.order_id:
+            return None
+        if quantity <= 0:
+            return None
+        if abs(quantity - held.quantity) < quantity_increment:
+            return None
+        if money_mode is None:
+            self.standing.refused_no_mode += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_MODE, "", None, None, "", quantity,
+                held.stop_price, held.stop_price,
+                "the money mode could not be read; a stop must not be guessed into a destination",
+            )
+        destination = LIVE_VENUE if money_mode.mode == "live" else PAPER_BOOK
+        side = SELL if direction == LONG else BUY
+        was = held.quantity
+        self._sequence += 1
+        new_order_id = f"stop-{venue_id}-{symbol}-{self._sequence}"
+        # Place first, cancel second, exactly as a replacement does: two stops
+        # briefly is recoverable, no stop briefly is not.
+        self._resting[key] = _RestingStop(
+            new_order_id, held.stop_price, quantity,
+            target_order_id=held.target_order_id, target_price=held.target_price,
+        )
+        self.standing.resized_to_the_position += 1
+        return self._action(
+            venue_id, symbol, RESIZE, destination, new_order_id, held.order_id,
+            side, quantity, held.stop_price, held.stop_price,
+            f"the position holds {quantity:,.6g} and the stop resting at "
+            f"{held.stop_price:g} closed {was:,.6g} of it; re-cut to the whole position",
+        )
+
+    def resting_quantity(self, venue_id: str, symbol: str) -> float | None:
+        """How much the resting stop would close, or None when none is resting."""
+        held = self._resting.get((venue_id, symbol))
+        return held.quantity if held else None
+
     def resting_stop(self, venue_id: str, symbol: str) -> float | None:
         held = self._resting.get((venue_id, symbol))
         return held.stop_price if held else None
@@ -417,6 +487,7 @@ def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
         "placed": manager.standing.placed,
         "replaced": manager.standing.replaced,
         "refused_widening": manager.standing.refused_widening,
+        "resized_to_the_position": manager.standing.resized_to_the_position,
         "refused_no_position": manager.standing.refused_no_position,
         "refused_no_mode": manager.standing.refused_no_mode,
         "stops_resting": manager.standing.stops_resting,
@@ -438,6 +509,8 @@ def run_stop_order_manager(
     tick_floor_seconds: float = 0.0,
     write_checkpoint=None,
     dropped=None,
+    read_positions_to_cut_stops_to=None,
+    quantity_increment: float = 0.0,
 ) -> int:
     """`read_flat_positions` names the positions that have gone flat this tick.
 
@@ -457,6 +530,21 @@ def run_stop_order_manager(
     """
     def tick() -> None:
         actions = []
+        # Before anything proposed this tick: a stop resting for less than the
+        # position is a stop protecting part of it, and nothing upstream will ever
+        # say so -- a fill changes the quantity without proposing a stop price,
+        # and a proposal at the unchanged price is refused as a widening.
+        if read_positions_to_cut_stops_to is not None:
+            for venue_id, symbol, direction, quantity, mode in (
+                read_positions_to_cut_stops_to()
+            ):
+                resize = manager.resize_stop_to_the_position(
+                    venue_id=venue_id, symbol=symbol, direction=direction,
+                    quantity=quantity, money_mode=mode,
+                    quantity_increment=quantity_increment,
+                )
+                if resize is not None:
+                    actions.append(resize)
         for adjustment in read_adjustments():
             target_price = adjustment.pop("target_price", None)
             actions.append(manager.apply_adjustment(**adjustment))
@@ -479,7 +567,14 @@ def run_stop_order_manager(
         actionable = tuple(action for action in actions if action.is_actionable)
         publish_orders(actionable)
         if actionable and write_checkpoint is not None:
-            write_checkpoint(manager.standing.placed + manager.standing.exits_withdrawn)
+            # Resizes count too. They change which order id is resting and for how
+            # much, and a checkpoint that ignored them would restore a stop the
+            # venue no longer holds and a quantity the position no longer is.
+            write_checkpoint(
+                manager.standing.placed
+                + manager.standing.exits_withdrawn
+                + manager.standing.resized_to_the_position
+            )
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -622,6 +717,9 @@ def start_part(context) -> int:
     # stream and the manager's job starts once it is known.
     gone_flat: list[tuple[str, str]] = []
     held_quantity: dict[tuple[str, str], float] = {}
+    # Which way each held position is held, beside how much of it. The resize
+    # pass needs both to know which side an exit order sits on.
+    held_direction: dict[tuple[str, str], str] = {}
     unreadable = {"count": 0, "last": None}
     # Adjustments read fine and deliberately not sent: a lock that decided to hold
     # the stop where it was. A different fact from one this part could not read,
@@ -651,8 +749,10 @@ def start_part(context) -> int:
                 if was_held:
                     gone_flat.append(key)
                 held_quantity.pop(key, None)
+                held_direction.pop(key, None)
             else:
                 held_quantity[key] = position.quantity
+                held_direction[key] = position.direction
 
         readable = []
         for adjustment in adjustments.payloads():
@@ -672,6 +772,30 @@ def start_part(context) -> int:
         closed = tuple(gone_flat)
         gone_flat.clear()
         return closed
+
+    def read_positions_to_cut_stops_to():
+        """Every held position, every tick -- not the ones seen to change.
+
+        The invariant is that a resting stop closes the whole position it
+        protects, and an invariant is checked, not triggered. A change-triggered
+        version resized on one sample and never looked again: on 2026-08-28 it
+        cut `binance-usdm|AKEUSDT`'s stop to 57,735.536 while the book held
+        177,120.635 and, having seen no further change, left it there. Checked
+        every tick, a wrong sample is corrected by the next right one.
+
+        This costs nothing when nothing is wrong: `resize_stop_to_the_position`
+        returns None for a position with no stop resting and for one already
+        within a quantity step of its stop, which is every position almost always.
+        """
+        mode = modes.value()
+        # `Position.quantity` is signed -- negative is short -- and an order's
+        # quantity is not. `read_adjustment` already takes the absolute value for
+        # the same reason; a resize that forgot to would refuse every short as
+        # having no position to protect.
+        return tuple(
+            (venue_id, symbol, held_direction.get((venue_id, symbol), ""), abs(quantity), mode)
+            for (venue_id, symbol), quantity in held_quantity.items()
+        )
 
     def publish_as_order_requests(actions) -> None:
         publish_orders(tuple(as_order_request(action) for action in actions))
@@ -714,6 +838,11 @@ def start_part(context) -> int:
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
         read_flat_positions=read_flat_positions,
+        read_positions_to_cut_stops_to=read_positions_to_cut_stops_to,
+        # The same step the sizer and the bounds gate snap every order to. Below
+        # one of these a stop and its position differ by an amount no order could
+        # correct, so re-cutting would churn an order per fill and change nothing.
+        quantity_increment=context.number("order_quantity_increment"),
         write_checkpoint=write_checkpoint,
         # Live views of the two local counters, so health reports what never
         # reached the manager rather than only what did.

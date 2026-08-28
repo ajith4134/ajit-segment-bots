@@ -197,7 +197,12 @@ def start_part(context) -> int:
 
     def read_candidates_and_weights(setup_filter):
         for weight in weights.payloads():
-            setup_filter.observe_setup_weight(weight)
+            # The payload, unpacked. Handing the whole `bull-setup-weight` in as the
+            # detector raised TypeError on the first weight either bot ever
+            # received and crash-looped the part -- 63 times on 2026-08-28
+            # before the spine ran out of file descriptors restarting it.
+            # `tail-mover-qualifier` unpacks the same shape and never did.
+            setup_filter.observe_setup_weight(weight.detector, weight.weight)
         return candidates.payloads()
 
     return run_bull_setup_filter(

@@ -40,6 +40,11 @@ def fill(fill_id, side, price, quantity, at=1, fee=0.55):
         price=price, quantity=quantity, fee=fee, filled_at_ns=at * SECOND,
     )
 
+# The venue quantity step these tests reason against, matching the shipped
+# `order_quantity_increment`. Stated rather than defaulted, because it is the
+# bound that decides when a round trip is over.
+QUANTITY_INCREMENT = 0.001
+
 
 def test_a_key_survives_the_round_trip_through_json():
     key = (VENUE, SYMBOL)
@@ -77,12 +82,12 @@ def test_a_half_closed_round_trip_finishes_in_the_next_process(durable_tmp_path)
     """
     store = DurableStateStore(durable_tmp_path)
 
-    before = PositionCloseDetector()
+    before = PositionCloseDetector(QUANTITY_INCREMENT)
     before.observe_fill(fill("f1", BUY, 2500.0, 1.0, at=1))
     before.observe_fill(fill("f2", SELL, 2510.0, 0.99, at=2))
     store.save("position-close-detector", "positions", before.read_checkpoint_state(), SETTINGS)
 
-    after = PositionCloseDetector()
+    after = PositionCloseDetector(QUANTITY_INCREMENT)
     restoration = store.restore("position-close-detector", "positions", SETTINGS)
     assert restoration.verdict == RESTORED
     assert after.restore_from_checkpoint(restoration.state) == 1
@@ -99,13 +104,13 @@ def test_a_half_closed_round_trip_finishes_in_the_next_process(durable_tmp_path)
 
 def test_a_restored_trade_keeps_the_excursion_it_went_through(durable_tmp_path):
     store = DurableStateStore(durable_tmp_path)
-    before = PositionCloseDetector()
+    before = PositionCloseDetector(QUANTITY_INCREMENT)
     before.observe_excursion(VENUE, SYMBOL, best=75.0, worst=-10.0)
     before.observe_fill(fill("f1", BUY, 100.0, 2.0, at=1))
     before.observe_fill(fill("f2", SELL, 110.0, 1.0, at=2))
     store.save("position-close-detector", "positions", before.read_checkpoint_state(), SETTINGS)
 
-    after = PositionCloseDetector()
+    after = PositionCloseDetector(QUANTITY_INCREMENT)
     after.restore_from_checkpoint(
         store.restore("position-close-detector", "positions", SETTINGS).state
     )
@@ -117,11 +122,11 @@ def test_a_restored_trade_keeps_the_excursion_it_went_through(durable_tmp_path):
 def test_a_fill_re_delivered_across_a_restart_is_not_counted_twice(durable_tmp_path):
     """Without this a venue's re-send after a restart opens a phantom position."""
     store = DurableStateStore(durable_tmp_path)
-    before = PositionCloseDetector()
+    before = PositionCloseDetector(QUANTITY_INCREMENT)
     before.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     store.save("position-close-detector", "positions", before.read_checkpoint_state(), SETTINGS)
 
-    after = PositionCloseDetector()
+    after = PositionCloseDetector(QUANTITY_INCREMENT)
     after.restore_from_checkpoint(
         store.restore("position-close-detector", "positions", SETTINGS).state
     )
@@ -133,7 +138,7 @@ def test_a_fill_re_delivered_across_a_restart_is_not_counted_twice(durable_tmp_p
 
 def test_the_oldest_fill_ids_fall_out_of_the_window_first(durable_tmp_path):
     """Bounded on purpose: the books are written every fill, so the set cannot grow."""
-    detector = PositionCloseDetector(remembered_fill_ids=3)
+    detector = PositionCloseDetector(QUANTITY_INCREMENT, remembered_fill_ids=3)
     for index in range(5):
         detector.observe_fill(fill(f"f{index}", BUY, 100.0, 1.0, at=1 + index))
     remembered = detector.read_checkpoint_state()["seen_fills"]
@@ -142,12 +147,12 @@ def test_the_oldest_fill_ids_fall_out_of_the_window_first(durable_tmp_path):
 
 def test_a_cost_basis_survives_a_restart(durable_tmp_path):
     store = DurableStateStore(durable_tmp_path)
-    before = CostBasisTracker()
+    before = CostBasisTracker(QUANTITY_INCREMENT)
     before.observe_fill(fill("f1", BUY, 90.0, 1.0, at=1))
     before.observe_fill(fill("f2", BUY, 110.0, 1.0, at=2))
     store.save("cost-basis-tracker", "lots", before.read_checkpoint_state(), SETTINGS)
 
-    after = CostBasisTracker()
+    after = CostBasisTracker(QUANTITY_INCREMENT)
     assert after.restore_from_checkpoint(
         store.restore("cost-basis-tracker", "lots", SETTINGS).state
     ) == 1
@@ -160,11 +165,11 @@ def test_a_cost_basis_survives_a_restart(durable_tmp_path):
 
 def test_a_restored_cost_basis_returns_to_flat_when_the_position_closes(durable_tmp_path):
     store = DurableStateStore(durable_tmp_path)
-    before = CostBasisTracker()
+    before = CostBasisTracker(QUANTITY_INCREMENT)
     before.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1))
     store.save("cost-basis-tracker", "lots", before.read_checkpoint_state(), SETTINGS)
 
-    after = CostBasisTracker()
+    after = CostBasisTracker(QUANTITY_INCREMENT)
     after.restore_from_checkpoint(store.restore("cost-basis-tracker", "lots", SETTINGS).state)
     after.observe_fill(fill("f2", SELL, 110.0, 0.99, at=2))
     after.observe_fill(fill("f3", SELL, 110.0, 0.01, at=3))
@@ -174,12 +179,12 @@ def test_a_restored_cost_basis_returns_to_flat_when_the_position_closes(durable_
 def test_a_narrowed_fill_window_is_applied_now_not_as_it_was_stored(durable_tmp_path):
     """An operator who narrows the window means it to apply to the restore too."""
     store = DurableStateStore(durable_tmp_path)
-    before = PositionCloseDetector(remembered_fill_ids=10)
+    before = PositionCloseDetector(QUANTITY_INCREMENT, remembered_fill_ids=10)
     for index in range(6):
         before.observe_fill(fill(f"f{index}", BUY, 100.0, 1.0, at=1 + index))
     store.save("position-close-detector", "positions", before.read_checkpoint_state(), SETTINGS)
 
-    after = PositionCloseDetector(remembered_fill_ids=2)
+    after = PositionCloseDetector(QUANTITY_INCREMENT, remembered_fill_ids=2)
     after.restore_from_checkpoint(
         store.restore("position-close-detector", "positions", SETTINGS).state
     )
@@ -188,10 +193,10 @@ def test_a_narrowed_fill_window_is_applied_now_not_as_it_was_stored(durable_tmp_
 
 def test_nothing_open_restores_as_nothing_open_rather_than_failing(durable_tmp_path):
     store = DurableStateStore(durable_tmp_path)
-    empty = PositionCloseDetector()
+    empty = PositionCloseDetector(QUANTITY_INCREMENT)
     store.save("position-close-detector", "positions", empty.read_checkpoint_state(), SETTINGS)
 
-    after = PositionCloseDetector()
+    after = PositionCloseDetector(QUANTITY_INCREMENT)
     assert after.restore_from_checkpoint(
         store.restore("position-close-detector", "positions", SETTINGS).state
     ) == 0
