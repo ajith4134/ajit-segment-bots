@@ -412,12 +412,39 @@ class TradeNarrative:
     written_at_ns: int
 
 
+# What a pair established about direction. Named here rather than in the decoder,
+# because a consumer that has to import a part to read its payload knows about the
+# circuit rather than about the data (T-4), and because a reader comparing against
+# its own spelling of these is a reader that silently never matches.
+LONG_SIDE_WON = "the-long-side-had-the-edge"
+SHORT_SIDE_WON = "the-short-side-had-the-edge"
+NO_DIRECTIONAL_EDGE = "neither-side-beat-the-cost-of-finding-out"
+NOT_SYMMETRIC = "the-legs-were-not-comparable"
+CLOSED_DIFFERENTLY = "the-legs-closed-for-different-reasons"
+
+PAIR_VERDICTS = (
+    LONG_SIDE_WON, SHORT_SIDE_WON, NO_DIRECTIONAL_EDGE, NOT_SYMMETRIC, CLOSED_DIFFERENTLY,
+)
+
+# Which side a verdict found for, or None where it found for neither. A verdict
+# that settled nothing has no winning side, and that is a different fact from a
+# verdict nobody has reached yet.
+WINNING_SIDE_OF = {LONG_SIDE_WON: "long", SHORT_SIDE_WON: "short"}
+
+
 @dataclass(frozen=True)
 class PairVerdict:
     """What an exploratory paired trade actually established (RL-005).
 
     A pair is run to learn something, so its verdict is about the question, not
     about the money. A pair that lost money and settled the question did its job.
+
+    It names the instrument it was run on. Both legs are the same instrument --
+    that is what makes the pair a comparison of direction rather than of two
+    symbols -- and without the name on the payload no consumer can tell which of
+    its positions this verdict is about. `tail-winner-selector` spent every tick
+    of 2026-08-28 unable to: 3,531,494 held positions examined and every one
+    rejected for having no verdict, while verdicts were being published.
     """
 
     pair_id: str
@@ -429,6 +456,15 @@ class PairVerdict:
     is_conclusive: bool
     reason: str
     decided_at_ns: int
+    venue_id: str | None = None
+    symbol: str | None = None
+
+    @property
+    def winning_side(self) -> str | None:
+        """"long", "short", or None where the pair settled on neither."""
+        if not self.is_conclusive:
+            return None
+        return WINNING_SIDE_OF.get(self.verdict)
 
 
 @dataclass(frozen=True)

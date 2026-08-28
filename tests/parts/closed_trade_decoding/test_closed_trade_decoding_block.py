@@ -24,7 +24,8 @@ from parts.closed_trade_decoding.exit_quality_scorer import (
     ExitQualityScorer, NEVER_WENT_FAVOURABLE, NO_EXCURSION, SCORED as EXIT_SCORED,
 )
 from parts.closed_trade_decoding.exploration_pair_decoder import (
-    CLOSED_DIFFERENTLY, ExplorationPairDecoder, INCOMPLETE as PAIR_INCOMPLETE,
+    CLOSED_DIFFERENTLY, DIFFERENT_INSTRUMENTS, ExplorationPairDecoder,
+    INCOMPLETE as PAIR_INCOMPLETE,
     LONG_SIDE_WON, NOT_SYMMETRIC, NO_DIRECTIONAL_EDGE,
 )
 from parts.closed_trade_decoding.holding_horizon_profiler import (
@@ -1019,6 +1020,69 @@ def test_an_incomplete_pair_is_not_decoded():
     subject = a_pair_decoder()
     subject.observe_leg("p-1", "long", a_closed_trade(), "target", 0, 1000.0)
     assert subject.decode("p-1").state == PAIR_INCOMPLETE
+
+
+def test_a_verdict_names_the_instrument_the_pair_was_run_on():
+    """Without it no consumer can match a verdict to one of its positions.
+
+    `tail-winner-selector` could not, for the whole of 2026-08-28: 3,531,494
+    held positions examined and every one rejected for having no verdict, while
+    verdicts were being published a few parts away.
+    """
+    subject = a_pair_decoder(cost=0.0001)
+    _pair(subject, long_realised=20.0, short_realised=-20.0)
+    verdict = subject.decode("p-1").verdict
+    assert (verdict.venue_id, verdict.symbol) == ("binance-usdm", "BTCUSDT")
+    assert verdict.winning_side == "long"
+
+
+def test_a_verdict_nobody_reached_has_no_winning_side():
+    """Inconclusive and unresolved are different facts and must not both read as a side."""
+    subject = a_pair_decoder(cost=0.01)
+    _pair(subject, 1.0, 0.5)
+    assert subject.decode("p-1").verdict.winning_side is None
+
+
+def test_two_symbols_are_not_a_pair():
+    """The difference between two instruments measures the instruments."""
+    subject = a_pair_decoder()
+    subject.observe_leg("p-1", "long", a_closed_trade(realised=10.0), "target", 0, 1000.0)
+    subject.observe_leg(
+        "p-1", "short",
+        a_closed_trade(realised=-10.0, direction="short", symbol="ETHUSDT"),
+        "target", 0, 1000.0,
+    )
+    outcome = subject.decode("p-1")
+    assert outcome.state == DIFFERENT_INSTRUMENTS
+    assert outcome.verdict is None
+    assert subject.standing.refused_different_instruments == 1
+
+
+def test_the_verdict_this_decoder_publishes_is_the_one_the_tailgater_can_read():
+    """The defect no unit test on either side could see (2026-08-28).
+
+    `tail-winner-selector` declared its own class named `PairVerdict` with four
+    fields -- `venue_id`, `winning_symbol`, `losing_symbol`, `has_resolved` -- that
+    the published payload has never carried. Its tests built that class, so they
+    passed; the contract checkers followed the local annotation, so they passed;
+    and the first verdict to reach the part would have killed it with
+    AttributeError. Only feeding the real producer's output to the real consumer
+    catches that, so this test does exactly that and nothing else.
+    """
+    from parts.profit_tailgating_bot.tail_winner_selector import TailWinnerSelector
+
+    decoder = a_pair_decoder(cost=0.0001)
+    _pair(decoder, long_realised=20.0, short_realised=-20.0)
+    published = decoder.decode("p-1").verdict
+
+    selector = TailWinnerSelector(
+        maximum_retraced_fraction=0.3, maximum_symbol_share_of_book=0.25,
+        minimum_profit_fraction=0.005, default_setup_weight=1.0,
+    )
+    selector.observe_pair_verdict(published)
+
+    assert selector.standing.verdicts_without_an_instrument == 0
+    assert ("binance-usdm", "BTCUSDT") in selector._verdicts
 
 
 # ---- trade-episode-encoder --------------------------------------------------

@@ -30,6 +30,12 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import FROM_OUR_OWN_WINNER, LONG, SHORT, FollowCandidate
+# The verdict shape as `exploration-pair-decoder` publishes it. It was declared a
+# second time in this file until 2026-08-28, with four fields the wire payload has
+# never carried -- so the reads below type-checked against a class nobody sends,
+# the tests built that class and passed, and the first real verdict to arrive
+# would have killed this part with AttributeError.
+from runtime.trade_decoding_types import PairVerdict
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -47,22 +53,12 @@ PART_DECLARATION = PartDeclaration(
 
 SELECTED = "selected"
 NO_VERDICT = "the-pair-experiment-has-not-resolved"
-NOT_THE_WINNING_LEG = "this-is-not-the-leg-that-won"
+NOT_THE_WINNING_SIDE = "this-position-is-on-the-side-the-pair-found-against"
+SETTLED_ON_NEITHER_SIDE = "the-pair-resolved-and-found-for-neither-side"
 NOT_IN_PROFIT = "the-leg-is-not-actually-ahead"
 GIVING_PROFIT_BACK = "price-has-retraced-from-its-peak"
 ALREADY_CONCENTRATED = "this-symbol-already-holds-too-much-of-the-book"
 NO_PEAK_RECORD = "no-peak-excursion-recorded-for-this-position"
-
-
-@dataclass(frozen=True)
-class PairVerdict:
-    """Which leg of an exploration pair won, once the experiment has resolved."""
-
-    venue_id: str
-    winning_symbol: str | None
-    losing_symbol: str | None
-    has_resolved: bool
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -90,6 +86,7 @@ class SelectorStanding:
     by_rejection: dict = field(default_factory=dict)
     largest_retracement_refused: float = 0.0
     concentration_refusals: int = 0
+    verdicts_without_an_instrument: int = 0
 
 
 class TailWinnerSelector:
@@ -125,9 +122,17 @@ class TailWinnerSelector:
         self.standing = SelectorStanding()
 
     def observe_pair_verdict(self, verdict: PairVerdict) -> None:
-        for symbol in (verdict.winning_symbol, verdict.losing_symbol):
-            if symbol is not None:
-                self._verdicts[(verdict.venue_id, symbol)] = verdict
+        """One verdict, filed under the instrument the pair was run on.
+
+        A pair is two directions on one instrument, so a verdict names one
+        instrument and one winning side -- never a winning symbol and a losing
+        one. A verdict that reached this part without naming its instrument
+        cannot be matched to a position and is counted rather than filed.
+        """
+        if verdict.venue_id is None or verdict.symbol is None:
+            self.standing.verdicts_without_an_instrument += 1
+            return
+        self._verdicts[(verdict.venue_id, verdict.symbol)] = verdict
 
     def observe_peak_excursion(self, peak: PeakExcursion) -> None:
         self._peaks[(peak.venue_id, peak.symbol)] = peak
@@ -151,11 +156,19 @@ class TailWinnerSelector:
         self.standing.positions_examined += 1
         key = (position.venue_id, position.symbol)
 
+        direction = LONG if position.quantity > 0 else SHORT
+
         verdict = self._verdicts.get(key)
-        if verdict is None or not verdict.has_resolved:
+        if verdict is None or not verdict.is_conclusive:
             return None, self._reject(NO_VERDICT)
-        if verdict.winning_symbol != position.symbol:
-            return None, self._reject(NOT_THE_WINNING_LEG)
+        # A pair that settled on neither side settled the question -- it found no
+        # directional edge -- and that is a reason not to add rather than a reason
+        # to wait. Kept apart from "no verdict yet" because the two say opposite
+        # things about whether more evidence is coming.
+        if verdict.winning_side is None:
+            return None, self._reject(SETTLED_ON_NEITHER_SIDE)
+        if verdict.winning_side != direction:
+            return None, self._reject(NOT_THE_WINNING_SIDE)
 
         peak = self._peaks.get(key)
         if peak is None:
@@ -175,7 +188,6 @@ class TailWinnerSelector:
             return None, self._reject(ALREADY_CONCENTRATED)
 
         self.standing.selected += 1
-        direction = LONG if position.quantity > 0 else SHORT
         return (
             FollowCandidate(
                 bot=BOT,
@@ -197,7 +209,8 @@ class TailWinnerSelector:
                     "pair_verdict": verdict.reason,
                 },
                 reason=(
-                    f"{position.symbol} is the winning leg of a resolved pair "
+                    f"{position.symbol} is held on the {verdict.winning_side} side, which "
+                    f"is the side a resolved pair found for "
                     f"({verdict.reason}), up {peak.current_fraction:.2%} against a peak of "
                     f"{peak.peak_fraction:.2%} -- {peak.retraced_fraction:.0%} given back, "
                     f"inside the {self._maximum_retraced:.0%} this bot will add through"
@@ -235,7 +248,8 @@ def describe_winner_selection(selector: TailWinnerSelector) -> dict:
         "rejected_by_reason": dict(selector.standing.by_rejection),
         "refused_for_concentration": selector.standing.concentration_refusals,
         "largest_retracement_refused": selector.standing.largest_retracement_refused,
-        "resolved_pairs_held": len(selector._verdicts),
+        "verdicts_held": len(selector._verdicts),
+        "verdicts_without_an_instrument": selector.standing.verdicts_without_an_instrument,
     }
 
 

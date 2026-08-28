@@ -30,7 +30,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.trade_decoding_types import PairVerdict
+from runtime.trade_decoding_types import (
+    CLOSED_DIFFERENTLY,
+    LONG_SIDE_WON,
+    NOT_SYMMETRIC,
+    NO_DIRECTIONAL_EDGE,
+    PairVerdict,
+    SHORT_SIDE_WON,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -45,12 +52,15 @@ PART_DECLARATION = PartDeclaration(
     skipped_tick_effect="delays",
 )
 
-LONG_SIDE_WON = "the-long-side-had-the-edge"
-SHORT_SIDE_WON = "the-short-side-had-the-edge"
-NO_DIRECTIONAL_EDGE = "neither-side-beat-the-cost-of-finding-out"
-NOT_SYMMETRIC = "the-legs-were-not-comparable"
-CLOSED_DIFFERENTLY = "the-legs-closed-for-different-reasons"
+# The five verdicts come from `runtime.trade_decoding_types`, where a consumer can
+# read them without importing this part (T-4). INCOMPLETE stays here: it is a state
+# of this decoder's own bookkeeping, never a verdict, and no verdict is published
+# carrying it.
 INCOMPLETE = "one-leg-is-still-open"
+
+# A pair is two directions on ONE instrument. Two symbols is not a pair, and the
+# difference between them would measure the symbols rather than the direction.
+DIFFERENT_INSTRUMENTS = "the-legs-were-not-the-same-instrument"
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,7 @@ class DecoderStanding:
     no_directional_edge: int = 0
     refused_not_symmetric: int = 0
     refused_closed_differently: int = 0
+    refused_different_instruments: int = 0
     incomplete: int = 0
     pairs_that_lost_money_and_settled_the_question: int = 0
 
@@ -134,6 +145,19 @@ class ExplorationPairDecoder:
 
         long_leg, short_leg = legs["long"], legs["short"]
 
+        instrument = self._instrument_of(long_leg, short_leg)
+        if instrument is None:
+            self.standing.refused_different_instruments += 1
+            return self._outcome(
+                pair_id, DIFFERENT_INSTRUMENTS, None,
+                f"the legs closed on "
+                f"{long_leg['trade'].venue_id}:{long_leg['trade'].symbol} and "
+                f"{short_leg['trade'].venue_id}:{short_leg['trade'].symbol}. A pair is "
+                f"two directions on one instrument; across two, the difference measures "
+                f"the instruments rather than the direction",
+            )
+        venue_id, symbol = instrument
+
         gap = abs(
             (long_leg["opened_at_ns"] or 0) - (short_leg["opened_at_ns"] or 0)
         ) / 1e9
@@ -151,7 +175,7 @@ class ExplorationPairDecoder:
             return self._outcome(
                 pair_id, NOT_SYMMETRIC,
                 self._verdict(
-                    pair_id, question, NOT_SYMMETRIC, None, None, None, False,
+                    venue_id, symbol, pair_id, question, NOT_SYMMETRIC, None, None, None, False,
                     f"the legs opened {gap:.1f}s apart"
                     + (
                         f" and differ in size by {size_mismatch:.0%}"
@@ -169,7 +193,7 @@ class ExplorationPairDecoder:
             return self._outcome(
                 pair_id, CLOSED_DIFFERENTLY,
                 self._verdict(
-                    pair_id, question, CLOSED_DIFFERENTLY,
+                    venue_id, symbol, pair_id, question, CLOSED_DIFFERENTLY,
                     long_leg["trade"].realised_pnl, short_leg["trade"].realised_pnl,
                     None, False,
                     f"one leg closed on {long_leg['exit_reason']} and the other on "
@@ -192,7 +216,7 @@ class ExplorationPairDecoder:
         if abs(difference) <= cost_of_finding_out:
             self.standing.no_directional_edge += 1
             verdict = self._verdict(
-                pair_id, question, NO_DIRECTIONAL_EDGE, long_realised, short_realised,
+                venue_id, symbol, pair_id, question, NO_DIRECTIONAL_EDGE, long_realised, short_realised,
                 difference, True,
                 f"the legs differ by {difference:+.4f} against {cost_of_finding_out:.4f} "
                 f"of cost to find out. Neither side had detectable edge, which is exactly "
@@ -203,7 +227,7 @@ class ExplorationPairDecoder:
             self.standing.conclusive += 1
             winner = LONG_SIDE_WON if difference > 0 else SHORT_SIDE_WON
             verdict = self._verdict(
-                pair_id, question, winner, long_realised, short_realised, difference,
+                venue_id, symbol, pair_id, question, winner, long_realised, short_realised, difference,
                 True,
                 f"the {'long' if difference > 0 else 'short'} side is ahead by "
                 f"{abs(difference):.4f}, clear of {cost_of_finding_out:.4f} in costs. This "
@@ -216,15 +240,21 @@ class ExplorationPairDecoder:
 
         return self._outcome(pair_id, verdict.verdict, verdict, verdict.reason)
 
+    def _instrument_of(self, long_leg, short_leg) -> tuple[str, str] | None:
+        """The one instrument both legs were run on, or None where they differ."""
+        long_key = (long_leg["trade"].venue_id, long_leg["trade"].symbol)
+        short_key = (short_leg["trade"].venue_id, short_leg["trade"].symbol)
+        return long_key if long_key == short_key else None
+
     def _verdict(
-        self, pair_id, question, verdict, long_realised, short_realised, difference,
-        is_conclusive, reason,
+        self, venue_id, symbol, pair_id, question, verdict, long_realised,
+        short_realised, difference, is_conclusive, reason,
     ) -> PairVerdict:
         return PairVerdict(
             pair_id=pair_id, question=question, verdict=verdict,
             long_realised=long_realised, short_realised=short_realised,
             difference=difference, is_conclusive=is_conclusive, reason=reason,
-            decided_at_ns=self._now_ns(),
+            decided_at_ns=self._now_ns(), venue_id=venue_id, symbol=symbol,
         )
 
     def _outcome(self, pair_id, state, verdict, reason) -> PairOutcome:
@@ -241,6 +271,7 @@ def describe_pair_decoding(decoder: ExplorationPairDecoder) -> dict:
         "conclusive": decoder.standing.conclusive,
         "no_directional_edge": decoder.standing.no_directional_edge,
         "refused_not_symmetric": decoder.standing.refused_not_symmetric,
+        "refused_different_instruments": decoder.standing.refused_different_instruments,
         "refused_closed_differently": decoder.standing.refused_closed_differently,
         "incomplete": decoder.standing.incomplete,
         "pairs_that_lost_money_and_settled_the_question": (

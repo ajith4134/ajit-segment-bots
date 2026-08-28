@@ -39,8 +39,12 @@ from parts.profit_tailgating_bot.tail_trailing_exit_planner import (
     describe_trailing,
 )
 from parts.profit_tailgating_bot.tail_winner_selector import (
-    ALREADY_CONCENTRATED, GIVING_PROFIT_BACK, NOT_IN_PROFIT, NOT_THE_WINNING_LEG,
-    NO_PEAK_RECORD, NO_VERDICT, PairVerdict, PeakExcursion, TailWinnerSelector,
+    ALREADY_CONCENTRATED, GIVING_PROFIT_BACK, NOT_IN_PROFIT, NOT_THE_WINNING_SIDE,
+    NO_PEAK_RECORD, NO_VERDICT, SETTLED_ON_NEITHER_SIDE, PeakExcursion,
+    TailWinnerSelector,
+)
+from runtime.trade_decoding_types import (
+    LONG_SIDE_WON, NO_DIRECTIONAL_EDGE, PairVerdict, SHORT_SIDE_WON,
 )
 from runtime.bot_opinion import (
     CROWDED, CROWDING_NOT_MEASURED, ENTER_NOW, ESTIMATES_AGREE, ESTIMATES_DISAGREE,
@@ -67,6 +71,7 @@ BLOCK_PARTS = {
 
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
+SECOND = 1_000_000_000
 DETECTOR = "momentum-burst-detector"
 # What the detector named above calibrates on, carried on the claim so the label
 # can be routed back to the estimator that made it. Six of the nine detectors key
@@ -256,10 +261,19 @@ def a_winner_selector(maximum_retraced=0.3, maximum_share=0.25, minimum_profit=0
     )
 
 
-def a_resolved_verdict(winner=SYMBOL, loser="ETHUSDT"):
+def a_resolved_verdict(verdict=LONG_SIDE_WON, symbol=SYMBOL, is_conclusive=True):
+    """A verdict in the shape `exploration-pair-decoder` actually publishes.
+
+    Built from the wire type on purpose. This file built a second class of the
+    same name, declared inside the part, until 2026-08-28: it carried
+    `winning_symbol`, `losing_symbol` and `has_resolved`, none of which are on
+    the payload, so every test here passed against a shape nobody sends.
+    """
     return PairVerdict(
-        venue_id=VENUE, winning_symbol=winner, losing_symbol=loser,
-        has_resolved=True, reason="the experiment resolved in favour of the winner",
+        pair_id="pair-1", question="does this setup have directional edge",
+        verdict=verdict, long_realised=12.0, short_realised=-4.0, difference=16.0,
+        is_conclusive=is_conclusive, reason="the long side is ahead, clear of costs",
+        decided_at_ns=SECOND, venue_id=VENUE, symbol=symbol,
     )
 
 
@@ -289,17 +303,29 @@ def test_the_winning_leg_of_a_resolved_pair_is_selected():
 def test_an_unresolved_experiment_is_not_a_winner():
     """Adding on unrealised profit before the verdict is adding on noise."""
     subject = a_winner_selector()
-    subject.observe_pair_verdict(
-        PairVerdict(venue_id=VENUE, winning_symbol=None, losing_symbol=None,
-                    has_resolved=False, reason="still running")
-    )
+    subject.observe_pair_verdict(a_resolved_verdict(is_conclusive=False))
     assert subject.select(PositionStub())[1] == NO_VERDICT
 
 
-def test_the_losing_leg_is_never_added_to():
+def test_a_pair_that_found_for_neither_side_is_not_waiting_for_more_evidence():
+    """Settled-on-neither is an answer; it must not read as "no verdict yet"."""
     subject = a_prepared_winner_selector()
-    subject.observe_pair_verdict(a_resolved_verdict(winner="ETHUSDT", loser=SYMBOL))
-    assert subject.select(PositionStub())[1] == NOT_THE_WINNING_LEG
+    subject.observe_pair_verdict(a_resolved_verdict(verdict=NO_DIRECTIONAL_EDGE))
+    assert subject.select(PositionStub())[1] == SETTLED_ON_NEITHER_SIDE
+
+
+def test_a_verdict_naming_no_instrument_cannot_be_filed_against_a_position():
+    subject = a_winner_selector()
+    subject.observe_pair_verdict(a_resolved_verdict(symbol=None))
+    assert subject.standing.verdicts_without_an_instrument == 1
+    assert subject.select(PositionStub())[1] == NO_VERDICT
+
+
+def test_the_losing_side_is_never_added_to():
+    """A pair is two directions on one instrument, so the loser is a side."""
+    subject = a_prepared_winner_selector()
+    subject.observe_pair_verdict(a_resolved_verdict(verdict=SHORT_SIDE_WON))
+    assert subject.select(PositionStub(quantity=1.0))[1] == NOT_THE_WINNING_SIDE
 
 
 def test_a_position_giving_profit_back_is_a_move_that_has_finished():
