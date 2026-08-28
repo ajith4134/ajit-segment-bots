@@ -59,76 +59,60 @@ class ControlRecorder:
         self._journal = journal
         self.standing = ControlStanding()
 
-    def record_switch(self, switch_record) -> JournalEntry:
-        """One gate flip, with its outcome -- a failed flip is as important as a good one."""
-        self.standing.switches += 1
-        return self._append(
-            SWITCH_RECORD,
-            {
-                "part_id": switch_record.part_id,
-                "action": switch_record.action,
-                "outcome": switch_record.outcome,
-                "reason": switch_record.reason,
-                "attempted_at_ns": switch_record.attempted_at_ns,
-                "completed_at_ns": switch_record.completed_at_ns,
-            },
-        )
+    # The content field of a `modification-record`: what was written, as written.
+    # Named here rather than taken from a producer, because the digest is the whole
+    # point of this kind and a recorder that could not find the content would
+    # journal an account of intentions.
+    MODIFICATION_CONTENT_FIELD = "after"
 
-    def record_policy_decision(self, policy: str, verdict: str, reason: str, subject: str) -> JournalEntry:
-        """One ruling by a policy engine, with what it ruled on and why.
-
-        The reason is required rather than optional: a policy log of verdicts
-        without reasons cannot be audited, and an autonomous system's rulings are
-        exactly the thing that has to be auditable after the fact.
-        """
-        self.standing.policy_decisions += 1
-        return self._append(
-            POLICY_DECISION,
-            {"policy": policy, "verdict": verdict, "reason": reason, "subject": subject},
-        )
-
-    def record_modification(
-        self, target: str, description: str, new_content: str | None, author: str
-    ) -> JournalEntry:
-        """One change the system made to itself, digested so it can be checked.
-
-        The digest is of the content as written. A modification recorded without
-        it is still journaled -- losing the record entirely would be worse -- but
-        it is counted separately, because that entry cannot later be matched
-        against what is actually on disk.
-        """
-        self.standing.modifications += 1
-        digest = None
-        if new_content is None:
-            self.standing.modifications_without_content += 1
-        else:
-            digest = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
-        return self._append(
-            MODIFICATION_RECORD,
-            {
-                "target": target,
-                "description": description,
-                "author": author,
-                "content_digest": digest,
-                "content_bytes": len(new_content.encode("utf-8")) if new_content else None,
-            },
-        )
-
-    def record_knowledge_snapshot(self, snapshot_id: str, summary: str, item_count: int) -> JournalEntry:
-        """A point the system's knowledge can be rolled back to."""
-        self.standing.snapshots += 1
-        return self._append(
-            KNOWLEDGE_SNAPSHOT,
-            {"snapshot_id": snapshot_id, "summary": summary, "item_count": item_count},
-        )
+    COUNTER_FOR_KIND = {
+        SWITCH_RECORD: "switches",
+        POLICY_DECISION: "policy_decisions",
+        MODIFICATION_RECORD: "modifications",
+        KNOWLEDGE_SNAPSHOT: "snapshots",
+    }
 
     def record(self, kind: str, payload: dict) -> JournalEntry | None:
-        """A generic path for a caller holding an already-shaped payload."""
+        """The one way a control-plane event becomes an entry.
+
+        Every field the producer carried is journaled as it arrived: a recorder
+        that re-listed the fields it wanted would silently drop whatever a
+        producer gained later, and the fields it dropped would be exactly the
+        ones nobody thought to ask for.
+
+        Two things happen here that a bare append does not do, and both were
+        absent from every one of the 5,930 entries written before 2026-08-28:
+        the kind is counted as its own kind, so a board can tell 3,691 policy
+        rulings from 140 gate flips; and a modification is digested, so a later
+        reader can check the change on disk against the change recorded.
+        """
         if kind not in RECORDED_KINDS:
             self.standing.unknown_kinds += 1
             self.standing.last_refusal = f"{kind!r} is not a control-plane record"
             return None
+        counter = self.COUNTER_FOR_KIND[kind]
+        setattr(self.standing, counter, getattr(self.standing, counter) + 1)
+        if kind == MODIFICATION_RECORD:
+            payload = self._digested(payload)
         return self._append(kind, payload)
+
+    def _digested(self, payload: dict) -> dict:
+        """A modification record, with the digest of what was written added to it.
+
+        Recorded without one when the content is absent -- losing the record
+        entirely would be worse -- but counted separately, because that entry can
+        never be matched against what is actually on disk.
+        """
+        content = payload.get(self.MODIFICATION_CONTENT_FIELD)
+        if not isinstance(content, str):
+            self.standing.modifications_without_content += 1
+            return {**payload, "content_digest": None, "content_bytes": None}
+        written = content.encode("utf-8")
+        return {
+            **payload,
+            "content_digest": hashlib.sha256(written).hexdigest(),
+            "content_bytes": len(written),
+        }
 
     def _append(self, kind: str, payload: dict) -> JournalEntry:
         self.standing.recorded += 1

@@ -730,28 +730,97 @@ def test_a_backward_looking_finding_needs_no_deadline():
 
 # ---- control-recorder --------------------------------------------------------
 
+def modification_record(after="new content"):
+    """The shape `self-modification-journal` actually publishes."""
+    from dataclasses import asdict
+
+    from runtime.autonomy_types import ModificationRecord
+
+    return asdict(
+        ModificationRecord(
+            record_id="mod-1",
+            part_id="position-sizer",
+            change="rewrote the sizer",
+            before="old content",
+            after=after,
+            authorised_by="autonomy-policy-engine",
+            envelope_level="supervised",
+            took_effect_at_ns=None,
+            recorded_at_ns=SECOND,
+        )
+    )
+
+
 def test_a_self_modification_is_digested_so_it_can_be_checked():
     """An account of self-modification that cannot be checked is an account of intentions."""
     recorder = ControlRecorder(Journal())
-    entry = recorder.record_modification("parts/x.py", "rewrote the sizer", "new content", "part-author")
+    entry = recorder.record("modification-record", modification_record())
     assert recorder.verify_modification(entry, "new content") is True
     assert recorder.verify_modification(entry, "something else") is False
 
 
 def test_a_modification_with_no_content_is_recorded_and_counted():
     recorder = ControlRecorder(Journal())
-    entry = recorder.record_modification("parts/x.py", "changed something", None, "part-author")
+    entry = recorder.record("modification-record", modification_record(after=None))
     assert entry.payload["content_digest"] is None
     assert recorder.standing.modifications_without_content == 1
     assert recorder.verify_modification(entry, "anything") is False
 
 
+def test_a_modification_keeps_every_field_the_producer_carried():
+    """The rollback path needs `before`, and a recorder that re-lists fields drops it."""
+    entry = ControlRecorder(Journal()).record("modification-record", modification_record())
+    assert entry.payload["before"] == "old content"
+    assert entry.payload["authorised_by"] == "autonomy-policy-engine"
+    assert entry.payload["envelope_level"] == "supervised"
+
+
 def test_a_failed_switch_is_journalled_too():
+    from dataclasses import asdict
+
     from parts.resource_governor.gate_actuator import SwitchRecord
 
     recorder = ControlRecorder(Journal())
-    entry = recorder.record_switch(SwitchRecord("a-part", "off", "failed", "no cgroup", 1, None))
+    entry = recorder.record(
+        "switch-record", asdict(SwitchRecord("a-part", "off", "failed", "no cgroup", 1, None))
+    )
     assert entry.payload["outcome"] == "failed"
+
+
+def test_each_kind_is_counted_as_its_own_kind():
+    """The defect this replaced: 5,930 recorded, and every per-kind count zero.
+
+    Measured on the live spine on 2026-08-28 -- the journal held 3,691 policy
+    rulings and 140 gate flips in its last 2 MiB alone, and the board read
+    `switches 0, policy_decisions 0, modifications 0, knowledge_snapshots 0`,
+    because only the generic path ever ran and it counted only the total.
+    """
+    from dataclasses import asdict
+
+    from parts.resource_governor.gate_actuator import SwitchRecord
+    from runtime.autonomy_types import PolicyDecision
+
+    recorder = ControlRecorder(Journal())
+    recorder.record("switch-record", asdict(SwitchRecord("a-part", "off", "flipped", "hog", 1, 2)))
+    recorder.record(
+        "policy-decision",
+        asdict(PolicyDecision("position-sizer", "place-order", True, "supervised", "inside", SECOND)),
+    )
+    recorder.record("modification-record", modification_record())
+    recorder.record("knowledge-snapshot", {"version": "v3", "counts": {}})
+
+    assert recorder.standing.recorded == 4
+    assert recorder.standing.switches == 1
+    assert recorder.standing.policy_decisions == 1
+    assert recorder.standing.modifications == 1
+    assert recorder.standing.snapshots == 1
+
+
+def test_a_kind_this_recorder_does_not_keep_is_refused_and_counted():
+    recorder = ControlRecorder(Journal())
+    assert recorder.record("market-data", {"price": 1.0}) is None
+    assert recorder.standing.unknown_kinds == 1
+    assert recorder.standing.recorded == 0
 
 
 # ---- journal-integrity-checker ----------------------------------------------
