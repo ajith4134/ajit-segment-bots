@@ -65,6 +65,11 @@ QUANTITY = 0.01
 TAKER_FEE_RATE = 0.0004
 MAKER_FEE_RATE = 0.0002
 
+# The venue quantity step, matching the shipped `order_quantity_increment`. It is
+# what `fill-reconciler` already reconciles against below, and what decides when
+# a book holds nothing an order could sell.
+QUANTITY_INCREMENT = 0.001
+
 
 class Mode:
     """What `money-mode-reader` publishes. Paper, and checked, never assumed."""
@@ -110,12 +115,12 @@ class TheClosingChain:
         self.book = PaperFillSimulator(
             taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE
         )
-        self.reconciler = FillReconciler(quantity_tolerance=0.001)
-        self.cost_basis = CostBasisTracker()
+        self.reconciler = FillReconciler(quantity_tolerance=QUANTITY_INCREMENT)
+        self.cost_basis = CostBasisTracker(QUANTITY_INCREMENT)
         self.excursions = PeakExcursionTracker()
         self.chainer = ExitOrderChainer()
         self.stops = StopOrderManager()
-        self.closes = PositionCloseDetector()
+        self.closes = PositionCloseDetector(QUANTITY_INCREMENT)
         self.accountant = UsdtPnlAccountant()
         self.closed_trades = []
         self.statements = []
