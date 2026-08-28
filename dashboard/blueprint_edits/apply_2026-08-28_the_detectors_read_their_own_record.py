@@ -81,7 +81,7 @@ if not changed:
     print("nothing to do; the registry already carries this edit")
     raise SystemExit(0)
 
-REGISTRY.write_text(json.dumps(registry, indent=2) + "\n")
+REGISTRY.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n")
 
 print(f"{THE_RECORD} added to the consumes of {len(changed)} part(s):")
 for part_id in changed:

@@ -22,7 +22,14 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import LONG, SHORT, UNWIND, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    LONG,
+    SHORT,
+    SignalCalibrator,
+    UNWIND,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -31,7 +38,7 @@ PART_ID = "funding-skew-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="funding-skew-detector",
-    consumes=("symbol-price-frame", "funding-forecast", "playbook-rule"),
+    consumes=("symbol-price-frame", "funding-forecast", "playbook-rule", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -115,8 +122,8 @@ class FundingSkewDetector:
             self._prices[key] = window
         window.observe(price, at_ns)
 
-    def observe_outcome(self, regime: str, unwound: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, regime, unwound)
+    def observe_outcome(self, calibration_key: str, unwound: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, unwound)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str, regime_name: str = "any") -> tuple[object | None, str]:
@@ -163,6 +170,7 @@ class FundingSkewDetector:
                 expectation=UNWIND,
                 signal_strength=abs(z),
                 confidence=confidence,
+                calibration_key=regime_name,
                 horizon_seconds=self._horizon,
                 evidence={
                     "funding_rate": rate,
@@ -233,6 +241,10 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     forecasts = Batch(read=context.bus.reader("funding-forecast"))
     rules = Batch(read=context.bus.reader("playbook-rule"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = FundingSkewDetector(
         window_length=int(context.number("detector_window_length")),
@@ -251,6 +263,12 @@ def start_part(context) -> int:
     )
 
     def read_funding(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         rules.payloads()
         touched = set()
         for forecast in forecasts.payloads():

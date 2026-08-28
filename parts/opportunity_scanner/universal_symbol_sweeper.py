@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import SignalCalibrator, make_candidate
+from runtime.market_signal import SignalCalibrator, make_candidate, settle_claims_from
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -43,8 +43,15 @@ TRADEABLE_GRADE = "tradeable"
 PART_DECLARATION = PartDeclaration(
     part_id="universal-symbol-sweeper",
     consumes=(
-        "symbol-price-frame", "symbol-universe", "watch-condition", "liquidity-grade",
-        "position", "cross-segment-signal", "venue-announcement", "consolidated-price",
+        "symbol-price-frame",
+        "symbol-universe",
+        "watch-condition",
+        "liquidity-grade",
+        "position",
+        "cross-segment-signal",
+        "venue-announcement",
+        "consolidated-price",
+        "training-label",
     ),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
@@ -188,6 +195,7 @@ class UniversalSymbolSweeper:
                         expectation=condition.expectation,
                         signal_strength=abs(value - condition.threshold),
                         confidence=confidence,
+                        calibration_key=condition.condition_id,
                         horizon_seconds=condition.horizon_seconds,
                         evidence={
                             "condition_id": condition.condition_id,
@@ -244,8 +252,8 @@ class UniversalSymbolSweeper:
         )
         return tuple(candidates), report
 
-    def observe_outcome(self, condition_id: str, was_right: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, condition_id, was_right)
+    def observe_outcome(self, calibration_key: str, was_right: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, was_right)
 
 
 def describe_sweeps(sweeper: UniversalSymbolSweeper) -> dict:
@@ -309,6 +317,10 @@ def start_part(context) -> int:
     signals = Batch(read=context.bus.reader("cross-segment-signal"))
     announcements = Batch(read=context.bus.reader("venue-announcement"))
     consolidated = LatestByKey(read=context.bus.reader("consolidated-price"), key_of=lambda p: p.symbol)
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     sweeper = UniversalSymbolSweeper(
         sweep_budget_seconds=context.number("sweep_budget"),
@@ -327,6 +339,12 @@ def start_part(context) -> int:
     last_sweep = [float("-inf")]
 
     def read_universe(_sweeper):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), sweeper, PART_ID)
         signals.payloads()
         announcements.payloads()
         for trade in levels_in(trades.payloads()):

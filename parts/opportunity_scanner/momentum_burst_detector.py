@@ -22,7 +22,13 @@ from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
 from runtime.market_signal import (
-    CONTINUATION, LONG, REVERSION, SHORT, SignalCalibrator, make_candidate,
+    CONTINUATION,
+    LONG,
+    REVERSION,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
 )
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -32,7 +38,7 @@ PART_ID = "momentum-burst-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="momentum-burst-detector",
-    consumes=("symbol-price-frame", "symbol-profile", "playbook-rule"),
+    consumes=("symbol-price-frame", "symbol-profile", "playbook-rule", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -142,8 +148,8 @@ class MomentumBurstDetector:
         window.observe((price - previous) / previous, at_ns)
         self.standing.symbols_tracked = len(self._returns)
 
-    def observe_outcome(self, regime: str, was_right: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, regime, was_right)
+    def observe_outcome(self, calibration_key: str, was_right: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, was_right)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str, regime) -> tuple[object | None, str]:
@@ -185,6 +191,7 @@ class MomentumBurstDetector:
                 expectation=expectation,
                 signal_strength=abs(z),
                 confidence=confidence,
+                calibration_key=regime.regime,
                 horizon_seconds=self._horizon,
                 evidence={
                     "return": latest,
@@ -257,6 +264,10 @@ def start_part(context) -> int:
     # what the symbol's profile records, and "unclassified" until one does.
     profiles = LatestByKey(read=context.bus.reader("symbol-profile"), key_of=lambda p: (p.venue_id, p.symbol))
     rules = Batch(read=context.bus.reader("playbook-rule"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = MomentumBurstDetector(
         window_length=int(context.number("detector_window_length")),
@@ -282,6 +293,12 @@ def start_part(context) -> int:
             self.is_classified = bool(regime)
 
     def read_prices_and_regimes(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         for rule in rules.payloads():
             # A playbook rule about a symbol's bursts says what to expect of them.
             expectation = getattr(rule, "then", None)

@@ -23,7 +23,14 @@ from runtime.price_frames import levels_in
 from runtime.quote_frames import quote_levels_in
 from runtime.reference_price import ReferencePriceChooser
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator, price_staleness_from
-from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    LONG,
+    REVERSION,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -32,7 +39,7 @@ PART_ID = "spread-reversion-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="spread-reversion-detector",
-    consumes=("cointegrated-pair", "symbol-price-frame", "symbol-quote-frame"),
+    consumes=("cointegrated-pair", "symbol-price-frame", "symbol-quote-frame", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -186,8 +193,8 @@ class SpreadReversionDetector:
         self.standing.untradeable_pairs_held = len(held) - len(tradeable)
         return tradeable
 
-    def observe_outcome(self, regime: str, reverted: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, regime, reverted)
+    def observe_outcome(self, calibration_key: str, reverted: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, reverted)
         self.standing.outcomes_learned += 1
 
     def detect(self, pair, regime_name: str = "any") -> tuple[object | None, str]:
@@ -295,6 +302,7 @@ class SpreadReversionDetector:
                 expectation=REVERSION,
                 signal_strength=abs(z),
                 confidence=confidence,
+                calibration_key=regime_name,
                 horizon_seconds=self._horizon,
                 evidence={
                     "long_symbol": legs.long_symbol,
@@ -403,6 +411,10 @@ def start_part(context) -> int:
         read=context.bus.reader("cointegrated-pair"),
         key_of=lambda pair: (pair.venue_id, pair.left_symbol, pair.right_symbol),
     )
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
 
     price_staleness = price_staleness_from(context)
@@ -433,6 +445,12 @@ def start_part(context) -> int:
     )
 
     def read_pairs(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         for trade in levels_in(trades.payloads()):
             detector.observe_price(
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns

@@ -358,6 +358,12 @@ def test_a_candidate_the_sweeper_raises_can_be_labelled(real_prices):
         horizon_seconds=600.0,
         evidence={"measurement": RETURN_OVER_WINDOW, "value": found[RETURN_OVER_WINDOW]},
         reason="a condition fired",
+        # What the sweeper itself keys on: the condition it fired, not the market
+        # regime. Three of the nine detectors calibrate on something other than
+        # the regime, which is why the key travels on the claim rather than being
+        # re-derived when the claim settles. Shaped like a real `condition_id`,
+        # which is `{instruction}:{measurement}:{comparison}`.
+        calibration_key=f"instruction:f-1:{RETURN_OVER_WINDOW}:above",
         now_ns=clock,
     )
 

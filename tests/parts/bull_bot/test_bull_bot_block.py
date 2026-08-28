@@ -76,6 +76,13 @@ BLOCK_PARTS = {
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
 DETECTOR = "mean-reversion-detector"
+# What the detector named above calibrates on, carried on the claim so the label
+# can be routed back to the estimator that made it. Six of the nine detectors key
+# on the market regime and three do not -- the sweeper on its condition, the whale
+# reader on flow direction, the sentiment reader on the relationship it found --
+# which is why the key travels with the candidate rather than being re-derived
+# from the regime at settlement.
+CALIBRATION_KEY = "reverting"
 
 
 class Clock:
@@ -115,7 +122,7 @@ def a_candidate(direction=LONG, strength=3.0, detector=DETECTOR, confidence=None
         detector=detector, venue_id=VENUE, symbol=SYMBOL, direction=direction,
         expectation=REVERSION, signal_strength=strength,
         confidence=confidence or fitted(0.6), horizon_seconds=300.0,
-        evidence={"z_score": -2.5}, reason="stretched",
+        evidence={"z_score": -2.5}, reason="stretched", calibration_key=CALIBRATION_KEY,
     )
 
 

@@ -21,7 +21,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    LONG,
+    REVERSION,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -29,7 +36,13 @@ PART_ID = "volatility-gap-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="volatility-gap-detector",
-    consumes=("volatility-forecast", "implied-vol-surface", "playbook-rule", "options-flow"),
+    consumes=(
+        "volatility-forecast",
+        "implied-vol-surface",
+        "playbook-rule",
+        "options-flow",
+        "training-label",
+    ),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -85,8 +98,8 @@ class VolatilityGapDetector:
         """From an options surface. Phase 1 captures none, so this is usually absent."""
         self._implied[(venue_id, symbol)] = implied_volatility
 
-    def observe_outcome(self, regime: str, gap_closed: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, regime, gap_closed)
+    def observe_outcome(self, calibration_key: str, gap_closed: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, gap_closed)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str, regime_name: str = "any") -> tuple[object | None, str]:
@@ -135,6 +148,7 @@ class VolatilityGapDetector:
                 expectation=REVERSION,
                 signal_strength=abs(gap),
                 confidence=confidence,
+                calibration_key=regime_name,
                 horizon_seconds=self._horizon,
                 evidence={
                     "implied_volatility": implied,
@@ -212,6 +226,10 @@ def start_part(context) -> int:
     surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
     rules = Batch(read=context.bus.reader("playbook-rule"))
     flows = Batch(read=context.bus.reader("options-flow"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = VolatilityGapDetector(
         minimum_gap_fraction=context.number("volatility_gap_minimum_fraction"),
@@ -226,6 +244,12 @@ def start_part(context) -> int:
     symbols_of: dict[tuple[str, str], set[str]] = {}
 
     def read_volatility(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         rules.payloads()
         flows.payloads()
         touched = set()

@@ -135,9 +135,64 @@ def calls_that_bring_evidence_in(tree: ast.Module) -> set[str]:
     return arriving
 
 
+def helpers_that_deliver_evidence() -> dict[str, set[str]]:
+    """Runtime functions that hand a part's own object some evidence.
+
+    The module-scoped rule above is right about parts and wrong about `runtime/`.
+    A part may not import another part (T-4), so nothing outside a part's own
+    module can reach into it -- except a shared helper the part hands its object
+    to. `runtime/market_signal.settle_claims_from(labels, detector, PART_ID)` is
+    exactly that: nine detectors call it, and it calls `observe_outcome` on the
+    object each one passed in. Without this, all nine read as unreachable while
+    the record actually reaches them, which is the same false statement as the
+    defect but pointing the other way (Rule 8).
+
+    Recognised narrowly: a module-level function in `runtime/` that calls an
+    evidence method **on one of its own parameters**. A helper reaching a global
+    or building its own object is not delivering a caller's evidence anywhere,
+    and is not counted.
+    """
+    delivering: dict[str, set[str]] = {}
+    for path in python_files_under("runtime"):
+        tree = read_tree(path)
+        if tree is None:
+            continue
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            arguments = node.args
+            parameters = {
+                argument.arg
+                for argument in (
+                    *arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+                )
+            }
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                    continue
+                if not isinstance(inner.func.value, ast.Name):
+                    continue
+                if inner.func.value.id not in parameters:
+                    continue
+                if not is_an_evidence_method(inner.func.attr):
+                    continue
+                delivering.setdefault(node.name, set()).add(inner.func.attr)
+    return delivering
+
+
+def helpers_called_in(tree: ast.Module) -> set[str]:
+    """Plain function names this module calls, which is how a helper is reached."""
+    return {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
 def check() -> int:
     defined: list[dict] = []
     unreachable = []
+    delivering = helpers_that_deliver_evidence()
 
     for path in python_files_under("parts"):
         tree = read_tree(path)
@@ -146,6 +201,8 @@ def check() -> int:
         here = evidence_methods_defined_in(tree, path)
         defined.extend(here)
         reachable = calls_that_bring_evidence_in(tree)
+        for helper in helpers_called_in(tree) & delivering.keys():
+            reachable |= delivering[helper]
         for entry in here:
             if entry["method"] not in reachable:
                 unreachable.append(entry)

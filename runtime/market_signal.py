@@ -49,6 +49,18 @@ class EntryCandidate:
     evidence: dict
     reason: str
     detected_at_ns: int
+    # The key this detector's own calibrator is segmented by, stated by the claim
+    # rather than implied by whichever string the detector happened to pass.
+    #
+    # `SignalCalibrator._estimator_for(detector, regime)` names its second slot
+    # `regime`, and three of the nine detectors correctly put something else in
+    # it: `whale-flow-detector` segments by direction, `universal-symbol-sweeper`
+    # by watch condition, and `sentiment-shift-detector` compares its leading
+    # record against its contrarian one. So an outcome cannot be routed back by
+    # regime, and until this field existed the key was written down nowhere at
+    # all -- which is one of the reasons no outcome ever reached any of the nine
+    # (docs/proposals/nine-detectors-that-never-learn-whether-they-were-right.md).
+    calibration_key: str = ""
 
     @property
     def is_calibrated(self) -> bool:
@@ -100,6 +112,57 @@ class SignalCalibrator:
         }
 
 
+def settle_claims_from(labels, detector, part_id: str) -> int:
+    """Hand a detector every settled claim of its own. Returns how many it took.
+
+    The other half of `SignalCalibrator`. Nine scanner detectors defined
+    `observe_outcome` and nothing called any of them: none declared an input
+    carrying an outcome, so no `start_part` had anything to call it with. All
+    nine reported `outcomes_learned: 0`, `EntryCandidate.confidence` was the
+    prior on every candidate ever raised, and `detector_hit_rate` was missing on
+    100% of every feature vector either bot had ever built
+    (docs/proposals/nine-detectors-that-never-learn-whether-they-were-right.md).
+
+    Here rather than nine times over, because the reading is identical in all
+    nine and a detector copying it is a detector made cleverer rather than the
+    vocabulary made to say more (T-6). It takes the detector as an argument and
+    names no part: what it knows is the shape of a claim and the shape of a
+    label, which is what `runtime/` is for.
+
+    Three filters, and each one is load-bearing:
+
+    * **the label names this detector.** `training-label` is one wire carrying
+      every detector's record; a part learning from another's would be learning
+      about a claim it never made.
+    * **the label carries a calibration key.** `label-builder` publishes on the
+      same wire, from a closed trade after costs, and sets `THE_SETUP_WAS_RIGHT`
+      as well -- but `SignalCalibrator`'s own docstring rules that out: *"not
+      whether a trade made money, which depends on sizing, stops and timing that
+      this detector had no part in."* A trade sized badly or stopped early is not
+      evidence about the setup. `label-builder` has no candidate and so leaves
+      the key empty, which makes the filter say what it means rather than lean on
+      `claimed_at_ns` being non-zero.
+    * **the component is present.** `label_for` returns None for a component the
+      label does not speak to, and training on None as False would teach the
+      calibrator that silence is a wrong call.
+    """
+    from runtime.learning_types import THE_SETUP_WAS_RIGHT
+
+    settled = 0
+    for label in labels:
+        if getattr(label, "detector", "") != part_id:
+            continue
+        calibration_key = getattr(label, "calibration_key", "")
+        if not calibration_key:
+            continue
+        was_right = label.label_for(THE_SETUP_WAS_RIGHT)
+        if was_right is None:
+            continue
+        detector.observe_outcome(calibration_key, bool(was_right))
+        settled += 1
+    return settled
+
+
 def make_candidate(
     detector: str,
     venue_id: str,
@@ -111,6 +174,7 @@ def make_candidate(
     horizon_seconds: float,
     evidence: dict,
     reason: str,
+    calibration_key: str,
     now_ns=time.time_ns,
 ) -> EntryCandidate:
     """One candidate, with its strength and its calibrated confidence kept apart.
@@ -121,6 +185,15 @@ def make_candidate(
     """
     if direction not in (LONG, SHORT):
         raise ValueError(f"{direction!r} is not a direction a candidate can point in")
+    if not calibration_key:
+        # Required, not defaulted. A claim that does not say what it should be
+        # scored against cannot be scored, and defaulting it to the regime would
+        # silently mis-key the three detectors that do not calibrate on one --
+        # their records would be written under a key nothing ever reads back.
+        raise ValueError(
+            f"{detector} raised a candidate with no calibration key, so the outcome "
+            f"could never be routed back to the estimator that made the claim"
+        )
     return EntryCandidate(
         detector=detector,
         venue_id=venue_id,
@@ -131,6 +204,7 @@ def make_candidate(
         confidence=confidence,
         horizon_seconds=horizon_seconds,
         evidence=dict(evidence),
+        calibration_key=calibration_key,
         reason=reason,
         detected_at_ns=now_ns(),
     )

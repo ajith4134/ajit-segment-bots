@@ -22,7 +22,15 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import CONTINUATION, LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    CONTINUATION,
+    LONG,
+    REVERSION,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -31,7 +39,7 @@ PART_ID = "sentiment-shift-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="sentiment-shift-detector",
-    consumes=("sentiment-reading", "symbol-price-frame", "playbook-rule"),
+    consumes=("sentiment-reading", "symbol-price-frame", "playbook-rule", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -120,9 +128,9 @@ class SentimentShiftDetector:
             self._prices[key] = window
         window.observe(price, at_ns)
 
-    def observe_outcome(self, relationship: str, was_right: bool) -> None:
+    def observe_outcome(self, calibration_key: str, was_right: bool) -> None:
         """Whether price followed sentiment, or reversed against it, after a call."""
-        self._calibrator.observe_outcome(PART_ID, relationship, was_right)
+        self._calibrator.observe_outcome(PART_ID, calibration_key, was_right)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str) -> tuple[object | None, str]:
@@ -179,6 +187,7 @@ class SentimentShiftDetector:
                 expectation=expectation,
                 signal_strength=abs(shift),
                 confidence=confidence,
+                calibration_key=relationship,
                 horizon_seconds=self._horizon,
                 evidence={
                     "sentiment": sentiment.latest,
@@ -255,6 +264,10 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     readings = Batch(read=context.bus.reader("sentiment-reading"))
     rules = Batch(read=context.bus.reader("playbook-rule"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = SentimentShiftDetector(
         window_length=int(context.number("detector_window_length")),
@@ -274,6 +287,12 @@ def start_part(context) -> int:
     venues_of: dict[str, set[str]] = {}
 
     def read_sentiment(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         rules.payloads()
         for trade in levels_in(trades.payloads()):
             detector.observe_price(

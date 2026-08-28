@@ -80,6 +80,15 @@ class TrainingLabel:
     direction: str = ""
     best_favourable_fraction: float = 0.0
     worst_adverse_fraction: float = 0.0
+    # The key the detector that made this claim calibrates on, carried back
+    # unchanged so its estimator can be found again. Empty on a label built from
+    # a closed trade, and that emptiness is load-bearing: `label-builder` sets
+    # `THE_SETUP_WAS_RIGHT` too, from realised PnL after costs, and
+    # `SignalCalibrator` must not be trained on it -- a trade sized badly,
+    # entered late or stopped early is not evidence about the setup. A detector
+    # takes only labels that carry a key, which says what it means rather than
+    # relying on `claimed_at_ns` being non-zero.
+    calibration_key: str = ""
 
     def label_for(self, component: str) -> bool | None:
         return self.labels.get(component)

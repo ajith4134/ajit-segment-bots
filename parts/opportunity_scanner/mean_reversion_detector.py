@@ -24,7 +24,14 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import LONG, REVERSION, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    LONG,
+    REVERSION,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -33,7 +40,7 @@ PART_ID = "mean-reversion-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="mean-reversion-detector",
-    consumes=("symbol-price-frame", "market-regime", "playbook-rule"),
+    consumes=("symbol-price-frame", "market-regime", "playbook-rule", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -105,9 +112,9 @@ class MeanReversionDetector:
         window.observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
-    def observe_outcome(self, regime: str, reverted: bool) -> None:
+    def observe_outcome(self, calibration_key: str, reverted: bool) -> None:
         """Whether the price actually reverted within the horizon after a call."""
-        self._calibrator.observe_outcome(PART_ID, regime, reverted)
+        self._calibrator.observe_outcome(PART_ID, calibration_key, reverted)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str, regime) -> tuple[object | None, str]:
@@ -153,6 +160,7 @@ class MeanReversionDetector:
                 expectation=REVERSION,
                 signal_strength=abs(z),
                 confidence=confidence,
+                calibration_key=regime.regime,
                 horizon_seconds=self._horizon,
                 evidence={
                     "price": price,
@@ -225,6 +233,10 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     regimes = LatestByKey(read=context.bus.reader("market-regime"), key_of=lambda r: (r.venue_id, r.symbol))
     rules = Batch(read=context.bus.reader("playbook-rule"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = MeanReversionDetector(
         window_length=int(context.number("detector_window_length")),
@@ -243,6 +255,12 @@ def start_part(context) -> int:
     )
 
     def read_prices_and_regimes(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         rules.payloads()
         touched = set()
         for trade in levels_in(trades.payloads()):

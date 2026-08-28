@@ -25,7 +25,14 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import CONTINUATION, LONG, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    CONTINUATION,
+    LONG,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -34,7 +41,7 @@ PART_ID = "liquidation-cascade-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="liquidation-cascade-detector",
-    consumes=("liquidation-map", "symbol-price-frame"),
+    consumes=("liquidation-map", "symbol-price-frame", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -150,8 +157,8 @@ class LiquidationCascadeDetector:
         """How much the book can absorb, which decides whether a cluster cascades."""
         self._book_depth[(venue_id, symbol)] = notional
 
-    def observe_outcome(self, regime: str, cascaded: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, regime, cascaded)
+    def observe_outcome(self, calibration_key: str, cascaded: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, cascaded)
         self.standing.outcomes_learned += 1
 
     def detect(self, venue_id: str, symbol: str, regime_name: str = "any") -> tuple[object | None, str]:
@@ -209,6 +216,7 @@ class LiquidationCascadeDetector:
                 expectation=CONTINUATION,
                 signal_strength=nearest.notional / max(self._minimum_notional, 1.0),
                 confidence=confidence,
+                calibration_key=regime_name,
                 horizon_seconds=self._horizon,
                 evidence={
                     "price": price,
@@ -286,6 +294,10 @@ def start_part(context) -> int:
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     maps = Batch(read=context.bus.reader("liquidation-map"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = LiquidationCascadeDetector(
         window_length=int(context.number("detector_window_length")),
@@ -305,6 +317,12 @@ def start_part(context) -> int:
     )
 
     def read_map(_detector):
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         touched = set()
         for liquidation_map in maps.payloads():
             detector.set_clusters(liquidation_map.venue_id, liquidation_map.symbol, tuple(liquidation_map.clusters))

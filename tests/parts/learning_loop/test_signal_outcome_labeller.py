@@ -37,6 +37,13 @@ from runtime.part_declaration import load_declaration_from_blueprint
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
 DETECTOR = "spread-reversion-detector"
+# What the detector named above calibrates on, carried on the claim so the label
+# can be routed back to the estimator that made it. Six of the nine detectors key
+# on the market regime and three do not -- the sweeper on its condition, the whale
+# reader on flow direction, the sentiment reader on the relationship it found --
+# which is why the key travels with the candidate rather than being re-derived
+# from the regime at settlement.
+CALIBRATION_KEY = "reverting"
 # Deliberately not the shipped 0.002. The captured run is 2000 trades spanning
 # 0.133% of price, so no claim in it can reach a 20-basis-point barrier; the tests
 # below place theirs where this fixture can actually reach them. That the shipped
@@ -87,7 +94,11 @@ def an_untested_confidence() -> Estimate:
     )
 
 
-def a_claim(direction: str = LONG, horizon_seconds: float = HORIZON_SECONDS):
+def a_claim(
+    direction: str = LONG,
+    horizon_seconds: float = HORIZON_SECONDS,
+    calibration_key: str = CALIBRATION_KEY,
+):
     return make_candidate(
         detector=DETECTOR,
         venue_id=VENUE,
@@ -99,6 +110,7 @@ def a_claim(direction: str = LONG, horizon_seconds: float = HORIZON_SECONDS):
         horizon_seconds=horizon_seconds,
         evidence={"spread_z": 2.5},
         reason="the spread is stretched",
+        calibration_key=calibration_key,
     )
 
 
@@ -259,6 +271,7 @@ def test_claims_are_bounded_and_the_refusal_is_counted(real_prices):
                 horizon_seconds=HORIZON_SECONDS,
                 evidence={},
                 reason="test",
+                calibration_key=CALIBRATION_KEY,
             )
         )
 

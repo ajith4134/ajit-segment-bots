@@ -43,6 +43,13 @@ from runtime.trade_profiles import FROM_SETTLED_CLAIMS
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
 DETECTOR = "spread-reversion-detector"
+# What the detector named above calibrates on, carried on the claim so the label
+# can be routed back to the estimator that made it. Six of the nine detectors key
+# on the market regime and three do not -- the sweeper on its condition, the whale
+# reader on flow direction, the sentiment reader on the relationship it found --
+# which is why the key travels with the candidate rather than being re-derived
+# from the regime at settlement.
+CALIBRATION_KEY = "reverting"
 # The captured run spans 0.133% of price over 28 seconds, so a barrier has to sit
 # well inside that for enough claims to settle to take a quantile of. At two basis
 # points -- what the labeller's own tests use -- the run settles eight, which is
@@ -93,7 +100,7 @@ def a_claim(direction: str = LONG, detector: str = DETECTOR):
         detector=detector, venue_id=VENUE, symbol=SYMBOL, direction=direction,
         expectation=REVERSION, signal_strength=2.5, confidence=an_untested_confidence(),
         horizon_seconds=HORIZON_SECONDS, evidence={"spread_z": 2.5},
-        reason="the spread is stretched",
+        reason="the spread is stretched", calibration_key=CALIBRATION_KEY,
     )
 
 

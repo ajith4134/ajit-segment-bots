@@ -105,7 +105,7 @@ Nine identical readers, no per-detector special case.
 
 ### Why `calibration_key` rather than reusing `regime`
 
-Because seven detectors calibrate on the regime and two do not, and the
+Because six detectors calibrate on the regime and three do not, and the
 calibrator cannot tell:
 
     funding-skew, liquidation-cascade, mean-reversion, momentum-burst,

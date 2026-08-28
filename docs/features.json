@@ -3393,7 +3393,8 @@
       "consumes": [
         "symbol-price-frame",
         "market-regime",
-        "playbook-rule"
+        "playbook-rule",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -3420,7 +3421,8 @@
         "volatility-forecast",
         "implied-vol-surface",
         "playbook-rule",
-        "options-flow"
+        "options-flow",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5088,7 +5090,8 @@
       "consumes": [
         "cointegrated-pair",
         "symbol-price-frame",
-        "symbol-quote-frame"
+        "symbol-quote-frame",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5497,7 +5500,8 @@
         "position",
         "cross-segment-signal",
         "venue-announcement",
-        "consolidated-price"
+        "consolidated-price",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5552,7 +5556,8 @@
       "consumes": [
         "symbol-price-frame",
         "symbol-profile",
-        "playbook-rule"
+        "playbook-rule",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5578,7 +5583,8 @@
       "consumes": [
         "symbol-price-frame",
         "funding-forecast",
-        "playbook-rule"
+        "playbook-rule",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5604,7 +5610,8 @@
       "consumes": [
         "whale-transfer",
         "symbol-price-frame",
-        "onchain-flow"
+        "onchain-flow",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5629,7 +5636,8 @@
       "category": "opportunity-scanner",
       "consumes": [
         "liquidation-map",
-        "symbol-price-frame"
+        "symbol-price-frame",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
@@ -5655,7 +5663,8 @@
       "consumes": [
         "sentiment-reading",
         "symbol-price-frame",
-        "playbook-rule"
+        "playbook-rule",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",

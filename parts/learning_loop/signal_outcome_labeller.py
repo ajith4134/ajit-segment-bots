@@ -88,6 +88,11 @@ class OpenClaim:
     """One detector's claim, waiting for the market to settle it."""
 
     detector: str
+    # Which of that detector's estimators made the claim. Held on the claim
+    # rather than looked up at settlement, because by then the regime may have
+    # changed and the record would be written against a state the detector was
+    # not speaking about.
+    calibration_key: str
     venue_id: str
     symbol: str
     direction: str
@@ -252,6 +257,10 @@ class SignalOutcomeLabeller:
             symbol=candidate.symbol,
             direction=candidate.direction,
             regime=regime_name,
+            # Carried, not re-derived. The claim says which of its own estimators
+            # it should be scored against, and only the detector knows that: seven
+            # of the nine calibrate on the regime and three do not.
+            calibration_key=candidate.calibration_key,
             horizon_seconds=candidate.horizon_seconds,
             evidence=dict(candidate.evidence),
             measurements=dict(measurements or {}),
@@ -346,6 +355,10 @@ class SignalOutcomeLabeller:
             direction=claim.direction,
             best_favourable_fraction=claim.best_favourable_fraction,
             worst_adverse_fraction=claim.worst_adverse_fraction,
+            # Back to the detector that made the claim. This is the field that
+            # makes the label routable at all, and it is what separates a label
+            # about a setup from `label-builder`'s label about a trade.
+            calibration_key=claim.calibration_key,
         )
 
     def _refuse(self, reason: str) -> str:

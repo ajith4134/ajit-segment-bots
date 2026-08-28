@@ -25,7 +25,14 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
-from runtime.market_signal import CONTINUATION, LONG, SHORT, SignalCalibrator, make_candidate
+from runtime.market_signal import (
+    CONTINUATION,
+    LONG,
+    SHORT,
+    SignalCalibrator,
+    make_candidate,
+    settle_claims_from,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.rolling_statistics import RollingWindow
@@ -34,7 +41,7 @@ PART_ID = "whale-flow-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="whale-flow-detector",
-    consumes=("whale-transfer", "symbol-price-frame", "onchain-flow"),
+    consumes=("whale-transfer", "symbol-price-frame", "onchain-flow", "training-label"),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -133,6 +140,7 @@ class WhaleFlowDetector:
                 expectation=CONTINUATION,
                 signal_strength=abs(z),
                 confidence=confidence,
+                calibration_key=direction,
                 horizon_seconds=self._horizon,
                 evidence={
                     "quantity": quantity,
@@ -154,8 +162,8 @@ class WhaleFlowDetector:
             FIRED,
         )
 
-    def observe_outcome(self, flow_direction: str, moved_as_expected: bool) -> None:
-        self._calibrator.observe_outcome(PART_ID, flow_direction, moved_as_expected)
+    def observe_outcome(self, calibration_key: str, moved_as_expected: bool) -> None:
+        self._calibrator.observe_outcome(PART_ID, calibration_key, moved_as_expected)
         self.standing.outcomes_learned += 1
 
 
@@ -210,6 +218,10 @@ def start_part(context) -> int:
     transfers = Batch(read=context.bus.reader("whale-transfer"))
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     flows = Batch(read=context.bus.reader("onchain-flow"))
+    # The record of whether this detector was right, back from
+    # `signal-outcome-labeller`. Until 2026-08-28 nothing carried it here and
+    # `observe_outcome` had never been called by anything that runs.
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
     detector = WhaleFlowDetector(
         window_length=int(context.number("detector_window_length")),
@@ -226,6 +238,12 @@ def start_part(context) -> int:
     symbol_of: dict[tuple[str, str], str] = {}
 
     def read_transfers():
+        # Whichever of this detector's own claims the market has settled since
+        # the last tick. Drained first, so a candidate raised below is priced by
+        # the record including everything already known -- a claim settled this
+        # tick and used next tick would make the confidence one tick stale for
+        # no reason.
+        settle_claims_from(labels.payloads(), detector, PART_ID)
         flows.payloads()
         for trade in levels_in(trades.payloads()):
             # The price frame is read for the symbol it names, which is how an
