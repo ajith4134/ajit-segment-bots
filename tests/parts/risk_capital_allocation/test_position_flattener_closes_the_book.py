@@ -252,3 +252,9 @@ def test_an_empty_door_ends_the_flattening():
     assert subject.standing.instructions_not_about_the_book == 0, (
         "an empty door is not an instruction about something else"
     )
+    assert subject.standing.reads_with_no_override == 1
+    assert subject.standing.overrides_read == 1, (
+        "an empty door is not an override read: on a spine with no override "
+        "written, overrides_read climbing once a second reports an instruction "
+        "nobody gave -- measured 241 of them in the first four minutes"
+    )

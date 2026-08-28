@@ -74,6 +74,12 @@ LIVE = "live"
 @dataclass
 class FlattenerStanding:
     overrides_read: int = 0
+    # Ticks on which the door held nothing. Counted separately, because
+    # `overrides_read` climbing once a second on an empty door would report that
+    # an instruction was read when none was written -- and the two states must
+    # not look the same on a board (Rule 8). With no override this is the counter
+    # that moves and every other one holds still.
+    reads_with_no_override: int = 0
     # Instructions this part deliberately did nothing about. Counted, because
     # "the override said stop-trading" and "no override arrived" are different
     # facts and a board that showed neither would look identical in both.
@@ -160,6 +166,10 @@ class PositionFlattener:
         ends the flattening: what was sent is forgotten so the next
         `close-positions` is acted on rather than treated as already done.
         """
+        if override is None:
+            self.standing.reads_with_no_override += 1
+            self._forget_the_instruction()
+            return
         self.standing.overrides_read += 1
         instruction = getattr(override, "instruction", None)
         is_active = bool(getattr(override, "is_active", False))
@@ -264,6 +274,7 @@ def describe_flattening(flattener: PositionFlattener) -> dict:
         "part_id": PART_ID,
         "is_flattening": 1.0 if flattener.is_flattening else 0.0,
         "overrides_read": flattener.standing.overrides_read,
+        "reads_with_no_override": flattener.standing.reads_with_no_override,
         "instructions_acted_on": flattener.standing.instructions_acted_on,
         "instructions_not_about_the_book": flattener.standing.instructions_not_about_the_book,
         "open_positions": flattener.standing.open_positions,
