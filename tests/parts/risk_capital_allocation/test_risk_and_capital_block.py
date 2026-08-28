@@ -83,6 +83,7 @@ BLOCK_PARTS = {
     "exposure-limiter": "parts.risk_capital_allocation.exposure_limiter",
     "drawdown-breaker": "parts.risk_capital_allocation.drawdown_breaker",
     "halt-enforcer": "parts.risk_capital_allocation.halt_enforcer",
+    "position-flattener": "parts.risk_capital_allocation.position_flattener",
     "event-risk-limiter": "parts.risk_capital_allocation.event_risk_limiter",
     "position-sizer": "parts.risk_capital_allocation.position_sizer",
     "margin-liquidation-watch": "parts.risk_capital_allocation.margin_liquidation_watch",

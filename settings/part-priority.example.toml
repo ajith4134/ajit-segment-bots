@@ -118,3 +118,15 @@
 #                              instrument it reads itself with.
 "subscription-quota-watch" = 28
 "paid-spend-ledger" = 29
+
+#   position-flattener         added 2026-08-27, the part that carries out a
+#                              human's close-positions by placing a market exit
+#                              for every open position. Ranked inside the ceiling
+#                              for the reason the governor's own instruments are:
+#                              a part that exists to carry out an instruction
+#                              from outside must not be switched off by the
+#                              machine being instructed. It takes no resource
+#                              floor -- that stops at 10 -- it is simply never
+#                              shed. It costs nothing when idle: with no override
+#                              present it publishes no order at all.
+"position-flattener" = 30

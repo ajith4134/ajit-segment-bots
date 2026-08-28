@@ -96,7 +96,7 @@ across 108 files had offsets pointing into the other writer's payloads.
 record by record against the venue's own reading of the bytes, and kept the
 damaged files as `{day}.interleaved.*`.
 
-The blueprint is `docs/features.json`: 327 parts in 27 blocks, every contract
+The blueprint is `docs/features.json`: 328 parts in 27 blocks, every contract
 holding (`python3 dashboard/check_contracts.py`). Build against it; do not
 redesign it.
 

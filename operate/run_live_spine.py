@@ -600,6 +600,13 @@ LIVE_SPINE = (
     # venue announcement. Running them now is what makes the wire exist before
     # the first halt rather than after it.
     "halt-enforcer",
+    # The other half of `close-positions`, added 2026-08-27. halt-enforcer stops
+    # the bot opening anything new on that instruction and closes nothing; this
+    # is what actually places the exits. Never shed -- part-priority ranks it
+    # inside never_switched_off_priority_ceiling -- because a part that carries
+    # out a human's instruction must not be switched off by the machine the
+    # human is instructing.
+    "position-flattener",
     "event-risk-limiter",
     # Knowledge, phase 13's unblocked half: the three tiers of memory. None of
     # these needs a provider key -- the parts that do are llm-foundation's, and

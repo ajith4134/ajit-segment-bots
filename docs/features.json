@@ -6753,6 +6753,32 @@
       "skipped_tick_effect": "corrupts"
     },
     {
+      "id": "position-flattener",
+      "name": "Position flattener",
+      "role": "close every open position at market when a human override says close-positions",
+      "category": "risk-capital-allocation",
+      "consumes": [
+        "human-override",
+        "position",
+        "money-mode"
+      ],
+      "produces": [
+        "order-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-08-27",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
+    },
+    {
       "id": "event-risk-limiter",
       "name": "Event risk limiter",
       "role": "shrink the limit around events plus anomalies",
