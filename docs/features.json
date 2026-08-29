@@ -3149,6 +3149,13 @@
       "id": "candle",
       "name": "candle",
       "description": "One OHLCV bar for one symbol at one interval, with the venue's own flag for whether the bar is closed. Split from market-data on 2026-08-25: that type carried trades, candles and books at once, and the minute candles began flowing on it feed-gap-detector -- which reads a trade's sequence number -- crashed every two seconds. A candle is a summary of many trades and shares no field with one."
+    },
+    {
+      "id": "venue-premium",
+      "name": "venue premium",
+      "description": "One symbol's mark price and index price on one venue, with the funding rate the venue has declared for the next settlement and the moment it settles. The premium is mark minus index as a fraction of the index, and it is what a funding rate is averaged from -- so it is a different fact from the rate itself, which the venue states about a settlement that has not happened yet.",
+      "origin": "proposed",
+      "added": "2026-08-28"
     }
   ],
   "features": [
@@ -6089,7 +6096,8 @@
       "role": "forecast next period's funding rate",
       "category": "prediction",
       "consumes": [
-        "market-data"
+        "market-data",
+        "venue-premium"
       ],
       "produces": [
         "funding-forecast",
@@ -12042,6 +12050,31 @@
       "origin": "proposed",
       "evidence": "docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md",
       "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "venue-premium-stream-reader",
+      "name": "Venue premium stream reader",
+      "role": "read one venue's premium stream",
+      "category": "market-data-feed",
+      "consumes": [
+        "stream-plan",
+        "venue-standing"
+      ],
+      "produces": [
+        "venue-premium",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/the-premium-both-venues-send-and-nobody-reads.md",
+      "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
     }

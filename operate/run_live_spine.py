@@ -125,6 +125,20 @@ LIVE_SPINE = (
     # this system records
     # (docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md).
     "venue-quote-stream-reader",
+    # The premium half of the feed, added 2026-08-28. Mark price against index
+    # price, which is neither what printed nor what is resting, and which nothing
+    # carried: funding-rate-forecaster had received 5,017,806 messages and made
+    # zero forecasts, with zero premium observations and not one refusal -- it
+    # never reached the code that would refuse. Six parts consume funding-forecast
+    # and none had ever seen one, which is why tail-crowding-detector reported
+    # NOT_MEASURED for all 37 candidates it was handed and the tailgating bot has
+    # never formed a conviction
+    # (docs/proposals/the-premium-both-venues-send-and-nobody-reads.md).
+    #
+    # It writes no tape, for the reason the quote reader writes none: a premium is
+    # priced against rather than learned from, and the venue restates it every
+    # second whether or not it moved.
+    "venue-premium-stream-reader",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and

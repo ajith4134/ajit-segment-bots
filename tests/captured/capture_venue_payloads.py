@@ -354,7 +354,7 @@ def capture_binance_usdm(day: str) -> None:
     """
     from runtime.tape import StreamKind
     from runtime.venues.adapter_registry import load_venue_adapter
-    from runtime.venues.venue_adapter import StreamRequest
+    from runtime.venues.venue_adapter import EVERY_SYMBOL, StreamRequest
 
     venue = "binance-usdm"
     adapter = load_venue_adapter(venue)
@@ -471,6 +471,40 @@ def capture_binance_usdm(day: str) -> None:
             "received including the acknowledgement. The bare route is deliberate and is "
             "the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is "
             "silent on /market/ws, which is the opposite of this venue's ticker streams",
+        }
+    )
+
+    # The all-market premium topic, for the same reason the quote fixture takes
+    # the all-market one: `!markPrice@arr@1s` is what carries mark, index and the
+    # declared funding rate, it arrives as an ARRAY of every listed symbol once a
+    # second, and a one-symbol fixture would not show that. Its route differs
+    # again -- measured 2026-08-26 it answers on /market/ws and is silent on /ws,
+    # the opposite of !bookTicker beside it.
+    premium_url = adapter.stream_endpoint_url(StreamKind.PREMIUM)
+    premium_topics = [
+        adapter.subscription_topic(
+            StreamRequest(stream_kind=StreamKind.PREMIUM, symbol=EVERY_SYMBOL)
+        )
+    ]
+    premium_path = venue_directory / f"{day}-ws-markprice-all-symbols.jsonl"
+    write_payload_lines(
+        premium_path,
+        asyncio.run(
+            capture_stream_payloads(
+                premium_url, adapter.subscribe_frame(premium_topics), STREAM_MESSAGE_COUNT
+            )
+        ),
+    )
+    record_in_manifest(
+        {
+            "path": str(premium_path.relative_to(HERE)),
+            "venue": venue,
+            "source": premium_url,
+            "subscribed": premium_topics,
+            "captured_on": day,
+            "how": "connect with the adapter's own url and subscribe frame, keep every frame "
+            "received including the acknowledgement. One frame carries every listed symbol, "
+            "so this fixture is what a reader of many symbols actually receives",
         }
     )
 

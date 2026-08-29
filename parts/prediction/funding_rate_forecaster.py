@@ -40,7 +40,7 @@ PART_ID = "funding-rate-forecaster"
 
 PART_DECLARATION = PartDeclaration(
     part_id="funding-rate-forecaster",
-    consumes=("market-data",),
+    consumes=("market-data", "venue-premium"),
     produces=("funding-forecast", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -279,10 +279,17 @@ def run_funding_rate_forecaster(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    The premium a funding rate is averaged from is mark minus index, and
-    neither is on market-data, which carries trades, candles and books. With
-    no premium to observe the forecaster forecasts nothing and its standing
-    says so: a blueprint gap (RL-062), not a forecast of zero funding.
+    The premium a funding rate is averaged from is mark minus index. Neither is
+    on `market-data`, which carries trades and candles, and until 2026-08-28
+    nothing else carried them either: this part read five million messages, made
+    zero forecasts, and recorded zero refusals, because it never reached the code
+    that would refuse. Six parts consume `funding-forecast` and none had ever
+    seen one.
+
+    `venue-premium-stream-reader` carries them now. `market-data` stays on the
+    consumes and is still drained: it is what says a symbol is live at all, and
+    dropping an input in the same change that adds one is how a part quietly
+    loses a capability nobody was watching.
     """
     # `market-data` carries trades AND candles: venue-trade-stream-reader
     # publishes the first, ccxt-venue-reader the second, and both have always
@@ -293,6 +300,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     trades = Batch(read=context.bus.reader("market-data"))
+    premiums = Batch(read=context.bus.reader("venue-premium"))
     publish_forecasts = context.bus.publisher_for("funding-forecast")
     forecaster = FundingRateForecaster(
         premium_window_observations=int(context.number("funding_premium_window")),
@@ -300,8 +308,21 @@ def start_part(context) -> int:
     )
 
     def read_premiums(_forecaster):
+        # Drained rather than read: this part forecasts from the premium, and the
+        # trades are here so an unread wire does not back up behind it.
         trades_in(trades.payloads())
-        return ()
+        touched: set[tuple[str, str]] = set()
+        for premium in premiums.payloads():
+            if premium.mark_price is None or not premium.index_price:
+                continue
+            _forecaster.observe_premium(
+                premium.venue_id, premium.symbol, premium.mark_price, premium.index_price
+            )
+            touched.add((premium.venue_id, premium.symbol))
+        # Only the symbols this tick actually heard about. Forecasting every
+        # symbol ever seen on every tick would republish an unchanged level for
+        # hundreds of symbols a second, which is the storm of 2026-08-26.
+        return tuple(sorted(touched))
 
     def publish(items) -> None:
         kept = tuple(item for item in items if item is not None)
