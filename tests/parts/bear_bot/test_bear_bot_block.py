@@ -26,8 +26,9 @@ from parts.bear_bot.bear_entry_timer import (
 from parts.bear_bot.bear_exit_plan_proposer import (
     MAXIMUM_SHORT_FAVOURABLE_EXCURSION, NO_EXCURSION_PROFILE, NO_HORIZON, NO_RANGE,
     REWARD_BELOW_RISK, STOP_WOULD_BE_UNBOUNDED, BearExitPlanProposer, ExcursionProfile,
-    HorizonProfile, StopAudit,
+    HorizonProfile,
 )
+from runtime.trade_decoding_types import StopAudit, WELL_PLACED_AND_HIT
 from parts.bear_bot.bear_feature_builder import FEATURE_NAMES, BearFeatureBuilder
 from parts.bear_bot.bear_opinion_composer import RISK_UNBOUNDED, BearOpinionComposer
 from parts.bear_bot.bear_outlier_rejector import DANGEROUS_WHEN_LOW, BearOutlierRejector
@@ -726,8 +727,12 @@ def test_the_stop_audit_widens_a_short_stop_that_kept_being_hit():
     subject = a_prepared_proposer()
     tight, _ = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     subject.observe_stop_audit(
-        StopAudit(venue_id=VENUE, symbol=SYMBOL, stops_hit=40,
-                  stops_hit_then_reversed=30, worst_reversal_excursion=0.04)
+        StopAudit(
+            trade_id="t1", stop_price=101.0, distance=1.0, typical_movement=0.5,
+            distance_in_typical_movements=2.0, was_hit=True, would_have_recovered=None,
+            verdict=WELL_PLACED_AND_HIT, is_measurable=True, reason="r", audited_at_ns=1,
+            venue_id=VENUE, symbol=SYMBOL, adverse_excursion_fraction=0.04,
+        )
     )
     widened, _ = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert widened.stop_price > tight.stop_price

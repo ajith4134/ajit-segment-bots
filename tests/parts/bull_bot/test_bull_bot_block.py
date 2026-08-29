@@ -33,8 +33,9 @@ from parts.bull_bot.bull_entry_timer import (
 from parts.bull_bot.bull_exit_plan_proposer import (
     NO_EXCURSION_PROFILE, NO_HORIZON, NO_RANGE, REWARD_BELOW_RISK,
     BullExitPlanProposer,
-    ExcursionProfile, HorizonProfile, StopAudit,
+    ExcursionProfile, HorizonProfile,
 )
+from runtime.trade_decoding_types import StopAudit, WELL_PLACED_AND_HIT
 from parts.bull_bot.bull_feature_builder import FEATURE_NAMES, BullFeatureBuilder
 from parts.bull_bot.bull_opinion_composer import BullOpinionComposer
 from parts.bull_bot.bull_outlier_rejector import BullOutlierRejector
@@ -961,8 +962,12 @@ def test_the_stop_audit_widens_a_stop_that_kept_being_hit_before_the_trade_worke
     subject = a_prepared_proposer()
     tight, _ = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     subject.observe_stop_audit(
-        StopAudit(venue_id=VENUE, symbol=SYMBOL, stops_hit=40,
-                  stops_hit_then_reversed=30, worst_reversal_excursion=0.02)
+        StopAudit(
+            trade_id="t1", stop_price=99.0, distance=1.0, typical_movement=0.5,
+            distance_in_typical_movements=2.0, was_hit=True, would_have_recovered=None,
+            verdict=WELL_PLACED_AND_HIT, is_measurable=True, reason="r", audited_at_ns=1,
+            venue_id=VENUE, symbol=SYMBOL, adverse_excursion_fraction=0.02,
+        )
     )
     widened, _ = subject.propose(a_side_candidate(), ConvictionStub(0.8))
     assert widened.stop_price < tight.stop_price

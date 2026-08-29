@@ -37,6 +37,7 @@ from runtime.part_declaration import PartDeclaration
 # peer bot's proposer, and the bus pickles -- so a profile produced against
 # one definition arrived at the other as a class it did not recognise.
 from runtime.trade_profiles import ExcursionProfile, HorizonProfile
+from runtime.trade_decoding_types import StopAudit
 from runtime.part_process import run_part
 
 PART_ID = "bear-exit-plan-proposer"
@@ -67,23 +68,6 @@ NO_HORIZON = "no-horizon-record-for-this-kind-of-trade"
 NO_RANGE = "too-few-prints-in-the-window-to-measure-a-range"
 REWARD_BELOW_RISK = "reward-to-risk-below-floor"
 STOP_WOULD_BE_UNBOUNDED = "the-stop-this-symbol-needs-is-wider-than-a-short-can-carry"
-
-
-@dataclass(frozen=True)
-class StopAudit:
-    """Where short stops have been hit and the trade then went on to work anyway."""
-
-    venue_id: str
-    symbol: str
-    stops_hit: int
-    stops_hit_then_reversed: int
-    worst_reversal_excursion: float | None
-
-    @property
-    def reversal_fraction(self) -> float | None:
-        if not self.stops_hit:
-            return None
-        return self.stops_hit_then_reversed / self.stops_hit
 
 
 @dataclass
@@ -310,8 +294,8 @@ class BearExitPlanProposer:
         fraction = profile.adverse_excursion * self._stop_multiple
         audit = self._audits.get(key)
         widened = False
-        if audit is not None and audit.worst_reversal_excursion is not None:
-            widened_to = audit.worst_reversal_excursion * self._stop_multiple
+        if audit is not None and audit.adverse_excursion_fraction is not None:
+            widened_to = audit.adverse_excursion_fraction * self._stop_multiple
             if widened_to > fraction:
                 fraction = widened_to
                 widened = True
