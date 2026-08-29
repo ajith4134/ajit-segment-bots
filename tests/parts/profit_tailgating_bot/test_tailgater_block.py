@@ -869,6 +869,26 @@ def test_plan_does_not_reset_a_trail_that_has_already_advanced():
     assert plan.stop_price == advanced_stop
 
 
+def test_plans_risk_fraction_matches_the_ratcheted_stops_real_distance():
+    """risk_fraction must describe stop_price's actual distance from price, not
+    the freshly-measured retracement width -- stop_target_placer.py inverts
+    stop_price/(1 -+ risk_fraction) to recover a reference price on the
+    assumption that the two agree, which only holds if risk_fraction is the
+    real distance rather than a number computed independently of stop_price."""
+    planner = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    planner.advance_trail(VENUE, SYMBOL, LONG, price=planner._standing_trails[key] * 1.05)
+    advanced_stop = planner._standing_trails[key]
+
+    plan, _ = planner.plan(a_follow(), a_remaining())
+    current_price = planner._prices[key].price
+    assert plan.risk_fraction == pytest.approx((current_price - advanced_stop) / current_price)
+    # The invariant stop_target_placer.py relies on: recovering a reference
+    # price from stop_price and risk_fraction must round-trip.
+    recovered = plan.stop_price / (1.0 - plan.risk_fraction)
+    assert recovered == pytest.approx(current_price)
+
+
 def test_apply_positions_and_prices_advances_a_held_positions_trail():
     from parts.profit_tailgating_bot.tail_trailing_exit_planner import _apply_positions_and_prices
 

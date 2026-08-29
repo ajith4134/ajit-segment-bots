@@ -247,6 +247,17 @@ class TailTrailingExitPlanner:
         self.standing.plans_built += 1
         self.standing.widest_trail = max(self.standing.widest_trail, width)
 
+        # The plan's risk_fraction must describe stop_price's actual distance
+        # from price, not the freshly-measured retracement width -- once the
+        # ratchet has moved the stop, the two diverge, and
+        # stop_target_placer.py inverts stop_price/(1 -+ risk_fraction) to
+        # recover a reference price on the assumption that they agree.
+        stop_distance_fraction = (
+            (price - stop_price) / price
+            if candidate.direction == LONG
+            else (stop_price - price) / price
+        )
+
         return (
             ExitPlan(
                 bot=BOT,
@@ -262,13 +273,16 @@ class TailTrailingExitPlanner:
                     ),
                 ),
                 invalidation_reason=(
-                    f"the move turning by {width:.2%} is this bot's only exit; it joined a move "
-                    f"whose size it cannot know, so naming a target would be a claim it has no "
-                    f"basis for"
+                    f"the move turning by {stop_distance_fraction:.2%} is this bot's only exit; "
+                    f"it joined a move whose size it cannot know, so naming a target would be a "
+                    f"claim it has no basis for"
                 ),
                 horizon_seconds=0.0,
-                risk_fraction=width,
-                reward_to_risk=None if left is None or width <= 0 else left / width,
+                risk_fraction=stop_distance_fraction,
+                reward_to_risk=(
+                    None if left is None or stop_distance_fraction <= 0
+                    else left / stop_distance_fraction
+                ),
                 reason=(
                     f"trailing {width:.2%} behind {price:.8g}, which is "
                     f"{self._trail_multiple:.2g}x what a winning move in {candidate.symbol} "
