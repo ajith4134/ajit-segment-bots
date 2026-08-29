@@ -34,7 +34,7 @@ from parts.profit_tailgating_bot.tail_opinion_composer import (
 )
 from parts.profit_tailgating_bot.tail_setup_weight_learner import TailSetupWeightLearner
 from parts.profit_tailgating_bot.tail_trailing_exit_planner import (
-    NO_EXCURSION_PROFILE, TRAIL_WOULD_EXCEED_WHAT_IS_LEFT, ExitCounterfactual,
+    NO_EXCURSION_PROFILE, TRAIL_WOULD_EXCEED_WHAT_IS_LEFT, TAIL_TRAIL_RULE_NAME,
     NO_MOVE_REMAINING, RetracementProfile, TailTrailingExitPlanner,
     describe_trailing,
 )
@@ -44,7 +44,7 @@ from parts.profit_tailgating_bot.tail_winner_selector import (
     TailWinnerSelector,
 )
 from runtime.trade_decoding_types import (
-    LONG_SIDE_WON, NO_DIRECTIONAL_EDGE, PairVerdict, SHORT_SIDE_WON,
+    ExitCounterfactual, LONG_SIDE_WON, NO_DIRECTIONAL_EDGE, PairVerdict, SHORT_SIDE_WON,
 )
 from runtime.bot_opinion import (
     CROWDED, CROWDING_NOT_MEASURED, ENTER_NOW, ESTIMATES_AGREE, ESTIMATES_DISAGREE,
@@ -805,18 +805,100 @@ def test_the_trail_tightens_once_the_follow_is_far_enough_ahead():
     assert subject.standing.trails_tightened == 1
 
 
+def a_tail_trail_counterfactual(trail_fraction=0.03, difference=0.05, rule_name=TAIL_TRAIL_RULE_NAME):
+    return ExitCounterfactual(
+        trade_id="t1", rule_name=rule_name, exit_price=99.0, realised_pnl=1.0,
+        difference=difference, would_have_been_reachable=True, is_hindsight=True,
+        reason="r", replayed_at_ns=1, venue_id=VENUE, symbol=SYMBOL,
+        trail_fraction=trail_fraction,
+    )
+
+
 def test_the_counterfactual_widens_a_trail_that_kept_cutting_moves_short():
     """Without it a trailing stop is a rule nobody is checking."""
     subject = a_prepared_planner(retracement=0.01, trail_multiple=1.5)
     narrow, _ = subject.trail_width(VENUE, SYMBOL)
     for _ in range(20):
-        subject.observe_exit_counterfactual(
-            ExitCounterfactual(venue_id=VENUE, symbol=SYMBOL, trail_fraction=0.03,
-                               realised_fraction=0.01, would_have_made_fraction=0.06)
-        )
+        # difference > 0 means this trail width would have beaten the actual
+        # exit -- the actual trail was too tight.
+        subject.observe_exit_counterfactual(a_tail_trail_counterfactual(trail_fraction=0.03, difference=0.05))
     wider, counterfactual = subject.trail_width(VENUE, SYMBOL)
     assert wider > narrow
     assert counterfactual.is_fitted
+
+
+def test_observe_exit_counterfactual_only_learns_from_the_trailing_job():
+    planner = a_planner()
+    fixed_target = ExitCounterfactual(
+        trade_id="t1", rule_name="tail-exit-plan:target-0", exit_price=101.0,
+        realised_pnl=1.0, difference=5.0, would_have_been_reachable=True,
+        is_hindsight=True, reason="r", replayed_at_ns=1,
+        venue_id=VENUE, symbol=SYMBOL, trail_fraction=None,
+    )
+    planner.observe_exit_counterfactual(fixed_target)
+    assert planner.standing.counterfactuals_seen == 0
+
+    trailing = ExitCounterfactual(
+        trade_id="t1", rule_name=TAIL_TRAIL_RULE_NAME, exit_price=99.0,
+        realised_pnl=1.0, difference=2.0, would_have_been_reachable=True,
+        is_hindsight=True, reason="r", replayed_at_ns=1,
+        venue_id=VENUE, symbol=SYMBOL, trail_fraction=0.03,
+    )
+    planner.observe_exit_counterfactual(trailing)
+    assert planner.standing.counterfactuals_seen == 1
+
+
+def a_prepared_planner_with_an_open_position(retracement=0.01, tighten_after=10.0, **kwargs):
+    """A planner that has already planned once, so _standing_trails[key] exists
+    and advance_trail has something to ratchet."""
+    subject = a_prepared_planner(retracement=retracement, tighten_after=tighten_after, **kwargs)
+    subject.plan(a_follow(), a_remaining(fraction=0.05))
+    return subject
+
+
+def test_plan_does_not_reset_a_trail_that_has_already_advanced():
+    planner = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    first_stop = planner._standing_trails[key]
+    planner.advance_trail(VENUE, SYMBOL, LONG, price=first_stop * 1.05)
+    advanced_stop = planner._standing_trails[key]
+    assert advanced_stop > first_stop
+
+    plan, _ = planner.plan(a_follow(), a_remaining())
+    assert planner._standing_trails[key] == advanced_stop
+    assert plan.stop_price == advanced_stop
+
+
+def test_apply_positions_and_prices_advances_a_held_positions_trail():
+    from parts.profit_tailgating_bot.tail_trailing_exit_planner import _apply_positions_and_prices
+
+    planner = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    first_stop = planner._standing_trails[key]
+
+    class PositionStub:
+        venue_id, symbol, direction, is_flat = VENUE, SYMBOL, LONG, False
+
+    class TradeStub:
+        venue_id, symbol, observed_at_ns = VENUE, SYMBOL, 2
+        price = first_stop * 1.05
+
+    _apply_positions_and_prices(planner, [PositionStub()], [TradeStub()])
+    assert planner._standing_trails[key] > first_stop
+
+
+def test_apply_positions_and_prices_forgets_a_flat_position():
+    from parts.profit_tailgating_bot.tail_trailing_exit_planner import _apply_positions_and_prices
+
+    planner = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    assert key in planner._standing_trails
+
+    class FlatPositionStub:
+        venue_id, symbol, is_flat = VENUE, SYMBOL, True
+
+    _apply_positions_and_prices(planner, [FlatPositionStub()], [])
+    assert key not in planner._standing_trails
 
 
 def test_a_closed_follow_releases_its_trail():

@@ -37,6 +37,7 @@ from runtime.price_staleness import ObservedPrice
 from runtime.bot_opinion import LONG, SHORT, ExitPlan, ExitTarget
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.knowledge_types import TICK_SIZE
+from runtime.trade_decoding_types import ExitCounterfactual
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -47,7 +48,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="tail-trailing-exit-planner",
     consumes=(
         "follow-candidate", "symbol-price-frame", "symbol-profile",
-        "exit-counterfactual", "excursion-profile", "move-remaining",
+        "exit-counterfactual", "excursion-profile", "move-remaining", "position",
     ),
     produces=("tail-exit-plan", "part-health"),
     resource_class="compute-bound",
@@ -65,6 +66,13 @@ TRAIL_WOULD_EXCEED_WHAT_IS_LEFT = "the-trail-is-wider-than-the-move-has-left"
 # recorded as the single exit that does it.
 TRAIL_IS_THE_ONLY_EXIT = "the-trail-is-the-exit; this-bot-never-names-a-target"
 
+# Matches the rule_name exit-counterfactual-replayer constructs for the one
+# job it replays from this bot's own exit plan (see that part's read_jobs).
+# Not shared via import -- the two parts agree on it only through the data on
+# the wire, exactly as every other rule_name string in that block is a
+# convention rather than an imported constant (T-4).
+TAIL_TRAIL_RULE_NAME = "tail-exit-plan:trail"
+
 
 @dataclass(frozen=True)
 class RetracementProfile:
@@ -75,26 +83,6 @@ class RetracementProfile:
     normal_retracement_fraction: float
     moves_observed: int
     is_fitted: bool
-
-
-@dataclass(frozen=True)
-class ExitCounterfactual:
-    """What would have been made by exiting at a given trail width.
-
-    The only measurement that can say whether this bot's trails have been too
-    loose or too tight. A trailing stop with no counterfactual is a rule nobody
-    is checking.
-    """
-
-    venue_id: str
-    symbol: str
-    trail_fraction: float
-    realised_fraction: float
-    would_have_made_fraction: float
-
-    @property
-    def trail_was_too_tight(self) -> bool:
-        return self.would_have_made_fraction > self.realised_fraction
 
 
 @dataclass
@@ -171,7 +159,17 @@ class TailTrailingExitPlanner:
         self._profiles[(profile.venue_id, profile.symbol)] = profile
 
     def observe_exit_counterfactual(self, counterfactual: ExitCounterfactual) -> None:
-        """What a different trail would have made, so the width can be corrected."""
+        """What this bot's own trail width would have made, so it can be corrected.
+
+        Only the trailing-stop replay of this bot's own plan is relevant --
+        exit-counterfactual also carries fixed-target/fixed-stop replays of
+        the bull/bear proposers' plans on the same wire, which say nothing
+        about a trail width.
+        """
+        if counterfactual.rule_name != TAIL_TRAIL_RULE_NAME:
+            return
+        if counterfactual.trail_fraction is None or counterfactual.difference is None:
+            return
         self.standing.counterfactuals_seen += 1
         key = (counterfactual.venue_id, counterfactual.symbol)
         estimator = self._counterfactual_trails.get(key)
@@ -180,9 +178,9 @@ class TailTrailingExitPlanner:
                 window=self._counterfactual_window, prior=self._prior_trail
             )
             self._counterfactual_trails[key] = estimator
-        # Learn from the trails that would have done better, so the width moves
-        # toward what the record says rather than toward what it already is.
-        if counterfactual.trail_was_too_tight:
+        # difference > 0 means this trail width would have beaten the actual
+        # exit -- the actual trail was too tight, so learn a wider one.
+        if counterfactual.difference > 0:
             estimator.observe(counterfactual.trail_fraction * self._trail_multiple)
         else:
             estimator.observe(counterfactual.trail_fraction)
@@ -236,8 +234,15 @@ class TailTrailingExitPlanner:
             # ordinary noise before the move can pay for it.
             return None, self._refuse(TRAIL_WOULD_EXCEED_WHAT_IS_LEFT)
 
-        stop_price = self._trail_price(key, candidate.direction, price, width)
-        self._standing_trails[key] = stop_price
+        if key in self._standing_trails:
+            # Already tracking this position -- advance_trail owns the ratchet
+            # from here; plan() must not reset it back toward the current
+            # price on every candidate, which would loosen a trail that had
+            # already tightened.
+            stop_price = self._standing_trails[key]
+        else:
+            stop_price = self._trail_price(key, candidate.direction, price, width)
+            self._standing_trails[key] = stop_price
         self._entry_prices.setdefault(key, price)
         self.standing.plans_built += 1
         self.standing.widest_trail = max(self.standing.widest_trail, width)
@@ -350,6 +355,29 @@ class TailTrailingExitPlanner:
         return reason
 
 
+def _apply_positions_and_prices(planner, positions, price_prints) -> None:
+    """One tick's positions and price prints, applied to the planner.
+
+    Extracted from read_candidates_and_market so forgetting a closed
+    position and advancing a held one's trail are testable without going
+    through start_part's Batch/LatestByKey wiring.
+    """
+    held_by_key = {
+        (position.venue_id, position.symbol): position
+        for position in positions if not position.is_flat
+    }
+    for position in positions:
+        if position.is_flat:
+            planner.forget_position(position.venue_id, position.symbol)
+    for trade in price_prints:
+        planner.observe_price(
+            trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
+        )
+        held = held_by_key.get((trade.venue_id, trade.symbol))
+        if held is not None:
+            planner.advance_trail(trade.venue_id, trade.symbol, held.direction, trade.price)
+
+
 def describe_trailing(planner: TailTrailingExitPlanner) -> dict:
     return {
         "part_id": PART_ID,
@@ -400,6 +428,7 @@ def start_part(context) -> int:
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     counterfactuals = Batch(read=context.bus.reader("exit-counterfactual"))
     excursions = Batch(read=context.bus.reader("excursion-profile"))
+    positions = Batch(read=context.bus.reader("position"))
     # Bounded, like every level here: an estimate of how much of a move is left
     # is a statement about a move that is still running, and one held past the
     # move it described would trail a position against a number from a different
@@ -422,10 +451,9 @@ def start_part(context) -> int:
     )
 
     def read_candidates_and_market(_planner):
-        for trade in levels_in(trades.payloads()):
-            planner.observe_price(
-                    trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
-                )
+        _apply_positions_and_prices(
+            planner, positions.payloads(), levels_in(trades.payloads())
+        )
         for profile in profiles.payloads():
             # `tick-size`, from the closed key set a profile's fields are filed
             # under. It was read as "price_increment" -- a key no profile has ever
