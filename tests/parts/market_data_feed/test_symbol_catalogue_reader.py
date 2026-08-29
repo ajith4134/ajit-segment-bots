@@ -24,6 +24,7 @@ from parts.market_data_feed.symbol_catalogue_reader import (
     describe_catalogue,
     CatalogueStanding,
     select_capturable_symbols,
+    _short_window_acceleration,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.venues.adapter_registry import load_venue_adapter
@@ -254,6 +255,29 @@ def test_the_liquidity_floor_excludes_a_volatile_symbol_outside_the_pool(read_ca
     )
 
 
+def test_acceleration_is_the_real_binance_btcusdt_ratio(read_captured_json):
+    """Real capture, 2026-08-29: 12 five-minute bars, last 3 = the last 15 minutes."""
+    response = read_captured_json("binance-usdm", "2026-08-29-btcusdt-klines-5m.json")
+    closes = tuple(float(r[4]) for r in sorted(response, key=lambda r: r[0]))
+    assert _short_window_acceleration(closes, recent_bars=3) == pytest.approx(0.5933583959899351)
+
+
+def test_acceleration_is_bounded_by_construction():
+    """A subset's range can never exceed the whole window's it is drawn from."""
+    closes = (100.0, 105.0, 95.0, 110.0, 90.0, 108.0, 102.0)
+    score = _short_window_acceleration(closes, recent_bars=3)
+    assert 0.0 <= score <= 1.0
+
+
+def test_a_flat_baseline_has_no_share_to_report():
+    """Zero range means there is nothing for a recent slice to be a fraction of."""
+    assert _short_window_acceleration((100.0,) * 8, recent_bars=3) is None
+
+
+def test_too_few_bars_for_a_distinct_recent_slice_is_not_measured():
+    assert _short_window_acceleration((100.0, 101.0, 102.0), recent_bars=3) is None
+
+
 def test_the_blend_still_selects_every_symbol_the_venue_capably_lists(read_captured_json):
     """A count of zero under the blend metric must still be the full universe."""
     everything = build_reader(
@@ -264,6 +288,81 @@ def test_the_blend_still_selects_every_symbol_the_venue_capably_lists(read_captu
         "binance-usdm", read_captured_json, count=CAPTURE_EVERY_SYMBOL,
     ).read_catalogue()
     assert {e.symbol for e in everything} == {e.symbol for e in by_volume}
+
+
+def test_an_empty_signal_returns_its_weight_to_volume(read_captured_json):
+    """Bybit has no momentum data; asking for it anyway must not distort the order."""
+    adapter = load_venue_adapter("binance-usdm")
+    catalogue, tickers = load_real_responses("binance-usdm", read_captured_json)
+    listings = adapter.read_symbol_listings(catalogue)
+    volumes = dict(adapter.read_quote_volumes(tickers))
+    volatility = dict(adapter.read_volatility_facts(tickers))
+
+    without_momentum = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes, volatility=volatility,
+        captured_symbol_count=10, selection_metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=0.5, momentum_weight=0.0,
+    )
+    asked_for_empty_momentum = select_capturable_symbols(
+        adapter=adapter, listings=listings, quote_volumes=volumes, volatility=volatility,
+        captured_symbol_count=10, selection_metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=0.5, momentum_weight=0.3, momentum=None,
+    )
+    assert [e.symbol for e in without_momentum] == [e.symbol for e in asked_for_empty_momentum], (
+        "a weight asked for a signal with nothing behind it must not change the order"
+    )
+
+
+def test_the_blend_refuses_when_weights_exceed_one(read_captured_json):
+    reader = build_reader(
+        "binance-usdm", read_captured_json, count=5, metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=0.7,
+    )
+    reader._momentum_weight = 0.4
+    with pytest.raises(SymbolSelectionRefused) as refusal:
+        reader.read_catalogue()
+    assert "sum to at most 1.0" in str(refusal.value)
+
+
+def test_the_scan_rotates_one_slice_per_refresh(read_captured_json):
+    """Real capture, 2026-08-29: the pool's busiest symbol's own 5m klines."""
+    adapter = load_venue_adapter("binance-usdm")
+    catalogue, tickers = load_real_responses("binance-usdm", read_captured_json)
+    kline_response = read_captured_json("binance-usdm", "2026-08-29-btcusdt-klines-5m.json")
+    kline_url = f"{adapter.short_window_kline_requests(['BTCUSDT'], '5m', 12)[0].url}"
+    responses = {
+        adapter.catalogue_url(): catalogue,
+        adapter.ticker_url(): tickers,
+        kline_url: kline_response,
+    }
+
+    def fetch(url, _timeout, _headers=None):
+        if url not in responses:
+            raise TimeoutError(f"{url} is not stubbed in this test")
+        return responses[url]
+
+    reader = SymbolCatalogueReader(
+        adapter=adapter, captured_symbol_count=5, selection_metric=VOLUME_AND_VOLATILITY_BLEND,
+        request_timeout_seconds=REQUEST_TIMEOUT, fetch=fetch,
+        liquidity_pool_size=10, volatility_weight=0.3, acceleration_weight=0.3,
+        short_window_scan_size=1, short_window_kline_interval="5m", short_window_kline_count=12,
+        short_window_recent_bars=3,
+    )
+    selection = reader.read_catalogue()
+    scanned = {e.symbol for e in selection if e.short_window_acceleration is not None}
+    assert scanned == {"BTCUSDT"}, (
+        "with a scan size of one, the busiest-by-volume symbol should be scanned first"
+    )
+    assert reader.standing.short_window_scanned == 1
+
+    # The next refresh rotates to the next pool member, which is not stubbed
+    # here -- the scan must fail closed for that one symbol without taking the
+    # whole catalogue read down with it.
+    reader.read_catalogue()
+    assert reader.standing.short_window_scan_failure is not None
+    assert reader.standing.reads_completed == 2, (
+        "a failed scan must not stop the catalogue read it is attached to"
+    )
 
 
 def test_a_negative_count_is_refused(read_captured_json):

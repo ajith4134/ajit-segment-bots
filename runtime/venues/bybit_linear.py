@@ -77,6 +77,12 @@ TICKER_URL = f"{REST_HOST}/v5/market/tickers?category=linear"
 # captures 50 of them. Asked per captured symbol instead: BTCUSDT returns its 35
 # tiers with an empty cursor, in one call.
 RISK_LIMIT_URL = f"{REST_HOST}/v5/market/risk-limit?category=linear&symbol={{symbol}}"
+# Public, one call per symbol -- this venue bulk-serves nothing shorter than
+# 24h (TICKER_URL), so a recent-window scan has no bulk alternative here either.
+KLINE_URL = (
+    f"{REST_HOST}/v5/market/kline?category=linear&symbol={{symbol}}&interval={{interval}}"
+    f"&limit={{limit}}"
+)
 
 _DOCS = "https://bybit-exchange.github.io/docs/v5"
 _CONNECT_PAGE = f"{_DOCS}/ws/connect"
@@ -861,6 +867,63 @@ class BybitLinearAdapter(VenueAdapter):
                 continue
             facts[entry["symbol"]] = (float(high) - float(low)) / last
         return facts
+
+    def read_momentum_facts(self, ticker_response: object) -> Mapping[str, float]:
+        """Signed change over the last hour, from `prevPrice1h` on the same response.
+
+        This venue states a price level from an hour ago, not a computed percent
+        change -- `read_quote_volumes` and `read_volatility_facts` read the same
+        response, so this costs no extra request. Binance's bulk ticker states
+        nothing shorter than 24h at all, so this figure exists on one venue and
+        not the other; `select_capturable_symbols` treats its absence as
+        undeclared, never as zero momentum.
+        """
+        facts = {}
+        for entry in ticker_response["result"]["list"]:
+            last = entry.get("lastPrice")
+            previous = entry.get("prevPrice1h")
+            if last in (None, "") or previous in (None, ""):
+                continue
+            previous = float(previous)
+            if previous <= 0:
+                continue
+            facts[entry["symbol"]] = (float(last) - previous) / previous
+        return facts
+
+    def short_window_kline_requests(
+        self, symbols: Sequence[str], interval: str, bar_count: int
+    ) -> tuple[VenueRequest, ...]:
+        """One public call per symbol -- this venue bulk-serves no interval shorter than 24h."""
+        venue_interval = CANDLE_INTERVAL_BY_CANONICAL_NAME[interval]
+        return tuple(
+            VenueRequest(
+                url=KLINE_URL.format(symbol=symbol, interval=venue_interval, limit=bar_count),
+                describes=symbol,
+            )
+            for symbol in symbols
+        )
+
+    def read_short_window_klines(
+        self, symbol_responses: Sequence[tuple[str, object]]
+    ) -> Mapping[str, tuple[float, ...]]:
+        """Each response's closes, oldest first -- one response is one symbol here.
+
+        The symbol travels beside the response rather than being read back out
+        of it, the same convention Binance's reader uses, even though this
+        venue's own response does carry `result.symbol` -- one pairing rule for
+        both venues is what keeps this method from needing to know which venue
+        it is reading. This venue's kline rows are not documented as arriving in
+        a fixed order, so they are sorted by start time here rather than trusted
+        as already chronological.
+        """
+        closes: dict[str, tuple[float, ...]] = {}
+        for symbol, response in symbol_responses:
+            rows = (response.get("result") or {}).get("list") or []
+            if not rows:
+                continue
+            ordered = sorted(rows, key=lambda row: int(row[0]))
+            closes[symbol] = tuple(float(row[4]) for row in ordered)
+        return closes
 
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every instrument the venue lists, from an instruments-info response.

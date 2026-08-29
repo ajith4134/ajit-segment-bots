@@ -368,6 +368,37 @@ def test_volatility_is_the_24h_range_over_last_price(adapter, read_captured_json
     )
 
 
+def test_momentum_is_the_change_since_prevprice1h(adapter, read_captured_json):
+    """This venue states a price level, not a computed percent change."""
+    tickers = read_captured_json("bybit-linear", TICKER_FIXTURE)
+    momentum = adapter.read_momentum_facts(tickers)
+    assert momentum[CAPTURED_SYMBOL] == pytest.approx((76987.70 - 78373.60) / 78373.60)
+
+
+def test_short_window_klines_are_one_request_per_symbol(adapter):
+    requests = adapter.short_window_kline_requests(["BTCUSDT", "ETHUSDT"], "5m", 12)
+    assert len(requests) == 2
+    assert requests[0].describes == "BTCUSDT"
+    assert "symbol=BTCUSDT" in requests[0].url and "interval=5" in requests[0].url
+    assert "limit=12" in requests[0].url
+
+
+def test_short_window_klines_are_sorted_rather_than_trusted(adapter, read_captured_json):
+    """Real capture, 2026-08-29: this venue returned the 12 bars newest-first."""
+    response = read_captured_json("bybit-linear", "2026-08-29-btcusdt-kline-5m.json")
+    raw_first_row_time = int(response["result"]["list"][0][0])
+    raw_last_row_time = int(response["result"]["list"][-1][0])
+    assert raw_first_row_time > raw_last_row_time, (
+        "the fixture no longer exercises the case this test exists for -- this venue "
+        "used to return newest-first"
+    )
+    closes = adapter.read_short_window_klines([("BTCUSDT", response)])
+    assert closes["BTCUSDT"] == (
+        78016.7, 77976.1, 78071.9, 78031.0, 78052.2, 78032.3,
+        78022.1, 78068.2, 78011.7, 78047.8, 78141.2, 78107.1,
+    )
+
+
 def test_a_dated_contract_pays_no_funding_and_is_not_recorded_as_paying_zero(
     adapter, read_captured_json
 ):

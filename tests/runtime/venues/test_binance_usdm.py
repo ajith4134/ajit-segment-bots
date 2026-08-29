@@ -366,6 +366,30 @@ def test_volatility_is_the_24h_range_over_last_price(adapter, read_captured_json
     )
 
 
+def test_momentum_is_not_stated_by_this_venue_in_bulk(adapter, read_captured_json):
+    """Confirmed against the connector source 2026-08-29: no windowSize on this endpoint."""
+    tickers = read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json")
+    assert adapter.read_momentum_facts(tickers) == {}
+
+
+def test_short_window_klines_are_one_request_per_symbol(adapter):
+    requests = adapter.short_window_kline_requests(["BTCUSDT", "ETHUSDT"], "5m", 12)
+    assert len(requests) == 2
+    assert requests[0].describes == "BTCUSDT"
+    assert "symbol=BTCUSDT" in requests[0].url and "interval=5m" in requests[0].url
+    assert "limit=12" in requests[0].url
+
+
+def test_short_window_klines_read_real_closes_oldest_first(adapter, read_captured_json):
+    """Real capture, 2026-08-29: 12 five-minute BTCUSDT bars."""
+    response = read_captured_json("binance-usdm", "2026-08-29-btcusdt-klines-5m.json")
+    closes = adapter.read_short_window_klines([("BTCUSDT", response)])
+    assert closes["BTCUSDT"] == (
+        78016.2, 77979.7, 78073.0, 78032.9, 78050.0, 78036.5,
+        78023.3, 78069.7, 78016.5, 78044.6, 78139.3, 78107.6,
+    )
+
+
 def test_a_contract_this_venue_states_no_interval_for_is_left_unpriceable(
     adapter, read_captured_json
 ):

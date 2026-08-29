@@ -1,6 +1,22 @@
 {
   "captures": [
     {
+      "path": "binance-usdm/2026-08-29-btcusdt-klines-5m.json",
+      "venue": "binance-usdm",
+      "source": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=12",
+      "captured_on": "2026-08-29",
+      "how": "one public REST call, kept verbatim -- the short-window acceleration scan's own request shape (docs/proposals/rank-by-recent-acceleration-not-just-24h-range.md)",
+      "records": 12
+    },
+    {
+      "path": "bybit-linear/2026-08-29-btcusdt-kline-5m.json",
+      "venue": "bybit-linear",
+      "source": "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=12",
+      "captured_on": "2026-08-29",
+      "how": "one public REST call, kept verbatim -- rows arrived newest-first, confirming the reader must sort rather than trust chronological order",
+      "records": 12
+    },
+    {
       "path": "binance-usdm/2026-08-22-btcusdt-aggtrade-run.jsonl",
       "venue": "binance-usdm",
       "source": "wss://fstream.binance.com/market/ws (btcusdt@aggTrade), by way of the tape this project records",

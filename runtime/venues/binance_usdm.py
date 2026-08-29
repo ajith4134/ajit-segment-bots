@@ -78,6 +78,11 @@ CATALOGUE_URL = f"{REST_HOST}/fapi/v1/exchangeInfo"
 # individually -- at 570 symbols the per-symbol form would cost fourteen times
 # the entire minute's budget.
 TICKER_URL = f"{REST_HOST}/fapi/v1/ticker/24hr"
+# Public, one call per symbol. This venue's 24-hour ticker takes no `windowSize`
+# parameter -- confirmed against the official connector source 2026-08-29, the
+# Spot API has one and USDⓈ-M futures never got it -- so a recent-window scan
+# has no bulk alternative here either.
+KLINES_URL = f"{REST_HOST}/fapi/v1/klines"
 # The maintenance margin ladder. Unlike every other endpoint this adapter names,
 # it is SIGNED: measured 2026-08-26, an unsigned GET returns
 # {"code":-2014,"msg":"API-key format invalid."}. One call returns every symbol,
@@ -801,6 +806,37 @@ class BinanceUsdmAdapter(VenueAdapter):
                 continue
             facts[entry["symbol"]] = (float(high) - float(low)) / last
         return facts
+
+    def short_window_kline_requests(
+        self, symbols: Sequence[str], interval: str, bar_count: int
+    ) -> tuple[VenueRequest, ...]:
+        """One public call per symbol -- this venue bulk-serves no interval shorter than 24h."""
+        return tuple(
+            VenueRequest(
+                url=f"{KLINES_URL}?symbol={symbol}&interval={interval}&limit={bar_count}",
+                describes=symbol,
+            )
+            for symbol in symbols
+        )
+
+    def read_short_window_klines(
+        self, symbol_responses: Sequence[tuple[str, object]]
+    ) -> Mapping[str, tuple[float, ...]]:
+        """Each response's closes, oldest first. Binance's kline rows carry no
+        symbol field of their own, which is why the symbol travels beside the
+        response rather than being read out of it.
+
+        Documented as already chronological (oldest first), sorted here anyway
+        rather than trusted, for the same reason Bybit's own reader does.
+        """
+        closes: dict[str, tuple[float, ...]] = {}
+        for symbol, response in symbol_responses:
+            rows = response if isinstance(response, (list, tuple)) else ()
+            if not rows:
+                continue
+            ordered = sorted(rows, key=lambda row: int(row[0]))
+            closes[symbol] = tuple(float(row[4]) for row in ordered)
+        return closes
 
     def funding_request_urls(self) -> tuple[str, ...]:
         """Two: the rate, then the interval. Neither is on the catalogue or ticker.

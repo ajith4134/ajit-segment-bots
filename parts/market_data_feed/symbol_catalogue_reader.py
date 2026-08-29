@@ -27,7 +27,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from runtime.level_publishing import LevelPublisher, LevelPublisherByKey
 from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
@@ -101,6 +101,12 @@ class CatalogueStanding:
     kept_because_held: int = 0
     without_volume: int = 0
     without_volatility: int = 0
+    # Both partial by design, not a fault: momentum is venue-asymmetric (Bybit
+    # states it, Binance does not), and the acceleration scan only covers
+    # whatever slice of the pool the rotation has reached so far.
+    with_momentum: int = 0
+    short_window_scanned: int = 0
+    short_window_scan_failure: str | None = None
     # How many selected symbols the venue quoted no funding rate for, and how many
     # it quoted a rate for but no settlement interval. Counted rather than
     # asserted: a perpetual missing either cannot have its carry priced, and the
@@ -181,24 +187,31 @@ def _with_funding(
     )
 
 
-def _rank_by_volume_and_volatility(
-    chosen: list[CapturableSymbol], liquidity_pool_size: int, volatility_weight: float,
+def _rank_pool_by_blended_percentiles(
+    chosen: list[CapturableSymbol],
+    liquidity_pool_size: int,
+    weighted_signals: tuple[tuple, ...],
 ) -> list[CapturableSymbol]:
-    """Blend volume and volatility by percentile rank, never by raw magnitude.
+    """Blend volume with zero or more other signals by percentile rank, never by
+    raw magnitude.
 
     Volume runs from thousands to billions of USDT; a 24-hour range fraction
-    runs from zero to a few. Adding the two as they stand would let volume
-    decide the order by itself -- so each is first turned into where a symbol
-    sits among its peers (0.0 = best, 1.0 = worst), and only those two
-    percentiles are blended.
+    runs from zero to a few; a percent change can be negative. Adding any of
+    these to volume as they stand would let volume decide the order by itself
+    -- so each is first turned into where a symbol sits among its pool peers
+    (0.0 = best, 1.0 = worst on that one signal), and only the percentiles are
+    blended, in shares that sum to 1.0 (volume takes whatever the named signals
+    do not spend).
 
-    The liquidity floor comes first and is not negotiable under this metric: only
-    the top `liquidity_pool_size` by volume are eligible at all, so a thin,
-    hard-to-fill symbol cannot outrank a liquid one purely by having spiked.
-    Within that pool, `volatility_weight` (0..1) decides how much a symbol's
-    24-hour range counts against its volume rank; a symbol with no volatility
-    reading ranks as the pool's least volatile rather than being dropped, since
-    its volume reading already qualified it as tradeable.
+    The liquidity floor comes first and is not negotiable under this metric:
+    only the top `liquidity_pool_size` by volume are eligible at all, so a
+    thin, hard-to-fill symbol cannot outrank a liquid one purely by having
+    spiked. `weighted_signals` is `((key_function, weight), ...)` -- each
+    `key_function` reads the value to rank a pool entry by (already signed or
+    made absolute by the caller, e.g. momentum ranked by its magnitude rather
+    than its direction). A symbol with no reading for a signal ranks as the
+    pool's worst on that signal rather than being dropped, since its volume
+    reading already qualified it as tradeable.
     """
     by_volume = sorted(chosen, key=lambda entry: (-(entry.quote_volume_24h or 0.0), entry.symbol))
     priced = [entry for entry in by_volume if entry.quote_volume_24h is not None]
@@ -210,20 +223,19 @@ def _rank_by_volume_and_volatility(
     if pool_size <= 1:
         return pool + outside_pool
 
-    by_volatility = sorted(
-        pool, key=lambda entry: (-(entry.volatility_24h or 0.0), entry.symbol)
-    )
-    volatility_rank = {entry.symbol: i for i, entry in enumerate(by_volatility)}
+    def percentile_rank(key) -> dict[str, float]:
+        ordered = sorted(pool, key=lambda entry: (-(key(entry) or 0.0), entry.symbol))
+        return {entry.symbol: i / (pool_size - 1) for i, entry in enumerate(ordered)}
 
-    def blended_score(entry: CapturableSymbol, volume_rank: int) -> float:
-        volume_percentile = volume_rank / (pool_size - 1)
-        volatility_percentile = volatility_rank[entry.symbol] / (pool_size - 1)
-        return (1.0 - volatility_weight) * volume_percentile + volatility_weight * volatility_percentile
+    volume_weight = 1.0 - sum(weight for _, weight in weighted_signals)
+    percentiles = [(percentile_rank(lambda entry: entry.quote_volume_24h), volume_weight)]
+    percentiles.extend((percentile_rank(key), weight) for key, weight in weighted_signals)
 
-    ranked_pool = sorted(
-        (blended_score(entry, i), entry.symbol, entry) for i, entry in enumerate(pool)
-    )
-    return [entry for _, _, entry in ranked_pool] + outside_pool
+    def blended_score(entry: CapturableSymbol) -> float:
+        return sum(pct[entry.symbol] * weight for pct, weight in percentiles)
+
+    ranked_pool = sorted(pool, key=lambda entry: (blended_score(entry), entry.symbol))
+    return ranked_pool + outside_pool
 
 
 def select_capturable_symbols(
@@ -238,6 +250,10 @@ def select_capturable_symbols(
     volatility: Mapping[str, float] | None = None,
     liquidity_pool_size: int | None = None,
     volatility_weight: float | None = None,
+    momentum: Mapping[str, float] | None = None,
+    momentum_weight: float = 0.0,
+    short_window_acceleration: Mapping[str, float] | None = None,
+    acceleration_weight: float = 0.0,
 ) -> tuple[CapturableSymbol, ...]:
     """Apply the settings policy to one venue's catalogue. Pure, so it is testable.
 
@@ -245,6 +261,13 @@ def select_capturable_symbols(
     rather than dropped: it sorts last, because an unknown volume is not a zero
     one, and the count of them is reported so a venue that stopped pricing half
     its symbols is visible rather than merely quiet.
+
+    `momentum` and `short_window_acceleration` are optional on top of volume and
+    24-hour volatility. Both are asymmetric by venue (Binance states nothing
+    shorter than 24h in bulk; the acceleration scan only covers whatever slice
+    of the pool has been rotated through so far) -- when a mapping is entirely
+    empty, its weight is silently redistributed to volume rather than spent on
+    a signal that would rank every symbol identically anyway.
     """
     if selection_metric not in KNOWN_SELECTION_METRICS:
         raise SymbolSelectionRefused(
@@ -266,14 +289,30 @@ def select_capturable_symbols(
             )
         if volatility_weight is None or not 0.0 <= volatility_weight <= 1.0:
             raise SymbolSelectionRefused(
-                f"symbol_selection_volatility_weight is {volatility_weight!r}; it blends two "
-                f"percentiles and must sit in [0, 1]"
+                f"symbol_selection_volatility_weight is {volatility_weight!r}; it must sit in [0, 1]"
+            )
+        if not 0.0 <= momentum_weight <= 1.0:
+            raise SymbolSelectionRefused(
+                f"symbol_selection_momentum_weight is {momentum_weight!r}; it must sit in [0, 1]"
+            )
+        if not 0.0 <= acceleration_weight <= 1.0:
+            raise SymbolSelectionRefused(
+                f"symbol_selection_acceleration_weight is {acceleration_weight!r}; it must sit "
+                f"in [0, 1]"
+            )
+        spent = volatility_weight + momentum_weight + acceleration_weight
+        if spent > 1.0:
+            raise SymbolSelectionRefused(
+                f"volatility_weight + momentum_weight + acceleration_weight is {spent!r}, which "
+                f"would leave a negative share for volume; the three must sum to at most 1.0"
             )
 
     capturable = [listing for listing in listings if adapter.is_symbol_capturable(listing)]
     held = frozenset(held_symbols or ())
     funding = funding or {}
     volatility = volatility or {}
+    momentum = momentum or {}
+    short_window_acceleration = short_window_acceleration or {}
     chosen = [
         _with_funding(
             CapturableSymbol(
@@ -284,13 +323,20 @@ def select_capturable_symbols(
                 price_increment=listing.price_increment,
                 instrument_kind=listing.instrument_kind,
                 volatility_24h=volatility.get(listing.symbol),
+                momentum_1h=momentum.get(listing.symbol),
+                short_window_acceleration=short_window_acceleration.get(listing.symbol),
             ),
             funding.get(listing.symbol),
         )
         for listing in capturable
     ]
     if selection_metric == VOLUME_AND_VOLATILITY_BLEND:
-        chosen = _rank_by_volume_and_volatility(chosen, liquidity_pool_size, volatility_weight)
+        weighted_signals = [(lambda entry: entry.volatility_24h, volatility_weight)]
+        if momentum:
+            weighted_signals.append((lambda entry: abs(entry.momentum_1h) if entry.momentum_1h is not None else None, momentum_weight))
+        if short_window_acceleration:
+            weighted_signals.append((lambda entry: entry.short_window_acceleration, acceleration_weight))
+        chosen = _rank_pool_by_blended_percentiles(chosen, liquidity_pool_size, tuple(weighted_signals))
     else:
         # Descending volume, with unpriced symbols last and ties broken by name so
         # two runs over the same catalogue select the same symbols.
@@ -328,6 +374,10 @@ def select_capturable_symbols(
         standing.selected = len(chosen)
         standing.without_volume = sum(1 for entry in chosen if entry.quote_volume_24h is None)
         standing.without_volatility = sum(1 for entry in chosen if entry.volatility_24h is None)
+        standing.with_momentum = sum(1 for entry in chosen if entry.momentum_1h is not None)
+        standing.short_window_scanned = sum(
+            1 for entry in chosen if entry.short_window_acceleration is not None
+        )
         standing.without_funding_rate = sum(
             1 for entry in chosen if entry.funding_rate_per_settlement is None
         )
@@ -339,6 +389,27 @@ def select_capturable_symbols(
             types[listing.contract_type] = types.get(listing.contract_type, 0) + 1
         standing.contract_types_seen = types
     return tuple(chosen)
+
+
+def _short_window_acceleration(closes: tuple[float, ...], recent_bars: int) -> float | None:
+    """What fraction of the whole window's own range happened in its most recent slice.
+
+    Both ranges are measured as high-low over the same closes, so a subset's
+    range can never exceed the full window's -- the ratio is bounded in [0, 1]
+    by construction. Close to 1 means most of what this window moved happened
+    in just the last `recent_bars`; close to 0 means the move is over and this
+    symbol has been flat since. None when there are not enough bars to measure
+    both a baseline and a distinct recent slice, or the baseline never moved at
+    all (a symbol with zero range has no "share of it" to speak of).
+    """
+    if recent_bars < 1 or len(closes) <= recent_bars:
+        return None
+    baseline_high, baseline_low = max(closes), min(closes)
+    if baseline_high == baseline_low:
+        return None
+    recent = closes[-recent_bars:]
+    recent_high, recent_low = max(recent), min(recent)
+    return (recent_high - recent_low) / (baseline_high - baseline_low)
 
 
 class SymbolCatalogueReader:
@@ -354,6 +425,12 @@ class SymbolCatalogueReader:
         monotonic=None,
         liquidity_pool_size: int | None = None,
         volatility_weight: float | None = None,
+        momentum_weight: float = 0.0,
+        acceleration_weight: float = 0.0,
+        short_window_scan_size: int = 0,
+        short_window_kline_interval: str = "5m",
+        short_window_kline_count: int = 12,
+        short_window_recent_bars: int = 3,
     ) -> None:
         import time
 
@@ -369,6 +446,19 @@ class SymbolCatalogueReader:
         # threads settings through, it does not re-decide what they mean).
         self._liquidity_pool_size = liquidity_pool_size
         self._volatility_weight = volatility_weight
+        self._momentum_weight = momentum_weight
+        self._acceleration_weight = acceleration_weight
+        self._short_window_scan_size = short_window_scan_size
+        self._short_window_kline_interval = short_window_kline_interval
+        self._short_window_kline_count = short_window_kline_count
+        self._short_window_recent_bars = short_window_recent_bars
+        # Held in memory alone, deliberately: unlike a checkpointed price series,
+        # losing this on a restart costs at most one rotation's worth of scans
+        # (up to liquidity_pool_size / short_window_scan_size refreshes) before
+        # the picture rebuilds, which is a mild cost next to what a lost lot book
+        # or a lost regime series costs -- so it is not checkpointed in this pass.
+        self._short_window_scores: dict[str, float] = {}
+        self._short_window_rotation_position = 0
         self.standing = CatalogueStanding(venue_id=adapter.venue_id)
         self._selection: tuple[CapturableSymbol, ...] = ()
 
@@ -432,6 +522,58 @@ class SymbolCatalogueReader:
             return {}
         self.standing.funding_failure = None
         return facts
+
+    def _scan_short_window_momentum(self, pool_symbols: Sequence[str]) -> None:
+        """Refresh a rotating slice of the pool's acceleration reading.
+
+        Neither venue bulk-serves candles shorter than 24h, so this is one REST
+        call per symbol scanned -- bounded to `short_window_scan_size` and
+        rotated through the pool rather than scanning it all at once, the same
+        reasoning `cointegration-pair-finder` rotates through pairs for. A
+        symbol not reached this cycle keeps whatever reading a previous cycle
+        gave it; a symbol never reached at all stays None, which
+        `select_capturable_symbols` treats as "not yet scanned", not as flat.
+
+        A failed fetch stops the scan for this cycle rather than raising: the
+        catalogue read that starts this must not fail over a single symbol's
+        candle request timing out, the same reasoning `_read_margin_tiers` uses.
+        """
+        if self._short_window_scan_size <= 0 or not pool_symbols:
+            return
+        pool_symbols = list(pool_symbols)
+        start = self._short_window_rotation_position % len(pool_symbols)
+        slice_ = pool_symbols[start:start + self._short_window_scan_size]
+        if len(slice_) < self._short_window_scan_size:
+            slice_ += pool_symbols[: self._short_window_scan_size - len(slice_)]
+        self._short_window_rotation_position = (start + len(slice_)) % len(pool_symbols)
+
+        requests = self._adapter.short_window_kline_requests(
+            slice_, self._short_window_kline_interval, self._short_window_kline_count
+        )
+        if not requests:
+            return
+
+        paired = []
+        for request in requests:
+            try:
+                paired.append(
+                    (request.describes, self._fetch(request.url, self._request_timeout_seconds))
+                )
+            except (urllib.error.URLError, OSError, TimeoutError, ValueError) as failure:
+                self.standing.short_window_scan_failure = (
+                    f"{type(failure).__name__} reading recent klines for "
+                    f"{request.describes}: {failure}"
+                )
+                break
+        if not paired:
+            return
+
+        closes_by_symbol = self._adapter.read_short_window_klines(paired)
+        for symbol, closes in closes_by_symbol.items():
+            score = _short_window_acceleration(closes, self._short_window_recent_bars)
+            if score is not None:
+                self._short_window_scores[symbol] = score
+        self.standing.short_window_scan_failure = None
 
     @property
     def selection(self) -> tuple:
@@ -517,7 +659,22 @@ class SymbolCatalogueReader:
 
         volumes = dict(self._adapter.read_quote_volumes(tickers))
         volatility = dict(self._adapter.read_volatility_facts(tickers))
+        momentum = dict(self._adapter.read_momentum_facts(tickers))
         funding = self._read_funding(listings, tickers)
+
+        if self._selection_metric == VOLUME_AND_VOLATILITY_BLEND and self._acceleration_weight > 0:
+            # The same volume-qualified pool select_capturable_symbols itself
+            # will rank -- computed again here, cheaply (a sort of symbol names),
+            # because the scan has to run before the selection it feeds.
+            capturable_symbols = [
+                listing.symbol for listing in listings if self._adapter.is_symbol_capturable(listing)
+            ]
+            pool_symbols = sorted(
+                (symbol for symbol in capturable_symbols if volumes.get(symbol) is not None),
+                key=lambda symbol: -volumes[symbol],
+            )[: self._liquidity_pool_size or 0]
+            self._scan_short_window_momentum(pool_symbols)
+
         selection = select_capturable_symbols(
             adapter=self._adapter,
             listings=listings,
@@ -530,6 +687,10 @@ class SymbolCatalogueReader:
             volatility=volatility,
             liquidity_pool_size=self._liquidity_pool_size,
             volatility_weight=self._volatility_weight,
+            momentum=momentum,
+            momentum_weight=self._momentum_weight,
+            short_window_acceleration=dict(self._short_window_scores),
+            acceleration_weight=self._acceleration_weight,
         )
         # The ladder is read for the symbols actually being captured, after the
         # selection has chosen them. Asked before, this would be one request per
@@ -623,6 +784,9 @@ def describe_catalogue(reader: SymbolCatalogueReader) -> dict:
         "kept_because_held": reader.standing.kept_because_held,
         "selected_without_volume": reader.standing.without_volume,
         "selected_without_volatility": reader.standing.without_volatility,
+        "selected_with_momentum": reader.standing.with_momentum,
+        "selected_short_window_scanned": reader.standing.short_window_scanned,
+        "short_window_scan_failure": reader.standing.short_window_scan_failure,
         "selected_without_funding_rate": reader.standing.without_funding_rate,
         "selected_without_funding_interval": reader.standing.without_funding_interval,
         "funding_failure": reader.standing.funding_failure,
@@ -726,6 +890,18 @@ def start_part(context) -> int:
             # metric is what symbol_selection_metric actually names.
             liquidity_pool_size=int(context.number("symbol_selection_liquidity_pool_size")),
             volatility_weight=context.number("symbol_selection_volatility_weight"),
+            momentum_weight=context.number("symbol_selection_momentum_weight"),
+            acceleration_weight=context.number("symbol_selection_acceleration_weight"),
+            short_window_scan_size=int(context.number("symbol_selection_short_window_scan_size")),
+            short_window_kline_interval=settings.entries[
+                "symbol_selection_short_window_kline_interval"
+            ].value,
+            short_window_kline_count=int(
+                context.number("symbol_selection_short_window_kline_count")
+            ),
+            short_window_recent_bars=int(
+                context.number("symbol_selection_short_window_recent_bars")
+            ),
         )
         for adapter in adapters
     ]

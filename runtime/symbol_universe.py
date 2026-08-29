@@ -80,6 +80,17 @@ class CapturableSymbol:
     # ticker response quote_volume_24h comes from. None where the venue did not
     # price the symbol on this read -- the same absence, not a zero range.
     volatility_24h: float | None = None
+    # Signed change over the last hour, from a venue that states one in bulk
+    # (Bybit's prevPrice1h). None on a venue that states nothing shorter than
+    # 24h at all (Binance) -- never zero, which would read as "measured flat".
+    momentum_1h: float | None = None
+    # What fraction of a longer look-back window's own high-low range happened
+    # in just its most recent slice -- close to 1 means the window's movement is
+    # concentrated right now, close to 0 means it already happened and this
+    # symbol has since gone quiet. From a rotating per-symbol kline scan, so
+    # None on a pool member this rotation has not reached yet, not on a symbol
+    # confirmed flat.
+    short_window_acceleration: float | None = None
     # This contract's maintenance margin ladder, as the venue published it.
     # Empty when the venue's schedule could not be read -- Binance serves its
     # brackets from a signed endpoint, so an empty tuple there means no API key

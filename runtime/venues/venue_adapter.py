@@ -857,6 +857,57 @@ class VenueAdapter(abc.ABC):
         from the mapping rather than given a fabricated range.
         """
 
+    # Deliberately NOT abstract, same reasoning as margin_schedule_requests above:
+    # momentum and short-window klines are genuinely asymmetric between venues
+    # (Bybit states a 1-hour-old price on its bulk ticker; Binance states
+    # nothing shorter than 24h in bulk at all), and an abstract method added for
+    # one venue and forgotten for the other is exactly the 2026-08-25 incident --
+    # `BybitLinearAdapter` could not be constructed and every part loading a
+    # venue adapter crash-looped, invisibly, for hours. A default that answers
+    # "this venue states nothing shorter" cannot do that to a venue nobody
+    # extended yet.
+
+    def read_momentum_facts(self, ticker_response: object) -> Mapping[str, float]:
+        """Each symbol's recent (shorter than 24h) price change, or nothing.
+
+        Empty for a venue whose bulk ticker states nothing shorter than a full
+        day -- which is not the same fact as every symbol having zero momentum,
+        so an empty mapping here must never be read as a zero.
+        """
+        return {}
+
+    def short_window_kline_requests(
+        self, symbols: Sequence[str], interval: str, bar_count: int
+    ) -> tuple["VenueRequest", ...]:
+        """The REST calls needed for recent (minutes-to-an-hour) candles, per symbol.
+
+        `interval` and `bar_count` are the caller's settings, not this adapter's
+        own: how far back to look is a policy question, and a venue only knows
+        how to translate that policy into its own request shape (T-4). Empty
+        when nothing has asked for a scan this cycle. Per symbol on both venues
+        that implement this -- neither bulk-serves short-interval candles the
+        way the 24-hour ticker bulk-serves a whole market -- so `symbols` is
+        never ignored the way it can be for a venue-wide margin schedule.
+        """
+        return ()
+
+    def read_short_window_klines(
+        self, symbol_responses: Sequence[tuple[str, object]]
+    ) -> Mapping[str, tuple[float, ...]]:
+        """Each requested symbol's recent closes, oldest first, or nothing.
+
+        `symbol_responses` pairs each response with the symbol its own request
+        named (`VenueRequest.describes`), rather than asking this method to dig
+        a symbol back out of the response body -- Binance's kline rows carry
+        none at all, and deriving the pairing two different ways per venue would
+        be the kind of difference this method exists to hide.
+
+        Empty for a venue this has not been implemented for. A symbol absent
+        from the mapping was not read, which is a different fact from having
+        been read and found flat.
+        """
+        return {}
+
     @abc.abstractmethod
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
         """Whether this listing is one the tape should carry at all.
