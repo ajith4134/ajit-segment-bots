@@ -1338,6 +1338,11 @@ value = 0.6
 unit  = "fraction of the peak"
 note  = "operator, 2026-08-23: the share of a trade's peak favourable excursion an exit must capture to count as a good exit for exit-timing-learner. Six tenths; capturing everything is hindsight and half is a coin flip on when to leave."
 
+[exit_counterfactual_plan_maximum_age_seconds]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-29: how old a bull/bear/tail exit plan may be before exit-counterfactual-replayer stops treating its symbol as holding an open position. Without a bound this dict held every symbol that had ever had a plan, forever, so an open-position tape accumulated tape for symbols with no position at all (T-3). A day is generously above any expected holding time."
+
 [feature_extreme_deviation]
 value = 2.0
 unit  = "standard deviations"

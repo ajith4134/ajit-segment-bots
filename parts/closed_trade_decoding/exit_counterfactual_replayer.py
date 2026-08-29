@@ -57,6 +57,29 @@ TIME_EXIT = "time-exit"
 REPLAYABLE_RULES = (FIXED_TARGET, FIXED_STOP, TRAILING_STOP, TIME_EXIT)
 
 
+def _jobs_for_plan(kind: str, plan, trade_id: str, trade) -> tuple:
+    """Every counterfactual replay job one exit plan implies.
+
+    Every plan gets its stop and its targets replayed as fixed rules. Only
+    tail-exit-plan also gets a trailing-stop replay: it is the only bot whose
+    plan is a trail rather than a fixed level, and REPLAYABLE_RULES has always
+    supported TRAILING_STOP -- nothing fed it until now.
+    """
+    jobs = [
+        (trade_id, trade, f"{kind}:stop", {"kind": FIXED_STOP, "price": plan.stop_price}),
+    ]
+    for index, target in enumerate(plan.targets):
+        jobs.append(
+            (trade_id, trade, f"{kind}:target-{index}", {"kind": FIXED_TARGET, "price": target.price})
+        )
+    if kind == "tail-exit-plan":
+        jobs.append((
+            trade_id, trade, "tail-exit-plan:trail",
+            {"kind": TRAILING_STOP, "distance": plan.risk_fraction * trade.entry_price},
+        ))
+    return tuple(jobs)
+
+
 @dataclass(frozen=True)
 class ReplayOutcome:
     trade_id: str
@@ -93,12 +116,21 @@ class ExitCounterfactualReplayer:
             )
         self._cost_fraction = round_trip_cost_fraction
         self._now_ns = now_ns
-        self._tape: dict[str, list] = {}
+        self._tape: dict[tuple[str, str], list] = {}
         self.standing = ReplayerStanding()
 
-    def observe_tape(self, trade_id: str, price: float, at_ns: int) -> None:
-        """The prices that actually printed while the position was open."""
-        self._tape.setdefault(trade_id, []).append((at_ns, price))
+    def observe_tape(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
+        """The prices that actually printed while the position was open.
+
+        Keyed by instrument, not by trade id: the real trade id only exists
+        once the trade closes (closed_trade_id needs closed_at_ns), so keying
+        by it here meant the tape and the replay lookup could never meet.
+        """
+        self._tape.setdefault((venue_id, symbol), []).append((at_ns, price))
+
+    def release(self, venue_id: str, symbol: str) -> None:
+        """T-3: a closed trade's tape must not leak into the next trade's replay."""
+        self._tape.pop((venue_id, symbol), None)
 
     def replay(self, trade_id: str, closed_trade, rule_name: str, rule: dict) -> ReplayOutcome:
         self.standing.replays += 1
@@ -109,19 +141,23 @@ class ExitCounterfactualReplayer:
                 f"extra steps"
             )
 
-        tape = sorted(self._tape.get(trade_id, []))
+        tape = sorted(self._tape.get((closed_trade.venue_id, closed_trade.symbol), []))
         if not tape:
             self.standing.without_a_tape += 1
             return self._outcome(
                 trade_id, rule_name, NO_TAPE, None, None, False,
                 "no price history covers this trade, so nothing can be replayed against "
                 "what actually printed",
+                closed_trade.venue_id, closed_trade.symbol, None,
             )
 
         is_long = closed_trade.direction == "long"
         sign = 1.0 if is_long else -1.0
         entry = closed_trade.entry_price
         kind = rule["kind"]
+        trail_fraction = (
+            rule["distance"] / entry if kind == TRAILING_STOP and entry else None
+        )
         exit_price = None
         best = entry
 
@@ -153,6 +189,7 @@ class ExitCounterfactualReplayer:
                 trade_id, rule_name, NEVER_TRIGGERED, None, None, False,
                 f"the {kind} rule never fired over this trade's tape, so it would have "
                 f"held to the actual exit",
+                closed_trade.venue_id, closed_trade.symbol, trail_fraction,
             )
 
         # A rule exiting at a price the tape never printed did not have a fill
@@ -166,6 +203,7 @@ class ExitCounterfactualReplayer:
                 f"the rule assumes an exit at {exit_price:.6f}, which never printed "
                 f"between {min(printed):.6f} and {max(printed):.6f}. Reporting it would "
                 f"invent money",
+                closed_trade.venue_id, closed_trade.symbol, trail_fraction,
             )
 
         gross = sign * (exit_price - entry) * closed_trade.quantity
@@ -185,12 +223,12 @@ class ExitCounterfactualReplayer:
             f"actual {closed_trade.realised_pnl:+.4f}, {difference:+.4f} apart, costs "
             f"applied. This is hindsight: a rule chosen after seeing outcomes is fitted to "
             f"them, and one trade is never evidence that it is better",
-            difference,
+            closed_trade.venue_id, closed_trade.symbol, trail_fraction, difference,
         )
 
     def _outcome(
         self, trade_id, rule_name, state, exit_price, realised, reachable, reason,
-        difference=None,
+        venue_id, symbol, trail_fraction, difference=None,
     ) -> ReplayOutcome:
         return ReplayOutcome(
             trade_id=trade_id, rule_name=rule_name, state=state,
@@ -199,6 +237,7 @@ class ExitCounterfactualReplayer:
                 realised_pnl=realised, difference=difference,
                 would_have_been_reachable=reachable, is_hindsight=True, reason=reason,
                 replayed_at_ns=self._now_ns(),
+                venue_id=venue_id, symbol=symbol, trail_fraction=trail_fraction,
             ),
             reason=reason, replayed_at_ns=self._now_ns(),
         )
@@ -262,35 +301,33 @@ def start_part(context) -> int:
     closed = Batch(read=context.bus.reader("closed-trade"))
     trades = Batch(read=context.bus.reader("market-data"))
     plans = {
-        kind: LatestByKey(read=context.bus.reader(kind), key_of=lambda p: (p.venue_id, p.symbol))
+        kind: LatestByKey(
+            read=context.bus.reader(kind), key_of=lambda p: (p.venue_id, p.symbol),
+            maximum_age_seconds=context.number("exit_counterfactual_plan_maximum_age_seconds"),
+        )
         for kind in ("bull-exit-plan", "bear-exit-plan", "tail-exit-plan")
     }
     publish_counterfactuals = context.bus.publisher_for("exit-counterfactual")
     replayer = ExitCounterfactualReplayer(round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"))
-    open_symbols: dict[tuple[str, str], str] = {}
 
     def read_jobs():
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
-                trade_id = open_symbols.get((trade.venue_id, trade.symbol))
-                if trade_id is not None:
-                    replayer.observe_tape(trade_id, trade.price, trade.venue_time_ns)
+                replayer.observe_tape(
+                    trade.venue_id, trade.symbol, trade.price, trade.venue_time_ns
+                )
         jobs = []
         for trade in closed.payloads():
             trade_id = closed_trade_id(trade)
             key = (trade.venue_id, trade.symbol)
-            open_symbols.pop(key, None)
             for kind, source in plans.items():
                 plan = source.mapping().get(key)
                 if plan is None:
                     continue
-                jobs.append((trade_id, trade, f"{kind}:stop", {"kind": FIXED_STOP, "price": plan.stop_price}))
-                for index, target in enumerate(plan.targets):
-                    jobs.append((trade_id, trade, f"{kind}:target-{index}", {"kind": FIXED_TARGET, "price": target.price}))
-        # The next trade on a symbol starts a fresh tape under its own id.
-        for kind, source in plans.items():
-            for key in source.mapping():
-                open_symbols.setdefault(key, f"{key[0]}:{key[1]}:pending")
+                jobs.extend(_jobs_for_plan(kind, plan, trade_id, trade))
+            # The next trade on this symbol gets a fresh tape -- the one just
+            # replayed against must not leak into it (T-3).
+            replayer.release(*key)
         return tuple(jobs)
 
     def publish(counterfactual) -> None:

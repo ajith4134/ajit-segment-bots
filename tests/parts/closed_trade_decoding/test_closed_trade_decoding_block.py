@@ -737,8 +737,13 @@ def a_replayer(cost=0.0):
 
 
 def _tape(replayer, trade_id, prices):
+    # `trade_id` is kept as this helper's parameter name for call-site
+    # continuity (it still names which replay() call the tape is "for" in the
+    # test's own reading), but observe_tape keys by instrument now -- every
+    # caller in this section uses a_closed_trade()'s defaults, "binance-usdm"/
+    # "BTCUSDT", so that is what is observed here regardless of trade_id.
     for index, price in enumerate(prices):
-        replayer.observe_tape(trade_id, price, index * SECOND_NS)
+        replayer.observe_tape("binance-usdm", "BTCUSDT", price, index * SECOND_NS)
 
 
 def test_every_counterfactual_is_labelled_hindsight():
@@ -789,6 +794,65 @@ def test_a_rule_shape_outside_the_declared_set_is_refused():
     with pytest.raises(ValueError):
         subject.replay("t-1", a_closed_trade(), "invented", {"kind": "optimised-sweep"})
     assert set(REPLAYABLE_RULES) >= {FIXED_TARGET, TRAILING_STOP, TIME_EXIT}
+
+
+def test_a_tape_observed_while_open_is_found_at_replay_time():
+    class ClosedTradeStub:
+        venue_id = "binance-usdm"
+        symbol = "BTCUSDT"
+        direction = "long"
+        entry_price = 100.0
+        quantity = 1.0
+        opened_at_ns = 0
+        realised_pnl = 2.0
+
+    replayer = ExitCounterfactualReplayer(round_trip_cost_fraction=0.0)
+    # Prices observed while the position was open, keyed by instrument -- not
+    # by a trade_id that doesn't exist until the trade closes.
+    replayer.observe_tape("binance-usdm", "BTCUSDT", 101.0, at_ns=1)
+    replayer.observe_tape("binance-usdm", "BTCUSDT", 98.0, at_ns=2)
+
+    outcome = replayer.replay(
+        "t1", ClosedTradeStub(), "tail-exit-plan:trail",
+        {"kind": TRAILING_STOP, "distance": 2.0},
+    )
+    assert outcome.counterfactual.reason != "no price history covers this trade, so nothing can be replayed against what actually printed"
+    assert outcome.counterfactual.venue_id == "binance-usdm"
+    assert outcome.counterfactual.symbol == "BTCUSDT"
+    assert outcome.counterfactual.trail_fraction == pytest.approx(2.0 / 100.0)
+
+
+def test_jobs_for_plan_includes_a_trailing_stop_job_for_tail_exit_plan():
+    from parts.closed_trade_decoding.exit_counterfactual_replayer import _jobs_for_plan
+
+    class PlanStub:
+        stop_price = 95.0
+        targets = ()
+        risk_fraction = 0.02
+
+    class TradeStub:
+        entry_price = 100.0
+
+    jobs = _jobs_for_plan("tail-exit-plan", PlanStub(), "t1", TradeStub())
+    trail_jobs = [job for job in jobs if job[2] == "tail-exit-plan:trail"]
+    assert len(trail_jobs) == 1
+    _, _, _, rule = trail_jobs[0]
+    assert rule == {"kind": TRAILING_STOP, "distance": pytest.approx(2.0)}
+
+
+def test_jobs_for_plan_does_not_add_a_trailing_job_for_bull_or_bear_plans():
+    from parts.closed_trade_decoding.exit_counterfactual_replayer import _jobs_for_plan
+
+    class PlanStub:
+        stop_price = 95.0
+        targets = ()
+        risk_fraction = 0.02
+
+    class TradeStub:
+        entry_price = 100.0
+
+    jobs = _jobs_for_plan("bull-exit-plan", PlanStub(), "t1", TradeStub())
+    assert all(not job[2].endswith(":trail") for job in jobs)
 
 
 # ---- holding-horizon-profiler -----------------------------------------------
