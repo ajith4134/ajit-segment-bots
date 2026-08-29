@@ -48,7 +48,7 @@ from parts.hypothesis.instruction_writer import (
 )
 from parts.hypothesis.loss_inverter import (
     INVERTED, LossCause, LossInverter, LOST_TO_COSTS, LOST_TO_EXECUTION, LOST_TO_NOISE,
-    LOST_TO_TIMING, NOT_INVERTIBLE, NOT_SYSTEMATIC_ENOUGH, WRONG_ON_DIRECTION,
+    LOST_TO_TIMING, NOT_INVERTIBLE, NOT_SYSTEMATIC_ENOUGH, WRONG_ON_DIRECTION, detector_of,
 )
 from parts.hypothesis.power_estimator import (
     ESTIMATED, NO_EFFECT_CLAIMED, PowerEstimator, UNTESTABLE_HERE,
@@ -235,6 +235,22 @@ def test_a_wrong_rate_below_half_is_refused_at_construction():
             minimum_trades=10, minimum_wrong_rate=0.3, base_rate=0.5, prior_weight=4.0,
             half_life_observations=500,
         )
+
+
+def test_detector_of_does_not_treat_a_stop_verdict_as_a_detector_name():
+    class InstructionStub:
+        change = "stop:inside-the-symbols-ordinary-movement"
+
+    assert detector_of(InstructionStub()) == "stop:inside-the-symbols-ordinary-movement"
+    # unchanged, not stripped to "inside-the-symbols-ordinary-movement" --
+    # this is not a detector name and must not be read as one.
+
+
+def test_detector_of_unwraps_a_real_detector_prefixed_change():
+    class InstructionStub:
+        change = "detector:momentum-burst-detector"
+
+    assert detector_of(InstructionStub()) == "momentum-burst-detector"
 
 
 # ---- power-estimator --------------------------------------------------------

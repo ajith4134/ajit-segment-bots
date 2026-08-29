@@ -75,6 +75,16 @@ THE_FIX_FOR = {
 }
 
 
+def detector_of(instruction) -> str:
+    """The detector an instruction names, or the instruction's raw change string
+    if it does not name one at all -- only a `detector:*` change is naming a
+    detector; a stop verdict, a pnl component or a sequence kind is not, and
+    reading one as a detector name would corrupt LossCause.detector."""
+    change = str(instruction.change)
+    prefix, sep, suffix = change.partition(":")
+    return suffix if prefix == "detector" and sep else change
+
+
 @dataclass(frozen=True)
 class LossCause:
     """Why one strategy lost, from whoever decoded the trades."""
@@ -295,10 +305,6 @@ def start_part(context) -> int:
     losses_seen: dict[str, int] = {}
     causes_seen: dict[str, dict] = {}
     handed_over_already: set[str] = set()
-
-    def detector_of(instruction) -> str:
-        change = str(instruction.change)
-        return change.split(":", 1)[1] if ":" in change else change
 
     def regime_of(instruction) -> str:
         applies_when = instruction.applies_when if isinstance(instruction.applies_when, dict) else {}
