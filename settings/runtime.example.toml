@@ -2133,6 +2133,11 @@ value = 0.1
 unit  = "fraction of notional"
 note  = "operator, 2026-08-23: the least effect a sequence pattern -- a loss after a loss, a session, a size -- must show on realised results for sequence-pattern-miner to report it. A tenth of notional."
 
+[sequence_pattern_republish_interval_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-29: how long an unchanged sequence-pattern finding may go unrepeated before it is restated so a reader that started after it last changed still sees it. An hour, because these are process-wide findings that change on the order of dozens of trades, not seconds -- unlike a per-symbol level, nothing needs this fresher than a reader could reasonably have missed a restart window for."
+
 [sequence_shuffle_margin]
 value = 0.05
 unit  = "fraction of notional"

@@ -29,7 +29,11 @@ import statistics
 import time
 from dataclasses import dataclass, field
 
-from runtime.trade_decoding_types import SequencePattern
+from runtime.trade_decoding_types import (
+    SequencePattern, SEQUENCE_KINDS, STREAKS, SIZE_DRIFT, SESSION_DECAY,
+    OUTCOME_CONDITIONING,
+)
+from runtime.level_publishing import LevelPublisherByKey
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -43,13 +47,6 @@ PART_DECLARATION = PartDeclaration(
     rate_risk="latency-only",
     skipped_tick_effect="delays",
 )
-
-STREAKS = "losses-cluster-more-than-chance"
-SIZE_DRIFT = "size-changes-with-the-previous-outcome"
-SESSION_DECAY = "quality-falls-later-in-the-session"
-OUTCOME_CONDITIONING = "the-next-trade-depends-on-the-last-one"
-
-PATTERN_KINDS = (STREAKS, SIZE_DRIFT, SESSION_DECAY, OUTCOME_CONDITIONING)
 
 FOUND = "found"
 NOT_PRESENT = "not-present-in-this-sequence"
@@ -201,7 +198,7 @@ class SequencePatternMiner:
         return self._outcome_conditioning(trades)
 
     def mine(self, kind: str) -> SequenceOutcome:
-        if kind not in PATTERN_KINDS:
+        if kind not in SEQUENCE_KINDS:
             raise ValueError(
                 f"{kind!r} is not a declared shape. A search over sequences finds "
                 f"structure in random walks reliably enough to be dangerous"
@@ -285,10 +282,30 @@ def describe_sequence_mining(miner: SequencePatternMiner) -> dict:
         "rejected_because_they_survived_shuffling": (
             miner.standing.rejected_by_shuffling
         ),
-        "pattern_kinds": list(PATTERN_KINDS),
+        "pattern_kinds": list(SEQUENCE_KINDS),
         "searches_for_patterns": False,
         "tests_against_a_shuffled_baseline": True,
     }
+
+
+def _sequence_pattern_identity(items):
+    return tuple(
+        (p.kind, p.description, p.trades_examined, p.occurrences, p.effect,
+         p.is_significant, p.reason)
+        for p in items
+    )
+
+
+def mine_and_publish(miner: SequencePatternMiner, publish_patterns) -> None:
+    """One pass over every kind, publishing each usable finding.
+
+    `publish_patterns` takes (kind, pattern) -- separated from tick() so it is
+    directly testable without running the whole part's event loop.
+    """
+    for kind in SEQUENCE_KINDS:
+        outcome = miner.mine(kind)
+        if outcome.is_usable:
+            publish_patterns(kind, outcome.pattern)
 
 
 def run_sequence_pattern_miner(
@@ -300,10 +317,7 @@ def run_sequence_pattern_miner(
     def tick() -> None:
         for job in read_trades():
             miner.observe_trade(**job)
-        for kind in PATTERN_KINDS:
-            outcome = miner.mine(kind)
-            if outcome.is_usable:
-                publish_patterns(outcome.pattern)
+        mine_and_publish(miner, publish_patterns)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -326,7 +340,12 @@ def start_part(context) -> int:
 
     episodes = Batch(read=context.bus.reader("trade-episode"))
     closed = Batch(read=context.bus.reader("closed-trade"))
-    publish_patterns = context.bus.publisher_for("sequence-pattern")
+    raw_publish_patterns = context.bus.publisher_for("sequence-pattern")
+    level_publisher = LevelPublisherByKey(
+        publish=raw_publish_patterns,
+        refresh_interval_seconds=context.number("sequence_pattern_republish_interval_seconds"),
+        identity_of=_sequence_pattern_identity,
+    )
     miner = SequencePatternMiner(
         minimum_trades=int(context.number("decoding_minimum_trades")),
         effect_threshold=context.number("sequence_effect_threshold"),
@@ -349,7 +368,7 @@ def start_part(context) -> int:
         miner=miner,
         control_socket=context.control_socket,
         read_trades=read_trades,
-        publish_patterns=lambda pattern: publish_patterns((pattern,)),
+        publish_patterns=lambda kind, pattern: level_publisher.publish_level(kind, (pattern,)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

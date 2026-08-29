@@ -52,8 +52,9 @@ from parts.closed_trade_decoding.regime_transition_tagger import (
     FLICKER_ONLY, NO_CHANGE, NO_REGIME_DATA, RegimeTransitionTagger, TAGGED,
 )
 from parts.closed_trade_decoding.sequence_pattern_miner import (
-    OUTCOME_CONDITIONING, PATTERN_KINDS, SIZE_DRIFT, SURVIVES_SHUFFLING,
+    OUTCOME_CONDITIONING, SIZE_DRIFT, SURVIVES_SHUFFLING,
     SequencePatternMiner, STREAKS, TOO_FEW_TRADES as SEQUENCE_THIN,
+    mine_and_publish,
 )
 from parts.closed_trade_decoding.shortfall_decomposer import (
     DECOMPOSED, NO_DECISION_PRICE, ShortfallDecomposer,
@@ -81,8 +82,9 @@ from parts.closed_trade_decoding.winner_pattern_miner import (
 )
 from runtime.trade_decoding_types import (
     COSTS_ATE_IT, FROM_DIRECTION, FROM_FEES, FROM_UNEXPLAINED, IT_WAS_JUST_VARIANCE,
-    PNL_COMPONENTS, THE_STOP_WAS_INSIDE_THE_NOISE,
+    PNL_COMPONENTS, SEQUENCE_KINDS, SequencePattern, THE_STOP_WAS_INSIDE_THE_NOISE,
 )
+from runtime.level_publishing import LevelPublisherByKey
 from runtime.trading_types import ClosedTrade, Fill
 from runtime.part_declaration import load_declaration_from_blueprint
 
@@ -987,7 +989,53 @@ def test_only_declared_shapes_are_mined():
     subject = a_sequence_miner()
     with pytest.raises(ValueError):
         subject.mine("something-i-noticed")
-    assert len(PATTERN_KINDS) == 4
+    assert len(SEQUENCE_KINDS) == 4
+
+
+def test_an_unchanged_pattern_is_not_republished_every_tick():
+    published = []
+    level_publisher = LevelPublisherByKey(
+        publish=lambda items: published.extend(items),
+        refresh_interval_seconds=3600.0,
+        identity_of=lambda items: tuple(
+            (p.kind, p.description, p.trades_examined, p.occurrences, p.effect,
+             p.is_significant, p.reason)
+            for p in items
+        ),
+    )
+
+    def a_pattern(pattern_id, occurrences=1):
+        return SequencePattern(
+            pattern_id=pattern_id, description="d", kind=STREAKS, trades_examined=10,
+            occurrences=occurrences, effect=0.1, is_significant=True, reason="r",
+            found_at_ns=1,
+        )
+
+    # Same finding, minted under a fresh pattern_id each tick (exactly what
+    # sequence-pattern-miner does today) -- must be published once, not twice.
+    level_publisher.publish_level(STREAKS, (a_pattern("sequence-1"),))
+    level_publisher.publish_level(STREAKS, (a_pattern("sequence-2"),))
+    assert len(published) == 1
+
+    # A genuinely new occurrence count is a real change and must go out.
+    level_publisher.publish_level(STREAKS, (a_pattern("sequence-3", occurrences=2),))
+    assert len(published) == 2
+
+
+def test_mine_and_publish_calls_publish_with_kind_and_pattern():
+    miner = SequencePatternMiner(minimum_trades=4, effect_threshold=2.0, shuffle_margin=0.5)
+    # Ten wins followed by six losses in a row: the losing streak is long enough
+    # to clear the threshold, and asymmetric enough (unlike a symmetric block
+    # split down the middle) that _shuffled's interleave breaks it up, so this
+    # trips STREAKS to FOUND rather than SURVIVES_SHUFFLING.
+    realised = [1.0] * 10 + [-1.0] * 6
+    for i, outcome in enumerate(realised):
+        miner.observe_trade(f"t{i}", realised=outcome, notional=100.0, opened_at_ns=i, seconds_into_session=0.0)
+
+    calls = []
+    mine_and_publish(miner, lambda kind, pattern: calls.append((kind, pattern)))
+    kinds_published = {kind for kind, _ in calls}
+    assert STREAKS in kinds_published
 
 
 # ---- exploration-pair-decoder -----------------------------------------------
