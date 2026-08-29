@@ -25,6 +25,7 @@ pull the trigger down toward the current price.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
@@ -42,7 +43,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="bear-entry-timer",
     consumes=(
         "bear-side-candidate", "symbol-price-frame", "bear-calibrated-conviction",
-        "playbook-rule", "entry-quality",
+        "playbook-rule", "trade-episode",
     ),
     produces=("bear-entry-timing", "part-health"),
     resource_class="compute-bound",
@@ -92,6 +93,8 @@ class BearEntryTimer:
         entry_quality_window: int,
         prior_extension_floor: float,
         prior_entry_cost_fraction: float,
+        pending_entries_per_detector: int,
+        pending_entry_maximum_age_seconds: float,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
@@ -100,6 +103,13 @@ class BearEntryTimer:
             raise ValueError(
                 "a trigger with no life is a short taken later by reasoning that has aged out, "
                 "having paid carry the whole way"
+            )
+        if pending_entries_per_detector < 1:
+            raise ValueError("a queue of zero holds no pending entry to ever match")
+        if pending_entry_maximum_age_seconds <= 0:
+            raise ValueError(
+                "an entry that can wait forever for a matching episode leaks memory "
+                "for every decision whose trade was never taken"
             )
         self._floor, self._floor_reason = conviction_floor.before_any_plan()
         self._window_length = window_length
@@ -120,6 +130,9 @@ class BearEntryTimer:
         self._extension_by_detector: dict[str, QuantileEstimator] = {}
         self._entry_quality_window = entry_quality_window
         self._prior_extension_floor = prior_extension_floor
+        self._pending_entries_per_detector = pending_entries_per_detector
+        self._pending_entry_maximum_age_seconds = pending_entry_maximum_age_seconds
+        self._pending: dict[tuple[str, str, str], deque] = {}
         self.standing = TimerStanding()
 
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
@@ -148,6 +161,46 @@ class BearEntryTimer:
         """What entering this far above the mean actually cost, per detector."""
         self._entry_quality.observe(given_away)
         self._extension_for(detector).observe(extension_at_entry)
+
+    def _remember_pending_entry(
+        self, venue_id: str, symbol: str, detector: str, extension_at_entry: float,
+        decided_at_ns: int,
+    ) -> None:
+        """One ENTER_NOW decision, held until a closing trade-episode claims it.
+
+        Bounded on both ends (T-3): a decision whose trade was never taken, or
+        never closes, must not wait here forever. Keyed on detector as well as
+        symbol so two detectors active on the same symbol never share a queue.
+        """
+        key = (venue_id, symbol, detector)
+        queue = self._pending.setdefault(key, deque(maxlen=self._pending_entries_per_detector))
+        queue.append((extension_at_entry, decided_at_ns))
+
+    def match_trade_episode(self, episode) -> None:
+        """A closed trade claiming its entry decision, if one is still pending.
+
+        `trade-episode` is not side-specific -- a bear timer must ignore a
+        long episode on the same symbol and detector, or it learns from the
+        peer bot's trades.
+        """
+        if episode.action != SHORT:
+            return
+        key = (episode.venue_id, episode.symbol, episode.detector)
+        queue = self._pending.get(key)
+        if not queue:
+            return
+        now_ns = self._now_ns()
+        while queue and (now_ns - queue[0][1]) / 1e9 > self._pending_entry_maximum_age_seconds:
+            queue.popleft()
+        if not queue:
+            return
+        extension_at_entry, _ = queue.popleft()
+        conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+        entry_percentile = conditions.get("entry_percentile")
+        if entry_percentile is None:
+            return
+        given_away = max(0.0, 1.0 - entry_percentile)
+        self.observe_entry_quality(episode.detector, extension_at_entry, given_away)
 
     def decide(self, candidate, conviction) -> EntryTiming:
         self.standing.decisions += 1
@@ -210,6 +263,11 @@ class BearEntryTimer:
             )
 
         self.standing.entered_now += 1
+        if extension is not None:
+            self._remember_pending_entry(
+                candidate.venue_id, candidate.symbol, candidate.detector, extension,
+                self._now_ns(),
+            )
         return EntryTiming(
             bot=BOT,
             venue_id=candidate.venue_id,
@@ -335,7 +393,7 @@ def start_part(context) -> int:
         key_of=lambda conviction: (conviction.venue_id, conviction.symbol),
     )
     rules = Batch(read=context.bus.reader("playbook-rule"))
-    quality = Batch(read=context.bus.reader("entry-quality"))
+    episodes = Batch(read=context.bus.reader("trade-episode"))
     publish_timings = context.bus.publisher_for("bear-entry-timing")
 
     def read_candidates_and_convictions(timer):
@@ -345,8 +403,8 @@ def start_part(context) -> int:
             )
         for rule in rules.payloads():
             timer.observe_playbook_rule(rule)
-        for entry in quality.payloads():
-            timer.observe_entry_quality(entry)
+        for episode in episodes.payloads():
+            timer.match_trade_episode(episode)
         belief = convictions.mapping()
         pairs = []
         for candidate in candidates.payloads():
@@ -371,6 +429,8 @@ def start_part(context) -> int:
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
             prior_extension_floor=context.number("bear_entry_prior_extension_floor"),
             prior_entry_cost_fraction=context.number("bear_entry_prior_entry_cost_fraction"),
+            pending_entries_per_detector=int(context.number("bear_pending_entries_per_detector")),
+            pending_entry_maximum_age_seconds=context.number("bear_pending_entry_maximum_age_seconds"),
         ),
         control_socket=context.control_socket,
         read_candidates_and_convictions=read_candidates_and_convictions,

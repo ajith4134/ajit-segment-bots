@@ -1643,6 +1643,16 @@ value = 0.0005
 unit  = "fraction of price"
 note  = "operator, 2026-08-23, mirrored for the short side from bull_entry_prior_entry_cost_fraction (2026-08-22): what the timer assumes an entry costs in slippage before it has measured its own fills -- five basis points. Anchored to the taker fee it will also pay, so the assumed all-in cost of entering is roughly twice the fee rather than zero. A prior of zero would have the timer believe entering is free, which is the assumption that makes a marginal edge look tradeable."
 
+[bear_pending_entries_per_detector]
+value = 50
+unit  = "decisions"
+note  = "operator, 2026-08-29, mirrored for the short side from bull_pending_entries_per_detector: how many un-matched ENTER_NOW decisions bear-entry-timer holds per (venue, symbol, detector) waiting for the trade-episode that closes them. Bounded so a decision whose trade was never taken does not accumulate forever (T-3)."
+
+[bear_pending_entry_maximum_age_seconds]
+value = 86400.0
+unit  = "seconds"
+note  = "operator, 2026-08-29, mirrored for the short side from bull_pending_entry_maximum_age_seconds: how long a pending entry decision may wait for its closing trade-episode before it is dropped rather than matched. A day."
+
 [bear_exit_stop_safety_multiple]
 value = 2.0
 unit  = "multiples of recent deviation"

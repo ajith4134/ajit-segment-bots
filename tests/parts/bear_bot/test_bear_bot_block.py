@@ -541,7 +541,9 @@ def a_timer(margin=0.0, clock=None, floor=0.01):
         conviction_floor=a_floor(margin), window_length=50, minimum_observations=10,
         trigger_validity_seconds=30.0, minimum_extension_quantile=0.2,
         entry_quality_window=200, prior_extension_floor=floor,
-        prior_entry_cost_fraction=0.0005, now_ns=clock or Clock(),
+        prior_entry_cost_fraction=0.0005,
+        pending_entries_per_detector=50, pending_entry_maximum_age_seconds=86400.0,
+        now_ns=clock or Clock(),
     )
 
 
@@ -623,6 +625,60 @@ def test_a_playbook_rule_can_demand_a_higher_bounce_never_a_lower_one():
         PlaybookRule(detector=DETECTOR, bounce_fraction=-0.9, withholds=False, reason="lower")
     )
     assert subject.decide(a_side_candidate(), ConvictionStub(0.9)).trigger_price >= 90.0
+
+
+def test_entry_timer_matches_a_pending_decision_to_its_closing_episode():
+    from runtime.knowledge_types import TradeEpisode
+
+    # minimum_observations=1 (rather than a_timer()'s usual 10): this test is
+    # about the join landing one real observation, not about the estimator's
+    # fitted-ness threshold, which every other timer test already covers.
+    timer = BearEntryTimer(
+        conviction_floor=a_floor(), window_length=50, minimum_observations=1,
+        trigger_validity_seconds=30.0, minimum_extension_quantile=0.2,
+        entry_quality_window=200, prior_extension_floor=0.01,
+        prior_entry_cost_fraction=0.0005,
+        pending_entries_per_detector=50, pending_entry_maximum_age_seconds=86400.0,
+        now_ns=Clock(),
+    )
+    timer._remember_pending_entry(
+        VENUE, SYMBOL, "momentum-burst-detector", 0.02, decided_at_ns=timer._now_ns()
+    )
+
+    episode = TradeEpisode(
+        episode_id="e1", venue_id=VENUE, symbol=SYMBOL,
+        detector="momentum-burst-detector", regime="trending",
+        conditions={"entry_percentile": 0.9}, action="short", outcome="win",
+        realised=1.0, opened_at_ns=200, closed_at_ns=300, narrative="",
+    )
+    timer.match_trade_episode(episode)
+
+    # given_away = 1.0 - 0.9 = 0.1, extension_at_entry = 0.02, observed together.
+    assert timer._median_entry_cost() == pytest.approx(0.1, abs=0.01)
+
+
+def test_entry_timer_ignores_a_long_episode():
+    from runtime.knowledge_types import TradeEpisode
+
+    timer = a_timer()
+    timer._remember_pending_entry(VENUE, SYMBOL, "momentum-burst-detector", 0.02, decided_at_ns=100)
+
+    episode = TradeEpisode(
+        episode_id="e1", venue_id=VENUE, symbol=SYMBOL,
+        detector="momentum-burst-detector", regime="trending",
+        conditions={"entry_percentile": 0.9}, action="long", outcome="win",
+        realised=1.0, opened_at_ns=200, closed_at_ns=300, narrative="",
+    )
+    timer.match_trade_episode(episode)
+    # Nothing matched: a bear timer must not learn from a long trade on the
+    # same symbol and detector name.
+    assert timer._pending.get((VENUE, SYMBOL, "momentum-burst-detector"))
+
+
+def test_start_part_reads_trade_episode_not_entry_quality():
+    from parts.bear_bot import bear_entry_timer as module
+    assert "entry-quality" not in module.PART_DECLARATION.consumes
+    assert "trade-episode" in module.PART_DECLARATION.consumes
 
 
 # ---- bear-exit-plan-proposer ------------------------------------------------
