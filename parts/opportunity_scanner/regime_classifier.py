@@ -26,12 +26,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.lot_book_checkpoint import book_key_of, book_key_text
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.price_frames import levels_in
 from runtime.rolling_statistics import RollingWindow, hurst_exponent
 
 PART_ID = "regime-classifier"
+CHECKPOINT_COMPONENT = "series"
 
 PART_DECLARATION = PartDeclaration(
     part_id="regime-classifier",
@@ -87,6 +89,11 @@ class ClassifierStanding:
     symbols_tracked: int = 0
     by_regime: dict = field(default_factory=dict)
     unclassified: int = 0
+    # Not counters: what happened to the checkpoint at start. A part that came
+    # back holding nothing and one whose checkpoint could not be read are
+    # different facts, and only the second is a fault (Rule 8).
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
 
 
 class RegimeClassifier:
@@ -184,6 +191,44 @@ class RegimeClassifier:
             self._prices[key] = window
         return window
 
+    # -- what survives a restart ----------------------------------------------
+    #
+    # Held in memory alone until 2026-08-29: `regime_minimum_observations` is set
+    # equal to the 1024-trade window on purpose (below 512 the Hurst estimate
+    # swings wider than the distance from a random walk to either regime), and
+    # every restart discarded whatever a symbol had accumulated toward it.
+    # Measured live at the time this was written: 48,192 classification
+    # attempts, 48,192 unclassified -- not one symbol had ever reached the
+    # floor, across a spine that had been restarted several times in the
+    # session. `RollingWindow` already carries `as_document`/`restore_document`
+    # for exactly this (built for cointegration-pair-finder's identical shape
+    # of problem); this wires the same mechanism here.
+
+    def read_checkpoint_state(self) -> dict:
+        """Every symbol's price series, so a restart does not start blind.
+
+        Each window carries its own last observation time, so the gap across a
+        restart is measured rather than assumed continuous -- without it the
+        first price after an outage sits beside the last one before it and
+        reads as an instant move, which is exactly the shape a regime change
+        would misread as a trend.
+        """
+        return {
+            "prices": {
+                book_key_text(key): window.as_document()
+                for key, window in self._prices.items()
+            },
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Refill every series. Returns how many symbols came back."""
+        for text, document in (state.get("prices") or {}).items():
+            window = self._window_for(book_key_of(text))
+            window.restore_document(document)
+        self.standing.symbols_tracked = len(self._prices)
+        self.standing.restored_symbols = len(self._prices)
+        return len(self._prices)
+
     def _regime(self, venue_id, symbol, regime, hurst, observations, volatility, reason) -> MarketRegime:
         return MarketRegime(
             venue_id=venue_id,
@@ -206,6 +251,8 @@ def describe_regimes(classifier: RegimeClassifier) -> dict:
         "classifications": classifier.standing.classifications,
         "unclassified": classifier.standing.unclassified,
         "by_regime": dict(classifier.standing.by_regime),
+        "restored_symbols": classifier.standing.restored_symbols,
+        "checkpoint_verdict": classifier.standing.checkpoint_verdict,
     }
 
 
@@ -214,6 +261,7 @@ def run_regime_classifier(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     import time as _time
 
@@ -238,6 +286,8 @@ def run_regime_classifier(
             last_full_publish[0] = now
         elif touched:
             publish_regimes(tuple(classifier.classify(v, s) for v, s in sorted(touched)))
+        if touched and write_checkpoint is not None:
+            write_checkpoint(classifier.standing.observations)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -263,11 +313,50 @@ def start_part(context) -> int:
     Woken by its data rather than by its clock: the whole point of the regime is to
     be current when a detector asks, and the tick floor keeps a busy symbol from
     spinning this part at the rate of the tape.
+
+    Every symbol's series survives a restart, since 2026-08-29: beside
+    cointegration-pair-finder's own price series under `position_state_root`,
+    because it is the same class of fact -- a stretch of market this part has
+    been watching -- read off the same wire.
     """
+    import pathlib
+
+    from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
     from runtime.input_assembly import Batch
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_regimes = context.bus.publisher_for("market-regime")
+    classifier = RegimeClassifier(
+        window_length=int(context.number("regime_window_length")),
+        minimum_observations=int(context.number("regime_minimum_observations")),
+        trending_above=context.number("regime_trending_hurst_above"),
+        reverting_below=context.number("regime_reverting_hurst_below"),
+        maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+        gap_patience_multiple=context.number("price_gap_patience_multiple"),
+    )
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    # The settings that give the stored series their meaning. A window judged
+    # against a different length or gap bound describes a different stretch of
+    # market -- restoring across such a change would test one span while
+    # reporting another, the same reasoning cointegration-pair-finder's own
+    # checkpoint uses.
+    series_settings = {
+        "regime_window_length": float(context.number("regime_window_length")),
+        "price_series_maximum_gap_seconds": float(
+            context.number("price_series_maximum_gap_seconds")
+        ),
+        "price_gap_patience_multiple": float(context.number("price_gap_patience_multiple")),
+    }
+    write_checkpoint = restore_and_arm_checkpoint(
+        store,
+        CheckpointSchedule(int(context.number("regime_state_checkpoint_interval"))),
+        PART_ID,
+        CHECKPOINT_COMPONENT,
+        classifier,
+        series_settings,
+    )
 
     def read_prices():
         return tuple(
@@ -276,14 +365,7 @@ def start_part(context) -> int:
         )
 
     return run_regime_classifier(
-        classifier=RegimeClassifier(
-            window_length=int(context.number("regime_window_length")),
-            minimum_observations=int(context.number("regime_minimum_observations")),
-            trending_above=context.number("regime_trending_hurst_above"),
-            reverting_below=context.number("regime_reverting_hurst_below"),
-            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
-            gap_patience_multiple=context.number("price_gap_patience_multiple"),
-        ),
+        classifier=classifier,
         control_socket=context.control_socket,
         read_prices=read_prices,
         publish_regimes=publish_regimes,
@@ -291,4 +373,5 @@ def start_part(context) -> int:
         emit_health=context.emit_health,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
+        write_checkpoint=write_checkpoint,
     )

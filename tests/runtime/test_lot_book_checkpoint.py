@@ -290,3 +290,93 @@ def test_a_scanner_restored_under_a_different_window_is_refused(durable_tmp_path
     )
     assert not restoration.was_restored
     assert "cointegration_window_length" in restoration.detail
+
+
+# ---- the regime classifier keeps its series ----------------------------------
+#
+# Held in memory alone until 2026-08-29. regime_minimum_observations (1024) is
+# set equal to the window on purpose, so a restart that discards the window
+# discards all progress toward ever classifying a symbol at all -- measured
+# live: 48,192 classification attempts, 48,192 unclassified, not one symbol
+# had ever reached the floor.
+
+
+def test_the_classifier_keeps_its_series_across_a_restart(durable_tmp_path):
+    from parts.opportunity_scanner.regime_classifier import RegimeClassifier
+
+    settings = {"regime_window_length": 8.0}
+    store = DurableStateStore(durable_tmp_path)
+
+    def classifier():
+        return RegimeClassifier(
+            window_length=8, minimum_observations=4,
+            trending_above=0.6, reverting_below=0.4,
+        )
+
+    before = classifier()
+    for step in range(8):
+        before.observe_price("bybit-linear", "AAAUSDT", 100.0 + step, (step + 1) * SECOND)
+    store.save("regime-classifier", "series", before.read_checkpoint_state(), settings)
+
+    after = classifier()
+    assert after.restore_from_checkpoint(
+        store.restore("regime-classifier", "series", settings).state
+    ) == 1
+    # The series came back full, so this symbol is one price away from having
+    # met minimum_observations rather than starting over at zero.
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 8
+    assert after._prices[("bybit-linear", "AAAUSDT")].latest == pytest.approx(107.0)
+
+
+def test_a_restored_classifier_series_measures_the_gap_across_the_restart(durable_tmp_path):
+    """Without the stored observation time, the outage reads as an instant move."""
+    from parts.opportunity_scanner.regime_classifier import RegimeClassifier
+
+    def classifier():
+        return RegimeClassifier(
+            window_length=8, minimum_observations=4,
+            trending_above=0.6, reverting_below=0.4,
+            maximum_gap_seconds=5.0,
+        )
+
+    before = classifier()
+    for step in range(8):
+        before.observe_price("bybit-linear", "AAAUSDT", 100.0 + step, (step + 1) * SECOND)
+    state = before.read_checkpoint_state()
+
+    after = classifier()
+    after.restore_from_checkpoint(state)
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 8
+    # An hour later: the window must clear rather than treat it as continuous.
+    after.observe_price("bybit-linear", "AAAUSDT", 500.0, 3600 * SECOND)
+    assert after._prices[("bybit-linear", "AAAUSDT")].count == 1
+
+
+def test_a_classifier_restored_under_a_different_window_is_refused(durable_tmp_path):
+    """A different window length describes a different stretch of market."""
+    from parts.opportunity_scanner.regime_classifier import RegimeClassifier
+
+    store = DurableStateStore(durable_tmp_path)
+    before = RegimeClassifier(
+        window_length=8, minimum_observations=4, trending_above=0.6, reverting_below=0.4,
+    )
+    before.observe_price("bybit-linear", "AAAUSDT", 100.0, SECOND)
+    store.save(
+        "regime-classifier", "series", before.read_checkpoint_state(),
+        {"regime_window_length": 8.0},
+    )
+
+    restoration = store.restore("regime-classifier", "series", {"regime_window_length": 1024.0})
+    assert not restoration.was_restored
+    assert "regime_window_length" in restoration.detail
+
+
+def test_a_classifier_that_never_ran_restores_to_nothing_held(durable_tmp_path):
+    """Came back holding nothing, and never ran, are different facts (Rule 8)."""
+    from parts.opportunity_scanner.regime_classifier import RegimeClassifier
+
+    cold = RegimeClassifier(
+        window_length=8, minimum_observations=4, trending_above=0.6, reverting_below=0.4,
+    )
+    assert cold.restore_from_checkpoint(cold.read_checkpoint_state()) == 0
+    assert cold.standing.symbols_tracked == 0
