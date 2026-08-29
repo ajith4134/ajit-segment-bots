@@ -174,6 +174,15 @@ class ExitCounterfactual:
     is_hindsight: bool
     reason: str
     replayed_at_ns: int
+    # Added so a live consumer can key by instrument -- the producer already
+    # holds this on the source ClosedTrade at construction time. See
+    # docs/proposals/four-parts-read-a-shape-the-wire-never-carried.md.
+    venue_id: str = ""
+    symbol: str = ""
+    # The trail width this rule was replayed at, as a fraction of entry price.
+    # Only set when rule_name names a trailing-stop replay; None otherwise --
+    # a fixed-target or fixed-stop replay has no trail width to report.
+    trail_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -225,6 +234,15 @@ class StopAudit:
     is_measurable: bool
     reason: str
     audited_at_ns: int
+    # Added so a live consumer can key by instrument -- the producer already
+    # holds this on the source ClosedTrade at construction time.
+    venue_id: str = ""
+    symbol: str = ""
+    # How far against the trade price went before the stop resolved, as a
+    # fraction of entry price. Per-trade and latest-write-wins where a
+    # consumer keys by symbol, like every other field on this audit -- never a
+    # running maximum, which is why it is not named "worst_*".
+    adverse_excursion_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -425,6 +443,30 @@ CLOSED_DIFFERENTLY = "the-legs-closed-for-different-reasons"
 PAIR_VERDICTS = (
     LONG_SIDE_WON, SHORT_SIDE_WON, NO_DIRECTIONAL_EDGE, NOT_SYMMETRIC, CLOSED_DIFFERENTLY,
 )
+
+# What stop-placement-auditor found. Named here rather than in the part,
+# because a consumer that has to import a part to read its payload knows
+# about the circuit rather than about the data (T-4).
+INSIDE_THE_NOISE = "inside-the-symbols-ordinary-movement"
+TOO_WIDE = "wide-enough-to-turn-a-small-loss-into-a-large-one"
+WELL_PLACED_AND_HIT = "well-placed-and-it-did-its-job"
+WELL_PLACED_AND_NOT_HIT = "well-placed-and-never-tested-by-this-trade"
+NEVER_APPROACHED = "the-price-never-came-near-it"
+NO_STOP = "no-stop-was-placed"
+NOT_MEASURABLE = "the-symbols-typical-movement-has-never-been-measured"
+
+STOP_VERDICTS = (
+    INSIDE_THE_NOISE, TOO_WIDE, WELL_PLACED_AND_HIT, WELL_PLACED_AND_NOT_HIT,
+    NEVER_APPROACHED, NO_STOP, NOT_MEASURABLE,
+)
+
+# What sequence-pattern-miner tests for. Named here for the same reason.
+STREAKS = "losses-cluster-more-than-chance"
+SIZE_DRIFT = "size-changes-with-the-previous-outcome"
+SESSION_DECAY = "quality-falls-later-in-the-session"
+OUTCOME_CONDITIONING = "the-next-trade-depends-on-the-last-one"
+
+SEQUENCE_KINDS = (STREAKS, SIZE_DRIFT, SESSION_DECAY, OUTCOME_CONDITIONING)
 
 # Which side a verdict found for, or None where it found for neither. A verdict
 # that settled nothing has no winning side, and that is a different fact from a
