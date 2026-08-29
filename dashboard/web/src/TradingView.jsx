@@ -253,15 +253,26 @@ function OpenPositions({ open }) {
                       ? <span className="faint" title={p.exit_proof}>—</span>
                       : <span title={p.exit_proof}><Num value={p.target_price} /></span>}
                   </td>
-                  {/* Tailgating is the one per-position plan still held on the bus
-                      alone. tail-trailing-exit-planner keeps its trailing level in
-                      memory the way stop-order-manager kept its resting stops until
-                      2026-08-26; until it checkpoints too, nothing anywhere holds the
-                      answer and a column that guessed would be exactly the failure
-                      Rule 8 exists to prevent. NOT BUILT, not NOT MEASURED: this is a
-                      fact about the system, not about this reading. */}
+                  {/* Read from tail-trailing-exit-planner's own checkpoint, the file
+                      that part restores from -- since 2026-08-29. Before it this trail
+                      lived in that part's memory alone, the same defect stop-order-manager
+                      had until 2026-08-26, and the column could only ever say `not built`
+                      because nothing anywhere held the answer. `not tailgated` is a fact
+                      about which bot opened this position, not a gap in this reading. */}
                   <td className="n mono">
-                    <em className="unmeasured" title="two facts, both true: tail-trailing-exit-planner holds its trailing level in memory and publishes tail-exit-plan on the bus, so nothing writes a per-position tailgating state any board process could read -- and on 2026-08-28 it had built no plans at all, because plans_requested was 0 and no follow-candidate has ever reached it. Neither is a gap in this reading.">not built</em>
+                    {p.tail_stop_price === null || p.tail_stop_price === undefined
+                      ? <em className="unmeasured" title={p.tailgating_proof}>
+                          {p.tailgating_proof?.startsWith('NOT MEASURED')
+                            ? 'not measured' : 'not tailgated'}
+                        </em>
+                      : <span title={p.tailgating_proof}>
+                          <Num value={p.tail_stop_price} />
+                          {p.tail_stop_distance_fraction != null && (
+                            <span className="faint">
+                              {' '}({(p.tail_stop_distance_fraction * 100).toFixed(2)}%)
+                            </span>
+                          )}
+                        </span>}
                   </td>
                   <td className="n mono faint">{p.fees_paid?.toFixed(3)}</td>
                   <td className="n mono faint">

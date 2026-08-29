@@ -551,6 +551,91 @@ def attach_resting_exits(positions: list[dict]) -> dict:
     }
 
 
+def attach_tailgating_trails(positions: list[dict]) -> dict:
+    """Attach the trailing stop `tail-trailing-exit-planner` actually holds for each position.
+
+    Read from that part's own checkpoint -- the file it restores from -- for the
+    same reason the resting stop above is: a second record kept for the board
+    would be free to disagree with the one the bot acts on.
+
+    The checkpoint exists as of 2026-08-29. Before it, this trail lived in that
+    part's memory alone, the same defect stop-order-manager had until
+    2026-08-26, and the tailgating column could only ever say `not built` --
+    nothing anywhere held the answer for a board process to read.
+
+    A position with no entry here is reported as not tailgated rather than
+    blank: this bot trails a follow it chose to join, not every open position,
+    so absence here is a fact about which bot opened the position, not a gap
+    in this reading.
+    """
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+        root = pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+    except Exception as refusal:
+        for position in positions:
+            position["tailgating_proof"] = f"{NOT_MEASURED}: settings refused position_state_root"
+        return {"ok": False, "proof": f"settings refused position_state_root ({refusal})"}
+
+    path = root / "tail-trailing-exit-planner.trailing-stops.json"
+    if not path.exists():
+        for position in positions:
+            position["tail_stop_price"] = None
+            position["tailgating_proof"] = (
+                f"{NOT_MEASURED}: tail-trailing-exit-planner has not written a checkpoint, "
+                f"which is a different fact from no position being tailgated"
+            )
+        return {
+            "ok": False,
+            "proof": (
+                f"no checkpoint at {path}: tail-trailing-exit-planner has not written one, "
+                "which is a different fact from no position being tailgated"
+            ),
+        }
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as failure:
+        for position in positions:
+            position["tailgating_proof"] = f"{NOT_MEASURED}: {path} could not be read"
+        return {"ok": False, "proof": f"{path} could not be read: {failure}"}
+
+    trails = (document.get("state") or {}).get("trails") or {}
+    written = int((time.time_ns() - int(document.get("saved_at_ns") or 0)) / 1e9)
+    trailed = 0
+    for position in positions:
+        held = trails.get(f"{position['venue_id']}|{position['symbol']}")
+        if held is None:
+            position["tail_stop_price"] = None
+            position["tailgating_proof"] = (
+                f"{path.name} holds no trail for {position['symbol']}: this position is "
+                f"not one tail-trailing-exit-planner is following"
+            )
+            continue
+        trailed += 1
+        stop_price = held.get("stop_price")
+        entry = held.get("entry_price")
+        position["tail_stop_price"] = stop_price
+        position["tail_entry_price"] = entry
+        position["tail_stop_distance_fraction"] = (
+            None if not entry or stop_price is None else abs(entry - stop_price) / entry
+        )
+        position["tailgating_proof"] = (
+            f"{path.name}, written {written}s ago: trailing at {stop_price}"
+            + (f", entered following at {entry}" if entry is not None else "")
+        )
+
+    return {
+        "ok": True,
+        "trailed": trailed,
+        "proof": (
+            f"{path}, written {written}s ago -- the same file tail-trailing-exit-planner "
+            f"restores from. {trailed} of {len(positions)} open position(s) are being trailed"
+        ),
+    }
+
+
 def attach_live_prices(positions: list[dict]) -> None:
     """Mark each held position against the tape's latest print, in place.
 
@@ -808,6 +893,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     # costs nothing the price marking does and is the same answer either way.
     prediction_provenance = attach_learned_excursions(positions)
     exit_provenance = attach_resting_exits(positions)
+    tailgating_provenance = attach_tailgating_trails(positions)
     for position in positions:
         position.pop("held_lots", None)
     closed, closed_provenance = read_closed_trades()
@@ -833,6 +919,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
             "provenance": position_provenance,
             "prediction_provenance": prediction_provenance,
             "exit_provenance": exit_provenance,
+            "tailgating_provenance": tailgating_provenance,
         },
         "closed": {
             "trades": closed,

@@ -34,8 +34,8 @@ from parts.profit_tailgating_bot.tail_opinion_composer import (
 )
 from parts.profit_tailgating_bot.tail_setup_weight_learner import TailSetupWeightLearner
 from parts.profit_tailgating_bot.tail_trailing_exit_planner import (
-    NO_EXCURSION_PROFILE, TRAIL_WOULD_EXCEED_WHAT_IS_LEFT, TAIL_TRAIL_RULE_NAME,
-    NO_MOVE_REMAINING, RetracementProfile, TailTrailingExitPlanner,
+    CHECKPOINT_COMPONENT, NO_EXCURSION_PROFILE, TRAIL_WOULD_EXCEED_WHAT_IS_LEFT,
+    TAIL_TRAIL_RULE_NAME, NO_MOVE_REMAINING, RetracementProfile, TailTrailingExitPlanner,
     describe_trailing,
 )
 from parts.profit_tailgating_bot.tail_winner_selector import (
@@ -926,6 +926,82 @@ def test_a_closed_follow_releases_its_trail():
     subject.plan(a_follow(), a_remaining(fraction=0.05))
     subject.forget_position(VENUE, SYMBOL)
     assert subject.standing_trail(VENUE, SYMBOL) is None
+
+
+# ---- a trail must survive a restart, the way stop-order-manager's does --------
+#
+# Held in memory alone until 2026-08-29. Not only a board gap: advance_trail
+# ratchets from whatever it remembers, so a restart that forgot a trail plans a
+# fresh one from wherever price now sits -- which can only be looser than the
+# trail it replaces, the one thing this bot's whole safety property forbids.
+
+
+def test_read_checkpoint_state_round_trips_into_a_fresh_planner():
+    subject = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    subject.advance_trail(VENUE, SYMBOL, LONG, price=subject._standing_trails[key] * 1.05)
+    stop_price = subject._standing_trails[key]
+
+    restored = a_planner()
+    assert restored.restore_from_checkpoint(subject.read_checkpoint_state()) == 1
+    assert restored.standing_trail(VENUE, SYMBOL) == pytest.approx(stop_price)
+
+
+def test_a_restored_trail_still_only_moves_in_the_trades_favour():
+    """A trail that came back must be a trail, not just a number in a dict."""
+    subject = a_prepared_planner_with_an_open_position()
+    key = (VENUE, SYMBOL)
+    subject.advance_trail(VENUE, SYMBOL, LONG, price=subject._standing_trails[key] * 1.05)
+    stop_price = subject._standing_trails[key]
+
+    restored = a_planner()
+    restored.restore_from_checkpoint(subject.read_checkpoint_state())
+    retreated = restored.advance_trail(VENUE, SYMBOL, LONG, price=stop_price * 0.5)
+    assert retreated == pytest.approx(stop_price), (
+        "a restart forgot how far this trail had already ratcheted"
+    )
+
+
+def test_a_planner_that_never_ran_restores_to_nothing_held():
+    """Came back holding nothing, and never ran, are different facts (Rule 8)."""
+    subject = a_planner()
+    assert subject.restore_from_checkpoint(subject.read_checkpoint_state()) == 0
+    assert subject.standing.restored_symbols == 0
+
+
+def test_a_trail_comes_back_after_a_restart_through_the_real_checkpoint_store(durable_tmp_path):
+    from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
+
+    store = DurableStateStore(durable_tmp_path)
+    before = a_prepared_planner_with_an_open_position()
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "tail-trailing-exit-planner", CHECKPOINT_COMPONENT, before, {}
+    )
+    write(before.checkpointable_mutations)
+    stop_price = before.standing_trail(VENUE, SYMBOL)
+
+    after = a_planner()
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "tail-trailing-exit-planner", CHECKPOINT_COMPONENT, after, {}
+    )
+
+    assert after.standing_trail(VENUE, SYMBOL) == pytest.approx(stop_price), (
+        "a restart forgot the trail protecting an open follow"
+    )
+    assert after.standing.restored_symbols == 1
+
+
+def test_a_planner_that_has_never_checkpointed_says_so_rather_than_reading_empty(durable_tmp_path):
+    from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
+
+    cold = a_planner()
+    restore_and_arm_checkpoint(
+        DurableStateStore(durable_tmp_path), CheckpointSchedule(1),
+        "tail-trailing-exit-planner", CHECKPOINT_COMPONENT, cold, {},
+    )
+
+    assert cold.standing.checkpoint_verdict, "a cold start recorded no verdict at all"
+    assert cold.standing.restored_symbols == 0
 
 
 def test_a_trail_that_could_loosen_is_refused_at_construction():

@@ -43,6 +43,7 @@ from runtime.part_process import run_part
 
 PART_ID = "tail-trailing-exit-planner"
 BOT = "profit-tailgating-bot"
+CHECKPOINT_COMPONENT = "trailing-stops"
 
 PART_DECLARATION = PartDeclaration(
     part_id="tail-trailing-exit-planner",
@@ -74,6 +75,21 @@ TRAIL_IS_THE_ONLY_EXIT = "the-trail-is-the-exit; this-bot-never-names-a-target"
 TAIL_TRAIL_RULE_NAME = "tail-exit-plan:trail"
 
 
+def trail_key_text(key: tuple[str, str]) -> str:
+    """One position's key as one string, for a JSON object that has only strings.
+
+    The same separator stop-order-manager uses for its own resting-exit
+    checkpoint, so a person reading both files by eye is reading the same shape
+    for the same position.
+    """
+    return f"{key[0]}|{key[1]}"
+
+
+def trail_key_of(text: str) -> tuple[str, str]:
+    venue_id, _, symbol = text.partition("|")
+    return venue_id, symbol
+
+
 @dataclass(frozen=True)
 class RetracementProfile:
     """How much a winning move in this symbol normally gives back before continuing."""
@@ -94,6 +110,11 @@ class PlannerStanding:
     by_refusal: dict = field(default_factory=dict)
     widest_trail: float = 0.0
     counterfactuals_seen: int = 0
+    # Not counters: what happened to the checkpoint at start. A part that came
+    # back holding nothing and one whose checkpoint could not be read are
+    # different facts, and only the second is a fault (Rule 8).
+    restored_symbols: int = 0
+    checkpoint_verdict: str = ""
 
 
 class TailTrailingExitPlanner:
@@ -139,7 +160,15 @@ class TailTrailingExitPlanner:
         self._prior_trail = prior_trail_fraction
         self._standing_trails: dict[tuple[str, str], float] = {}
         self._entry_prices: dict[tuple[str, str], float] = {}
+        # What a checkpoint is written against: incremented only when a trail is
+        # set, moved, or released, so `CheckpointSchedule` can tell a tick that
+        # changed something from one woken by an unrelated price print.
+        self._mutations = 0
         self.standing = PlannerStanding()
+
+    @property
+    def checkpointable_mutations(self) -> int:
+        return self._mutations
 
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         """One print, kept with the venue's own time for it.
@@ -243,6 +272,7 @@ class TailTrailingExitPlanner:
         else:
             stop_price = self._trail_price(key, candidate.direction, price, width)
             self._standing_trails[key] = stop_price
+            self._mutations += 1
         self._entry_prices.setdefault(key, price)
         self.standing.plans_built += 1
         self.standing.widest_trail = max(self.standing.widest_trail, width)
@@ -331,6 +361,8 @@ class TailTrailingExitPlanner:
             advanced = min(standing, proposed)
         if advanced == standing and proposed != standing:
             self.standing.trails_never_loosened += 1
+        if advanced != standing:
+            self._mutations += 1
         self._standing_trails[key] = advanced
         return advanced
 
@@ -346,8 +378,51 @@ class TailTrailingExitPlanner:
 
     def forget_position(self, venue_id: str, symbol: str) -> None:
         """A closed follow releases its trail. T-3: nothing accumulates for ever."""
-        self._standing_trails.pop((venue_id, symbol), None)
-        self._entry_prices.pop((venue_id, symbol), None)
+        key = (venue_id, symbol)
+        if self._standing_trails.pop(key, None) is not None:
+            self._mutations += 1
+        self._entry_prices.pop(key, None)
+
+    # -- what survives a restart ----------------------------------------------
+    #
+    # Held in memory alone until 2026-08-29, the same defect stop-order-manager
+    # had until 2026-08-26: every restart forgot every trail. The consequence is
+    # not only a board that could never show one -- `advance_trail` ratchets from
+    # whatever it remembers, so a restart that forgot a trail plans a fresh one
+    # from wherever price now sits, which can only be looser than the trail it
+    # replaces (a trail may never loosen, and a forgotten one is the same failure
+    # by omission rather than by arithmetic).
+
+    def read_checkpoint_state(self) -> dict:
+        """The trailing stops this planner believes are resting, for the next process.
+
+        Not the standing counters: those count what *this* process did.
+        `positions_being_trailed` is recomputed from what came back, because
+        that is a fact about the trails rather than about the process.
+        """
+        return {
+            "trails": {
+                trail_key_text(key): {
+                    "stop_price": stop_price,
+                    "entry_price": self._entry_prices.get(key),
+                }
+                for key, stop_price in self._standing_trails.items()
+            },
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Rebuild the trails that were resting. Returns how many came back."""
+        trails = state.get("trails") or {}
+        self._standing_trails = {}
+        self._entry_prices = {}
+        for text, held in trails.items():
+            key = trail_key_of(text)
+            self._standing_trails[key] = float(held["stop_price"])
+            entry = held.get("entry_price")
+            if entry is not None:
+                self._entry_prices[key] = float(entry)
+        self.standing.restored_symbols = len(self._standing_trails)
+        return self.standing.restored_symbols
 
     def _trail_price(self, key, direction: str, price: float, width: float) -> float:
         if direction == LONG:
@@ -404,6 +479,8 @@ def describe_trailing(planner: TailTrailingExitPlanner) -> dict:
         "exit_counterfactuals_seen": planner.standing.counterfactuals_seen,
         "symbols_with_a_retracement_record": len(planner._profiles),
         "positions_being_trailed": len(planner._standing_trails),
+        "restored_symbols": planner.standing.restored_symbols,
+        "checkpoint_verdict": planner.standing.checkpoint_verdict,
     }
 
 
@@ -412,6 +489,7 @@ def run_tail_trailing_exit_planner(
     publish_plans, health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     def tick() -> None:
         plans = []
@@ -420,6 +498,12 @@ def run_tail_trailing_exit_planner(
             if plan is not None:
                 plans.append(plan)
         publish_plans(tuple(plans))
+        # After the plans go out, never before: a checkpoint written first would
+        # record a trail this tick never actually planned against. Called every
+        # tick; `write_checkpoint` itself skips the fsync when nothing moved
+        # (CheckpointSchedule.is_due against `checkpointable_mutations`).
+        if write_checkpoint is not None:
+            write_checkpoint(planner.checkpointable_mutations)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -435,6 +519,9 @@ def run_tail_trailing_exit_planner(
 
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
+    import pathlib
+
+    from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
     from runtime.input_assembly import Batch, LatestByKey
 
     candidates = Batch(read=context.bus.reader("follow-candidate"))
@@ -462,6 +549,25 @@ def start_part(context) -> int:
         counterfactual_window=int(context.number("tail_counterfactual_window")),
         counterfactual_quantile=context.number("tail_counterfactual_quantile"),
         prior_trail_fraction=context.number("tail_prior_trail_fraction"),
+    )
+    # Beside the resting-exit checkpoint stop-order-manager keeps, under
+    # position_state_root: it is the same fact about the same position, and a
+    # board reading one should not have to look somewhere else for the other.
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    write_checkpoint = restore_and_arm_checkpoint(
+        store,
+        # Every change, not every N: a trail changes when a follow opens, moves,
+        # or closes -- tens of times an hour -- and losing one costs the ratchet
+        # its memory, the same reasoning stop-order-manager uses for its own
+        # resting exits.
+        CheckpointSchedule(1),
+        PART_ID,
+        CHECKPOINT_COMPONENT,
+        planner,
+        {},
     )
 
     def read_candidates_and_market(_planner):
@@ -513,4 +619,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        write_checkpoint=write_checkpoint,
     )
