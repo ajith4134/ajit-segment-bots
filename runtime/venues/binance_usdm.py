@@ -826,22 +826,49 @@ class BinanceUsdmAdapter(VenueAdapter):
             for entry in interval_response
             if entry.get("fundingIntervalHours")
         }
+        # The cap and floor ride on the same fundingInfo entries the interval
+        # does -- absent for the same 132 symbols, for the same reason: this
+        # venue states a wider cap for some symbols than others (measured
+        # 2026-08-28: 0.003 to 0.02 across the captured set), so a shared
+        # default would be wrong for every symbol whose cap actually differs.
+        rate_caps = {
+            entry["symbol"]: float(entry["adjustedFundingRateCap"])
+            for entry in interval_response
+            if entry.get("adjustedFundingRateCap") is not None
+        }
+        rate_floors = {
+            entry["symbol"]: float(entry["adjustedFundingRateFloor"])
+            for entry in interval_response
+            if entry.get("adjustedFundingRateFloor") is not None
+        }
         facts = {}
         for entry in rate_response:
             rate = entry.get("lastFundingRate")
             if rate is None:
                 continue
             symbol = entry["symbol"]
+            interest_rate = entry.get("interestRate")
             facts[symbol] = ContractFunding(
                 symbol=symbol,
                 rate_per_settlement=float(rate),
                 settlements_per_day=settlements_per_day.get(symbol),
+                rate_cap=rate_caps.get(symbol),
+                rate_floor=rate_floors.get(symbol),
+                interest_rate_per_interval=(
+                    None if interest_rate is None else float(interest_rate)
+                ),
                 source=(
                     f"{FUNDING_RATE_URL} lastFundingRate"
+                    + (", interestRate" if interest_rate is not None else "")
                     + (
                         f", {FUNDING_INTERVAL_URL} fundingIntervalHours"
                         if symbol in settlements_per_day
                         else ", interval undeclared by this venue"
+                    )
+                    + (
+                        ", adjustedFundingRateCap/Floor"
+                        if symbol in rate_caps
+                        else ", cap/floor undeclared by this venue"
                     )
                 ),
             )

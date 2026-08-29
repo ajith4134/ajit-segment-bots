@@ -325,6 +325,33 @@ def test_funding_joins_the_rate_this_venue_charged_to_the_interval_it_declared(
     )
 
 
+def test_funding_carries_the_cap_floor_and_interest_rate_the_formula_needs(
+    adapter, read_captured_json
+):
+    """funding-rate-forecaster's formula needs all three, per symbol, never assumed."""
+    listings = adapter.read_symbol_listings(read_captured_json("binance-usdm", CATALOGUE_FIXTURE))
+    facts = adapter.read_funding_facts(
+        listings,
+        read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json"),
+        [
+            read_captured_json("binance-usdm", FUNDING_RATE_FIXTURE),
+            read_captured_json("binance-usdm", FUNDING_INTERVAL_FIXTURE),
+        ],
+    )
+
+    bitcoin = facts[CAPTURED_SYMBOL]
+    assert bitcoin.rate_cap == pytest.approx(0.003)
+    assert bitcoin.rate_floor == pytest.approx(-0.003)
+    assert bitcoin.interest_rate_per_interval == pytest.approx(0.0001)
+    assert "adjustedFundingRateCap" in bitcoin.source and "interestRate" in bitcoin.source
+
+    caps = {fact.rate_cap for fact in facts.values() if fact.rate_cap is not None}
+    assert len(caps) > 1, (
+        "the fixture holds only one distinct cap, so a venue-wide constant would have "
+        "passed this test while being wrong for every symbol whose cap actually differs"
+    )
+
+
 def test_a_contract_this_venue_states_no_interval_for_is_left_unpriceable(
     adapter, read_captured_json
 ):

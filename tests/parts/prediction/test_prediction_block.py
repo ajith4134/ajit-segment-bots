@@ -33,7 +33,7 @@ from parts.prediction.forecast_ensembler import (
 )
 from parts.prediction.forecast_scorer import ForecastScorer
 from parts.prediction.funding_rate_forecaster import (
-    FORECAST, NO_PREMIUM_OBSERVATIONS, NO_VENUE_PARAMETERS, FundingParameters,
+    FORECAST, NO_PREMIUM_OBSERVATIONS, NO_SYMBOL_PARAMETERS, FundingParameters,
     FundingRateForecaster,
 )
 from parts.prediction.implied_vol_reader import (
@@ -1100,22 +1100,29 @@ def a_funding_forecaster(window=100, minimum=10, clock=None):
     return forecaster
 
 
-def binance_parameters():
+def binance_parameters(symbol=None):
     return FundingParameters(
-        venue_id=VENUE, interval_seconds=28800.0, cap=0.0075,
+        venue_id=VENUE, symbol=symbol or SYMBOL, interval_seconds=28800.0,
+        cap=0.0075, floor=-0.0075,
         interest_rate_per_interval=0.0001, premium_clamp=0.0005,
-        averaging_window_seconds=28800.0,
     )
 
 
 def test_an_unknown_venue_formula_produces_no_forecast():
-    """Interval, cap and interest rate differ between venues and change."""
-    assert a_funding_forecaster().forecast(VENUE, SYMBOL).state == NO_VENUE_PARAMETERS
+    """Interval, cap and interest rate differ by symbol and change."""
+    assert a_funding_forecaster().forecast(VENUE, SYMBOL).state == NO_SYMBOL_PARAMETERS
+
+
+def test_a_second_symbols_parameters_do_not_answer_for_the_first():
+    """Per symbol, not per venue: Binance's own interval splits by symbol."""
+    subject = a_funding_forecaster(minimum=5)
+    subject.observe_funding_parameters(binance_parameters(symbol="OTHERUSDT"))
+    assert subject.forecast(VENUE, SYMBOL).state == NO_SYMBOL_PARAMETERS
 
 
 def test_funding_is_computed_from_the_premium_index_not_fitted_to_past_rates():
     subject = a_funding_forecaster(minimum=5)
-    subject.observe_venue_parameters(binance_parameters())
+    subject.observe_funding_parameters(binance_parameters())
     for _ in range(20):
         subject.observe_premium(VENUE, SYMBOL, mark_price=100.05, index_price=100.0)
     forecast = subject.forecast(VENUE, SYMBOL)
@@ -1126,7 +1133,7 @@ def test_funding_is_computed_from_the_premium_index_not_fitted_to_past_rates():
 
 def test_the_rate_is_capped_at_the_venues_cap():
     subject = a_funding_forecaster(minimum=5)
-    subject.observe_venue_parameters(binance_parameters())
+    subject.observe_funding_parameters(binance_parameters())
     for _ in range(20):
         subject.observe_premium(VENUE, SYMBOL, mark_price=200.0, index_price=100.0)
     forecast = subject.forecast(VENUE, SYMBOL)
@@ -1134,11 +1141,28 @@ def test_the_rate_is_capped_at_the_venues_cap():
     assert forecast.predicted_rate == pytest.approx(0.0075)
 
 
+def test_the_rate_is_floored_at_the_venues_floor():
+    """Floor is read, not assumed as the cap's negative -- some venues state both."""
+    subject = a_funding_forecaster(minimum=5)
+    subject.observe_funding_parameters(
+        FundingParameters(
+            venue_id=VENUE, symbol=SYMBOL, interval_seconds=28800.0,
+            cap=0.0075, floor=-0.002,
+            interest_rate_per_interval=0.0001, premium_clamp=0.0005,
+        )
+    )
+    for _ in range(20):
+        subject.observe_premium(VENUE, SYMBOL, mark_price=50.0, index_price=100.0)
+    forecast = subject.forecast(VENUE, SYMBOL)
+    assert forecast.was_capped
+    assert forecast.predicted_rate == pytest.approx(-0.002)
+
+
 def test_the_forecast_says_how_much_of_it_is_already_determined():
     """An hour before settlement is a different object from a minute before."""
     clock = Clock()
     subject = a_funding_forecaster(minimum=5, clock=clock)
-    subject.observe_venue_parameters(binance_parameters())
+    subject.observe_funding_parameters(binance_parameters())
     for _ in range(20):
         subject.observe_premium(VENUE, SYMBOL, 100.01, 100.0)
     subject.observe_next_settlement(VENUE, SYMBOL, clock() + int(1000 * 1e9))
@@ -1149,13 +1173,13 @@ def test_the_forecast_says_how_much_of_it_is_already_determined():
 
 def test_no_premium_observations_produces_no_forecast():
     subject = a_funding_forecaster(minimum=10)
-    subject.observe_venue_parameters(binance_parameters())
+    subject.observe_funding_parameters(binance_parameters())
     assert subject.forecast(VENUE, SYMBOL).state == NO_PREMIUM_OBSERVATIONS
 
 
 def test_the_forecast_is_a_cost_not_a_direction():
     subject = a_funding_forecaster(minimum=5)
-    subject.observe_venue_parameters(binance_parameters())
+    subject.observe_funding_parameters(binance_parameters())
     for _ in range(20):
         subject.observe_premium(VENUE, SYMBOL, 100.01, 100.0)
     assert "not a claim about direction" in subject.forecast(VENUE, SYMBOL).reason

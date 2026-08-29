@@ -213,12 +213,24 @@ class ContractFunding:
     carried rather than filled in with the documented default: an assumed
     eight-hour interval is a carry cost wrong by a factor of two on every
     four-hourly symbol, and it would be wrong invisibly.
+
+    `rate_cap`/`rate_floor`/`interest_rate_per_interval` are the rest of the
+    venue's own funding formula -- `funding-rate-forecaster` needs all three
+    to compute a settlement the way the venue does rather than fit a curve to
+    past rates, and they vary by symbol on both venues (measured: Binance's
+    `adjustedFundingRateCap` runs 0.003 to 0.02 across symbols on 2026-08-28;
+    Bybit's `fundingCap` differs too). None where the venue did not state one
+    for this symbol on this read -- never a platform default, for the same
+    reason `settlements_per_day` is never assumed to be eight hours.
     """
 
     symbol: str
     rate_per_settlement: float
     settlements_per_day: float | None
     source: str
+    rate_cap: float | None
+    rate_floor: float | None
+    interest_rate_per_interval: float | None
 
     def __post_init__(self) -> None:
         if not self.source.strip():

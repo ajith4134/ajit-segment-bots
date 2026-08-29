@@ -335,6 +335,25 @@ def test_funding_joins_the_ticker_s_rate_to_the_catalogue_s_interval(
     )
 
 
+def test_funding_carries_the_cap_the_formula_needs_floor_taken_as_its_negative(
+    adapter, read_captured_json
+):
+    """This venue publishes one symmetric bound; interest rate it never states at all."""
+    listings = adapter.read_symbol_listings(read_captured_json("bybit-linear", CATALOGUE_FIXTURE))
+    facts = adapter.read_funding_facts(
+        listings, read_captured_json("bybit-linear", TICKER_FIXTURE), []
+    )
+
+    bitcoin = facts[CAPTURED_SYMBOL]
+    assert bitcoin.rate_cap == pytest.approx(0.00333)
+    assert bitcoin.rate_floor == pytest.approx(-0.00333)
+    assert bitcoin.interest_rate_per_interval is None, (
+        "this venue states no interest-rate-equivalent field; guessing one here would "
+        "be exactly the assumed-eight-hours failure this file already refuses elsewhere"
+    )
+    assert "fundingCap" in bitcoin.source
+
+
 def test_a_dated_contract_pays_no_funding_and_is_not_recorded_as_paying_zero(
     adapter, read_captured_json
 ):

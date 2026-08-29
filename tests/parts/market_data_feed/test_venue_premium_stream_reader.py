@@ -26,7 +26,7 @@ from parts.market_data_feed.venue_premium_stream_reader import (
     describe_premium_reading,
 )
 from parts.prediction.funding_rate_forecaster import (
-    NO_VENUE_PARAMETERS,
+    NO_SYMBOL_PARAMETERS,
     FundingRateForecaster,
     describe_funding_forecasting,
 )
@@ -352,10 +352,11 @@ def test_without_a_venue_s_funding_formula_the_forecast_refuses_and_says_which(
 ):
     """The premium is half of a funding rate; the venue's own formula is the other.
 
-    Nothing publishes `FundingParameters` yet, so this is the live answer once
-    premiums flow: a named refusal rather than a number. Pinned deliberately --
-    an honest refusal is a different state from the silent zero this part reported
-    before, and it is what says the remaining gap is the formula, not the premium.
+    This is the answer for a symbol whose parameters were never observed: a
+    named refusal rather than a number. Pinned deliberately -- an honest
+    refusal is a different state from the silent zero this part reported
+    before, and it is what says the remaining gap is the formula, not the
+    premium.
     """
     whole, _ = premiums_from("binance-usdm", read_captured_payloads)
     forecaster = FundingRateForecaster(
@@ -367,6 +368,6 @@ def test_without_a_venue_s_funding_formula_the_forecast_refuses_and_says_which(
         )
 
     forecast = forecaster.forecast(whole[0].venue_id, whole[0].symbol)
-    assert forecast.state == NO_VENUE_PARAMETERS
+    assert forecast.state == NO_SYMBOL_PARAMETERS
     assert forecast.predicted_rate is None
-    assert describe_funding_forecasting(forecaster)["refused_no_venue_parameters"] == 1
+    assert describe_funding_forecasting(forecaster)["refused_no_symbol_parameters"] == 1

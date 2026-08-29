@@ -68,6 +68,14 @@ class CapturableSymbol:
     # them because a carry cost is a number a position is priced against, and
     # RL-061 does not stop at the venue boundary.
     funding_source: str | None = None
+    # The rest of the venue's own funding formula -- what `funding-rate-forecaster`
+    # needs to compute a settlement the way the venue does. None where the venue
+    # did not state one for this symbol on this read, same reasoning as the pair
+    # above: a defaulted cap or interest rate is wrong for exactly the symbols
+    # whose venue-stated figure differs from the default, and wrong invisibly.
+    funding_rate_cap: float | None = None
+    funding_rate_floor: float | None = None
+    funding_interest_rate_per_interval: float | None = None
     # This contract's maintenance margin ladder, as the venue published it.
     # Empty when the venue's schedule could not be read -- Binance serves its
     # brackets from a signed endpoint, so an empty tuple there means no API key

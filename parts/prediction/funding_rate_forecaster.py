@@ -40,7 +40,7 @@ PART_ID = "funding-rate-forecaster"
 
 PART_DECLARATION = PartDeclaration(
     part_id="funding-rate-forecaster",
-    consumes=("market-data", "venue-premium"),
+    consumes=("market-data", "venue-premium", "symbol-universe"),
     produces=("funding-forecast", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -48,20 +48,34 @@ PART_DECLARATION = PartDeclaration(
 )
 
 FORECAST = "forecast"
-NO_VENUE_PARAMETERS = "this-venue's-funding-formula-parameters-are-not-known"
+NO_SYMBOL_PARAMETERS = "this-symbol's-funding-formula-parameters-are-not-known"
 NO_PREMIUM_OBSERVATIONS = "no-premium-index-observations-for-this-symbol"
 
 
 @dataclass(frozen=True)
 class FundingParameters:
-    """A venue's own funding formula, as the venue documents it. Never assumed."""
+    """One symbol's own funding formula, as its venue documents it. Never assumed.
+
+    Per symbol, not per venue: measured 2026-08-28, Binance's own `fundingInfo`
+    splits 444 symbols at a four-hour interval, 314 at eight, 2 at one, and its
+    `adjustedFundingRateCap` runs 0.003 to 0.02 across symbols on the same read.
+    A venue-wide constant would mis-time or mis-cap the forecast for whichever
+    symbols sit off the majority value -- wrong invisibly, same failure shape
+    `docs/proposals/venue-declared-funding-facts.md` already found and fixed
+    for the rate and interval that feed a position's carry.
+
+    `averaging_window_seconds` is not a field here: the premium index is
+    averaged over the settlement interval itself, so it is `interval_seconds`,
+    not a second unknown neither venue publishes separately.
+    """
 
     venue_id: str
+    symbol: str
     interval_seconds: float
     cap: float
+    floor: float
     interest_rate_per_interval: float
     premium_clamp: float
-    averaging_window_seconds: float
 
 
 @dataclass(frozen=True)
@@ -119,13 +133,13 @@ class FundingRateForecaster:
         self._window = premium_window_observations
         self._minimum = minimum_observations
         self._now_ns = now_ns
-        self._parameters: dict[str, FundingParameters] = {}
+        self._parameters: dict[tuple[str, str], FundingParameters] = {}
         self._premiums: dict[tuple[str, str], RollingWindow] = {}
         self._next_settlement: dict[tuple[str, str], int] = {}
         self.standing = ForecasterStanding()
 
-    def observe_venue_parameters(self, parameters: FundingParameters) -> None:
-        self._parameters[parameters.venue_id] = parameters
+    def observe_funding_parameters(self, parameters: FundingParameters) -> None:
+        self._parameters[(parameters.venue_id, parameters.symbol)] = parameters
 
     def observe_premium(self, venue_id: str, symbol: str, mark_price: float, index_price: float) -> None:
         """One premium observation: how far the perpetual trades from its index."""
@@ -145,15 +159,15 @@ class FundingRateForecaster:
 
     def forecast(self, venue_id: str, symbol: str) -> FundingForecast:
         self.standing.forecasts_made += 1
-        parameters = self._parameters.get(venue_id)
+        parameters = self._parameters.get((venue_id, symbol))
 
         if parameters is None:
             self.standing.refused_no_parameters += 1
             return self._forecast(
-                venue_id, symbol, NO_VENUE_PARAMETERS, None, None, None, None, False, 0,
-                f"the funding formula's interval, cap and interest rate for {venue_id} are "
-                f"not known here; they differ between venues and change, so they are read "
-                f"rather than assumed",
+                venue_id, symbol, NO_SYMBOL_PARAMETERS, None, None, None, None, False, 0,
+                f"the funding formula's interval, cap, floor and interest rate for "
+                f"{venue_id}|{symbol} are not known here; they differ by symbol and change, "
+                f"so they are read rather than assumed",
             )
 
         window = self._premiums.get((venue_id, symbol))
@@ -176,23 +190,26 @@ class FundingRateForecaster:
             min(parameters.premium_clamp, parameters.interest_rate_per_interval - premium_average),
         )
         rate = premium_average + interest_component
-        capped = abs(rate) > parameters.cap
+        capped = rate > parameters.cap or rate < parameters.floor
         if capped:
-            rate = parameters.cap if rate > 0 else -parameters.cap
+            rate = parameters.cap if rate > parameters.cap else parameters.floor
             self.standing.capped_forecasts += 1
 
         settlement = self._next_settlement.get((venue_id, symbol))
         seconds_to_settlement = (
             None if settlement is None else max(0.0, (settlement - self._now_ns()) / 1e9)
         )
+        # The premium index is averaged over the settlement interval itself, so
+        # that is what "how much of this window is already past" is measured
+        # against -- not a second, unfetched window length.
         elapsed = (
             None
-            if seconds_to_settlement is None or parameters.averaging_window_seconds <= 0
+            if seconds_to_settlement is None or parameters.interval_seconds <= 0
             else min(
                 1.0,
                 max(
                     0.0,
-                    1.0 - seconds_to_settlement / parameters.averaging_window_seconds,
+                    1.0 - seconds_to_settlement / parameters.interval_seconds,
                 ),
             )
         )
@@ -208,7 +225,10 @@ class FundingRateForecaster:
             f"observation(s), which with {venue_id}'s "
             f"{parameters.interest_rate_per_interval:+.5%} interest component gives "
             f"{rate:+.5%} at the next settlement"
-            + (f", capped at {parameters.cap:.3%}" if capped else "")
+            + (
+                f", capped at {(parameters.cap if rate == parameters.cap else parameters.floor):.3%}"
+                if capped else ""
+            )
             + (
                 f". {elapsed:.0%} of the averaging window is already past, so that much of "
                 f"this is determined"
@@ -240,10 +260,10 @@ class FundingRateForecaster:
 def describe_funding_forecasting(forecaster: FundingRateForecaster) -> dict:
     return {
         "part_id": PART_ID,
-        "venues_with_known_parameters": sorted(forecaster._parameters),
+        "symbols_with_known_parameters": len(forecaster._parameters),
         "forecasts_made": forecaster.standing.forecasts_made,
         "forecasts_produced": forecaster.standing.forecasts_produced,
-        "refused_no_venue_parameters": forecaster.standing.refused_no_parameters,
+        "refused_no_symbol_parameters": forecaster.standing.refused_no_parameters,
         "refused_no_premium_observations": forecaster.standing.refused_no_observations,
         "premium_observations": forecaster.standing.premium_observations,
         "forecasts_hitting_the_cap": forecaster.standing.capped_forecasts,
@@ -290,6 +310,17 @@ def start_part(context) -> int:
     consumes and is still drained: it is what says a symbol is live at all, and
     dropping an input in the same change that adds one is how a part quietly
     loses a capability nobody was watching.
+
+    `symbol-universe` is read for the venue's own funding-formula facts --
+    interval, cap, floor and interest rate -- since 2026-08-29. Before it,
+    `observe_funding_parameters` was never called at all: every forecast
+    refused `NO_SYMBOL_PARAMETERS`, and `funding_forecast_change` was missing
+    on 100% of every bull and bear feature vector. `symbol-catalogue-reader`
+    already fetches all four in the same round-trip it uses for the rate and
+    interval `venue-declared-funding-facts.md` wired in; nothing here costs an
+    extra request. Only `premium_clamp` is not on that wire -- neither venue
+    publishes it via any endpoint read in this codebase -- so it is the one
+    setting-sourced constant, from this part's own documented formula above.
     """
     # `market-data` carries trades AND candles: venue-trade-stream-reader
     # publishes the first, ccxt-venue-reader the second, and both have always
@@ -301,13 +332,40 @@ def start_part(context) -> int:
 
     trades = Batch(read=context.bus.reader("market-data"))
     premiums = Batch(read=context.bus.reader("venue-premium"))
+    listings = Batch(read=context.bus.reader("symbol-universe"))
     publish_forecasts = context.bus.publisher_for("funding-forecast")
     forecaster = FundingRateForecaster(
         premium_window_observations=int(context.number("funding_premium_window")),
         minimum_observations=int(context.number("learning_minimum_observations")),
     )
+    premium_clamp = context.number("funding_premium_clamp")
 
     def read_premiums(_forecaster):
+        # Every declared symbol this tick, before the premiums: a parameter
+        # arriving the same tick as the premium that would first clear the
+        # minimum-observations floor must be in place before forecast() runs.
+        for listing in listings.payloads():
+            if (
+                listing.funding_settlements_per_day is None
+                or listing.funding_rate_cap is None
+                or listing.funding_rate_floor is None
+                or listing.funding_interest_rate_per_interval is None
+            ):
+                # Undeclared for this symbol on this read -- the same fact
+                # `bull-feature-builder` already reports as a missing feature,
+                # never filled in with a platform default.
+                continue
+            _forecaster.observe_funding_parameters(
+                FundingParameters(
+                    venue_id=listing.venue_id,
+                    symbol=listing.symbol,
+                    interval_seconds=86_400.0 / listing.funding_settlements_per_day,
+                    cap=listing.funding_rate_cap,
+                    floor=listing.funding_rate_floor,
+                    interest_rate_per_interval=listing.funding_interest_rate_per_interval,
+                    premium_clamp=premium_clamp,
+                )
+            )
         # Drained rather than read: this part forecasts from the premium, and the
         # trades are here so an unread wire does not back up behind it.
         trades_in(trades.payloads())

@@ -908,16 +908,35 @@ class BybitLinearAdapter(VenueAdapter):
             if rate is None or rate == "":
                 continue
             symbol = entry["symbol"]
+            # `fundingCap` rides on the same tickers message the rate does --
+            # measured 2026-08-24, it differs by symbol (0.00333 on BTCUSDT,
+            # 0.005 on a lower-volume listing in the same capture), so it is
+            # read per symbol rather than assumed shared. This venue documents
+            # the bound as symmetric and publishes only the one figure -- the
+            # floor is its negative by that documented convention, not a
+            # second reading, which is why it carries no separate source note.
+            # No `interestRate`-equivalent field appears anywhere on this
+            # response; this venue's formula does not expose one the way
+            # Binance's does, so it stays undeclared rather than guessed.
+            cap = entry.get("fundingCap")
             facts[symbol] = ContractFunding(
                 symbol=symbol,
                 rate_per_settlement=float(rate),
                 settlements_per_day=settlements_per_day.get(symbol),
+                rate_cap=None if cap is None or cap == "" else float(cap),
+                rate_floor=None if cap is None or cap == "" else -float(cap),
+                interest_rate_per_interval=None,
                 source=(
                     f"{TICKER_URL} fundingRate"
                     + (
                         f", {CATALOGUE_URL} fundingInterval"
                         if symbol in settlements_per_day
                         else ", interval undeclared by this venue"
+                    )
+                    + (
+                        f", {TICKER_URL} fundingCap (floor taken as its negative)"
+                        if cap not in (None, "")
+                        else ", cap undeclared by this venue"
                     )
                 ),
             )

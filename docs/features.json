@@ -6097,7 +6097,8 @@
       "category": "prediction",
       "consumes": [
         "market-data",
-        "venue-premium"
+        "venue-premium",
+        "symbol-universe"
       ],
       "produces": [
         "funding-forecast",

@@ -169,6 +169,9 @@ def _with_funding(
         funding_rate_per_settlement=funding.rate_per_settlement,
         funding_settlements_per_day=funding.settlements_per_day,
         funding_source=funding.source,
+        funding_rate_cap=funding.rate_cap,
+        funding_rate_floor=funding.rate_floor,
+        funding_interest_rate_per_interval=funding.interest_rate_per_interval,
     )
 
 
