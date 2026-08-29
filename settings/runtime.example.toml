@@ -2158,6 +2158,11 @@ value = 1.5
 unit  = "multiple"
 note  = "operator, 2026-08-23: how much higher the win rate with a condition must be than without, for the miner to report the condition. One and a half times."
 
+[lesson_extractor_republish_interval_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "operator, 2026-08-29: how long an unchanged decoded-trade-instruction may go unrepeated before it is restated for a reader that started after it last changed. Same reasoning and interval as sequence_pattern_republish_interval_seconds -- these are slow-moving, evidence-accumulated findings, not per-tick levels."
+
 [lesson_minimum_significant_fraction]
 value = 0.5
 unit  = "fraction"

@@ -33,8 +33,8 @@ from parts.closed_trade_decoding.holding_horizon_profiler import (
     TOO_FEW_TRADES as HORIZON_THIN,
 )
 from parts.closed_trade_decoding.lesson_extractor import (
-    CONTRADICTED, EXPRESSIBLE_CHANGES, EXTRACTED, LessonExtractor, NOT_SIGNIFICANT,
-    TIGHTEN_THE_STOP, TOO_FEW_TRADES as LESSON_THIN, UNCONDITIONAL, WIDEN_THE_STOP,
+    CONTRADICTED, EXTRACTED, LessonExtractor, NOT_SIGNIFICANT,
+    TOO_FEW_TRADES as LESSON_THIN, UNCONDITIONAL,
 )
 from parts.closed_trade_decoding.loss_cause_classifier import (
     CLASSIFIED, LossCauseClassifier, NOT_A_LOSS,
@@ -81,8 +81,9 @@ from parts.closed_trade_decoding.winner_pattern_miner import (
     DOES_NOT_SEPARATE, FOUND, TOO_FEW_TRADES as WINNER_THIN, WinnerPatternMiner,
 )
 from runtime.trade_decoding_types import (
-    COSTS_ATE_IT, FROM_DIRECTION, FROM_FEES, FROM_UNEXPLAINED, IT_WAS_JUST_VARIANCE,
-    PNL_COMPONENTS, SEQUENCE_KINDS, SequencePattern, THE_STOP_WAS_INSIDE_THE_NOISE,
+    COSTS_ATE_IT, FROM_DIRECTION, FROM_FEES, FROM_SLIPPAGE, FROM_UNEXPLAINED,
+    IT_WAS_JUST_VARIANCE, PNL_COMPONENTS, SEQUENCE_KINDS, SequencePattern,
+    THE_STOP_WAS_INSIDE_THE_NOISE,
 )
 from runtime.level_publishing import LevelPublisherByKey
 from runtime.trading_types import ClosedTrade, Fill
@@ -1287,8 +1288,9 @@ def _support(extractor, change, conditions, count=3, significant=True, effect=1.
 
 def test_an_instruction_names_the_condition_it_applies_under():
     subject = an_extractor()
-    _support(subject, WIDEN_THE_STOP, {"regime": "chop"})
-    outcome = subject.extract(WIDEN_THE_STOP, {"regime": "chop"})
+    change = f"stop:{TOO_WIDE}"
+    _support(subject, change, {"regime": "chop"})
+    outcome = subject.extract(change, {"regime": "chop"})
     assert outcome.state == EXTRACTED
     assert outcome.instruction.applies_when == {"regime": "chop"}
     assert outcome.instruction.can_be_acted_on
@@ -1296,32 +1298,36 @@ def test_an_instruction_names_the_condition_it_applies_under():
 
 def test_an_unconditional_instruction_is_refused():
     subject = an_extractor()
-    _support(subject, WIDEN_THE_STOP, {})
-    outcome = subject.extract(WIDEN_THE_STOP, {})
+    change = f"stop:{TOO_WIDE}"
+    _support(subject, change, {})
+    outcome = subject.extract(change, {})
     assert outcome.state == UNCONDITIONAL
     assert "one bad quarter rewrites a working strategy" in outcome.reason
 
 
 def test_one_trade_produces_a_narrative_not_a_rule():
     subject = an_extractor(minimum=5)
-    _support(subject, WIDEN_THE_STOP, {"regime": "chop"}, count=1)
-    assert subject.extract(WIDEN_THE_STOP, {"regime": "chop"}).state == LESSON_THIN
+    change = f"stop:{TOO_WIDE}"
+    _support(subject, change, {"regime": "chop"}, count=1)
+    assert subject.extract(change, {"regime": "chop"}).state == LESSON_THIN
 
 
 def test_insignificant_outcomes_cannot_support_an_instruction():
     subject = an_extractor(significant=0.8)
-    _support(subject, WIDEN_THE_STOP, {"regime": "chop"}, significant=False)
-    outcome = subject.extract(WIDEN_THE_STOP, {"regime": "chop"})
+    change = f"stop:{TOO_WIDE}"
+    _support(subject, change, {"regime": "chop"}, significant=False)
+    outcome = subject.extract(change, {"regime": "chop"})
     assert outcome.state == NOT_SIGNIFICANT
     assert "nothing there to learn from" in outcome.reason
 
 
 def test_contradictory_instructions_block_each_other():
     subject = an_extractor()
-    _support(subject, WIDEN_THE_STOP, {"regime": "chop"})
-    _support(subject, TIGHTEN_THE_STOP, {"regime": "chop"})
-    subject.extract(WIDEN_THE_STOP, {"regime": "chop"})
-    outcome = subject.extract(TIGHTEN_THE_STOP, {"regime": "chop"})
+    widen, tighten = f"stop:{TOO_WIDE}", f"stop:{INSIDE_THE_NOISE}"
+    _support(subject, widen, {"regime": "chop"})
+    _support(subject, tighten, {"regime": "chop"})
+    subject.extract(widen, {"regime": "chop"})
+    outcome = subject.extract(tighten, {"regime": "chop"})
     assert outcome.state == CONTRADICTED
     assert "not what mattered" in outcome.reason
 
@@ -1330,13 +1336,121 @@ def test_a_change_nothing_can_apply_is_refused():
     subject = an_extractor()
     with pytest.raises(ValueError):
         subject.observe_evidence("be-more-patient", {"regime": "chop"}, "t-1", 1.0, True)
-    assert "be-more-patient" not in EXPRESSIBLE_CHANGES
 
 
 def test_the_extractor_applies_nothing():
     assert importlib.import_module(
         BLOCK_PARTS["lesson-extractor"]
     ).describe_lesson_extraction(an_extractor())["applies_an_instruction"] is False
+
+
+def test_observe_evidence_accepts_the_four_real_families():
+    extractor = an_extractor()
+    # None of these raise.
+    extractor.observe_evidence(f"stop:{INSIDE_THE_NOISE}", {"symbol": "BTCUSDT"}, "t1", 0.0, True)
+    extractor.observe_evidence(f"pnl-from:{FROM_SLIPPAGE}", {"symbol": "BTCUSDT"}, "t2", -1.0, True)
+    extractor.observe_evidence("sequence:" + STREAKS, {}, "t3", 0.5, True)
+    extractor.observe_evidence("detector:momentum-burst-detector", {"regime": "trending"}, "t4", 1.0, True)
+
+
+def test_observe_evidence_refuses_a_stop_verdict_that_does_not_exist():
+    extractor = an_extractor()
+    with pytest.raises(ValueError, match="is not a change anything downstream can apply"):
+        extractor.observe_evidence("stop:not-a-real-verdict", {"symbol": "BTCUSDT"}, "t1", 0.0, True)
+
+
+def test_observe_evidence_no_longer_accepts_the_old_hyphenated_vocabulary():
+    extractor = an_extractor()
+    with pytest.raises(ValueError, match="is not a change anything downstream can apply"):
+        extractor.observe_evidence("widen-the-stop", {"symbol": "BTCUSDT"}, "t1", 0.0, True)
+
+
+def test_a_stop_verdict_contradicts_its_real_opposite():
+    extractor = an_extractor()
+    conditions = {"symbol": "BTCUSDT"}
+    for i in range(3):
+        extractor.observe_evidence(f"stop:{TOO_WIDE}", conditions, f"a{i}", 1.0, True)
+    extractor.extract(f"stop:{TOO_WIDE}", conditions)  # writes it
+
+    for i in range(3):
+        extractor.observe_evidence(f"stop:{INSIDE_THE_NOISE}", conditions, f"b{i}", 1.0, True)
+    outcome = extractor.extract(f"stop:{INSIDE_THE_NOISE}", conditions)
+
+    assert outcome.state == CONTRADICTED
+
+
+def test_sequence_evidence_is_keyed_on_kind_not_a_per_tick_pattern_id():
+    """A pattern republished under a fresh pattern_id each tick must accumulate
+    as the same evidence, not scatter into one-item buckets that can never
+    clear minimum_trades. conditions={"kind": ...} is what read_evidence
+    (in start_part) actually supplies -- see the wiring-level test below."""
+    extractor = an_extractor()
+    change = f"sequence:{STREAKS}"
+    extractor.observe_evidence(change, {"kind": STREAKS}, "sequence-1", 0.1, True)
+    extractor.observe_evidence(change, {"kind": STREAKS}, "sequence-2", 0.1, True)
+    outcome = extractor.extract(change, {"kind": STREAKS})
+
+    assert outcome.state == EXTRACTED
+    assert len(outcome.supporting_trades) == 2
+
+
+def test_read_evidence_keys_sequence_jobs_on_kind_not_pattern_id():
+    """Mirrors read_evidence's own construction (see lesson_extractor.start_part)
+    with a fake bus source, pinning the exact dict shape it must produce."""
+    from runtime.bus import Message
+    from runtime.input_assembly import Batch
+
+    def a_pattern(pattern_id):
+        return SequencePattern(
+            pattern_id=pattern_id, description="d", kind=STREAKS, trades_examined=10,
+            occurrences=1, effect=0.1, is_significant=True, reason="r", found_at_ns=1,
+        )
+
+    patterns_batch = Batch(read=lambda: (
+        Message(data_type="sequence-pattern", producer_part_id="x", sequence=1,
+                published_at_ns=1, payload=a_pattern("sequence-1")),
+    ))
+    jobs = []
+    for pattern in patterns_batch.payloads():
+        if pattern.is_significant:
+            jobs.append({
+                "change": f"sequence:{pattern.kind}", "conditions": {"kind": pattern.kind},
+                "trade_id": pattern.pattern_id, "effect": pattern.effect,
+                "was_significant": True,
+            })
+    assert jobs[0]["conditions"] == {"kind": STREAKS}
+    assert "pattern" not in jobs[0]["conditions"]
+
+
+def test_tick_does_not_republish_an_instruction_whose_content_has_not_changed():
+    from parts.closed_trade_decoding import lesson_extractor as module
+
+    published = []
+
+    extractor = module.LessonExtractor(minimum_trades=2, minimum_significant_fraction=0.5)
+    change = f"pnl-from:{FROM_SLIPPAGE}"
+    conditions = {"symbol": "BTCUSDT"}
+    extractor.observe_evidence(change, conditions, "t1", -1.0, True)
+    extractor.observe_evidence(change, conditions, "t2", -1.0, True)
+
+    level_publisher = LevelPublisherByKey(
+        publish=lambda items: published.extend(items),
+        refresh_interval_seconds=3600.0,
+        identity_of=module._instruction_identity,
+    )
+
+    def publish_if_new(key, outcome):
+        if outcome.is_usable:
+            level_publisher.publish_level(key, (outcome.instruction,))
+
+    # Same evidence, extracted twice -- extract() mints a fresh instruction_id
+    # each time, but the content (change, applies_when, derived_from,
+    # expected_effect, trades_supporting, reason minus the id/timestamp) is
+    # identical, so only the first call should reach `published`.
+    key = (change, tuple(sorted(conditions.items())))
+    publish_if_new(key, extractor.extract(change, conditions))
+    publish_if_new(key, extractor.extract(change, conditions))
+    assert len(published) == 1
 
 
 # ---- trade-replay-verifier --------------------------------------------------

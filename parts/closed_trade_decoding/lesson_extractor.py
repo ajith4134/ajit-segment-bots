@@ -32,7 +32,11 @@ import statistics
 import time
 from dataclasses import dataclass, field
 
-from runtime.trade_decoding_types import DecodedTradeInstruction
+from runtime.trade_decoding_types import (
+    DecodedTradeInstruction, STOP_VERDICTS, PNL_COMPONENTS, SEQUENCE_KINDS,
+    INSIDE_THE_NOISE, TOO_WIDE,
+)
+from runtime.level_publishing import LevelPublisherByKey
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -57,30 +61,9 @@ UNCONDITIONAL = "it-names-no-condition-so-it-would-apply-to-everything"
 CONTRADICTED = "an-opposite-instruction-exists-for-the-same-conditions"
 NOT_TESTABLE = "it-cannot-be-checked-against-a-later-trade"
 
-# Changes this part can express. Each is a knob something downstream actually has,
-# because an instruction naming a knob that does not exist can never be applied.
-WIDEN_THE_STOP = "widen-the-stop"
-TIGHTEN_THE_STOP = "tighten-the-stop"
-ENTER_LATER = "enter-later"
-ENTER_EARLIER = "enter-earlier"
-HOLD_LONGER = "hold-longer"
-EXIT_SOONER = "exit-sooner"
-TRADE_SMALLER = "trade-smaller"
-AVOID_THE_SETUP = "avoid-the-setup"
-PREFER_A_CHEAPER_INSTRUMENT = "prefer-a-cheaper-instrument"
-
-EXPRESSIBLE_CHANGES = (
-    WIDEN_THE_STOP, TIGHTEN_THE_STOP, ENTER_LATER, ENTER_EARLIER, HOLD_LONGER,
-    EXIT_SOONER, TRADE_SMALLER, AVOID_THE_SETUP, PREFER_A_CHEAPER_INSTRUMENT,
-)
-
 OPPOSITES = {
-    WIDEN_THE_STOP: TIGHTEN_THE_STOP,
-    TIGHTEN_THE_STOP: WIDEN_THE_STOP,
-    ENTER_LATER: ENTER_EARLIER,
-    ENTER_EARLIER: ENTER_LATER,
-    HOLD_LONGER: EXIT_SOONER,
-    EXIT_SOONER: HOLD_LONGER,
+    f"stop:{INSIDE_THE_NOISE}": f"stop:{TOO_WIDE}",
+    f"stop:{TOO_WIDE}": f"stop:{INSIDE_THE_NOISE}",
 }
 
 
@@ -146,7 +129,7 @@ class LessonExtractor:
         was_significant: bool,
     ) -> None:
         """One trade supporting one change under one set of conditions."""
-        if change not in EXPRESSIBLE_CHANGES:
+        if not self._is_expressible(change):
             raise ValueError(
                 f"{change!r} is not a change anything downstream can apply. An "
                 f"instruction naming a knob that does not exist can never be acted on"
@@ -154,6 +137,19 @@ class LessonExtractor:
         self._evidence.setdefault(self._key(change, conditions), []).append(
             {"trade_id": trade_id, "effect": effect, "significant": was_significant}
         )
+
+    @staticmethod
+    def _is_expressible(change: str) -> bool:
+        prefix, _, suffix = change.partition(":")
+        if prefix == "stop":
+            return suffix in STOP_VERDICTS
+        if prefix == "pnl-from":
+            return suffix in PNL_COMPONENTS
+        if prefix == "sequence":
+            return suffix in SEQUENCE_KINDS
+        if prefix == "detector":
+            return bool(suffix)
+        return False
 
     def extract(self, change: str, conditions: dict) -> ExtractionOutcome:
         self.standing.extractions_attempted += 1
@@ -252,10 +248,19 @@ def describe_lesson_extraction(extractor: LessonExtractor) -> dict:
         "refused_unconditional": extractor.standing.refused_unconditional,
         "refused_contradicted": extractor.standing.refused_contradicted,
         "contradictions_blocked": list(extractor.standing.contradictions_blocked),
-        "expressible_changes": list(EXPRESSIBLE_CHANGES),
+        "expressible_families": ["stop:*", "pnl-from:*", "sequence:*", "detector:*"],
         "applies_an_instruction": False,
         "instructions_applied": extractor.standing.instructions_applied,
     }
+
+
+def _instruction_identity(items):
+    """What counts as the same instruction: not its id or when it was written."""
+    return tuple(
+        (i.change, tuple(sorted(i.applies_when.items())), i.derived_from,
+         i.expected_effect, i.trades_supporting, i.is_testable, i.reason)
+        for i in items
+    )
 
 
 def run_lesson_extractor(
@@ -268,9 +273,13 @@ def run_lesson_extractor(
         for job in read_evidence():
             extractor.observe_evidence(**job)
         for change, conditions in list(extractor._evidence):
+            # `conditions` here is already `tuple(sorted(dict.items()))` -- it is
+            # the second half of the _evidence key, per _key() -- so it is used
+            # as the dedup key's condition component directly rather than
+            # re-sorted through a `.items()` call a tuple does not have.
             outcome = extractor.extract(change, dict(conditions))
             if outcome.is_usable:
-                publish_instructions(outcome.instruction)
+                publish_instructions((change, conditions), outcome.instruction)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -298,7 +307,12 @@ def start_part(context) -> int:
     attributions = Batch(read=context.bus.reader("pnl-attribution"))
     audits = Batch(read=context.bus.reader("stop-audit"))
     patterns = Batch(read=context.bus.reader("sequence-pattern"))
-    publish_instructions = context.bus.publisher_for("decoded-trade-instruction")
+    raw_publish_instructions = context.bus.publisher_for("decoded-trade-instruction")
+    instruction_level_publisher = LevelPublisherByKey(
+        publish=raw_publish_instructions,
+        refresh_interval_seconds=context.number("lesson_extractor_republish_interval_seconds"),
+        identity_of=_instruction_identity,
+    )
     extractor = LessonExtractor(
         minimum_trades=int(context.number("decoding_minimum_trades")),
         minimum_significant_fraction=context.number("lesson_minimum_significant_fraction"),
@@ -331,7 +345,13 @@ def start_part(context) -> int:
         for pattern in patterns.payloads():
             if pattern.is_significant:
                 jobs.append({
-                    "change": f"sequence:{pattern.kind}", "conditions": {"pattern": pattern.pattern_id},
+                    "change": f"sequence:{pattern.kind}",
+                    # `kind` restates the change, deliberately: SequencePattern
+                    # carries no symbol or regime (it is a genuinely global
+                    # finding), and observe_evidence refuses an unconditional
+                    # change. Naming the condition it already fires under keeps
+                    # it honest rather than inventing a scope it doesn't have.
+                    "conditions": {"kind": pattern.kind},
                     "trade_id": pattern.pattern_id, "effect": pattern.effect, "was_significant": True,
                 })
         return tuple(jobs)
@@ -340,7 +360,9 @@ def start_part(context) -> int:
         extractor=extractor,
         control_socket=context.control_socket,
         read_evidence=read_evidence,
-        publish_instructions=lambda instruction: publish_instructions((instruction,)),
+        publish_instructions=lambda key, instruction: instruction_level_publisher.publish_level(
+            key, (instruction,)
+        ),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
