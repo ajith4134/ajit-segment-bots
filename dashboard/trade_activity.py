@@ -164,7 +164,6 @@ def read_open_positions() -> tuple[list[dict], dict]:
     direction = state.get("direction") or {}
     entry_cost = state.get("entry_cost") or {}
     entered = state.get("entered_quantity") or {}
-    excursion = state.get("excursion") or {}
     # Realised so far on a position that is still open: a lot sold back before the
     # rest. Zero and absent are different -- absent means this key was never
     # scaled out of -- so the key's presence is what decides, not the number.
@@ -209,7 +208,6 @@ def read_open_positions() -> tuple[list[dict], dict]:
             if committed_when_entered and float(committed_when_entered) > 0
             else None
         )
-        best, worst = (excursion.get(key) or [None, None])[:2]
         positions.append(
             {
                 "venue_id": venue_id,
@@ -243,8 +241,10 @@ def read_open_positions() -> tuple[list[dict], dict]:
                     {"quantity": float(lot.quantity), "price": lot.price}
                     for lot in book.lots
                 ],
-                "best_unrealised": best,
-                "worst_unrealised": worst,
+                # Populated by attach_peak_excursions from peak-excursion-tracker's
+                # own checkpoint, not from this one -- see that function for why.
+                "best_unrealised": None,
+                "worst_unrealised": None,
                 "realised_so_far": (
                     float(realised[key]) if key in realised else None
                 ),
@@ -636,6 +636,100 @@ def attach_tailgating_trails(positions: list[dict]) -> dict:
     }
 
 
+def attach_peak_excursions(positions: list[dict]) -> dict:
+    """Attach each open position's best/worst unrealised, from the tracker's own checkpoint.
+
+    Read from `peak-excursion-tracker`'s own checkpoint -- as of 2026-08-29 -- for
+    the same reason the resting stop and the tailgating trail are: a second copy
+    kept for a board is free to disagree with the one the bot acts on.
+
+    Before this, `best_unrealised`/`worst_unrealised` came from `position-close-
+    detector`'s relayed copy, which only reaches disk when a fill happens (lots
+    genuinely only change on a fill, so that part's own cadence is correct for
+    its own job). A position priced continuously but not filled in a while showed
+    an excursion that was stale by however long since the last fill anywhere --
+    measured live, 573 seconds -- next to a `price_now`/`unrealised_pnl` that is
+    always fresh off the tape. The live mark could then exceed the stored "best",
+    which is impossible if both describe the same moment: it was never a bad
+    measurement, it was two clocks in one row.
+
+    peak-excursion-tracker checkpoints on its own excursion updates rather than
+    on a fill, so this is close to the tracker's own live answer rather than a
+    downstream copy of an old one.
+    """
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+        root = pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+    except Exception as refusal:
+        for position in positions:
+            position["excursion_proof"] = f"{NOT_MEASURED}: settings refused position_state_root"
+        return {"ok": False, "proof": f"settings refused position_state_root ({refusal})"}
+
+    path = root / "peak-excursion-tracker.excursion.json"
+    if not path.exists():
+        for position in positions:
+            position["best_unrealised"] = None
+            position["worst_unrealised"] = None
+            position["excursion_proof"] = (
+                f"{NOT_MEASURED}: peak-excursion-tracker has not written a checkpoint, "
+                f"which is a different fact from no position having moved"
+            )
+        return {
+            "ok": False,
+            "proof": (
+                f"no checkpoint at {path}: peak-excursion-tracker has not written one, "
+                "which is a different fact from no position having moved"
+            ),
+        }
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as failure:
+        for position in positions:
+            position["excursion_proof"] = f"{NOT_MEASURED}: {path} could not be read"
+        return {"ok": False, "proof": f"{path} could not be read: {failure}"}
+
+    state = document.get("state") or {}
+    extremes = state.get("extremes") or {}
+    last_observed = state.get("last_observed_at_ns") or {}
+    written = int((time.time_ns() - int(document.get("saved_at_ns") or 0)) / 1e9)
+    measured = 0
+    for position in positions:
+        key = f"{position['venue_id']}|{position['symbol']}"
+        held = extremes.get(key)
+        if held is None:
+            position["best_unrealised"] = None
+            position["worst_unrealised"] = None
+            position["excursion_proof"] = (
+                f"{path.name} holds no excursion for {position['symbol']}: this position "
+                f"has not been priced by peak-excursion-tracker yet"
+            )
+            continue
+        measured += 1
+        best, worst = held[0], held[1]
+        position["best_unrealised"] = best
+        position["worst_unrealised"] = worst
+        at_ns = last_observed.get(key)
+        age = None if at_ns is None else (time.time_ns() - int(at_ns)) / 1e9
+        position["excursion_proof"] = (
+            f"{path.name}, written {written}s ago: this position's own last print was "
+            f"{age:.0f}s before that" if age is not None else
+            f"{path.name}, written {written}s ago"
+        )
+
+    return {
+        "ok": True,
+        "measured": measured,
+        "proof": (
+            f"{path}, written {written}s ago -- the same file peak-excursion-tracker "
+            f"restores from. {measured} of {len(positions)} open position(s) have a "
+            f"recorded excursion"
+        ),
+    }
+
+
 def attach_live_prices(positions: list[dict]) -> None:
     """Mark each held position against the tape's latest print, in place.
 
@@ -894,6 +988,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     prediction_provenance = attach_learned_excursions(positions)
     exit_provenance = attach_resting_exits(positions)
     tailgating_provenance = attach_tailgating_trails(positions)
+    peak_excursion_provenance = attach_peak_excursions(positions)
     for position in positions:
         position.pop("held_lots", None)
     closed, closed_provenance = read_closed_trades()
@@ -920,6 +1015,7 @@ def build_trade_activity(with_prices: bool = True) -> dict:
             "prediction_provenance": prediction_provenance,
             "exit_provenance": exit_provenance,
             "tailgating_provenance": tailgating_provenance,
+            "peak_excursion_provenance": peak_excursion_provenance,
         },
         "closed": {
             "trades": closed,

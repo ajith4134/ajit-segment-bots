@@ -172,19 +172,23 @@ function OpenPositions({ open }) {
                       "we did not watch": the excursion's absence is what says
                       nothing was recorded, and that renders as not measured.
 
-                      Both are widened by the live unrealised before display. The
-                      checkpoint records what peak-excursion-tracker saw, and it
-                      cannot have seen a move it was not running for -- so a stored
-                      worst of -4.91 on a position sitting at -27.27 is not a
-                      smaller loss, it is an older reading. The live mark is
-                      evidence of the excursion in its own right, and taking the
-                      wider of the two is the only reading that cannot understate
-                      it. */}
+                      Read from peak-excursion-tracker's own checkpoint since
+                      2026-08-29 (excursion_proof carries its age) rather than from
+                      position-close-detector's relay, which only reaches disk on a
+                      fill and could be stale by however long since the last one
+                      anywhere -- measured live, 573 seconds -- while price_now and
+                      unrealised are always fresh off the tape. Still widened by the
+                      live unrealised, for the residual gap between this checkpoint's
+                      write and the current instant: a stored worst of -4.91 on a
+                      position sitting at -27.27 is an older reading, not a smaller
+                      loss, and the live mark is evidence of the excursion in its own
+                      right. */}
                   <td className="n mono">
                     <Excursion
                       best={p.best_unrealised}
                       worst={p.worst_unrealised}
                       live={p.unrealised_pnl}
+                      proof={p.excursion_proof}
                     />
                   </td>
                   {/* Realised on a position still open: a lot sold back before the
@@ -291,18 +295,20 @@ function OpenPositions({ open }) {
   )
 }
 
-function Excursion({ best, worst, live }) {
-  // The widest each side has been, counting the live mark as evidence. A tracker
-  // that was not running for a move did not record it, and the stored figure is
-  // then older rather than smaller -- so the live unrealised widens the range it
-  // falls outside of. Shown as best/worst in one cell.
+function Excursion({ best, worst, live, proof }) {
+  // The widest each side has been, counting the live mark as evidence. The
+  // stored figure can only ever be as fresh as peak-excursion-tracker's own
+  // checkpoint (see `proof`), and the instant between that write and now is a
+  // real gap -- so the live unrealised widens the range it falls outside of,
+  // rather than being treated as proof the stored figure was wrong. Shown as
+  // best/worst in one cell.
   const hasStored = best !== null && best !== undefined
     && worst !== null && worst !== undefined
   const hasLive = live !== null && live !== undefined
   if (!hasStored && !hasLive) {
     return (
       <em className="unmeasured"
-          title="peak-excursion-tracker has recorded no excursion for this position, and the tape cannot mark it either">
+          title={proof || 'peak-excursion-tracker has recorded no excursion for this position, and the tape cannot mark it either'}>
         not measured
       </em>
     )
@@ -310,14 +316,14 @@ function Excursion({ best, worst, live }) {
   const peak = Math.max(hasStored ? best : -Infinity, hasLive ? live : -Infinity)
   const trough = Math.min(hasStored ? worst : Infinity, hasLive ? live : Infinity)
   const widened = hasStored && hasLive && (live > best || live < worst)
-  const proof = !hasStored
+  const title = !hasStored
     ? 'no excursion recorded; this range is the live mark alone'
     : widened
-      ? `the recorded excursion was ${best.toFixed(3)}/${worst.toFixed(3)}, `
-        + 'widened by the live mark -- the tracker was not running for part of this trade'
-      : 'from the excursion peak-excursion-tracker recorded, alongside the lots'
+      ? `the recorded excursion was ${best.toFixed(3)}/${worst.toFixed(3)} as of the last checkpoint write `
+        + `(${proof || 'age not reported'}); widened here by the live mark, which is newer`
+      : (proof || 'from the excursion peak-excursion-tracker recorded, alongside the lots')
   return (
-    <span title={proof} className={widened ? 'widened' : undefined}>
+    <span title={title} className={widened ? 'widened' : undefined}>
       <Pnl value={peak} digits={2} />
       <span className="faint"> / </span>
       <Pnl value={trough} digits={2} />

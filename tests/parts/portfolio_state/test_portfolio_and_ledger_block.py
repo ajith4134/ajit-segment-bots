@@ -377,6 +377,78 @@ def test_going_flat_clears_the_excursion():
     assert tracker.read(VENUE, SYMBOL) is None
 
 
+# ---- an open position's excursion survives a restart -------------------------
+#
+# Held in memory alone until 2026-08-29, the same defect regime-classifier and
+# cointegration-pair-finder had before their own checkpoints: a restart wiped
+# every open position's true best/worst back to zero. Measured this session:
+# five spine restarts in one sitting, each a silent reset.
+
+
+def test_read_checkpoint_state_round_trips_into_a_fresh_tracker():
+    subject = PeakExcursionTracker()
+    subject.observe_position(position(2.0, entry=100.0))
+    subject.observe_price(VENUE, SYMBOL, 110.0, observed_at_ns=1 * SECOND_NS)
+    subject.observe_price(VENUE, SYMBOL, 90.0, observed_at_ns=2 * SECOND_NS)
+
+    restored = PeakExcursionTracker()
+    assert restored.restore_from_checkpoint(subject.read_checkpoint_state()) == 1
+    excursion = restored.read(VENUE, SYMBOL)
+    assert excursion.best_unrealised == pytest.approx(20.0)
+    assert excursion.worst_unrealised == pytest.approx(-20.0)
+
+
+def test_a_restored_tracker_keeps_ratcheting_from_where_it_left_off():
+    """A restart must not let a position's true worst point be forgotten."""
+    subject = PeakExcursionTracker()
+    subject.observe_position(position(1.0, entry=100.0))
+    subject.observe_price(VENUE, SYMBOL, 80.0, observed_at_ns=1 * SECOND_NS)
+
+    restored = PeakExcursionTracker()
+    restored.restore_from_checkpoint(subject.read_checkpoint_state())
+    restored.observe_position(position(1.0, entry=100.0))
+    # A print better than the true worst must not erase what the position
+    # already went through before the restart.
+    excursion = restored.observe_price(VENUE, SYMBOL, 95.0, observed_at_ns=2 * SECOND_NS)
+    assert excursion.worst_unrealised == pytest.approx(-20.0), (
+        "a restart forgot how far against this position had already gone"
+    )
+
+
+def test_a_tracker_that_never_ran_restores_to_nothing_held():
+    """Came back holding nothing, and never ran, are different facts (Rule 8)."""
+    subject = PeakExcursionTracker()
+    assert subject.restore_from_checkpoint(subject.read_checkpoint_state()) == 0
+    assert subject.standing.restored_symbols == 0
+
+
+def test_a_tracker_comes_back_after_a_restart_through_the_real_checkpoint_store(
+    durable_tmp_path,
+):
+    from parts.portfolio_state.peak_excursion_tracker import CHECKPOINT_COMPONENT
+    from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
+
+    store = DurableStateStore(durable_tmp_path)
+    before = PeakExcursionTracker()
+    write = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "peak-excursion-tracker", CHECKPOINT_COMPONENT, before, {}
+    )
+    before.observe_position(position(2.0, entry=100.0))
+    before.observe_price(VENUE, SYMBOL, 130.0, observed_at_ns=1 * SECOND_NS)
+    write(before.checkpointable_observations)
+
+    after = PeakExcursionTracker()
+    restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), "peak-excursion-tracker", CHECKPOINT_COMPONENT, after, {}
+    )
+
+    excursion = after.read(VENUE, SYMBOL)
+    assert excursion.best_unrealised == pytest.approx(60.0), (
+        "a restart forgot the excursion an open position had already shown"
+    )
+    assert after.standing.restored_symbols == 1
+
+
 def test_a_position_carries_the_leverage_of_the_fill_that_opened_it():
     """The only place the decision that chose it survives (2026-08-26)."""
     subject = FillReconciler(quantity_tolerance=0.0)
