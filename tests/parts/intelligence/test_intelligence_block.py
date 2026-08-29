@@ -39,6 +39,7 @@ from parts.intelligence.cross_segment_signal_bridge import (
 from parts.intelligence.decision_quality_critic import (
     CONVICTION_WAS_MEASURED, EVIDENCE_WAS_COMPLETE, IT_BEAT_ITS_ALTERNATIVES,
     THE_CASE_AGAINST_WAS_HEARD, THE_FAILURE_WAS_ANTICIPATED, DecisionQualityCritic,
+    as_scorable,
 )
 from parts.intelligence.edge_decay_tracker import (
     DECAYING, NEVER_HAD_AN_EDGE, NOT_DECAYING, TOO_FEW_BLOCKS, EdgeDecayTracker,
@@ -975,6 +976,38 @@ def test_weights_that_do_not_sum_to_one_are_refused():
         DecisionQualityCritic(
             component_weights=weights, relative_tolerance=0.02, maximum_sentences=3
         )
+
+
+class RealTradeEpisode:
+    """Shaped like `runtime.knowledge_types.TradeEpisode`, the real wire payload
+    `as_scorable` converts -- not the hand-built `Episode` fake the tests above
+    call `.score()` with directly. `decision-quality-critic` crash-looped on
+    `ScorableEpisode.how_it_ended` because that conversion never populated it;
+    every other test in this file bypasses the conversion entirely."""
+
+    def __init__(self, outcome="loss", realised=-0.02, conditions=None):
+        self.venue_id, self.symbol = VENUE, SYMBOL
+        self.realised = realised
+        self.outcome = outcome
+        self.conditions = conditions or {"conviction": 0.8, "conviction_was_measured": True}
+
+
+def test_as_scorable_carries_how_it_ended_from_the_real_episodes_outcome():
+    scorable = as_scorable(RealTradeEpisode(outcome="stop-is-hit"))
+    assert scorable.how_it_ended == "stop-is-hit"
+
+
+def test_a_converted_loss_with_a_premortem_does_not_crash():
+    """The path that crashed: `as_scorable` fed straight into `.score()` with a
+    premortem present and the trade a loss reaches `components_for`'s
+    `episode.how_it_ended` branch."""
+    subject = a_critic()
+    scorable = as_scorable(RealTradeEpisode(outcome="stop-is-hit", realised=-0.02))
+    score = subject.score(
+        scorable, rationale=Rationale(), premortem=Premortem(("price reaches the stop",)),
+        argument=Argument(),
+    )
+    assert score.components[THE_FAILURE_WAS_ANTICIPATED] == 1.0
 
 
 # ---- counterfactual-replayer ------------------------------------------------

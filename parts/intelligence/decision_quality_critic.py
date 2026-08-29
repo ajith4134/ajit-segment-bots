@@ -98,6 +98,34 @@ class DecisionQualityScore:
         return self.outcome_was_good is True and self.score < 0.4
 
 
+@dataclass(frozen=True)
+class ScorableEpisode:
+    venue_id: str
+    symbol: str
+    was_profitable: bool
+    realised_fraction: float
+    how_it_ended: str
+    entry_conviction: float
+    conviction_was_measured: bool
+
+
+def as_scorable(episode) -> ScorableEpisode:
+    """A `trade-episode` payload, narrowed to what the critic scores against.
+
+    `how_it_ended` mirrors brain-self-reflector's own conversion
+    (`str(encoded.outcome)`) -- the same real field, read the same way.
+    """
+    conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
+    return ScorableEpisode(
+        venue_id=episode.venue_id, symbol=episode.symbol,
+        was_profitable=episode.realised > 0,
+        realised_fraction=float(conditions.get("realised_fraction", episode.realised) or 0.0),
+        how_it_ended=str(episode.outcome),
+        entry_conviction=float(conditions.get("conviction", 0.0) or 0.0),
+        conviction_was_measured=bool(conditions.get("conviction_was_measured", False)),
+    )
+
+
 @dataclass
 class CriticStanding:
     decisions_scored: int = 0
@@ -323,18 +351,7 @@ def start_part(context) -> int:
     configured in phase 1. The other inputs are read and drained: the
     critic builds its own facts from what it scores.
     """
-    from dataclasses import dataclass
-
     from runtime.input_assembly import Batch, LatestByKey
-
-    @dataclass(frozen=True)
-    class ScorableEpisode:
-        venue_id: str
-        symbol: str
-        was_profitable: bool
-        realised_fraction: float
-        entry_conviction: float
-        conviction_was_measured: bool
 
     episodes = Batch(read=context.bus.reader("trade-episode"))
     outputs = Batch(read=context.bus.reader("validated-llm-output"))
@@ -361,16 +378,6 @@ def start_part(context) -> int:
     )
     pending: dict[tuple[str, str], tuple] = {}
     near_miss_contexts: set[tuple[str, str]] = set()
-
-    def as_scorable(episode) -> ScorableEpisode:
-        conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
-        return ScorableEpisode(
-            venue_id=episode.venue_id, symbol=episode.symbol,
-            was_profitable=episode.realised > 0,
-            realised_fraction=float(conditions.get("realised_fraction", episode.realised) or 0.0),
-            entry_conviction=float(conditions.get("conviction", 0.0) or 0.0),
-            conviction_was_measured=bool(conditions.get("conviction_was_measured", False)),
-        )
 
     def read_episodes(_critic):
         for source in drained:
