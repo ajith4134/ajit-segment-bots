@@ -32,7 +32,10 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.trade_decoding_types import StopAudit
+from runtime.trade_decoding_types import (
+    StopAudit, INSIDE_THE_NOISE, TOO_WIDE, WELL_PLACED_AND_HIT,
+    WELL_PLACED_AND_NOT_HIT, NEVER_APPROACHED, NO_STOP, NOT_MEASURABLE,
+)
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -46,14 +49,6 @@ PART_DECLARATION = PartDeclaration(
     rate_risk="latency-only",
     skipped_tick_effect="delays",
 )
-
-INSIDE_THE_NOISE = "inside-the-symbols-ordinary-movement"
-TOO_WIDE = "wide-enough-to-turn-a-small-loss-into-a-large-one"
-WELL_PLACED_AND_HIT = "well-placed-and-it-did-its-job"
-WELL_PLACED_AND_NOT_HIT = "well-placed-and-never-tested-by-this-trade"
-NEVER_APPROACHED = "the-price-never-came-near-it"
-NO_STOP = "no-stop-was-placed"
-NOT_MEASURABLE = "the-symbols-typical-movement-has-never-been-measured"
 
 
 @dataclass(frozen=True)
@@ -133,7 +128,8 @@ class StopPlacementAuditor:
                 self._audit(trade_id, None, None, None, None, False, None, NO_STOP,
                             False,
                             "no stop was placed, so the position's loss was bounded only "
-                            "by the exit decision"),
+                            "by the exit decision",
+                            closed_trade.venue_id, closed_trade.symbol, None),
                 "no stop was placed",
             )
 
@@ -147,11 +143,17 @@ class StopPlacementAuditor:
                     False,
                     "this symbol's typical movement has never been measured, and a stop "
                     "distance in percent means different things in different instruments",
+                    closed_trade.venue_id, closed_trade.symbol, None,
                 ),
                 "no typical movement measured",
             )
 
         is_long = closed_trade.direction == "long"
+        adverse_excursion_fraction = (
+            (closed_trade.entry_price - worst_price) / closed_trade.entry_price
+            if is_long
+            else (worst_price - closed_trade.entry_price) / closed_trade.entry_price
+        )
         distance = abs(closed_trade.entry_price - stop_price)
         in_movements = distance / typical
 
@@ -226,13 +228,14 @@ class StopPlacementAuditor:
             self._audit(
                 trade_id, stop_price, distance, typical, in_movements, was_hit,
                 recovered, verdict, verdict in (INSIDE_THE_NOISE, TOO_WIDE), reason,
+                closed_trade.venue_id, closed_trade.symbol, adverse_excursion_fraction,
             ),
             reason,
         )
 
     def _audit(
         self, trade_id, stop_price, distance, typical, in_movements, was_hit, recovered,
-        verdict, is_a_defect, reason,
+        verdict, is_a_defect, reason, venue_id, symbol, adverse_excursion_fraction,
     ) -> StopAudit:
         return StopAudit(
             trade_id=trade_id, stop_price=stop_price, distance=distance,
@@ -240,6 +243,8 @@ class StopPlacementAuditor:
             was_hit=was_hit, would_have_recovered=recovered, verdict=verdict,
             is_measurable=typical is not None, reason=reason,
             audited_at_ns=self._now_ns(),
+            venue_id=venue_id, symbol=symbol,
+            adverse_excursion_fraction=adverse_excursion_fraction,
         )
 
     def _outcome(self, trade_id, state, audit, reason) -> AuditOutcome:

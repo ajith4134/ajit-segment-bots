@@ -410,6 +410,31 @@ def test_a_trade_without_a_stop_is_recorded_as_such():
     assert subject.audit("t-1", a_closed_trade(), 90.0).state == NO_STOP
 
 
+def test_stop_audit_carries_venue_symbol_and_adverse_excursion():
+    """The audit is constructed with identity and a magnitude, not just a verdict."""
+    from parts.closed_trade_decoding.stop_placement_auditor import StopPlacementAuditor
+    from runtime.trade_decoding_types import INSIDE_THE_NOISE
+
+    class ClosedTradeStub:
+        venue_id = "binance-usdm"
+        symbol = "BTCUSDT"
+        direction = "long"
+        entry_price = 100.0
+
+    auditor = StopPlacementAuditor(
+        inside_the_noise_below=0.5, too_wide_above=5.0, approach_fraction=0.5,
+    )
+    auditor.observe_typical_movement("binance-usdm", "BTCUSDT", 0.01)
+    auditor.observe_stop("t1", 99.0)
+
+    outcome = auditor.audit("t1", ClosedTradeStub(), worst_price=97.0)
+
+    assert outcome.audit.venue_id == "binance-usdm"
+    assert outcome.audit.symbol == "BTCUSDT"
+    # Price went 3% against entry (100 -> 97) before the audit was taken.
+    assert outcome.audit.adverse_excursion_fraction == pytest.approx(0.03)
+
+
 # ---- luck-skill-separator ---------------------------------------------------
 
 def a_separator(threshold=1.0, minimum=5):
