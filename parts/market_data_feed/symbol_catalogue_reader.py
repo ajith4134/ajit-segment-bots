@@ -1005,7 +1005,8 @@ def start_part(context) -> int:
             venue = one["venue_id"] or "unread"
             for field in (
                 "reads_completed", "listings_seen", "capturable_seen", "selected",
-                "kept_because_held",
+                "kept_because_held", "selected_without_volatility", "selected_with_momentum",
+                "selected_short_window_scanned", "short_window_scan_failure",
             ):
                 merged[f"{field}.{venue}"] = one[field]
         return merged
