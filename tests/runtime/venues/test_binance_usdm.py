@@ -352,6 +352,20 @@ def test_funding_carries_the_cap_floor_and_interest_rate_the_formula_needs(
     )
 
 
+def test_volatility_is_the_24h_range_over_last_price(adapter, read_captured_json):
+    """From the same ticker response quote volume comes from -- no extra request."""
+    tickers = read_captured_json("binance-usdm", "2026-08-22-ticker-24h-subset.json")
+    volatility = adapter.read_volatility_facts(tickers)
+    assert volatility[CAPTURED_SYMBOL] == pytest.approx((79555.50 - 75021.50) / 77816.30)
+
+    values = list(volatility.values())
+    assert len(volatility) > 1, "the fixture holds only one symbol, so ordering is untested"
+    assert values != sorted(values), (
+        "the fixture's symbols all happen to have the same range, so a test that "
+        "swapped two fields would still pass this"
+    )
+
+
 def test_a_contract_this_venue_states_no_interval_for_is_left_unpriceable(
     adapter, read_captured_json
 ):

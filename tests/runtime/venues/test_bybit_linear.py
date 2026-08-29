@@ -354,6 +354,20 @@ def test_funding_carries_the_cap_the_formula_needs_floor_taken_as_its_negative(
     assert "fundingCap" in bitcoin.source
 
 
+def test_volatility_is_the_24h_range_over_last_price(adapter, read_captured_json):
+    """From the same tickers response turnover comes from -- no extra request."""
+    tickers = read_captured_json("bybit-linear", TICKER_FIXTURE)
+    volatility = adapter.read_volatility_facts(tickers)
+    assert volatility[CAPTURED_SYMBOL] == pytest.approx((79559.20 - 75016.60) / 76987.70)
+
+    values = list(volatility.values())
+    assert len(volatility) > 1, "the fixture holds only one symbol, so ordering is untested"
+    assert values != sorted(values), (
+        "the fixture's symbols all happen to have the same range, so a test that "
+        "swapped two fields would still pass this"
+    )
+
+
 def test_a_dated_contract_pays_no_funding_and_is_not_recorded_as_paying_zero(
     adapter, read_captured_json
 ):

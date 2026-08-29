@@ -17,6 +17,7 @@ from parts.market_data_feed.symbol_catalogue_reader import (
     PART_DECLARATION,
     PART_ID,
     QUOTE_VOLUME_24H,
+    VOLUME_AND_VOLATILITY_BLEND,
     SymbolCatalogueReader,
     SymbolSelectionRefused,
     restate_each_venues_universe,
@@ -63,6 +64,8 @@ def build_reader(
     count=CAPTURED_SYMBOL_COUNT,
     metric=QUOTE_VOLUME_24H,
     funding_fails=False,
+    liquidity_pool_size=None,
+    volatility_weight=None,
 ):
     adapter = load_venue_adapter(venue_id)
     catalogue, tickers = load_real_responses(venue_id, read_captured_json)
@@ -87,6 +90,8 @@ def build_reader(
         selection_metric=metric,
         request_timeout_seconds=REQUEST_TIMEOUT,
         fetch=fetch,
+        liquidity_pool_size=liquidity_pool_size,
+        volatility_weight=volatility_weight,
     )
 
 
@@ -183,6 +188,82 @@ def test_a_metric_this_reader_cannot_apply_is_refused(read_captured_json):
     with pytest.raises(SymbolSelectionRefused) as refusal:
         reader.read_catalogue()
     assert "whatever-sorts-first" in str(refusal.value)
+
+
+# ---- volume-and-volatility-blend ---------------------------------------------
+#
+# Real fixture data only, per RL-063. Computed by hand from
+# tests/captured/binance-usdm/2026-08-22-ticker-24h-subset.json: by 24h quote
+# volume, the top 10 are BTCUSDT, ETHUSDT, BTCUSDC, ETHUSDC, SOLUSDT, XRPUSDT,
+# ZECUSDT, HYPEUSDT, SNDKUSDT, XAUUSDT -- and within that top 10, ZECUSDT has
+# by far the widest 24h high-low range as a fraction of last price (0.330,
+# against SOLUSDT's next-widest 0.140). BCHUSDT has a wider range than most of
+# the top 10 (0.276) but ranks outside the top 10 by volume.
+
+
+def test_the_blend_needs_a_pool_size_and_a_weight(read_captured_json):
+    reader = build_reader(
+        "binance-usdm", read_captured_json, metric=VOLUME_AND_VOLATILITY_BLEND,
+    )
+    with pytest.raises(SymbolSelectionRefused) as refusal:
+        reader.read_catalogue()
+    assert "liquidity_pool_size" in str(refusal.value)
+
+
+def test_the_blend_refuses_a_weight_outside_zero_to_one(read_captured_json):
+    reader = build_reader(
+        "binance-usdm", read_captured_json, count=5, metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=1.5,
+    )
+    with pytest.raises(SymbolSelectionRefused) as refusal:
+        reader.read_catalogue()
+    assert "volatility_weight" in str(refusal.value)
+
+
+def test_a_zero_weight_blend_matches_pure_volume_ordering(read_captured_json):
+    """w=0 is volume alone; the pool's order must not move at all."""
+    by_volume = build_reader("binance-usdm", read_captured_json, count=10).read_catalogue()
+    blended = build_reader(
+        "binance-usdm", read_captured_json, count=10, metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=0.0,
+    ).read_catalogue()
+    assert [e.symbol for e in blended] == [e.symbol for e in by_volume]
+
+
+def test_a_full_weight_blend_ranks_the_pool_by_volatility_alone(read_captured_json):
+    """w=1 inside a 10-wide pool must put the pool's most volatile symbol first."""
+    selection = build_reader(
+        "binance-usdm", read_captured_json, count=10, metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=1.0,
+    ).read_catalogue()
+    assert selection[0].symbol == "ZECUSDT", (
+        "ZECUSDT has the widest 24h range of the top-10-by-volume pool and w=1 "
+        "should rank the pool by nothing else"
+    )
+
+
+def test_the_liquidity_floor_excludes_a_volatile_symbol_outside_the_pool(read_captured_json):
+    """BCHUSDT is more volatile than most of the top 10 by volume, but ranks 14th by volume."""
+    selection = build_reader(
+        "binance-usdm", read_captured_json, count=5, metric=VOLUME_AND_VOLATILITY_BLEND,
+        liquidity_pool_size=10, volatility_weight=1.0,
+    ).read_catalogue()
+    assert "BCHUSDT" not in {e.symbol for e in selection}, (
+        "a symbol outside the liquidity pool must never outrank the pool no matter "
+        "how volatile it is -- that floor is the whole point of the pool"
+    )
+
+
+def test_the_blend_still_selects_every_symbol_the_venue_capably_lists(read_captured_json):
+    """A count of zero under the blend metric must still be the full universe."""
+    everything = build_reader(
+        "binance-usdm", read_captured_json, count=CAPTURE_EVERY_SYMBOL,
+        metric=VOLUME_AND_VOLATILITY_BLEND, liquidity_pool_size=200, volatility_weight=1.0,
+    ).read_catalogue()
+    by_volume = build_reader(
+        "binance-usdm", read_captured_json, count=CAPTURE_EVERY_SYMBOL,
+    ).read_catalogue()
+    assert {e.symbol for e in everything} == {e.symbol for e in by_volume}
 
 
 def test_a_negative_count_is_refused(read_captured_json):

@@ -841,6 +841,27 @@ class BybitLinearAdapter(VenueAdapter):
             if entry.get("turnover24h") is not None
         }
 
+    def read_volatility_facts(self, ticker_response: object) -> Mapping[str, float]:
+        """24-hour high-low range over last price, from the same response as turnover.
+
+        `highPrice24h`, `lowPrice24h` and `lastPrice` sit on the same `tickers`
+        entry `read_quote_volumes` already reads. This venue writes "" rather
+        than omitting a field on a dated or newly-listed contract, same as it
+        does for `fundingRate` -- treated as absent, not as a zero range.
+        """
+        facts = {}
+        for entry in ticker_response["result"]["list"]:
+            last = entry.get("lastPrice")
+            high = entry.get("highPrice24h")
+            low = entry.get("lowPrice24h")
+            if last in (None, "") or high in (None, "") or low in (None, ""):
+                continue
+            last = float(last)
+            if last <= 0:
+                continue
+            facts[entry["symbol"]] = (float(high) - float(low)) / last
+        return facts
+
     def read_symbol_listings(self, catalogue_response: object) -> tuple[SymbolListing, ...]:
         """Every instrument the venue lists, from an instruments-info response.
 

@@ -781,6 +781,27 @@ class BinanceUsdmAdapter(VenueAdapter):
             if entry.get("quoteVolume") is not None
         }
 
+    def read_volatility_facts(self, ticker_response: object) -> Mapping[str, float]:
+        """24-hour high-low range over last price, from the same response as volume.
+
+        `highPrice`, `lowPrice` and `lastPrice` are the three fields this needs,
+        all on the same `/fapi/v1/ticker/24hr` entry `read_quote_volumes` already
+        reads -- measured 2026-08-22 against `tests/captured/binance-usdm/
+        2026-08-22-ticker-24h-subset.json`.
+        """
+        facts = {}
+        for entry in ticker_response:
+            last = entry.get("lastPrice")
+            high = entry.get("highPrice")
+            low = entry.get("lowPrice")
+            if last is None or high is None or low is None:
+                continue
+            last = float(last)
+            if last <= 0:
+                continue
+            facts[entry["symbol"]] = (float(high) - float(low)) / last
+        return facts
+
     def funding_request_urls(self) -> tuple[str, ...]:
         """Two: the rate, then the interval. Neither is on the catalogue or ticker.
 

@@ -846,6 +846,18 @@ class VenueAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
+    def read_volatility_facts(self, ticker_response: object) -> Mapping[str, float]:
+        """Each symbol's 24-hour high-low range as a fraction of its last price.
+
+        From the same response `read_quote_volumes` reads -- both venues already
+        carry high/low/last on their 24-hour ticker, so this costs no request
+        `select_capturable_symbols` would not otherwise make. A fraction of price
+        rather than the raw range, so a $60,000 symbol and a $0.01 symbol are
+        comparable; a symbol whose last price is absent or non-positive is absent
+        from the mapping rather than given a fabricated range.
+        """
+
+    @abc.abstractmethod
     def is_symbol_capturable(self, listing: SymbolListing) -> bool:
         """Whether this listing is one the tape should carry at all.
 
@@ -893,6 +905,7 @@ QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE = (
     "read_previous_sequence",
     "read_catalogue_cursor",
     "read_quote_volumes",
+    "read_volatility_facts",
     "read_http_ban_signal",
     "read_stream_ban_signal",
     "read_symbol_listings",

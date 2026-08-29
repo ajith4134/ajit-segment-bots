@@ -60,11 +60,16 @@ CAPTURE_EVERY_SYMBOL = 0
 MAXIMUM_CATALOGUE_PAGES = 20
 
 
-# The one ordering this reader knows how to apply. A settings file naming any
-# other metric is refused rather than silently ordered by this one: capturing
-# the wrong 30 symbols is irreversible, and it would look exactly like capturing
+# The orderings this reader knows how to apply. A settings file naming any
+# other metric is refused rather than silently ordered by one of these: capturing
+# the wrong symbols is irreversible, and it would look exactly like capturing
 # the right ones.
 QUOTE_VOLUME_24H = "quote-volume-24h"
+# Volume and volatility, blended by percentile rank within a volume-qualified
+# pool -- never by raw magnitude, which would let volume (in the billions)
+# swamp volatility (a fraction near 1). See _rank_by_volume_and_volatility.
+VOLUME_AND_VOLATILITY_BLEND = "volume-and-volatility-blend"
+KNOWN_SELECTION_METRICS = (QUOTE_VOLUME_24H, VOLUME_AND_VOLATILITY_BLEND)
 
 
 class SymbolSelectionRefused(ValueError):
@@ -95,6 +100,7 @@ class CatalogueStanding:
     # thing this exists for, so it belongs on health rather than in a comment.
     kept_because_held: int = 0
     without_volume: int = 0
+    without_volatility: int = 0
     # How many selected symbols the venue quoted no funding rate for, and how many
     # it quoted a rate for but no settlement interval. Counted rather than
     # asserted: a perpetual missing either cannot have its carry priced, and the
@@ -175,6 +181,51 @@ def _with_funding(
     )
 
 
+def _rank_by_volume_and_volatility(
+    chosen: list[CapturableSymbol], liquidity_pool_size: int, volatility_weight: float,
+) -> list[CapturableSymbol]:
+    """Blend volume and volatility by percentile rank, never by raw magnitude.
+
+    Volume runs from thousands to billions of USDT; a 24-hour range fraction
+    runs from zero to a few. Adding the two as they stand would let volume
+    decide the order by itself -- so each is first turned into where a symbol
+    sits among its peers (0.0 = best, 1.0 = worst), and only those two
+    percentiles are blended.
+
+    The liquidity floor comes first and is not negotiable under this metric: only
+    the top `liquidity_pool_size` by volume are eligible at all, so a thin,
+    hard-to-fill symbol cannot outrank a liquid one purely by having spiked.
+    Within that pool, `volatility_weight` (0..1) decides how much a symbol's
+    24-hour range counts against its volume rank; a symbol with no volatility
+    reading ranks as the pool's least volatile rather than being dropped, since
+    its volume reading already qualified it as tradeable.
+    """
+    by_volume = sorted(chosen, key=lambda entry: (-(entry.quote_volume_24h or 0.0), entry.symbol))
+    priced = [entry for entry in by_volume if entry.quote_volume_24h is not None]
+    unpriced = [entry for entry in by_volume if entry.quote_volume_24h is None]
+    pool = priced[:liquidity_pool_size]
+    outside_pool = priced[liquidity_pool_size:] + unpriced
+
+    pool_size = len(pool)
+    if pool_size <= 1:
+        return pool + outside_pool
+
+    by_volatility = sorted(
+        pool, key=lambda entry: (-(entry.volatility_24h or 0.0), entry.symbol)
+    )
+    volatility_rank = {entry.symbol: i for i, entry in enumerate(by_volatility)}
+
+    def blended_score(entry: CapturableSymbol, volume_rank: int) -> float:
+        volume_percentile = volume_rank / (pool_size - 1)
+        volatility_percentile = volatility_rank[entry.symbol] / (pool_size - 1)
+        return (1.0 - volatility_weight) * volume_percentile + volatility_weight * volatility_percentile
+
+    ranked_pool = sorted(
+        (blended_score(entry, i), entry.symbol, entry) for i, entry in enumerate(pool)
+    )
+    return [entry for _, _, entry in ranked_pool] + outside_pool
+
+
 def select_capturable_symbols(
     adapter: VenueAdapter,
     listings: tuple[SymbolListing, ...],
@@ -184,6 +235,9 @@ def select_capturable_symbols(
     funding: Mapping[str, ContractFunding] | None = None,
     standing: CatalogueStanding | None = None,
     held_symbols=(),
+    volatility: Mapping[str, float] | None = None,
+    liquidity_pool_size: int | None = None,
+    volatility_weight: float | None = None,
 ) -> tuple[CapturableSymbol, ...]:
     """Apply the settings policy to one venue's catalogue. Pure, so it is testable.
 
@@ -192,21 +246,34 @@ def select_capturable_symbols(
     one, and the count of them is reported so a venue that stopped pricing half
     its symbols is visible rather than merely quiet.
     """
-    if selection_metric != QUOTE_VOLUME_24H:
+    if selection_metric not in KNOWN_SELECTION_METRICS:
         raise SymbolSelectionRefused(
             f"symbol_selection_metric is {selection_metric!r}, and this reader can only order by "
-            f"{QUOTE_VOLUME_24H!r}. Ordering by the wrong metric captures the wrong symbols, "
-            f"which is not recoverable later -- so it refuses rather than falling back."
+            f"one of {KNOWN_SELECTION_METRICS!r}. Ordering by the wrong metric captures the wrong "
+            f"symbols, which is not recoverable later -- so it refuses rather than falling back."
         )
     if captured_symbol_count < CAPTURE_EVERY_SYMBOL:
         raise SymbolSelectionRefused(
             f"captured_symbol_count is {captured_symbol_count}; it is a count of symbols, and "
             f"{CAPTURE_EVERY_SYMBOL} already means every symbol the venue lists"
         )
+    if selection_metric == VOLUME_AND_VOLATILITY_BLEND:
+        if not liquidity_pool_size or liquidity_pool_size < captured_symbol_count:
+            raise SymbolSelectionRefused(
+                f"symbol_selection_liquidity_pool_size is {liquidity_pool_size!r}; the blend "
+                f"metric needs a pool of at least captured_symbol_count "
+                f"({captured_symbol_count}) volume-qualified symbols to rank within"
+            )
+        if volatility_weight is None or not 0.0 <= volatility_weight <= 1.0:
+            raise SymbolSelectionRefused(
+                f"symbol_selection_volatility_weight is {volatility_weight!r}; it blends two "
+                f"percentiles and must sit in [0, 1]"
+            )
 
     capturable = [listing for listing in listings if adapter.is_symbol_capturable(listing)]
     held = frozenset(held_symbols or ())
     funding = funding or {}
+    volatility = volatility or {}
     chosen = [
         _with_funding(
             CapturableSymbol(
@@ -216,14 +283,18 @@ def select_capturable_symbols(
                 quote_volume_24h=quote_volumes.get(listing.symbol),
                 price_increment=listing.price_increment,
                 instrument_kind=listing.instrument_kind,
+                volatility_24h=volatility.get(listing.symbol),
             ),
             funding.get(listing.symbol),
         )
         for listing in capturable
     ]
-    # Descending volume, with unpriced symbols last and ties broken by name so
-    # two runs over the same catalogue select the same symbols.
-    chosen.sort(key=lambda entry: (-(entry.quote_volume_24h or 0.0), entry.symbol))
+    if selection_metric == VOLUME_AND_VOLATILITY_BLEND:
+        chosen = _rank_by_volume_and_volatility(chosen, liquidity_pool_size, volatility_weight)
+    else:
+        # Descending volume, with unpriced symbols last and ties broken by name so
+        # two runs over the same catalogue select the same symbols.
+        chosen.sort(key=lambda entry: (-(entry.quote_volume_24h or 0.0), entry.symbol))
     if captured_symbol_count != CAPTURE_EVERY_SYMBOL:
         # The rank cut, then whatever is held put back. A symbol the bot is
         # holding is captured whatever its volume, because a position that cannot
@@ -256,6 +327,7 @@ def select_capturable_symbols(
         standing.capturable_seen = len(capturable)
         standing.selected = len(chosen)
         standing.without_volume = sum(1 for entry in chosen if entry.quote_volume_24h is None)
+        standing.without_volatility = sum(1 for entry in chosen if entry.volatility_24h is None)
         standing.without_funding_rate = sum(
             1 for entry in chosen if entry.funding_rate_per_settlement is None
         )
@@ -280,6 +352,8 @@ class SymbolCatalogueReader:
         request_timeout_seconds: float,
         fetch=fetch_json,
         monotonic=None,
+        liquidity_pool_size: int | None = None,
+        volatility_weight: float | None = None,
     ) -> None:
         import time
 
@@ -290,6 +364,11 @@ class SymbolCatalogueReader:
         self._fetch = fetch
         self._monotonic = monotonic or time.monotonic
         self._time_ns = time.time_ns
+        # Only meaningful under VOLUME_AND_VOLATILITY_BLEND; select_capturable_symbols
+        # validates them itself when that metric is asked for (T-4: this class
+        # threads settings through, it does not re-decide what they mean).
+        self._liquidity_pool_size = liquidity_pool_size
+        self._volatility_weight = volatility_weight
         self.standing = CatalogueStanding(venue_id=adapter.venue_id)
         self._selection: tuple[CapturableSymbol, ...] = ()
 
@@ -437,6 +516,7 @@ class SymbolCatalogueReader:
             return self._selection
 
         volumes = dict(self._adapter.read_quote_volumes(tickers))
+        volatility = dict(self._adapter.read_volatility_facts(tickers))
         funding = self._read_funding(listings, tickers)
         selection = select_capturable_symbols(
             adapter=self._adapter,
@@ -447,6 +527,9 @@ class SymbolCatalogueReader:
             funding=funding,
             standing=self.standing,
             held_symbols=held_symbols,
+            volatility=volatility,
+            liquidity_pool_size=self._liquidity_pool_size,
+            volatility_weight=self._volatility_weight,
         )
         # The ladder is read for the symbols actually being captured, after the
         # selection has chosen them. Asked before, this would be one request per
@@ -539,6 +622,7 @@ def describe_catalogue(reader: SymbolCatalogueReader) -> dict:
         "selected": reader.standing.selected,
         "kept_because_held": reader.standing.kept_because_held,
         "selected_without_volume": reader.standing.without_volume,
+        "selected_without_volatility": reader.standing.without_volatility,
         "selected_without_funding_rate": reader.standing.without_funding_rate,
         "selected_without_funding_interval": reader.standing.without_funding_interval,
         "funding_failure": reader.standing.funding_failure,
@@ -637,6 +721,11 @@ def start_part(context) -> int:
             captured_symbol_count=settings.entries["captured_symbol_count"].value,
             selection_metric=settings.entries["symbol_selection_metric"].value,
             request_timeout_seconds=context.number("catalogue_request_timeout"),
+            # Only meaningful under VOLUME_AND_VOLATILITY_BLEND; read unconditionally
+            # since select_capturable_symbols validates them itself when that
+            # metric is what symbol_selection_metric actually names.
+            liquidity_pool_size=int(context.number("symbol_selection_liquidity_pool_size")),
+            volatility_weight=context.number("symbol_selection_volatility_weight"),
         )
         for adapter in adapters
     ]

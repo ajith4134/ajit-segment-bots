@@ -76,6 +76,10 @@ class CapturableSymbol:
     funding_rate_cap: float | None = None
     funding_rate_floor: float | None = None
     funding_interest_rate_per_interval: float | None = None
+    # The 24-hour high-low range as a fraction of last price, from the same
+    # ticker response quote_volume_24h comes from. None where the venue did not
+    # price the symbol on this read -- the same absence, not a zero range.
+    volatility_24h: float | None = None
     # This contract's maintenance margin ladder, as the venue published it.
     # Empty when the venue's schedule could not be read -- Binance serves its
     # brackets from a signed endpoint, so an empty tuple there means no API key
