@@ -8579,7 +8579,7 @@
         "symbol-price-frame",
         "bull-calibrated-conviction",
         "playbook-rule",
-        "entry-quality"
+        "trade-episode"
       ],
       "produces": [
         "bull-entry-timing",
@@ -8892,7 +8892,7 @@
         "symbol-price-frame",
         "bear-calibrated-conviction",
         "playbook-rule",
-        "entry-quality"
+        "trade-episode"
       ],
       "produces": [
         "bear-entry-timing",
@@ -9239,7 +9239,8 @@
         "symbol-profile",
         "exit-counterfactual",
         "excursion-profile",
-        "move-remaining"
+        "move-remaining",
+        "position"
       ],
       "produces": [
         "tail-exit-plan",
