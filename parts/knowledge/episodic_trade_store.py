@@ -320,11 +320,15 @@ def start_part(context) -> int:
         for embedding in embeddings.payloads():
             if embedding.is_usable:
                 embedding_of[embedding.episode_id] = embedding
-                store.observe_embedding(embedding.episode_id, embedding)
+                store.observe_embedding(embedding.episode_id, embedding.vector)
         queries = []
         for episode in episodes.payloads():
             conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
-            queries.append((episode.venue_id, episode.symbol, conditions, embedding_of.get(episode.episode_id)))
+            stored_embedding = embedding_of.get(episode.episode_id)
+            queries.append((
+                episode.venue_id, episode.symbol, conditions,
+                stored_embedding.vector if stored_embedding is not None else None,
+            ))
             store.append(episode)
         return tuple(queries)
 

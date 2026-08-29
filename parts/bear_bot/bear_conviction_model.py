@@ -81,6 +81,8 @@ class ModelStanding:
     retrains: int = 0
     champion_swaps: int = 0
     rewards_applied: int = 0
+    rewards_uninterpretable: int = 0
+    last_uninterpretable_reward: str | None = None
     live_model: str = CHAMPION
     mean_absolute_error: float = 0.0
     by_symbol: dict = field(default_factory=dict)
@@ -205,6 +207,21 @@ class BearConvictionModel:
             raise ValueError("a non-positive multiplier would unlearn or erase the example")
         self._reward_multipliers[detector] = min(multiplier, self._maximum_sample_weight)
         self.standing.rewards_applied += 1
+
+    def note_uninterpretable_reward(self, reason: str) -> None:
+        """A `learning-reward` arrived that cannot be read as a weight multiplier.
+
+        `reward-shaper` publishes a shaped, signed figure in units nobody has
+        stated a conversion for, and this part's multiplier is a positive number
+        around one. Turning one into the other is a decision -- and a wrong one
+        would silently scale every future training step -- so it is refused and
+        counted here rather than guessed at the call site.
+
+        The multiplier that *is* defined arrives separately as `sample-weight`,
+        which this part already reads and applies per example.
+        """
+        self.standing.rewards_uninterpretable += 1
+        self.standing.last_uninterpretable_reward = reason
 
     def apply_champion_choice(self, chosen: str) -> None:
         if chosen not in self._models:

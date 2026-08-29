@@ -59,24 +59,29 @@ NOT_IN_PROFIT = "the-leg-is-not-actually-ahead"
 GIVING_PROFIT_BACK = "price-has-retraced-from-its-peak"
 ALREADY_CONCENTRATED = "this-symbol-already-holds-too-much-of-the-book"
 NO_PEAK_RECORD = "no-peak-excursion-recorded-for-this-position"
+NO_COST_BASIS = "position-has-no-cost-basis-to-measure-profit-against"
 
 
 @dataclass(frozen=True)
 class PeakExcursion:
-    """The furthest a position has been in profit, and where it is now (RL-042)."""
+    """The furthest a position has been in profit, and where it is now (RL-042).
+
+    Matches what `peak-excursion-tracker` actually publishes: unrealised
+    account-currency amounts, not a fraction of the position. A fraction is
+    computed in `select()`, against the notional of the position it is being
+    judged for, because the tracker itself has no notional to divide by --
+    only the cost basis it was given (T-4).
+    """
 
     venue_id: str
     symbol: str
-    peak_fraction: float
-    current_fraction: float
-    observations: int
-
-    @property
-    def retraced_fraction(self) -> float:
-        """How much of the peak has been given back. 0 means it is at its high."""
-        if self.peak_fraction <= 0:
-            return 0.0
-        return max(0.0, (self.peak_fraction - self.current_fraction) / self.peak_fraction)
+    best_unrealised: float
+    worst_unrealised: float
+    best_price: float
+    worst_price: float
+    current_unrealised: float
+    samples: int
+    observed_at_ns: int
 
 
 @dataclass
@@ -173,12 +178,25 @@ class TailWinnerSelector:
         peak = self._peaks.get(key)
         if peak is None:
             return None, self._reject(NO_PEAK_RECORD)
-        if peak.current_fraction < self._minimum_profit:
+
+        notional = abs(position.quantity) * position.average_entry_price
+        if notional <= 0:
+            return None, self._reject(NO_COST_BASIS)
+
+        peak_fraction = peak.best_unrealised / notional
+        current_fraction = peak.current_unrealised / notional
+        retraced_fraction = (
+            max(0.0, (peak_fraction - current_fraction) / peak_fraction)
+            if peak_fraction > 0
+            else 0.0
+        )
+
+        if current_fraction < self._minimum_profit:
             return None, self._reject(NOT_IN_PROFIT)
 
-        if peak.retraced_fraction > self._maximum_retraced:
+        if retraced_fraction > self._maximum_retraced:
             self.standing.largest_retracement_refused = max(
-                self.standing.largest_retracement_refused, peak.retraced_fraction
+                self.standing.largest_retracement_refused, retraced_fraction
             )
             return None, self._reject(GIVING_PROFIT_BACK)
 
@@ -195,24 +213,24 @@ class TailWinnerSelector:
                 venue_id=position.venue_id,
                 symbol=position.symbol,
                 direction=direction,
-                move_so_far=peak.current_fraction,
-                move_normal=peak.peak_fraction,
-                observations_in_move=peak.observations,
+                move_so_far=current_fraction,
+                move_normal=peak_fraction,
+                observations_in_move=peak.samples,
                 entry_cost_fraction=None,
                 setup_weight=self._default_weight,
                 detector=PART_ID,
                 evidence={
-                    "peak_fraction": peak.peak_fraction,
-                    "current_fraction": peak.current_fraction,
-                    "retraced_fraction": peak.retraced_fraction,
+                    "peak_fraction": peak_fraction,
+                    "current_fraction": current_fraction,
+                    "retraced_fraction": retraced_fraction,
                     "symbol_share_of_book": share,
                     "pair_verdict": verdict.reason,
                 },
                 reason=(
                     f"{position.symbol} is held on the {verdict.winning_side} side, which "
                     f"is the side a resolved pair found for "
-                    f"({verdict.reason}), up {peak.current_fraction:.2%} against a peak of "
-                    f"{peak.peak_fraction:.2%} -- {peak.retraced_fraction:.0%} given back, "
+                    f"({verdict.reason}), up {current_fraction:.2%} against a peak of "
+                    f"{peak_fraction:.2%} -- {retraced_fraction:.0%} given back, "
                     f"inside the {self._maximum_retraced:.0%} this bot will add through"
                     + (
                         f"; this symbol holds {share:.0%} of the book, inside the "

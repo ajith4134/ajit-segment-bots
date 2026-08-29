@@ -334,6 +334,7 @@ def start_part(context) -> int:
         was_profitable: bool
         realised_fraction: float
         entry_conviction: float
+        conviction_was_measured: bool
 
     episodes = Batch(read=context.bus.reader("trade-episode"))
     outputs = Batch(read=context.bus.reader("validated-llm-output"))
@@ -368,6 +369,7 @@ def start_part(context) -> int:
             was_profitable=episode.realised > 0,
             realised_fraction=float(conditions.get("realised_fraction", episode.realised) or 0.0),
             entry_conviction=float(conditions.get("conviction", 0.0) or 0.0),
+            conviction_was_measured=bool(conditions.get("conviction_was_measured", False)),
         )
 
     def read_episodes(_critic):
@@ -385,6 +387,16 @@ def start_part(context) -> int:
                 answered[key] = output.text
         by_rationale, by_premortem = rationales.mapping(), premortems.mapping()
         by_argument, by_counterfactual = arguments.mapping(), counterfactuals.mapping()
+
+        def alternative_realised_fraction(key):
+            """`score()` takes the alternative's realised fraction as a plain float --
+            the wire carries the whole `CounterfactualOutcome`, which has no fraction
+            at all until it has actually been replayed."""
+            outcome = by_counterfactual.get(key)
+            if outcome is None or outcome.realised_fraction is None:
+                return None
+            return outcome.realised_fraction
+
         jobs = []
         for key, text in answered.items():
             scorable, rationale, premortem, argument, counterfactual, near_miss = pending.pop(key)
@@ -393,7 +405,7 @@ def start_part(context) -> int:
             key = (episode.venue_id, episode.symbol)
             job = (
                 as_scorable(episode), by_rationale.get(key), by_premortem.get(key),
-                by_argument.get(key), by_counterfactual.get(key), key in near_miss_contexts,
+                by_argument.get(key), alternative_realised_fraction(key), key in near_miss_contexts,
             )
             near_miss_contexts.discard(key)
             pending[key] = job

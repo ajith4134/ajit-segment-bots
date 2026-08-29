@@ -250,8 +250,9 @@ def test_a_move_measured_against_this_symbols_own_history_not_a_percentage():
 # ---- tail-winner-selector ---------------------------------------------------
 
 class PositionStub:
-    def __init__(self, quantity=1.0):
+    def __init__(self, quantity=1.0, average_entry_price=20_000.0):
         self.venue_id, self.symbol, self.quantity = VENUE, SYMBOL, quantity
+        self.average_entry_price = average_entry_price
 
 
 def a_winner_selector(maximum_retraced=0.3, maximum_share=0.25, minimum_profit=0.005):
@@ -277,10 +278,25 @@ def a_resolved_verdict(verdict=LONG_SIDE_WON, symbol=SYMBOL, is_conclusive=True)
     )
 
 
+POSITION_NOTIONAL = 20_000.0  # PositionStub's default quantity (1.0) * average_entry_price
+
+
 def a_peak(peak=0.05, current=0.045):
+    """A peak excursion in the shape `peak-excursion-tracker` actually publishes:
+    unrealised account-currency amounts against a cost basis, not a fraction of the
+    position (TailWinnerSelector.select computes the fraction itself, against the
+    notional of the position being judged). `peak`/`current` here are the fractions
+    the caller wants to see once that division happens, scaled up by
+    `POSITION_NOTIONAL` so a `PositionStub()` (quantity=1.0, entry=20_000.0) recovers
+    them exactly.
+    """
+    best_unrealised = peak * POSITION_NOTIONAL
+    current_unrealised = current * POSITION_NOTIONAL
     return PeakExcursion(
-        venue_id=VENUE, symbol=SYMBOL, peak_fraction=peak,
-        current_fraction=current, observations=40,
+        venue_id=VENUE, symbol=SYMBOL,
+        best_unrealised=best_unrealised, worst_unrealised=min(0.0, current_unrealised),
+        best_price=20_000.0 + best_unrealised, worst_price=20_000.0 + min(0.0, current_unrealised),
+        current_unrealised=current_unrealised, samples=40, observed_at_ns=SECOND,
     )
 
 

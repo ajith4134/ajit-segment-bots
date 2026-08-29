@@ -319,7 +319,14 @@ def start_part(context) -> int:
             key = (feature_set.venue_id, feature_set.symbol)
             earlier = pending.get(key)
             realised = feature_set.features.get("close_to_close_short")
-            if earlier is not None and realised is not None and feature_set.built_at_ns - earlier.built_at_ns >= horizon * 1e9:
+            # A flat window's stdev of log returns is exactly zero -- an absence of an
+            # observation, not an observation of zero volatility (RealisedVolRegressor.train
+            # refuses it for that reason) -- so it is skipped rather than trained on, and the
+            # anchor is kept so the next tick can still train against it once vol is measurable.
+            if (
+                earlier is not None and realised is not None and realised > 0
+                and feature_set.built_at_ns - earlier.built_at_ns >= horizon * 1e9
+            ):
                 regressor.train(earlier, float(realised))
                 pending[key] = feature_set
             elif earlier is None:
