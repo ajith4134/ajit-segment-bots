@@ -358,6 +358,11 @@ value = 1000.0
 unit  = "observations"
 note  = "operator, 2026-08-22: how quickly the calibrator forgets old outcomes. A model that has been retrained is a different model, and its old calibration describes a predictor that no longer exists."
 
+[bull_remembered_convictions_per_symbol]
+value = 64
+unit  = "raw convictions"
+note  = "operator, 2026-08-30: how many recent bull-raw-conviction messages the calibrator keeps per symbol so a closed-trade training-label arriving later can be matched to the probability the model actually stated when that trade opened. Mirrors bull_remembered_vectors_per_symbol (2026-08-22) for the same reason: convictions accrue at the rate the model forms them, not at the rate trades close, and this is a bound on a process's memory."
+
 [bull_conviction_margin_over_break_even]
 value = 0.0
 unit  = "probability"
@@ -1607,6 +1612,11 @@ note  = "operator, 2026-08-23, mirrored for the short side from bull_calibration
 value = 1000.0
 unit  = "observations"
 note  = "operator, 2026-08-23, mirrored for the short side from bull_calibration_half_life_observations (2026-08-22): how quickly the calibrator forgets old outcomes. A model that has been retrained is a different model, and its old calibration describes a predictor that no longer exists."
+
+[bear_remembered_convictions_per_symbol]
+value = 64
+unit  = "raw convictions"
+note  = "operator, 2026-08-30, mirrored for the short side from bull_remembered_convictions_per_symbol: how many recent bear-raw-conviction messages the calibrator keeps per symbol so a closed-trade training-label arriving later can be matched to the probability the model actually stated when that trade opened."
 
 [bear_conviction_margin_over_break_even]
 value = 0.0

@@ -14,7 +14,9 @@ import json
 
 import pytest
 
-from parts.bear_bot.bear_conviction_calibrator import ALL_REGIMES, BearConvictionCalibrator
+from parts.bear_bot.bear_conviction_calibrator import (
+    ALL_REGIMES, BearConvictionCalibrator, label_outcome_for,
+)
 from parts.bear_bot.bear_conviction_model import (
     CHALLENGER, CHAMPION, FEATURES_FLAGGED, FORECAST_FLAGGED, NOTHING_USABLE,
     BearConvictionModel, ShortOutcome,
@@ -41,7 +43,9 @@ from parts.bear_bot.bear_setup_filter import (
     CARRY_EATS_THE_EDGE, SETUP_DISCOUNTED, WEIGHTED_STRENGTH_TOO_LOW, WRONG_SIDE,
     BearSetupFilter,
 )
-from parts.bear_bot.bear_setup_weight_learner import BearSetupWeightLearner
+from parts.bear_bot.bear_setup_weight_learner import (
+    BearSetupWeightLearner, setup_outcome_and_magnitude_for,
+)
 from runtime.online_learner import ModelBelief
 from runtime.bot_opinion import (
     CLOSE_POSITION, CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, LONG,
@@ -471,6 +475,30 @@ def test_promotion_is_delivered_and_the_live_model_cannot_be_wiped():
     assert subject.model(CHAMPION).observations == 0
 
 
+def test_both_slots_score_prequentially_from_every_short():
+    subject = a_model()
+    teach_the_model(subject, rounds=100)
+    champion_version, champion_score, champion_observations = subject.score_for(CHAMPION)
+    challenger_version, challenger_score, challenger_observations = subject.score_for(CHALLENGER)
+    assert champion_version == "v0"
+    assert challenger_version == "v0"
+    assert champion_observations == challenger_observations == 100
+    assert champion_score <= 0.0
+    assert challenger_score <= 0.0
+
+
+def test_a_retrain_gives_the_slot_a_fresh_version_and_resets_its_score():
+    subject = a_model()
+    teach_the_model(subject, rounds=50)
+    subject.apply_retrain_request(CHALLENGER)
+    version, score, observations = subject.score_for(CHALLENGER)
+    assert version == "v1"
+    assert observations == 0
+    assert score == 0.0
+    assert subject.score_for(CHAMPION)[0] == "v0"
+    assert subject.score_for(CHAMPION)[2] == 50
+
+
 # ---- bear-conviction-calibrator ---------------------------------------------
 
 class RawStub:
@@ -527,6 +555,25 @@ def test_the_record_decays_so_a_past_regime_stops_governing():
     for _ in range(300):
         subject.observe_outcome(0.8, was_right=False)
     assert subject.calibrate(RawStub(0.8)).probability < 0.2
+
+
+def test_a_claim_based_label_is_not_this_parts_evidence():
+    """SignalCalibrator's population, not this part's -- runtime/learning_types.py."""
+    assert label_outcome_for(
+        LabelStub(direction=SHORT, setup_was_right=True, calibration_key="a-detector:setup"), SHORT
+    ) is None
+
+
+def test_a_long_labels_outcome_is_not_this_bots_evidence_for_calibration():
+    assert label_outcome_for(LabelStub(direction=LONG, setup_was_right=True), SHORT) is None
+
+
+def test_an_unjudged_setup_component_is_not_evidence_for_calibration():
+    assert label_outcome_for(LabelStub(direction=SHORT, setup_was_right=None), SHORT) is None
+
+
+def test_a_matching_closed_trade_label_gives_its_setup_verdict():
+    assert label_outcome_for(LabelStub(direction=SHORT, setup_was_right=False), SHORT) is False
 
 
 # ---- bear-entry-timer -------------------------------------------------------
@@ -964,6 +1011,45 @@ def test_a_zero_tolerated_tail_is_refused_at_construction():
             loss_window=200, prior_loss_fraction=0.02, prior_win_fraction=0.02,
             tail_quantile=0.95, tolerated_tail_ratio=0.0,
         )
+
+
+class LabelStub:
+    def __init__(
+        self, direction=SHORT, setup_was_right=True, favourable=0.03, adverse=-0.01,
+        calibration_key="",
+    ):
+        self.direction = direction
+        self._labels = {} if setup_was_right is None else {"the-setup-was-right": setup_was_right}
+        self.best_favourable_fraction = favourable
+        self.worst_adverse_fraction = adverse
+        self.calibration_key = calibration_key
+
+    def label_for(self, component):
+        return self._labels.get(component)
+
+
+def test_a_long_labels_outcome_is_not_this_bots_evidence():
+    """A single detector fires both directions; the other side's label is not
+    a fact about how this bot's own shorts are doing."""
+    assert setup_outcome_and_magnitude_for(LabelStub(direction=LONG), SHORT) is None
+
+
+def test_an_unjudged_setup_component_is_not_evidence_either():
+    assert setup_outcome_and_magnitude_for(LabelStub(setup_was_right=None), SHORT) is None
+
+
+def test_a_matching_short_labels_magnitude_comes_from_its_own_excursion():
+    outcome, magnitude = setup_outcome_and_magnitude_for(
+        LabelStub(setup_was_right=True, favourable=0.05, adverse=-0.02), SHORT
+    )
+    assert outcome is True
+    assert magnitude == 0.05
+
+    outcome, magnitude = setup_outcome_and_magnitude_for(
+        LabelStub(setup_was_right=False, favourable=0.05, adverse=-0.02), SHORT
+    )
+    assert outcome is False
+    assert magnitude == 0.02
 
 
 # ---- bear-position-invalidation-watcher -------------------------------------

@@ -23,6 +23,15 @@ editing the old one; a registry that could be edited is a registry that will be.
 **A model without a refutation verdict can be registered but never marked as
 promoted on evidence**, and the difference is stated in the record rather than
 inferred.
+
+**A model with no discrete artefact is not in this ledger at all**, since
+2026-08-30. `bull-conviction-model` and `bear-conviction-model` train
+continuously rather than in the batches this record was built to hold a
+lineage of, and `champion-challenger-gate` scores them directly from their own
+`online-model-score` reports instead. Their retrain-request is still
+consumed elsewhere -- this part specifically skips registering a version for
+them, which would otherwise be an always-`0.0`-scored placeholder racing the
+real score in the gate's own comparison state.
 """
 
 from __future__ import annotations
@@ -47,6 +56,15 @@ PART_DECLARATION = PartDeclaration(
 
 REGISTERED = "registered"
 REJECTED_DUPLICATE = "a-version-with-this-name-is-already-registered"
+
+# These two have no discrete trained artefact for this ledger to hold -- they
+# train continuously and are scored directly by champion-challenger-gate via
+# online-model-score (2026-08-30). Registering a placeholder version at 0.0
+# for them here anyway would give the gate a stale, always-losing "champion"
+# entry racing against the real score, since the gate's own comparison state
+# is last-write-wins per model_name and this part's retrain-request-triggered
+# registration and the model's own score report are two independent streams.
+ONLINE_MODEL_NAMES = ("bull-conviction-model", "bear-conviction-model")
 
 CHAMPION = "champion"
 CHALLENGER = "challenger"
@@ -311,7 +329,7 @@ def start_part(context) -> int:
             registry.observe_trial_ledger(ledger.family, ledger.trials, ledger.corrected_significance)
         registrations = []
         for request in requests.payloads():
-            if request.state != "scheduled":
+            if request.state != "scheduled" or request.model_name in ONLINE_MODEL_NAMES:
                 continue
             windows_seen[request.model_name] = windows_seen.get(request.model_name, 0) + 1
             registrations.append({

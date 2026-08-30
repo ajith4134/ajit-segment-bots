@@ -1,9 +1,14 @@
 """bull-setup-weight-learner: how much this bot should trust each detector, from results.
 
 The setup filter needs a number per detector and that number must not be typed by
-anybody (RL-061). This is where it comes from: the bot's own scorecard, split by
-detector, and the instruction scorecard for detectors that came from a learned
-instruction rather than a built-in one.
+anybody (RL-061). This is where it comes from: the bot's own scorecard on restart
+(a durable record adopted whole so a restart does not relearn from nothing), the
+instruction scorecard for detectors that came from a learned instruction, and --
+since 2026-08-30 -- `training-label`'s own `THE_SETUP_WAS_RIGHT` component going
+forward, so the detector is trusted for calling the setup right, not for whatever
+this bot's own entry timing, exit timing or sizing did to the trade afterwards.
+The scorecard blends all four into one win/loss and stays only as the prior a
+restart needs before enough decomposed labels have arrived to outweigh it.
 
 **Long results only.** A detector that is right about shorts and wrong about
 longs must be weighted low *here* while the bear bot weights it high, and a
@@ -31,8 +36,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.bot_opinion import SetupWeight
+from runtime.bot_opinion import LONG, SetupWeight
 from runtime.learned_estimator import Estimate, RateEstimator
+from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -41,12 +47,26 @@ BOT = "bull-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="bull-setup-weight-learner",
-    consumes=("bot-scorecard", "instruction-scorecard"),
+    consumes=("bot-scorecard", "instruction-scorecard", "training-label"),
     produces=("bull-setup-weight", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
 )
+
+
+def setup_outcome_for(label, direction: str) -> bool | None:
+    """This label's `THE_SETUP_WAS_RIGHT` verdict, or None if it does not apply.
+
+    A single detector fires both directions, and `TrainingLabel` carries no
+    notion of which bot's trade it was labelling beyond `direction` itself --
+    so a label for the other side is not this bot's evidence, and a label
+    whose setup component was never judged (a claim-based label the labeller
+    has not yet resolved) is not evidence at all.
+    """
+    if label.direction != direction:
+        return None
+    return label.label_for(THE_SETUP_WAS_RIGHT)
 
 
 @dataclass
@@ -290,7 +310,11 @@ def start_part(context) -> int:
     The bot's scorecard carries each detector's wins and trades and is
     adopted whole; an instruction scorecard carries a learned instruction's
     record, which is attributed to the detector named for that instruction.
-    Weights go out once per health interval.
+    A training-label's `THE_SETUP_WAS_RIGHT` component is the decomposed
+    signal going forward -- filtered to `direction == LONG` because a single
+    detector fires both directions and a label carries no notion of which
+    bot's trade it was labelling other than that. Weights go out once per
+    health interval.
     """
     import time as _time
 
@@ -298,6 +322,7 @@ def start_part(context) -> int:
 
     scorecards = Batch(read=context.bus.reader("bot-scorecard"))
     instruction_cards = Batch(read=context.bus.reader("instruction-scorecard"))
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_weights = context.bus.publisher_for("bull-setup-weight")
     learner = BullSetupWeightLearner(
         prior_hit_rate=context.number("bull_setup_weight_prior_hit_rate"),
@@ -315,6 +340,11 @@ def start_part(context) -> int:
                 learner.observe_scorecard(scorecard)
         for card in instruction_cards.payloads():
             learner.observe_instruction_scorecard(card.instruction_id, card.instruction_id, card.wins, card.trades)
+        for label in labels.payloads():
+            outcome = setup_outcome_for(label, LONG)
+            if outcome is None:
+                continue
+            learner.observe_closed_trade(label.detector, outcome)
 
     def tick() -> None:
         read_scorecards(learner)

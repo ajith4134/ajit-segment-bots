@@ -16,6 +16,11 @@ not sufficient on its own, and this part weights on **two** things:
 
 **A floor, not zero**: RL-005 keeps the paper stage experimenting, and a detector
 weighted to zero stops producing the evidence that could clear it.
+
+`bot-scorecard` gives this part a durable prior on restart; since 2026-08-30 the
+live signal is `training-label`'s own `THE_SETUP_WAS_RIGHT` component, filtered to
+`direction == SHORT`, so a detector is judged on whether its call was right rather
+than on whatever this bot's own entry timing, exit timing or sizing did to it.
 """
 
 from __future__ import annotations
@@ -23,8 +28,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.bot_opinion import SetupWeight
+from runtime.bot_opinion import SHORT, SetupWeight
 from runtime.learned_estimator import Estimate, QuantileEstimator, RateEstimator
+from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -33,12 +39,29 @@ BOT = "bear-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="bear-setup-weight-learner",
-    consumes=("bot-scorecard", "instruction-scorecard"),
+    consumes=("bot-scorecard", "instruction-scorecard", "training-label"),
     produces=("bear-setup-weight", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
 )
+
+
+def setup_outcome_and_magnitude_for(label, direction: str) -> tuple[bool, float] | None:
+    """This label's `THE_SETUP_WAS_RIGHT` verdict and its excursion magnitude.
+
+    None if the label is not this bot's own trade (a single detector fires
+    both directions) or the setup component was never judged. The magnitude
+    is the label's own favourable or adverse excursion fraction -- the same
+    evidence the tail-loss discount already needs, not a separate measurement.
+    """
+    if label.direction != direction:
+        return None
+    outcome = label.label_for(THE_SETUP_WAS_RIGHT)
+    if outcome is None:
+        return None
+    magnitude = abs(label.best_favourable_fraction if outcome else label.worst_adverse_fraction)
+    return outcome, magnitude
 
 
 @dataclass
@@ -307,7 +330,12 @@ def start_part(context) -> int:
     The bot's scorecard carries each detector's wins and trades and is
     adopted whole; an instruction scorecard carries a learned instruction's
     record, which is attributed to the detector named for that instruction.
-    Weights go out once per health interval.
+    A training-label's `THE_SETUP_WAS_RIGHT` component is the decomposed
+    signal going forward, filtered to `direction == SHORT` because a single
+    detector fires both directions and a label carries no other notion of
+    which bot's trade it was labelling; its excursion fractions are this
+    learner's magnitude, the same evidence the tail-loss discount already
+    needs. Weights go out once per health interval.
     """
     import time as _time
 
@@ -315,6 +343,7 @@ def start_part(context) -> int:
 
     scorecards = Batch(read=context.bus.reader("bot-scorecard"))
     instruction_cards = Batch(read=context.bus.reader("instruction-scorecard"))
+    labels = Batch(read=context.bus.reader("training-label"))
     publish_weights = context.bus.publisher_for("bear-setup-weight")
     learner = BearSetupWeightLearner(
         prior_hit_rate=context.number("bear_setup_weight_prior_hit_rate"),
@@ -344,6 +373,12 @@ def start_part(context) -> int:
             learner.observe_instruction_scorecard(
                 card.instruction_id, card.instruction_id, card.wins, card.trades, average
             )
+        for label in labels.payloads():
+            judged = setup_outcome_and_magnitude_for(label, SHORT)
+            if judged is None:
+                continue
+            outcome, magnitude = judged
+            learner.observe_closed_trade(label.detector, outcome, magnitude)
 
     def tick() -> None:
         read_scorecards(learner)

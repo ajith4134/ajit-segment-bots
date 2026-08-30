@@ -39,12 +39,23 @@ PART_ID = "champion-challenger-gate"
 
 PART_DECLARATION = PartDeclaration(
     part_id="champion-challenger-gate",
-    consumes=("model-version", "refutation-verdict", "trial-ledger", "forgetting-report"),
+    consumes=(
+        "model-version", "refutation-verdict", "trial-ledger", "forgetting-report",
+        "online-model-score",
+    ),
     produces=("champion-choice", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
+
+# The two models with no discrete trained artefact for model-registry's ledger
+# to hold and no separate held-out data for a refutation battery or a trial
+# ledger to test against -- both train continuously on every label instead.
+# Promotion for these two is score improvement alone (RL-058 audit,
+# 2026-08-30): the fuller conditions below stay in force for every model that
+# actually has a discrete version to test them against.
+ONLINE_MODEL_NAMES = ("bull-conviction-model", "bear-conviction-model")
 
 PROMOTE = "promote-the-challenger"
 KEEP = "keep-the-champion"
@@ -56,6 +67,7 @@ WAS_REFUTED = "the-refutation-battery-broke-it"
 DOES_NOT_CLEAR_ITS_TRIALS = "the-best-of-many-challengers-beats-the-champion-by-chance"
 HAS_FORGOTTEN = "it-scores-better-and-has-forgotten-an-era"
 A_TIE = "a-tie-keeps-the-champion"
+NOT_APPLICABLE = "not-applicable-to-a-continuously-trained-model"
 
 
 @dataclass(frozen=True)
@@ -154,15 +166,27 @@ class ChampionChallengerGate:
             None if champion_score is None else challenger_score - champion_score
         )
 
-        conditions = {
-            DID_NOT_BEAT_IT: (
-                improvement is None or improvement >= self._minimum_improvement
-            ),
-            NOT_REFUTATION_TESTED: model_name in self._verdicts,
-            WAS_REFUTED: self._verdicts.get(model_name) != "refuted",
-            DOES_NOT_CLEAR_ITS_TRIALS: self._trial_clears.get(model_name, False),
-            HAS_FORGOTTEN: self._recall.get(model_name, 1.0) >= self._minimum_recall,
-        }
+        if model_name in ONLINE_MODEL_NAMES:
+            # No discrete version for a refutation battery or a trial ledger to
+            # test, and no separate held-out data a family's search could have
+            # overfit to across many trained candidates -- there is one
+            # champion and one challenger, both training continuously, so
+            # those three conditions are not applicable rather than unmet.
+            conditions = {
+                DID_NOT_BEAT_IT: (
+                    improvement is None or improvement >= self._minimum_improvement
+                ),
+            }
+        else:
+            conditions = {
+                DID_NOT_BEAT_IT: (
+                    improvement is None or improvement >= self._minimum_improvement
+                ),
+                NOT_REFUTATION_TESTED: model_name in self._verdicts,
+                WAS_REFUTED: self._verdicts.get(model_name) != "refuted",
+                DOES_NOT_CLEAR_ITS_TRIALS: self._trial_clears.get(model_name, False),
+                HAS_FORGOTTEN: self._recall.get(model_name, 1.0) >= self._minimum_recall,
+            }
 
         failing = tuple(name for name, met in conditions.items() if not met)
         for name in failing:
@@ -192,6 +216,17 @@ class ChampionChallengerGate:
         ):
             self.standing.largest_improvement_promoted = improvement
 
+        if model_name in ONLINE_MODEL_NAMES:
+            evidence = (
+                "; no discrete version for a refutation battery or a trial ledger to test, "
+                "and no era to have forgotten with only one champion and one challenger both "
+                "training continuously -- promoted on score improvement alone"
+            )
+        else:
+            evidence = (
+                f"; refutation did not break it, it clears the bar its own search implies, and "
+                f"it recalls {self._recall.get(model_name, 1.0):.0%} of what it was trained on"
+            )
         return self._choice(
             model_name, PROMOTE, challenger, champion, conditions, (),
             f"{challenger_version} scores {challenger_score:.4f} against "
@@ -201,10 +236,9 @@ class ChampionChallengerGate:
                 if champion_score is not None
                 else "no incumbent"
             )
-            + f"; refutation did not break it, it clears the bar its own search implies, and "
-            f"it recalls {self._recall.get(model_name, 1.0):.0%} of what it was trained on. "
-            f"The old champion is kept as the challenger, so this is undone by promoting back "
-            f"rather than by retraining from nothing",
+            + evidence
+            + f". The old champion is kept as the challenger, so this is undone by promoting "
+            f"back rather than by retraining from nothing",
         )
 
     def revert(self, model_name: str) -> ChampionChoice:
@@ -318,6 +352,7 @@ def start_part(context) -> int:
     refutations = Batch(read=context.bus.reader("refutation-verdict"))
     ledgers = Batch(read=context.bus.reader("trial-ledger"))
     forgetting = Batch(read=context.bus.reader("forgetting-report"))
+    online_scores = Batch(read=context.bus.reader("online-model-score"))
     publish_choices = context.bus.publisher_for("champion-choice")
     gate = ChampionChallengerGate(
         minimum_improvement=context.number("champion_minimum_improvement"),
@@ -358,6 +393,12 @@ def start_part(context) -> int:
             if report.overall_recall is not None:
                 gate.observe_forgetting_report(report.model_name, report.overall_recall)
                 touched.add(report.model_name)
+        for score in online_scores.payloads():
+            if score.role == "champion":
+                gate.observe_champion(score.model_name, score.version, score.score)
+            else:
+                gate.observe_challenger(score.model_name, score.version, score.score)
+            touched.add(score.model_name)
         return tuple(sorted(touched))
 
     def publish(choices) -> None:

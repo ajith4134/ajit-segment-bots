@@ -3166,6 +3166,11 @@
       "id": "objection-outcome",
       "name": "objection outcome",
       "description": "Whether a counter-argument's strongest objection was actually right, judged by brain-self-reflector from how the trade ended -- fed back to devils-advocate so its learned hit-rate per (objection kind, regime) can move."
+    },
+    {
+      "id": "online-model-score",
+      "name": "online model score",
+      "description": "A continuously-trained model's own prequential score for one of its slots (champion or challenger) -- each example judged by that slot's error on it before training on it, which is what makes the running mean a held-out measure without a separate validation split. Read by champion-challenger-gate in place of model-version.validation_score for a model with no discrete trained artefact for that ledger to hold."
     }
   ],
   "features": [
@@ -8592,7 +8597,8 @@
       ],
       "produces": [
         "bull-raw-conviction",
-        "part-health"
+        "part-health",
+        "online-model-score"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -8608,7 +8614,18 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "produces": [
+              "online-model-score"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bull-conviction-calibrator",
@@ -8617,7 +8634,9 @@
       "category": "bull-bot",
       "consumes": [
         "bull-raw-conviction",
-        "bot-scorecard"
+        "bot-scorecard",
+        "training-label",
+        "market-regime"
       ],
       "produces": [
         "bull-calibrated-conviction",
@@ -8637,7 +8656,19 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "training-label",
+              "market-regime"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bull-entry-timer",
@@ -8743,7 +8774,8 @@
       "category": "bull-bot",
       "consumes": [
         "bot-scorecard",
-        "instruction-scorecard"
+        "instruction-scorecard",
+        "training-label"
       ],
       "produces": [
         "bull-setup-weight",
@@ -8763,7 +8795,18 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "training-label"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bull-position-invalidation-watcher",
@@ -8905,7 +8948,8 @@
       ],
       "produces": [
         "bear-raw-conviction",
-        "part-health"
+        "part-health",
+        "online-model-score"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -8921,7 +8965,18 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "produces": [
+              "online-model-score"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bear-conviction-calibrator",
@@ -8930,7 +8985,9 @@
       "category": "bear-bot",
       "consumes": [
         "bear-raw-conviction",
-        "bot-scorecard"
+        "bot-scorecard",
+        "training-label",
+        "market-regime"
       ],
       "produces": [
         "bear-calibrated-conviction",
@@ -8950,7 +9007,19 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "training-label",
+              "market-regime"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bear-entry-timer",
@@ -9056,7 +9125,8 @@
       "category": "bear-bot",
       "consumes": [
         "bot-scorecard",
-        "instruction-scorecard"
+        "instruction-scorecard",
+        "training-label"
       ],
       "produces": [
         "bear-setup-weight",
@@ -9076,7 +9146,18 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "training-label"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "bear-position-invalidation-watcher",
@@ -9714,7 +9795,8 @@
         "model-version",
         "refutation-verdict",
         "trial-ledger",
-        "forgetting-report"
+        "forgetting-report",
+        "online-model-score"
       ],
       "produces": [
         "champion-choice",
@@ -9730,7 +9812,18 @@
       "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "online-model-score"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "reward-shaper",

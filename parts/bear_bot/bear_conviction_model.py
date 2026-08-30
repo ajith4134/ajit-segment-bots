@@ -20,6 +20,15 @@ those as wins would learn to hold shorts through squeezes.
 Champion and challenger, both trained, one believed, promoted by control (T-2).
 Two refusals, and neither returns a probability: a flagged feature vector, and a
 price forecast flagged out of distribution.
+
+**The swap and the retrain are consumed, not just declared, since 2026-08-30.**
+See bull-conviction-model's own docstring for the full account: the gate
+compares `online-model-score`, which this part now publishes for both champion
+and challenger (prequential, no separate validation split needed), because
+`model-registry`'s ledger has no discrete artefact to hold for an online model
+and its `validation_score` has in any case always been hardcoded to `0.0`.
+Promotion for this part is score improvement alone -- there is no discrete
+version for a refutation battery or a trial ledger to test.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ from runtime.learned_state import (
     CheckpointSchedule,
     LearnedStateStore,
 )
-from runtime.learning_types import THE_SETUP_WAS_RIGHT
+from runtime.learning_types import THE_SETUP_WAS_RIGHT, ModelScoreReport
 from runtime.online_learner import OnlineLogisticModel
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -52,7 +61,7 @@ PART_DECLARATION = PartDeclaration(
         "retrain-request", "champion-choice", "learning-reward",
         "bear-feature-out-of-distribution-flag",
     ),
-    produces=("bear-raw-conviction", "part-health"),
+    produces=("bear-raw-conviction", "part-health", "online-model-score"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
@@ -157,6 +166,14 @@ class BearConvictionModel:
         self._kline_features: dict[tuple[str, str], dict] = {}
         self._reward_multipliers: dict[str, float] = {}
         self._absolute_error_total = 0.0
+        # Prequential error per slot, as in the bull model: each example judged
+        # by that model's error on it before this call trains it on the same
+        # example, which is what makes the running mean a held-out measure
+        # without a separate validation split.
+        self._model_error_totals: dict[str, float] = {CHAMPION: 0.0, CHALLENGER: 0.0}
+        self._model_observations: dict[str, int] = {CHAMPION: 0, CHALLENGER: 0}
+        self._model_versions: dict[str, str] = {CHAMPION: "v0", CHALLENGER: "v0"}
+        self._version_counter = 0
         self.standing = ModelStanding()
 
     def observe_price_forecast(self, venue_id: str, symbol: str, expected_return: float) -> None:
@@ -240,7 +257,23 @@ class BearConvictionModel:
                 "retrain the other and promote it with a champion choice"
             )
         self._models[which] = OnlineLogisticModel(**self._settings)
+        self._version_counter += 1
+        self._model_versions[which] = f"v{self._version_counter}"
+        self._model_error_totals[which] = 0.0
+        self._model_observations[which] = 0
         self.standing.retrains += 1
+
+    def score_for(self, slot: str) -> tuple[str, float, int]:
+        """This slot's version, prequential score and observation count.
+
+        The score is `-mean_absolute_error`: higher is better, matching the
+        convention `champion-challenger-gate` already compares scores by.
+        """
+        observations = self._model_observations[slot]
+        mean_error = (
+            self._model_error_totals[slot] / observations if observations else 0.0
+        )
+        return self._model_versions[slot], -mean_error, observations
 
     def train(self, outcome: ShortOutcome) -> float:
         """One closed short into both models, labelled inside its own horizon."""
@@ -251,6 +284,8 @@ class BearConvictionModel:
         error = 0.0
         for name, model in self._models.items():
             model_error = model.train(outcome.features, outcome.label, weight)
+            self._model_error_totals[name] += abs(model_error)
+            self._model_observations[name] += 1
             if name == self._live:
                 error = model_error
         self.standing.labels_trained_on += 1
@@ -420,11 +455,13 @@ def run_bear_conviction_model(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
     checkpoint=None,
+    publish_scores=None,
 ) -> int:
     """`checkpoint` is called with the model on every tick, as in the bull model:
     whether enough has been learned to be worth an fsync is the schedule's
     decision, and a part that only checkpointed after training would never
-    write the first one on a quiet market."""
+    write the first one on a quiet market. `publish_scores`, if given, is also
+    called every tick; its own pacing lives in the closure the caller builds."""
     def tick() -> None:
         convictions = []
         for vector, is_flagged in read_vectors_flags_and_labels(model):
@@ -434,6 +471,8 @@ def run_bear_conviction_model(
         publish_convictions(tuple(convictions))
         if checkpoint is not None:
             checkpoint(model)
+        if publish_scores is not None:
+            publish_scores(model)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -476,7 +515,10 @@ def start_part(context) -> int:
     forecast_flags = Batch(read=context.bus.reader("forecast-out-of-distribution-flag"))
     kline_windows = Batch(read=context.bus.reader("kline-window"))
     rewards = Batch(read=context.bus.reader("learning-reward"))
+    champion_choices = Batch(read=context.bus.reader("champion-choice"))
+    retrain_requests = Batch(read=context.bus.reader("retrain-request"))
     publish_convictions = context.bus.publisher_for("bear-raw-conviction")
+    publish_score = context.bus.publisher_for("online-model-score")
 
     # Vectors kept per symbol with when they were built, so a label that arrives a
     # horizon later can find the one that was current when the claim was made.
@@ -531,6 +573,15 @@ def start_part(context) -> int:
                 f"{reward.state!r}; no conversion from a shaped reward to a weight "
                 f"multiplier has been decided, and sample-weight is the input that carries one"
             )
+        for choice in champion_choices.payloads():
+            if choice.model_name != PART_ID:
+                continue
+            model.apply_champion_choice(CHALLENGER if choice.promotes else CHAMPION)
+        for request in retrain_requests.payloads():
+            if request.model_name != PART_ID or not request.is_scheduled:
+                continue
+            non_live = CHALLENGER if model.live_model_name == CHAMPION else CHAMPION
+            model.apply_retrain_request(non_live)
 
         weight_by_symbol = weights.mapping()
         for label in labels.payloads():
@@ -595,10 +646,34 @@ def start_part(context) -> int:
         schedule.record_written(observations)
         model.standing.checkpoints_written += 1
 
+    minimum_training_observations = int(context.number("bear_minimum_training_observations"))
+    last_score_publish = [float("-inf")]
+
+    def publish_scores(model: BearConvictionModel) -> None:
+        now = time.monotonic()
+        if now - last_score_publish[0] < context.health_interval_seconds:
+            return
+        last_score_publish[0] = now
+        reported_at_ns = time.time_ns()
+        reports = []
+        for slot in (CHAMPION, CHALLENGER):
+            version, score, observations = model.score_for(slot)
+            if observations < minimum_training_observations:
+                continue
+            reports.append(
+                ModelScoreReport(
+                    model_name=PART_ID, role=slot, version=version, score=score,
+                    observations=observations, reported_at_ns=reported_at_ns,
+                )
+            )
+        if reports:
+            publish_score(tuple(reports))
+
     return run_bear_conviction_model(
         model=model,
         control_socket=context.control_socket,
         read_vectors_flags_and_labels=read_vectors_flags_and_labels,
+        publish_scores=publish_scores,
         publish_convictions=publish_convictions,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,

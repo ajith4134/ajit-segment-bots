@@ -25,6 +25,23 @@ control-path-separate-from-data-path rule the governor follows (T-2).
 rejector flagged, or a price forecast flagged out of distribution, produces no
 conviction at all -- because the model's answer there would be an extrapolation
 wearing the same type as a measurement.
+
+**The swap and the retrain are consumed, not just declared, since 2026-08-30.**
+`champion-choice`/`retrain-request` were on this part's own consumes from the
+start, but nothing ever called `apply_champion_choice`/`apply_retrain_request` --
+found in this session's own learning-loop audit, alongside the deeper reason:
+`champion-challenger-gate` compares `model-version.validation_score`, which
+`model-registry` has always hardcoded to `0.0` for every model, so nothing could
+ever have been promoted through that path regardless. This part now scores its
+own champion and challenger prequentially (each example judged by a slot's error
+on it *before* that call trains the slot on it, which is what makes the running
+mean a held-out measure without a separate validation split) and publishes both
+as `online-model-score`, which is what `champion-challenger-gate` actually
+compares for this model -- an online model has no discrete trained artefact for
+`model-registry`'s ledger to hold, so it is scored directly rather than through
+the registry. It also carries no discrete version for a refutation battery or a
+trial ledger to test, so the gate's promotion for this part is score improvement
+alone, stated as such.
 """
 
 from __future__ import annotations
@@ -40,7 +57,7 @@ from runtime.learned_state import (
     LearnedStateStore,
 )
 from runtime.online_learner import OnlineLogisticModel
-from runtime.learning_types import THE_SETUP_WAS_RIGHT
+from runtime.learning_types import THE_SETUP_WAS_RIGHT, ModelScoreReport
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -60,7 +77,7 @@ PART_DECLARATION = PartDeclaration(
         "retrain-request", "champion-choice", "learning-reward",
         "bull-feature-out-of-distribution-flag",
     ),
-    produces=("bull-raw-conviction", "part-health"),
+    produces=("bull-raw-conviction", "part-health", "online-model-score"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
@@ -157,6 +174,18 @@ class BullConvictionModel:
         self._kline_features: dict[tuple[str, str], dict] = {}
         self._reward_multipliers: dict[str, float] = {}
         self._absolute_error_total = 0.0
+        # Prequential error per slot -- each example judged by that model's error
+        # on it before this call trains it on the same example, which is what
+        # makes the running mean a held-out measure without a separate
+        # validation split. Champion and challenger both train on every example
+        # (the docstring's whole point), so both accumulate one.
+        self._model_error_totals: dict[str, float] = {CHAMPION: 0.0, CHALLENGER: 0.0}
+        self._model_observations: dict[str, int] = {CHAMPION: 0, CHALLENGER: 0}
+        # A fresh identifier each time a slot is retrained from empty, so a
+        # champion-choice or a reported score names which incarnation of that
+        # slot it is about rather than just which slot.
+        self._model_versions: dict[str, str] = {CHAMPION: "v0", CHALLENGER: "v0"}
+        self._version_counter = 0
         self.standing = ModelStanding()
 
     # -- what the model is told about the world ------------------------------
@@ -247,7 +276,23 @@ class BullConvictionModel:
                 "retrain the other and promote it with a champion choice"
             )
         self._models[which] = OnlineLogisticModel(**self._settings)
+        self._version_counter += 1
+        self._model_versions[which] = f"v{self._version_counter}"
+        self._model_error_totals[which] = 0.0
+        self._model_observations[which] = 0
         self.standing.retrains += 1
+
+    def score_for(self, slot: str) -> tuple[str, float, int]:
+        """This slot's version, prequential score and observation count.
+
+        The score is `-mean_absolute_error`: higher is better, matching the
+        convention `champion-challenger-gate` already compares scores by.
+        """
+        observations = self._model_observations[slot]
+        mean_error = (
+            self._model_error_totals[slot] / observations if observations else 0.0
+        )
+        return self._model_versions[slot], -mean_error, observations
 
     # -- training ------------------------------------------------------------
 
@@ -260,6 +305,8 @@ class BullConvictionModel:
         error = 0.0
         for name, model in self._models.items():
             model_error = model.train(example.features, example.label, weight)
+            self._model_error_totals[name] += abs(model_error)
+            self._model_observations[name] += 1
             if name == self._live:
                 error = model_error
         self.standing.labels_trained_on += 1
@@ -452,6 +499,7 @@ def run_bull_conviction_model(
     model: BullConvictionModel, control_socket, read_vectors_flags_and_labels,
     publish_convictions, health_interval_seconds: float, emit_health,
     checkpoint=None,
+    publish_scores=None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
@@ -461,6 +509,10 @@ def run_bull_conviction_model(
     has been learned to be worth an fsync is the schedule's decision and not this
     loop's -- and because a part that only checkpointed inside the training branch
     would never write the very first one on a quiet market.
+
+    `publish_scores`, if given, is also called every tick; its own pacing (a
+    score does not need publishing on every vector this part happens to see)
+    lives in the closure the caller builds, not here.
     """
     def tick() -> None:
         vectors_with_flags = read_vectors_flags_and_labels(model)
@@ -472,6 +524,8 @@ def run_bull_conviction_model(
         publish_convictions(tuple(convictions))
         if checkpoint is not None:
             checkpoint(model)
+        if publish_scores is not None:
+            publish_scores(model)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -514,7 +568,10 @@ def start_part(context) -> int:
     forecast_flags = Batch(read=context.bus.reader("forecast-out-of-distribution-flag"))
     kline_windows = Batch(read=context.bus.reader("kline-window"))
     rewards = Batch(read=context.bus.reader("learning-reward"))
+    champion_choices = Batch(read=context.bus.reader("champion-choice"))
+    retrain_requests = Batch(read=context.bus.reader("retrain-request"))
     publish_convictions = context.bus.publisher_for("bull-raw-conviction")
+    publish_score = context.bus.publisher_for("online-model-score")
 
     # Vectors kept per symbol with when they were built, so a label that arrives a
     # horizon later can find the one that was current when the claim was made.
@@ -569,6 +626,19 @@ def start_part(context) -> int:
                 f"{reward.state!r}; no conversion from a shaped reward to a weight "
                 f"multiplier has been decided, and sample-weight is the input that carries one"
             )
+        for choice in champion_choices.payloads():
+            if choice.model_name != PART_ID:
+                continue
+            model.apply_champion_choice(CHALLENGER if choice.promotes else CHAMPION)
+        for request in retrain_requests.payloads():
+            if request.model_name != PART_ID or not request.is_scheduled:
+                continue
+            # This part only ever retrains the slot that is not live -- the
+            # request names which model family, not which of this part's two
+            # slots that is, and apply_retrain_request already refuses the live
+            # one, so the non-live slot is the only one it could mean.
+            non_live = CHALLENGER if model.live_model_name == CHAMPION else CHAMPION
+            model.apply_retrain_request(non_live)
 
         weight_by_symbol = weights.mapping()
         for label in labels.payloads():
@@ -631,11 +701,38 @@ def start_part(context) -> int:
         schedule.record_written(observations)
         model.standing.checkpoints_written += 1
 
+    minimum_training_observations = int(context.number("bull_minimum_training_observations"))
+    last_score_publish = [float("-inf")]
+
+    def publish_scores(model: BullConvictionModel) -> None:
+        now = time.monotonic()
+        if now - last_score_publish[0] < context.health_interval_seconds:
+            return
+        last_score_publish[0] = now
+        reported_at_ns = time.time_ns()
+        reports = []
+        for slot in (CHAMPION, CHALLENGER):
+            version, score, observations = model.score_for(slot)
+            # A score from a handful of examples is noise wearing a
+            # measurement's clothes -- the same floor the model itself uses
+            # before it will act on a slot's own belief.
+            if observations < minimum_training_observations:
+                continue
+            reports.append(
+                ModelScoreReport(
+                    model_name=PART_ID, role=slot, version=version, score=score,
+                    observations=observations, reported_at_ns=reported_at_ns,
+                )
+            )
+        if reports:
+            publish_score(tuple(reports))
+
     return run_bull_conviction_model(
         model=model,
         control_socket=context.control_socket,
         read_vectors_flags_and_labels=read_vectors_flags_and_labels,
         publish_convictions=publish_convictions,
+        publish_scores=publish_scores,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

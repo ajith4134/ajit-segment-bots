@@ -19,6 +19,13 @@ happened to the long book in a market says nothing about what happens to the
 short book in it.
 
 Below enough outcomes the model's own number is passed through, marked unfitted.
+
+**The regime is `market-regime`, read the same way `signal-outcome-labeller`
+already does, since 2026-08-30.** Before this every call site passed the same
+`ALL_REGIMES` constant regardless of what regime a conviction actually formed
+in, so the per-regime split above existed but was never exercised -- every
+short was calibrated, and every outcome recorded, against the pooled record
+only.
 """
 
 from __future__ import annotations
@@ -26,7 +33,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.bot_opinion import CalibratedConviction
+from runtime.bot_opinion import SHORT, CalibratedConviction
+from runtime.learning_types import THE_SETUP_WAS_RIGHT
 from runtime.online_learner import ProbabilityCalibrator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -36,7 +44,7 @@ BOT = "bear-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="bear-conviction-calibrator",
-    consumes=("bear-raw-conviction", "bot-scorecard"),
+    consumes=("bear-raw-conviction", "bot-scorecard", "training-label", "market-regime"),
     produces=("bear-calibrated-conviction", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -44,6 +52,19 @@ PART_DECLARATION = PartDeclaration(
 )
 
 ALL_REGIMES = "all-regimes"
+
+
+def label_outcome_for(label, direction: str) -> bool | None:
+    """This label's `THE_SETUP_WAS_RIGHT` verdict, or None if it does not apply.
+
+    Filtered to a closed-trade label (`calibration_key` empty, same population
+    `bot-scorecard` already reads) and to the matching direction, because a
+    single detector fires both sides and a label carries no other notion of
+    which bot's trade it was labelling.
+    """
+    if label.calibration_key or label.direction != direction:
+        return None
+    return label.label_for(THE_SETUP_WAS_RIGHT)
 
 
 @dataclass
@@ -207,26 +228,73 @@ def run_bear_conviction_calibrator(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    A raw conviction is calibrated against the regime it was formed in, because a
-    model that is well calibrated in a trend is not the same model in a chop. The
-    regime is a level kept per symbol; a conviction with no regime yet is calibrated
-    against 'any', which is what the classifier itself reports before it has seen a
-    full window.
+    A raw conviction is calibrated against the regime it was formed in, read from
+    `market-regime` and kept per symbol; a symbol regime-classifier has not
+    reached yet calibrates against `ALL_REGIMES`, same as an outcome for a symbol
+    with no regime record.
+
+    Outcomes are observed from `training-label`, filtered to a closed-trade label
+    (`calibration_key` empty, same population `bot-scorecard` already reads)
+    whose direction is short and whose setup component was judged -- the same
+    detector fires both directions, and a label carries no other notion of which
+    bot's trade it was labelling. The label names when the trade opened, not what
+    this bot said about it at the time, so the raw conviction the model published
+    for that symbol around then is remembered and matched by timestamp -- the
+    same join `bull-conviction-model` already does for feature vectors.
     """
-    from runtime.input_assembly import Batch
+    from runtime.input_assembly import Batch, LatestByKey
 
     convictions = Batch(read=context.bus.reader("bear-raw-conviction"))
     scorecards = Batch(read=context.bus.reader("bot-scorecard"))
+    labels = Batch(read=context.bus.reader("training-label"))
+    regimes = LatestByKey(
+        read=context.bus.reader("market-regime"),
+        key_of=lambda regime: (regime.venue_id, regime.symbol),
+    )
     publish_calibrated = context.bus.publisher_for("bear-calibrated-conviction")
+
+    remembered: dict[tuple[str, str], list] = {}
+    remembered_per_symbol = int(context.number("bear_remembered_convictions_per_symbol"))
+
+    def remember(raw) -> None:
+        key = (raw.venue_id, raw.symbol)
+        history = remembered.setdefault(key, [])
+        history.append(raw)
+        if len(history) > remembered_per_symbol:
+            del history[0]
+
+    def probability_current_at(venue_id: str, symbol: str, at_ns: int) -> float | None:
+        history = remembered.get((venue_id, symbol), ())
+        current = None
+        for raw in history:
+            if raw.formed_at_ns <= at_ns:
+                current = raw
+            else:
+                break
+        return current.probability if current is not None else None
 
     def read_convictions_and_scorecard(calibrator):
         for scorecard in scorecards.payloads():
             calibrator.observe_scorecard(scorecard)
-        # The regime this part may use is the one carried on the conviction's own
-        # reason chain, not a market-regime message: this part does not declare
-        # market-regime, and reading a type it has not declared would be private
-        # wiring of exactly the kind R-01 forbids.
-        return tuple((raw, ALL_REGIMES) for raw in convictions.payloads())
+
+        for label in labels.payloads():
+            outcome = label_outcome_for(label, SHORT)
+            if outcome is None:
+                continue
+            probability = probability_current_at(
+                label.venue_id, label.symbol, label.feature_lookup_at_ns
+            )
+            if probability is None:
+                continue
+            calibrator.observe_outcome(probability, outcome, label.regime)
+
+        regime_by_symbol = regimes.mapping()
+        paired = []
+        for raw in convictions.payloads():
+            remember(raw)
+            regime = regime_by_symbol.get((raw.venue_id, raw.symbol))
+            paired.append((raw, regime.regime if regime else ALL_REGIMES))
+        return tuple(paired)
 
     return run_bear_conviction_calibrator(
         calibrator=BearConvictionCalibrator(

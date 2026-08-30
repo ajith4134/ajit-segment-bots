@@ -20,6 +20,7 @@ from parts.learning_loop.champion_challenger_gate import (
     DID_NOT_BEAT_IT, HAS_FORGOTTEN, KEEP, NOTHING_TO_COMPARE, PROMOTE,
     ChampionChallengerGate,
 )
+from parts.learning_loop.champion_challenger_gate import ONLINE_MODEL_NAMES
 from parts.learning_loop.champion_challenger_gate import (
     DOES_NOT_CLEAR_ITS_TRIALS as MODEL_DOES_NOT_CLEAR_ITS_TRIALS,
     NOT_REFUTATION_TESTED as MODEL_NOT_REFUTATION_TESTED,
@@ -249,6 +250,18 @@ def test_a_short_is_labelled_from_its_own_direction():
     subject = a_prepared_builder(peak=0.08)
     label, _ = subject.build(a_trade(entry=100.0, exit_=93.0, side="short"))
     assert label.label_for(THE_SETUP_WAS_RIGHT) is True
+
+
+def test_direction_and_excursion_survive_into_the_training_label():
+    """The live gap (2026-08-30): a closed-trade label carried no direction at
+    all, so bull/bear-setup-weight-learner could not tell a symbol's short
+    outcome from its long one without it -- both already computed here for the
+    label's own components, just never carried out."""
+    subject = a_prepared_builder(peak=0.08, adverse=0.02)
+    label, _ = subject.build(a_trade(side="short"))
+    assert label.direction == "short"
+    assert label.best_favourable_fraction == 0.08
+    assert label.worst_adverse_fraction == 0.02
 
 
 def test_every_component_is_labelled():
@@ -1113,6 +1126,40 @@ def test_a_promotion_is_undone_by_promoting_back():
     gate.revert("kronos")
     assert gate.live_version("kronos") == "v1"
     assert gate.standing.reversals == 1
+
+
+def test_an_online_model_promotes_on_score_improvement_alone():
+    """bull/bear-conviction-model have no discrete version for a refutation
+    battery or a trial ledger to test -- promotion is score improvement alone."""
+    model_name = ONLINE_MODEL_NAMES[0]
+    gate = a_champion_gate(improvement=0.01)
+    gate.observe_champion(model_name, "v3", -0.30)
+    gate.observe_challenger(model_name, "v4", -0.20)
+    choice = gate.decide(model_name)
+    assert choice.decision == PROMOTE
+    assert choice.failing_conditions == ()
+    assert "promoted on score improvement alone" in choice.reason
+
+
+def test_an_online_model_still_needs_to_beat_the_champion():
+    model_name = ONLINE_MODEL_NAMES[0]
+    gate = a_champion_gate(improvement=0.05)
+    gate.observe_champion(model_name, "v3", -0.20)
+    gate.observe_challenger(model_name, "v4", -0.19)
+    choice = gate.decide(model_name)
+    assert choice.decision == KEEP
+    assert choice.failing_conditions == (DID_NOT_BEAT_IT,)
+
+
+def test_a_non_online_model_is_unaffected_by_the_online_bypass():
+    """The full four conditions still apply to a model with a discrete version."""
+    assert "kronos" not in ONLINE_MODEL_NAMES
+    gate = a_champion_gate()
+    gate.observe_champion("kronos", "v1", 0.6)
+    gate.observe_challenger("kronos", "v2", 0.9)
+    gate.observe_trial_verdict("kronos", True)
+    gate.observe_forgetting_report("kronos", 1.0)
+    assert MODEL_NOT_REFUTATION_TESTED in gate.decide("kronos").failing_conditions
 
 
 def test_nothing_to_compare_is_its_own_answer():

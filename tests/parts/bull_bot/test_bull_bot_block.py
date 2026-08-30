@@ -21,7 +21,7 @@ import math
 
 import pytest
 
-from parts.bull_bot.bull_conviction_calibrator import BullConvictionCalibrator
+from parts.bull_bot.bull_conviction_calibrator import BullConvictionCalibrator, label_outcome_for
 from parts.bull_bot.bull_conviction_model import (
     CHALLENGER, CHAMPION, FEATURES_FLAGGED, FORECAST_FLAGGED, NOTHING_USABLE,
     BullConvictionModel, TrainingExample,
@@ -46,7 +46,7 @@ from parts.bull_bot.bull_position_invalidation_watcher import (
 from parts.bull_bot.bull_setup_filter import (
     SETUP_DISCOUNTED, WEIGHTED_STRENGTH_TOO_LOW, WRONG_SIDE, BullSetupFilter,
 )
-from parts.bull_bot.bull_setup_weight_learner import BullSetupWeightLearner
+from parts.bull_bot.bull_setup_weight_learner import BullSetupWeightLearner, setup_outcome_for
 from runtime.online_learner import ModelBelief
 from runtime.bot_opinion import (
     CLOSE_POSITION, CONVICTION_TOO_LOW, ENTER_NOW, FEATURES_INCOMPLETE, LONG,
@@ -569,6 +569,32 @@ def test_the_live_model_cannot_be_wiped_while_it_is_being_acted_on():
     assert subject.model(CHAMPION).observations > 0
 
 
+def test_both_slots_score_prequentially_from_every_example():
+    """Higher is better, matching champion-challenger-gate's own convention."""
+    subject = a_model()
+    teach_the_model(subject, rounds=100)
+    champion_version, champion_score, champion_observations = subject.score_for(CHAMPION)
+    challenger_version, challenger_score, challenger_observations = subject.score_for(CHALLENGER)
+    assert champion_version == "v0"
+    assert challenger_version == "v0"
+    assert champion_observations == challenger_observations == 100
+    assert champion_score <= 0.0
+    assert challenger_score <= 0.0
+
+
+def test_a_retrain_gives_the_slot_a_fresh_version_and_resets_its_score():
+    subject = a_model()
+    teach_the_model(subject, rounds=50)
+    subject.apply_retrain_request(CHALLENGER)
+    version, score, observations = subject.score_for(CHALLENGER)
+    assert version == "v1"
+    assert observations == 0
+    assert score == 0.0
+    # The champion's own history is untouched by the challenger's retrain.
+    assert subject.score_for(CHAMPION)[0] == "v0"
+    assert subject.score_for(CHAMPION)[2] == 50
+
+
 def test_a_learning_reward_scales_how_much_an_outcome_counts():
     subject = a_model()
     subject.observe_learning_reward(DETECTOR, 3.0)
@@ -667,6 +693,25 @@ def test_a_restarted_calibrator_adopts_the_scorecard_rather_than_relearning():
     subject = a_bull_calibrator(minimum=50)
     subject.observe_scorecard(scorecard)
     assert subject.calibrate(RawStub(0.85)).is_measured
+
+
+def test_a_claim_based_label_is_not_this_parts_evidence():
+    """SignalCalibrator's population, not this part's -- runtime/learning_types.py."""
+    assert label_outcome_for(
+        LabelStub(direction=LONG, setup_was_right=True, calibration_key="a-detector:setup"), LONG
+    ) is None
+
+
+def test_a_short_labels_outcome_is_not_this_bots_evidence_for_calibration():
+    assert label_outcome_for(LabelStub(direction=SHORT, setup_was_right=True), LONG) is None
+
+
+def test_an_unjudged_setup_component_is_not_evidence_for_calibration():
+    assert label_outcome_for(LabelStub(direction=LONG, setup_was_right=None), LONG) is None
+
+
+def test_a_matching_closed_trade_label_gives_its_setup_verdict():
+    assert label_outcome_for(LabelStub(direction=LONG, setup_was_right=False), LONG) is False
 
 
 # ---- bull-entry-timer -------------------------------------------------------
@@ -1329,6 +1374,30 @@ def test_a_zero_floor_is_refused_at_construction():
             prior_hit_rate=0.5, prior_weight=4.0, half_life_observations=500,
             minimum_observations=20, minimum_weight=3.0, maximum_weight=1.0,
         )
+
+
+class LabelStub:
+    def __init__(self, direction=LONG, setup_was_right=True, calibration_key=""):
+        self.direction = direction
+        self._labels = {} if setup_was_right is None else {"the-setup-was-right": setup_was_right}
+        self.calibration_key = calibration_key
+
+    def label_for(self, component):
+        return self._labels.get(component)
+
+
+def test_a_short_labels_outcome_is_not_this_bots_evidence():
+    """A single detector fires both directions; the other side's label is not
+    a fact about how this bot's own setups are doing."""
+    assert setup_outcome_for(LabelStub(direction=SHORT, setup_was_right=True), LONG) is None
+
+
+def test_an_unjudged_setup_component_is_not_evidence_either():
+    assert setup_outcome_for(LabelStub(direction=LONG, setup_was_right=None), LONG) is None
+
+
+def test_a_matching_long_label_gives_its_setup_verdict():
+    assert setup_outcome_for(LabelStub(direction=LONG, setup_was_right=False), LONG) is False
 
 
 # ---- bull-position-invalidation-watcher -------------------------------------

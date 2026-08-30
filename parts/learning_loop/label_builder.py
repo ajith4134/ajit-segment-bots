@@ -211,6 +211,15 @@ class LabelBuilder:
                 features=dict(trade.features),
                 built_at_ns=self._now_ns(),
                 opened_at_ns=trade.opened_at_ns,
+                # Left at their defaults until 2026-08-30: a reader keyed by
+                # symbol alone (bull/bear-setup-weight-learner) cannot tell a
+                # long trade's outcome from a short one on the same symbol
+                # without this, and the magnitude is what a short book's
+                # tail-loss discount is measured from -- both already computed
+                # here for the label's own components, just never carried out.
+                direction=trade.side,
+                best_favourable_fraction=excursion.peak_favourable_fraction,
+                worst_adverse_fraction=excursion.peak_adverse_fraction,
             ),
             LABELLED,
         )

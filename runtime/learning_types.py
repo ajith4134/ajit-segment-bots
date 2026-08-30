@@ -283,3 +283,27 @@ class ModelVersion:
     @property
     def was_promoted_on_evidence(self) -> bool:
         return self.promoted and self.refutation_verdict is not None
+
+
+@dataclass(frozen=True)
+class ModelScoreReport:
+    """One learned model's own measure of how its champion or challenger is doing.
+
+    A model that trains continuously (RL-060's learned components: bull/bear
+    conviction) has no discrete training run the way `kronos-finetuner` does, so
+    there is no separate held-out validation split to score a version against --
+    the score is prequential instead: each example is judged by the model's error
+    on it *before* that example is trained on, which is what makes the running
+    total a held-out measure without a separate validation set. Reported
+    per role so champion-challenger-gate can compare the two the same way it
+    compares two batch-trained versions, and only once `observations` has
+    cleared the model's own fitting floor -- an early score from a handful of
+    examples is noise wearing a measurement's clothes.
+    """
+
+    model_name: str
+    role: str
+    version: str
+    score: float
+    observations: int
+    reported_at_ns: int

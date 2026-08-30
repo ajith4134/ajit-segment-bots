@@ -26,6 +26,15 @@ feature reaching into the control plane (T-2).
 **Two retrains are never scheduled at once.** The second would train on the same
 labels as the first and produce a model that looks like an independent
 confirmation.
+
+**A model family is not always one detector, since 2026-08-30.**
+`bull-conviction-model` and `bear-conviction-model` each train on every label
+their own direction produced, so a label counts twice: once for the detector
+that proposed it, and once for the bot whose direction it was. Found in this
+session's own learning-loop audit: `champion-choice`/`retrain-request` were
+already declared on both conviction models, but nothing had ever scheduled a
+retrain addressed to either, because no label had ever been counted under
+their name.
 """
 
 from __future__ import annotations
@@ -33,10 +42,20 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.bot_opinion import LONG, SHORT
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "retrain-scheduler"
+
+# bull/bear-conviction-model each train on every label their own direction
+# produced, regardless of which detector proposed it -- so their own "model
+# family" for retrain-scheduling purposes is every label of their direction,
+# not any one detector's. Named here rather than read from the parts
+# themselves (T-4): this is a fact about the label vocabulary, not a wire into
+# either bot.
+BULL_CONVICTION_MODEL = "bull-conviction-model"
+BEAR_CONVICTION_MODEL = "bear-conviction-model"
 
 PART_DECLARATION = PartDeclaration(
     part_id="retrain-scheduler",
@@ -296,6 +315,14 @@ def start_part(context) -> int:
             # the detector name is the model family it trains.
             scheduler.observe_label(label.detector)
             touched.add(label.detector)
+            # It is also evidence for whichever bot's conviction model trains
+            # on every label of its direction, regardless of detector.
+            if label.direction == LONG:
+                scheduler.observe_label(BULL_CONVICTION_MODEL)
+                touched.add(BULL_CONVICTION_MODEL)
+            elif label.direction == SHORT:
+                scheduler.observe_label(BEAR_CONVICTION_MODEL)
+                touched.add(BEAR_CONVICTION_MODEL)
         for alert in drift.payloads():
             scheduler.observe_drift_alert(alert.model_name, alert.reason)
             touched.add(alert.model_name)
