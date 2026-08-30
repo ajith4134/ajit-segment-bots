@@ -35,6 +35,7 @@ from parts.bear_bot.bear_outlier_rejector import DANGEROUS_WHEN_LOW, BearOutlier
 from parts.bear_bot.bear_position_invalidation_watcher import (
     CARRY_ATE_THE_THESIS, FEATURES_REVERSED, HORIZON_EXPIRED, NO_ENTRY_RECORD,
     REGIME_BROKEN, SQUEEZE_FORMING, STILL_VALID, BearPositionInvalidationWatcher, HeldThesis,
+    is_no_longer_a_short,
 )
 from parts.bear_bot.bear_setup_filter import (
     CARRY_EATS_THE_EDGE, SETUP_DISCOUNTED, WEIGHTED_STRENGTH_TOO_LOW, WRONG_SIDE,
@@ -956,17 +957,23 @@ def test_a_zero_tolerated_tail_is_refused_at_construction():
 # ---- bear-position-invalidation-watcher -------------------------------------
 
 class PositionStub:
-    def __init__(self):
+    def __init__(self, quantity=-1.0, realised_pnl=0.0):
         self.venue_id, self.symbol = VENUE, SYMBOL
+        self.quantity = quantity
+        self.realised_pnl = realised_pnl
+
+    @property
+    def is_flat(self) -> bool:
+        return self.quantity == 0
 
 
 def a_watcher(clock=None, reduce_at=0.4, close_at=0.7, carry_limit=0.5,
-              room_collapse=0.5, volatility_rise=1.5):
+              room_collapse=0.5, volatility_rise=1.5, minimum_observations=20):
     return BearPositionInvalidationWatcher(
         reversal_fraction_to_reduce=reduce_at, reversal_fraction_to_close=close_at,
         squeeze_room_collapse_fraction=room_collapse, volatility_rise_fraction=volatility_rise,
         carry_fraction_of_expected_move=carry_limit, prior_invalidation_hit_rate=0.5,
-        prior_weight=4.0, half_life_observations=200, minimum_observations=20,
+        prior_weight=4.0, half_life_observations=200, minimum_observations=minimum_observations,
         now_ns=clock or Clock(),
     )
 
@@ -1141,6 +1148,56 @@ def test_the_watcher_is_judged_too():
         subject.observe_outcome(True)
     assert subject.invalidation_record.is_fitted
     assert subject.invalidation_record.value > 0.6
+
+
+def test_a_short_position_is_not_treated_as_no_longer_a_short():
+    """The live bug (2026-08-30): a short is a negative quantity, but the
+    wiring's own condition (`quantity < 0`) treated every real short as
+    already gone, copy-pasted from bull's mirror-image logic without flipping
+    the sign -- this watcher never watched a real short in production."""
+    assert is_no_longer_a_short(PositionStub(quantity=-1.0)) is False
+    assert is_no_longer_a_short(PositionStub(quantity=1.0)) is True
+    assert is_no_longer_a_short(PositionStub(quantity=0.0)) is True
+
+
+def test_a_close_call_confirmed_by_a_loss_is_fed_back_as_right():
+    """observe_outcome had no caller anywhere: the watcher's own record of
+    whether closing early paid off never moved off its prior."""
+    clock = Clock()
+    subject = a_watcher(clock, minimum_observations=1)
+    subject.record_entry(a_thesis(clock, horizon=1.0))
+    clock.advance_seconds(10.0)
+    opinion = subject.check(PositionStub(), a_now_vector())
+    assert opinion.action == CLOSE_POSITION
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=False)
+    assert subject.standing.outcomes_judged == 1
+    record = subject.invalidation_record
+    assert record.is_fitted
+    assert record.value > 0.5
+
+
+def test_a_close_call_contradicted_by_a_profit_is_fed_back_as_wrong():
+    clock = Clock()
+    subject = a_watcher(clock, minimum_observations=1)
+    subject.record_entry(a_thesis(clock, horizon=1.0))
+    clock.advance_seconds(10.0)
+    subject.check(PositionStub(), a_now_vector())
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=True)
+    assert subject.standing.outcomes_judged == 1
+    record = subject.invalidation_record
+    assert record.is_fitted
+    assert record.value < 0.5
+
+
+def test_a_hold_is_never_scored_on_close():
+    """A hold did not intervene, so there is nothing of this watcher's to judge."""
+    clock = Clock()
+    subject = a_watcher(clock)
+    subject.record_entry(a_thesis(clock))
+    opinion = subject.check(PositionStub(), a_now_vector())
+    assert opinion.action == STAND_DOWN
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=True)
+    assert subject.standing.outcomes_judged == 0
 
 
 def test_a_short_is_planned_before_any_short_has_closed_from_the_symbols_own_range():

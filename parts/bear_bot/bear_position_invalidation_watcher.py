@@ -89,6 +89,19 @@ def expected_move_of(vector) -> float:
     return abs(float(z_score)) * abs(float(volatility))
 
 
+def is_no_longer_a_short(position) -> bool:
+    """True once this watcher has nothing left to watch: flat, or flipped long.
+
+    A short is a negative quantity (`runtime.trading_types.Position.direction`),
+    so `quantity > 0` -- not `< 0` -- is the sign that means this is no longer
+    one. The wrong sign here (`< 0`, bull's mirror-image condition copy-pasted
+    without flipping it) matched every real short and skipped it before it was
+    ever added to `held`, so this watcher never watched one in production
+    (found live 2026-08-30).
+    """
+    return position.is_flat or position.quantity > 0
+
+
 @dataclass
 class WatcherStanding:
     positions_watched: int = 0
@@ -98,6 +111,7 @@ class WatcherStanding:
     held: int = 0
     squeezes_caught: int = 0
     carry_closes: int = 0
+    outcomes_judged: int = 0
     by_reason: dict = field(default_factory=dict)
 
 
@@ -137,6 +151,11 @@ class BearPositionInvalidationWatcher:
         self._theses: dict[tuple[str, str], HeldThesis] = {}
         self._carry_paid: dict[tuple[str, str], float] = {}
         self._broken_regimes: set[str] = set()
+        # The most recent time this watcher actually intervened on a position
+        # (close or reduce), kept until the position closes so its call can be
+        # judged against what really happened. A hold is not remembered here:
+        # it did not intervene, so there is nothing of this watcher's to score.
+        self._last_intervention: dict[tuple[str, str], str] = {}
         self._was_right = RateEstimator(
             prior=prior_invalidation_hit_rate, prior_weight=prior_weight,
             half_life_observations=half_life_observations,
@@ -160,7 +179,24 @@ class BearPositionInvalidationWatcher:
         key = (venue_id, symbol)
         self._theses.pop(key, None)
         self._carry_paid.pop(key, None)
+        self._last_intervention.pop(key, None)
         self.standing.positions_watched = len(self._theses)
+
+    def observe_position_closed(self, venue_id: str, symbol: str, was_profitable: bool) -> None:
+        """Judge this watcher's last close-or-reduce call against what really happened.
+
+        Called when the position it watched reaches flat. A loss validates the
+        call to get out; a profit means the thesis actually held and reducing
+        was premature. A hold is never scored here -- it did not intervene, so
+        there is nothing of this watcher's to judge; the position closed for
+        some other reason.
+        """
+        key = (venue_id, symbol)
+        if key not in self._last_intervention:
+            return
+        del self._last_intervention[key]
+        self.standing.outcomes_judged += 1
+        self.observe_outcome(was_right=not was_profitable)
 
     def observe_regime_break(self, regime: str, has_broken: bool) -> None:
         if has_broken:
@@ -305,8 +341,10 @@ class BearPositionInvalidationWatcher:
         self.standing.by_reason[reason_code] = self.standing.by_reason.get(reason_code, 0) + 1
         if action == CLOSE_POSITION:
             self.standing.close_calls += 1
+            self._last_intervention[(position.venue_id, position.symbol)] = action
         elif action == REDUCE_POSITION:
             self.standing.reduce_calls += 1
+            self._last_intervention[(position.venue_id, position.symbol)] = action
         else:
             self.standing.held += 1
 
@@ -363,6 +401,7 @@ def describe_invalidation_watching(watcher: BearPositionInvalidationWatcher) -> 
         "held": watcher.standing.held,
         "squeezes_caught": watcher.standing.squeezes_caught,
         "closed_because_carry_ate_the_thesis": watcher.standing.carry_closes,
+        "outcomes_judged": watcher.standing.outcomes_judged,
         "by_reason": dict(watcher.standing.by_reason),
         "was_right_when_it_called_a_short_invalid": record.value,
         "record_is_measured": record.is_fitted,
@@ -435,9 +474,10 @@ def start_part(context) -> int:
         current = vectors.mapping()
         for position in positions.payloads():
             key = (position.venue_id, position.symbol)
-            if position.is_flat or position.quantity < 0:
+            if is_no_longer_a_short(position):
                 if key in held:
                     held.pop(key)
+                    watcher.observe_position_closed(*key, position.realised_pnl > 0)
                     watcher.forget_position(*key)
                 continue
             if key not in held:

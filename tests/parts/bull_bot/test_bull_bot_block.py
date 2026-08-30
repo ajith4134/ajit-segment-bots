@@ -1322,15 +1322,21 @@ def test_a_zero_floor_is_refused_at_construction():
 # ---- bull-position-invalidation-watcher -------------------------------------
 
 class PositionStub:
-    def __init__(self):
+    def __init__(self, quantity=1.0, realised_pnl=0.0):
         self.venue_id, self.symbol = VENUE, SYMBOL
+        self.quantity = quantity
+        self.realised_pnl = realised_pnl
+
+    @property
+    def is_flat(self) -> bool:
+        return self.quantity == 0
 
 
-def a_watcher(clock=None, reduce_at=0.4, close_at=0.7):
+def a_watcher(clock=None, reduce_at=0.4, close_at=0.7, minimum_observations=20):
     return BullPositionInvalidationWatcher(
         reversal_fraction_to_reduce=reduce_at, reversal_fraction_to_close=close_at,
         prior_invalidation_hit_rate=0.5, prior_weight=4.0,
-        half_life_observations=200, minimum_observations=20, now_ns=clock or Clock(),
+        half_life_observations=200, minimum_observations=minimum_observations, now_ns=clock or Clock(),
     )
 
 
@@ -1424,6 +1430,47 @@ def test_the_watcher_is_judged_too():
     record = subject.invalidation_record
     assert record.is_fitted
     assert record.value < 0.4
+
+
+def test_a_close_call_confirmed_by_a_loss_is_fed_back_as_right():
+    """observe_outcome had no caller anywhere: the watcher's own record of
+    whether closing early paid off never moved off its prior (found live
+    2026-08-30)."""
+    clock = Clock()
+    subject = a_watcher(clock, minimum_observations=1)
+    subject.record_entry(a_thesis(clock, horizon=1.0))
+    clock.advance_seconds(2.0)
+    opinion = subject.check(PositionStub(), a_vector({"price_z_score": -2.0, "book_imbalance": 0.4}))
+    assert opinion.action == CLOSE_POSITION
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=False)
+    assert subject.standing.outcomes_judged == 1
+    record = subject.invalidation_record
+    assert record.is_fitted
+    assert record.value > 0.5
+
+
+def test_a_close_call_contradicted_by_a_profit_is_fed_back_as_wrong():
+    clock = Clock()
+    subject = a_watcher(clock, minimum_observations=1)
+    subject.record_entry(a_thesis(clock, horizon=1.0))
+    clock.advance_seconds(2.0)
+    subject.check(PositionStub(), a_vector({"price_z_score": -2.0, "book_imbalance": 0.4}))
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=True)
+    assert subject.standing.outcomes_judged == 1
+    record = subject.invalidation_record
+    assert record.is_fitted
+    assert record.value < 0.5
+
+
+def test_a_hold_is_never_scored_on_close():
+    """A hold did not intervene, so there is nothing of this watcher's to judge."""
+    clock = Clock()
+    subject = a_watcher(clock)
+    subject.record_entry(a_thesis(clock))
+    opinion = subject.check(PositionStub(), a_vector({"price_z_score": -1.5, "book_imbalance": 0.3}))
+    assert opinion.action == STAND_DOWN
+    subject.observe_position_closed(VENUE, SYMBOL, was_profitable=True)
+    assert subject.standing.outcomes_judged == 0
 
 
 def test_the_opinion_shows_entry_against_now():

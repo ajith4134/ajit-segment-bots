@@ -84,6 +84,7 @@ class WatcherStanding:
     close_calls: int = 0
     reduce_calls: int = 0
     held: int = 0
+    outcomes_judged: int = 0
     by_reason: dict = field(default_factory=dict)
 
 
@@ -111,6 +112,11 @@ class BullPositionInvalidationWatcher:
         self._now_ns = now_ns
         self._theses: dict[tuple[str, str], HeldThesis] = {}
         self._broken_regimes: set[str] = set()
+        # The most recent time this watcher actually intervened on a position
+        # (close or reduce), kept until the position closes so its call can be
+        # judged against what really happened. A hold is not remembered here:
+        # it did not intervene, so there is nothing of this watcher's to score.
+        self._last_intervention: dict[tuple[str, str], str] = {}
         self._was_right = RateEstimator(
             prior=prior_invalidation_hit_rate, prior_weight=prior_weight,
             half_life_observations=half_life_observations,
@@ -125,7 +131,23 @@ class BullPositionInvalidationWatcher:
     def forget_position(self, venue_id: str, symbol: str) -> None:
         """A closed position releases its thesis. T-3: nothing accumulates for ever."""
         self._theses.pop((venue_id, symbol), None)
+        self._last_intervention.pop((venue_id, symbol), None)
         self.standing.positions_watched = len(self._theses)
+
+    def observe_position_closed(self, venue_id: str, symbol: str, was_profitable: bool) -> None:
+        """Judge this watcher's last close-or-reduce call against what really happened.
+
+        Called when the position it watched reaches flat. A loss validates the
+        call to get out; a profit means the thesis actually held and reducing
+        was premature. A hold is never scored here -- it did not intervene, so
+        there is nothing of this watcher's to judge; the position closed for
+        some other reason.
+        """
+        if (venue_id, symbol) not in self._last_intervention:
+            return
+        del self._last_intervention[(venue_id, symbol)]
+        self.standing.outcomes_judged += 1
+        self.observe_outcome(was_right=not was_profitable)
 
     def observe_regime_break(self, regime: str, has_broken: bool) -> None:
         if has_broken:
@@ -238,8 +260,10 @@ class BullPositionInvalidationWatcher:
         self.standing.by_reason[reason_code] = self.standing.by_reason.get(reason_code, 0) + 1
         if action == CLOSE_POSITION:
             self.standing.close_calls += 1
+            self._last_intervention[(position.venue_id, position.symbol)] = action
         elif action == REDUCE_POSITION:
             self.standing.reduce_calls += 1
+            self._last_intervention[(position.venue_id, position.symbol)] = action
         else:
             self.standing.held += 1
 
@@ -293,6 +317,7 @@ def describe_invalidation_watching(watcher: BullPositionInvalidationWatcher) -> 
         "close_calls": watcher.standing.close_calls,
         "reduce_calls": watcher.standing.reduce_calls,
         "held": watcher.standing.held,
+        "outcomes_judged": watcher.standing.outcomes_judged,
         "by_reason": dict(watcher.standing.by_reason),
         "was_right_when_it_called_a_position_invalid": record.value,
         "record_is_measured": record.is_fitted,
@@ -366,6 +391,7 @@ def start_part(context) -> int:
             if position.is_flat or position.quantity < 0:
                 if key in held:
                     held.pop(key)
+                    watcher.observe_position_closed(*key, position.realised_pnl > 0)
                     watcher.forget_position(*key)
                 continue
             if key not in held:
