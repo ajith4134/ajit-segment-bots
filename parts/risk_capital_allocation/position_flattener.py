@@ -171,6 +171,30 @@ class PositionFlattener:
 
     def observe_position(self, position) -> None:
         key = (position.venue_id, position.symbol)
+        # A position that shrank was filled into, and that fill answered part of
+        # what is outstanding. This is the only evidence this part has that an
+        # ask was taken -- it produces `order-request` and consumes `position`,
+        # so a fill reaches it as the position getting smaller and in no other
+        # way. Growing is a fresh entry, not an answer, and leaves the
+        # outstanding ask exactly where it was.
+        #
+        # Counted before the flat case returns, never inside the branch below.
+        # The last fill on a position is the one that closes it, and skipping
+        # that one leaves the whole closed quantity looking like quantity nobody
+        # accounted for: measured live 2026-08-30, 35 positions closed correctly
+        # while `quantity_asked_beyond_the_position` read 1,904,948 -- a counter
+        # calling a clean flatten an overshoot. A number that reads as a fault
+        # when there is none costs the same as one that reads healthy when there
+        # is (Rule 8).
+        was = self._last_seen_quantity.get(key)
+        now_held = abs(position.quantity)
+        if was is not None and now_held < was:
+            filled = was - now_held
+            self._quantity_seen_filled[key] = (
+                self._quantity_seen_filled.get(key, 0.0) + filled
+            )
+            self._outstanding[key] = max(0.0, self._outstanding.get(key, 0.0) - filled)
+        self._last_seen_quantity[key] = now_held
         if position.is_flat:
             if key in self._held:
                 del self._held[key]
@@ -187,21 +211,6 @@ class PositionFlattener:
             quantity=position.quantity,
             direction=position.direction,
         )
-        # A position that shrank was filled into, and that fill answered part of
-        # what is outstanding. This is the only evidence this part has that an
-        # ask was taken -- it produces `order-request` and consumes `position`,
-        # so a fill reaches it as the position getting smaller and in no other
-        # way. Growing is a fresh entry, not an answer, and leaves the
-        # outstanding ask exactly where it was.
-        was = self._last_seen_quantity.get(key)
-        now_held = abs(position.quantity)
-        if was is not None and now_held < was:
-            filled = was - now_held
-            self._quantity_seen_filled[key] = (
-                self._quantity_seen_filled.get(key, 0.0) + filled
-            )
-            self._outstanding[key] = max(0.0, self._outstanding.get(key, 0.0) - filled)
-        self._last_seen_quantity[key] = now_held
         self.standing.open_positions = len(self._held)
 
     def observe_override(self, override) -> None:

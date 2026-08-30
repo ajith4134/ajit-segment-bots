@@ -195,6 +195,31 @@ def test_the_total_asked_for_never_exceeds_what_the_position_ever_held():
     assert subject.standing.quantity_asked_beyond_the_position == 0.0
 
 
+def test_a_position_that_closed_completely_is_not_reported_as_an_overshoot():
+    """The fill that closes a position is a fill like any other.
+
+    It was not counted as one until 2026-08-30, because `observe_position`
+    returned on the flat case before reaching the accounting. Measured live that
+    same day: 35 positions closed exactly as asked while
+    `quantity_asked_beyond_the_position` read 1,904,948 -- the whole closed
+    quantity, reported as quantity nobody could account for. A counter that calls
+    a clean flatten an overshoot is as wrong as one that calls an overshoot
+    clean.
+    """
+    clock = Clock()
+    subject = flattener(clock)
+    subject.observe_position(position("BTCUSDT", 0.5))
+    subject.observe_override(override())
+    assert subject.exits_to_place()[0].quantity == pytest.approx(0.5)
+
+    subject.observe_position(position("BTCUSDT", 0.0))
+    clock.advance(6.0)
+    assert subject.exits_to_place() == ()
+    assert subject.standing.quantity_asked_beyond_the_position == pytest.approx(0.0)
+    assert subject.standing.positions_at_the_cap == 0
+    assert subject.standing.positions_closed_since_the_instruction == 1
+
+
 def test_a_closed_position_is_not_closed_twice():
     clock = Clock()
     subject = flattener(clock)
