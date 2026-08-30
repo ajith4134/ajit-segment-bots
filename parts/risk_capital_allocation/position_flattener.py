@@ -91,6 +91,17 @@ class FlattenerStanding:
     positions_closed_since_the_instruction: int = 0
     refused_no_money_mode: int = 0
     instructions_acted_on: int = 0
+    # Positions still open whose allowance is spent -- the whole of what they
+    # were seen holding has already been asked for. This is a fault and not
+    # progress: something downstream is not filling or not reporting, and asking
+    # again would sell a position the bot no longer has. Counted so it is
+    # visible, because the alternative to counting it was overshooting.
+    positions_at_the_cap: int = 0
+    # How much more has been asked for than was ever held, summed over positions.
+    # It must stay at zero. It is reported rather than asserted, because the
+    # whole reason this counter exists is that it did not stay at zero and
+    # nothing anywhere said so.
+    quantity_asked_beyond_the_position: float = 0.0
     # How long the oldest unfilled exit has been asked for. An exit is repeated
     # for as long as the position is open, which is right for an order lost in
     # transit and wrong to leave silent: measured 2026-08-27, STORJUSDT was
@@ -113,12 +124,23 @@ class HeldPosition:
 class PositionFlattener:
     """Turns a human's close-positions into one market exit per open position."""
 
-    def __init__(self, repeat_after_seconds: float, now_ns=time.time_ns) -> None:
+    def __init__(
+        self,
+        repeat_after_seconds: float,
+        quantity_increment: float,
+        now_ns=time.time_ns,
+    ) -> None:
         if repeat_after_seconds <= 0:
             raise ValueError(
                 "an exit repeated after no wait at all is two closes racing for one position"
             )
+        if quantity_increment <= 0:
+            raise ValueError(
+                "a quantity step of zero leaves no floor under the unsold remainder, so a "
+                "position rounded to nothing would be asked for forever"
+            )
         self._repeat_after_ns = int(repeat_after_seconds * 1_000_000_000)
+        self._quantity_increment = quantity_increment
         self._now_ns = now_ns
         self._held: dict[tuple[str, str], HeldPosition] = {}
         self._money_mode: str | None = None
@@ -129,6 +151,14 @@ class PositionFlattener:
         # kept apart from the last ask so a repeat does not reset the wait.
         self._first_asked_at_ns: dict[tuple[str, str], int] = {}
         self._closed_under_this_instruction: set[tuple[str, str]] = set()
+        # How much of this position has been asked for and not yet answered, and
+        # what it was last seen holding so a fill can be told from a fresh entry.
+        # Together they are the only thing that stops a repeat from selling the
+        # position twice -- see `exits_to_place`.
+        self._outstanding: dict[tuple[str, str], float] = {}
+        self._last_seen_quantity: dict[tuple[str, str], float] = {}
+        self._quantity_asked_for: dict[tuple[str, str], float] = {}
+        self._quantity_seen_filled: dict[tuple[str, str], float] = {}
         self._sequence = 0
         self.standing = FlattenerStanding()
 
@@ -157,6 +187,21 @@ class PositionFlattener:
             quantity=position.quantity,
             direction=position.direction,
         )
+        # A position that shrank was filled into, and that fill answered part of
+        # what is outstanding. This is the only evidence this part has that an
+        # ask was taken -- it produces `order-request` and consumes `position`,
+        # so a fill reaches it as the position getting smaller and in no other
+        # way. Growing is a fresh entry, not an answer, and leaves the
+        # outstanding ask exactly where it was.
+        was = self._last_seen_quantity.get(key)
+        now_held = abs(position.quantity)
+        if was is not None and now_held < was:
+            filled = was - now_held
+            self._quantity_seen_filled[key] = (
+                self._quantity_seen_filled.get(key, 0.0) + filled
+            )
+            self._outstanding[key] = max(0.0, self._outstanding.get(key, 0.0) - filled)
+        self._last_seen_quantity[key] = now_held
         self.standing.open_positions = len(self._held)
 
     def observe_override(self, override) -> None:
@@ -194,9 +239,15 @@ class PositionFlattener:
         self._sent_at_ns.clear()
         self._first_asked_at_ns.clear()
         self._closed_under_this_instruction.clear()
+        self._outstanding.clear()
+        self._last_seen_quantity.clear()
+        self._quantity_asked_for.clear()
+        self._quantity_seen_filled.clear()
         self.standing.waiting_for_a_fill = 0
         self.standing.longest_wait_seconds = 0.0
         self.standing.positions_closed_since_the_instruction = 0
+        self.standing.positions_at_the_cap = 0
+        self.standing.quantity_asked_beyond_the_position = 0.0
 
     @property
     def is_flattening(self) -> bool:
@@ -207,6 +258,47 @@ class PositionFlattener:
 
         Nothing at all is the answer in every ordinary tick: no instruction, or
         an instruction whose exits are already in flight.
+
+        **A position of size Q never has more than Q asked for at one time.**
+        That invariant was missing until 2026-08-30 and the absence of it turned
+        this part into the opposite of what it is for. The repeat fired on a
+        timer alone, with no account of what was already asked and unanswered,
+        and every repeat carried a fresh `client_order_id` -- so
+        `paper-fill-simulator`'s duplicate guard, which keys on that id, could
+        never refuse one. The repeats did not replace each other, they
+        accumulated: measured on the live spine, `exits_placed` reached 426 with
+        `exits_repeated` 411 against `open_positions` 2, and the book held 2,199
+        of them in flight. They then filled, all of them.
+
+            flatten sell TURBOUSDT  13,020,303  against ~8,500,000 held
+                                                -> a NEW 4,457,934 short
+            flatten sell VETUSDT     5,915,542  against    731,927 held
+            1,048,525 USDT of flatten notional against a 190,900 USDT book
+
+        A close that overshoots does not stop at flat, it reverses -- the failure
+        `OrderRequest.cancels_client_order_id` was written for, in its own words:
+        "a stop that triggers on nothing opens the opposite position".
+
+        **The bound is outstanding quantity, not a repeat timer, and not
+        cancel-replace either.** Withdrawing the previous ask would also bound
+        it, and that was the first fix written here -- but it only holds while
+        cancels land, and the live book reported `cancels_for_an_unknown_order`
+        360 times against market orders it had already passed on. A bound that
+        depends on a cancel arriving is not a bound. So:
+
+            allowance = what is held now - what is already asked and unanswered
+
+        and an ask is only ever answered by evidence: the position getting
+        smaller, which is the only way a fill reaches a part that produces
+        `order-request` and consumes `position`. An unanswered ask therefore
+        keeps its allowance spent for as long as it stays unanswered, and the
+        timer decides *when* it is worth looking again, never *how much*.
+
+        The consequence is deliberate: an exit that is genuinely lost is not
+        re-sent. That is the right trade here, because the 411 repeats were not
+        lost -- they were slow, and every one of them was eventually taken. A
+        position still open with its allowance spent is a fault to report, and
+        it is counted in `positions_at_the_cap` rather than acted on.
         """
         if self._acting_on is None:
             return ()
@@ -216,16 +308,49 @@ class PositionFlattener:
 
         now = self._now_ns()
         exits = []
+        at_the_cap = 0
         for key, held in sorted(self._held.items()):
+            outstanding = self._outstanding.get(key, 0.0)
+            allowance = abs(held.quantity) - outstanding
+            # Below one order step there is nothing an order could sell, so an
+            # allowance that small is spent rather than nearly spent.
+            if allowance < self._quantity_increment:
+                if outstanding > 0:
+                    at_the_cap += 1
+                continue
             sent_at = self._sent_at_ns.get(key)
             if sent_at is not None and now - sent_at < self._repeat_after_ns:
                 continue
+            # Only what is not already asked for. Never the whole position again.
+            quantity = allowance
             if sent_at is not None:
                 self.standing.exits_repeated += 1
             self._sent_at_ns[key] = now
             self._first_asked_at_ns.setdefault(key, now)
+            self._quantity_asked_for[key] = (
+                self._quantity_asked_for.get(key, 0.0) + quantity
+            )
+            self._outstanding[key] = outstanding + quantity
             self.standing.exits_placed += 1
-            exits.append(self._exit_for(held, repeated=sent_at is not None, at_ns=now))
+            exits.append(
+                self._exit_for(
+                    held, quantity=quantity, repeated=sent_at is not None, at_ns=now
+                )
+            )
+        self.standing.positions_at_the_cap = at_the_cap
+        # What has been asked for beyond what was ever there to sell: everything
+        # asked, less everything a fill accounted for, less what each position
+        # still holds. It must stay at zero, and it is reported rather than
+        # asserted because the whole reason it exists is that it did not.
+        self.standing.quantity_asked_beyond_the_position = sum(
+            max(
+                0.0,
+                asked
+                - self._quantity_seen_filled.get(key, 0.0)
+                - abs(self._held[key].quantity if key in self._held else 0.0),
+            )
+            for key, asked in self._quantity_asked_for.items()
+        )
 
         waiting = [self._sent_at_ns[key] for key in self._sent_at_ns if key in self._held]
         self.standing.waiting_for_a_fill = len(waiting)
@@ -237,7 +362,9 @@ class PositionFlattener:
         )
         return tuple(exits)
 
-    def _exit_for(self, held: HeldPosition, repeated: bool, at_ns: int) -> OrderRequest:
+    def _exit_for(
+        self, held: HeldPosition, quantity: float, repeated: bool, at_ns: int
+    ) -> OrderRequest:
         self._sequence += 1
         side = SELL if held.direction == LONG else BUY
         again = " again" if repeated else ""
@@ -247,7 +374,7 @@ class PositionFlattener:
             venue_id=held.venue_id,
             symbol=held.symbol,
             side=side,
-            quantity=abs(held.quantity),
+            quantity=quantity,
             # A market order carries neither: an instruction to close now is not
             # an instruction to wait for a price, and a limit here would be a
             # position left open at the first tick that did not reach it.
@@ -260,7 +387,7 @@ class PositionFlattener:
             outcome=ROUTED,
             reason=(
                 f"a human override said {CLOSE_POSITIONS}; closing {held.direction} "
-                f"{abs(held.quantity):g} {held.symbol} at market{again}"
+                f"{quantity:g} of {abs(held.quantity):g} {held.symbol} at market{again}"
             ),
             routed_at_ns=at_ns,
             # An exit returns whatever the position committed, which the account
@@ -281,6 +408,10 @@ def describe_flattening(flattener: PositionFlattener) -> dict:
         "exits_placed": flattener.standing.exits_placed,
         "exits_repeated": flattener.standing.exits_repeated,
         "waiting_for_a_fill": flattener.standing.waiting_for_a_fill,
+        "positions_at_the_cap": flattener.standing.positions_at_the_cap,
+        "quantity_asked_beyond_the_position": (
+            flattener.standing.quantity_asked_beyond_the_position
+        ),
         "positions_closed_since_the_instruction": (
             flattener.standing.positions_closed_since_the_instruction
         ),
@@ -363,6 +494,12 @@ def start_part(context) -> int:
             # unfilled past it has genuinely not been taken. Anything shorter
             # repeats an order that is still in flight.
             repeat_after_seconds=context.number("order_latency_maximum"),
+            # The same step an order is snapped to, so the floor under the
+            # unsold remainder is the smallest thing an order could actually
+            # sell. Read rather than chosen: a number picked here would be a
+            # second opinion about what "nothing left to close" means, free to
+            # disagree with the one the book rounds to (RL-061).
+            quantity_increment=context.number("order_quantity_increment"),
         ),
         control_socket=context.control_socket,
         read_inputs=read_inputs,

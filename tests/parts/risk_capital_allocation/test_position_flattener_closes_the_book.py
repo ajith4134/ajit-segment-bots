@@ -48,8 +48,12 @@ def override(instruction: str = CLOSE_POSITIONS, override_id: str = "first", act
     )
 
 
-def flattener(clock: Clock, mode: str = "paper") -> PositionFlattener:
-    subject = PositionFlattener(repeat_after_seconds=5.0, now_ns=clock)
+def flattener(
+    clock: Clock, mode: str = "paper", quantity_increment: float = 0.001
+) -> PositionFlattener:
+    subject = PositionFlattener(
+        repeat_after_seconds=5.0, quantity_increment=quantity_increment, now_ns=clock
+    )
     subject.observe_money_mode(mode)
     return subject
 
@@ -98,19 +102,97 @@ def test_the_same_instruction_does_not_place_a_second_exit_on_the_next_tick():
     assert subject.standing.waiting_for_a_fill == 1
 
 
-def test_an_exit_that_never_filled_is_placed_again_once_it_could_have_answered():
-    """Derived from order_latency_maximum: past it, the book would have answered."""
+def test_an_exit_that_never_filled_is_not_asked_for_a_second_time():
+    """The whole position has been asked for. A second ask sells it twice.
+
+    This test asserted the opposite until 2026-08-30, and the behaviour it
+    asserted is what emptied the book: past `order_latency_maximum` the exit was
+    repeated on the timer alone, with a fresh `client_order_id` every time and
+    nothing withdrawing the previous ask. Measured on the live spine, that
+    reached 411 repeats against two open positions, `paper-fill-simulator` held
+    2,199 of them in flight, and they filled -- 13,020,303 units of TURBOUSDT
+    sold against roughly 8,500,000 held, leaving a new short.
+
+    A book that has not answered is a fault to report, not a reason to ask for
+    more than exists: the position stands at the cap and says so.
+    """
     clock = Clock()
     subject = flattener(clock)
     subject.observe_position(position("BTCUSDT", 0.5))
     subject.observe_override(override())
-    subject.exits_to_place()
+    first = subject.exits_to_place()
+    assert len(first) == 1
+    assert first[0].quantity == 0.5
 
+    clock.advance(6.0)
+    assert subject.exits_to_place() == ()
+    assert subject.standing.positions_at_the_cap == 1
+    assert subject.standing.quantity_asked_beyond_the_position == 0.0
+
+
+def test_a_partly_filled_exit_is_not_asked_for_again_because_the_rest_is_still_working():
+    """A partial fill answers part of the ask. The rest of that ask is still live.
+
+    0.5 was asked for. 0.2 came back, so 0.3 remains both held and outstanding,
+    and the original ask already covers it. Asking again here would be asking for
+    0.3 the book is already working on -- which is the 411-repeat failure in
+    miniature.
+    """
+    clock = Clock()
+    subject = flattener(clock)
+    subject.observe_position(position("BTCUSDT", 0.5))
+    subject.observe_override(override())
+    first = subject.exits_to_place()
+    assert first[0].quantity == 0.5
+
+    subject.observe_position(position("BTCUSDT", 0.3))
+    clock.advance(6.0)
+    assert subject.exits_to_place() == ()
+    assert subject.standing.positions_at_the_cap == 1
+    assert subject.standing.quantity_asked_beyond_the_position == pytest.approx(0.0)
+
+
+def test_quantity_added_after_the_instruction_gets_its_own_exit():
+    """The one legitimate second ask: there is more of the position than before.
+
+    A position that grew was entered into again, which is new quantity nobody has
+    asked to close. Only the difference is asked for -- never the whole position
+    a second time.
+    """
+    clock = Clock()
+    subject = flattener(clock)
+    subject.observe_position(position("BTCUSDT", 0.5))
+    subject.observe_override(override())
+    assert subject.exits_to_place()[0].quantity == pytest.approx(0.5)
+
+    subject.observe_position(position("BTCUSDT", 0.8))
     clock.advance(6.0)
     again = subject.exits_to_place()
     assert len(again) == 1
+    assert again[0].quantity == pytest.approx(0.3), "only the quantity that is new"
     assert subject.standing.exits_repeated == 1
     assert "again" in again[0].reason
+
+
+def test_the_total_asked_for_never_exceeds_what_the_position_ever_held():
+    """The invariant the whole cap exists for, said directly.
+
+    Whatever the book does -- answer late, not answer, answer twice -- the sum of
+    what this part asked to sell cannot exceed what it saw the position holding.
+    """
+    clock = Clock()
+    subject = flattener(clock)
+    subject.observe_position(position("BTCUSDT", 0.5))
+    subject.observe_override(override())
+
+    asked = 0.0
+    for _ in range(50):
+        for order in subject.exits_to_place():
+            asked += order.quantity
+        clock.advance(6.0)
+
+    assert asked <= 0.5
+    assert subject.standing.quantity_asked_beyond_the_position == 0.0
 
 
 def test_a_closed_position_is_not_closed_twice():
@@ -175,7 +257,9 @@ def test_where_an_exit_is_sent_is_never_guessed():
     """Paper and live are not interchangeable. With no money mode read, this
     places nothing and says why."""
     clock = Clock()
-    subject = PositionFlattener(repeat_after_seconds=5.0, now_ns=clock)
+    subject = PositionFlattener(
+        repeat_after_seconds=5.0, quantity_increment=0.001, now_ns=clock
+    )
     subject.observe_position(position("BTCUSDT", 0.5))
     subject.observe_override(override())
 
@@ -188,7 +272,7 @@ def test_where_an_exit_is_sent_is_never_guessed():
 
 def test_an_exit_repeated_after_no_wait_at_all_is_refused_at_construction():
     with pytest.raises(ValueError):
-        PositionFlattener(repeat_after_seconds=0.0)
+        PositionFlattener(repeat_after_seconds=0.0, quantity_increment=0.001)
 
 
 def test_an_override_with_no_id_of_its_own_is_still_one_instruction():
