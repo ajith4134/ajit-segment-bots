@@ -48,7 +48,7 @@ PART_DECLARATION = PartDeclaration(
 FIRED = "fired"
 NOT_A_BURST = "move-is-ordinary-for-this-symbol"
 TOO_FEW_OBSERVATIONS = "too-few-observations"
-NO_PLAYBOOK = "no-playbook-rule-for-this-symbol"
+NO_PLAYBOOK = "no-playbook-rule-for-this-regime"
 
 
 @dataclass
@@ -119,15 +119,18 @@ class MomentumBurstDetector:
         self._playbook: dict[str, str] = {}
         self.standing = BurstStanding()
 
-    def set_playbook_expectation(self, symbol: str, expectation: str) -> None:
-        """What this symbol's bursts have historically done: pull back, or run.
+    def set_playbook_expectation(self, regime_tag: str, expectation: str) -> None:
+        """What bursts in this regime have historically done: pull back, or run.
 
-        A fact about the symbol rather than about bursts in general, which is why
-        it comes from the playbook rather than being assumed here.
+        Keyed by regime, not by symbol -- `PlaybookRule` carries no symbol field
+        at all (`when`/`then` are free-text condition/action phrases), only
+        `regime_tag`. A rule about "trending" bursts applies to every symbol
+        this detector currently judges as trending, which is what "learned per
+        regime rather than assumed" in this module's own docstring already said.
         """
         if expectation not in (REVERSION, CONTINUATION):
             raise ValueError(f"{expectation!r} is not something a burst can be expected to do")
-        self._playbook[symbol] = expectation
+        self._playbook[regime_tag] = expectation
 
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
         """One print, turned into a return against the previous one.
@@ -182,7 +185,7 @@ class MomentumBurstDetector:
             self.standing.not_a_burst += 1
             return None, NOT_A_BURST
 
-        expectation = self._playbook.get(symbol)
+        expectation = self._playbook.get(regime.regime)
         if expectation is None:
             # Without the playbook this detector knows a burst happened and
             # nothing about what follows, which is not a tradeable claim.
@@ -318,11 +321,13 @@ def start_part(context) -> int:
         # no reason.
         settle_claims_from(labels.payloads(), detector, PART_ID)
         for rule in rules.payloads():
-            # A playbook rule about a symbol's bursts says what to expect of them.
+            # A playbook rule about a regime's bursts says what to expect of them.
+            # `rule.when` is a condition phrase, not a symbol -- PlaybookRule
+            # carries no symbol field at all, only regime_tag.
             expectation = expectation_word_in(str(getattr(rule, "then", "") or ""))
-            symbol = getattr(rule, "when", "")
-            if expectation and symbol:
-                detector.set_playbook_expectation(str(symbol), expectation)
+            regime_tag = getattr(rule, "regime_tag", None)
+            if expectation and regime_tag:
+                detector.set_playbook_expectation(str(regime_tag), expectation)
         touched = set()
         for trade in levels_in(trades.payloads()):
             detector.observe_price(

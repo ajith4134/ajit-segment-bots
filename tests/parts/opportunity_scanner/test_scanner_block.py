@@ -335,7 +335,7 @@ def test_a_burst_without_a_playbook_rule_is_not_a_claim():
 
 def test_the_playbook_decides_which_way_a_burst_is_traded():
     subject = burst_detector(z=2.0, minimum=10)
-    subject.set_playbook_expectation(SYMBOL, REVERSION)
+    subject.set_playbook_expectation(RANDOM, REVERSION)
     price = 100.0
     for _ in range(20):
         price *= 1.0001
@@ -344,10 +344,26 @@ def test_the_playbook_decides_which_way_a_burst_is_traded():
     candidate, _ = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate.direction == SHORT
 
-    subject.set_playbook_expectation(SYMBOL, CONTINUATION)
+    subject.set_playbook_expectation(RANDOM, CONTINUATION)
     subject.observe_price(VENUE, SYMBOL, price * 1.10, subject._now_ns())
     candidate, _ = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate.direction == LONG
+
+
+def test_a_playbook_rule_for_one_regime_does_not_apply_in_another():
+    """The expectation is a fact about the regime, not the symbol -- the same
+    symbol bursting in a different regime gets no claim until that regime has
+    its own rule."""
+    subject = burst_detector(z=2.0, minimum=10)
+    subject.set_playbook_expectation(RANDOM, REVERSION)
+    price = 100.0
+    for _ in range(20):
+        price *= 1.0001
+        subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
+    subject.observe_price(VENUE, SYMBOL, price * 1.05, subject._now_ns())
+    candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(TRENDING))
+    assert candidate is None
+    assert outcome == NO_PLAYBOOK
 
 
 def test_expectation_word_in_extracts_from_a_real_playbook_phrase():
@@ -364,7 +380,7 @@ def test_expectation_word_in_extracts_from_a_real_playbook_phrase():
 def test_an_ordinary_move_for_this_symbol_is_not_a_burst(real_trade_prices):
     """A 2% move is nothing in a thin altcoin and enormous in BTCUSDT."""
     subject = burst_detector(z=4.0, minimum=20)
-    subject.set_playbook_expectation(SYMBOL, REVERSION)
+    subject.set_playbook_expectation(RANDOM, REVERSION)
     for price in real_trade_prices[:60]:
         subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     candidate, outcome = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
