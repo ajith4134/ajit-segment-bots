@@ -46,6 +46,7 @@ from parts.ai_brain.premortem_writer import (
     CONVICTION_WAS_NOT_MEASURED, HORIZON_PASSES, REGIME_CHANGES, STOP_IS_HIT, PremortemWriter,
 )
 from parts.ai_brain.size_hint_writer import SizeHintWriter
+from parts.ai_brain.strategy_review_reasoner import StrategyReviewReasoner
 from runtime.bot_opinion import (
     CLOSE_POSITION, ENTER_NOW, LONG, SHORT, STAND_DOWN, WAIT_FOR_TRIGGER, BotScorecard,
     DirectionalOpinion, EntryTiming, ExitPlan, ExitTarget,
@@ -58,7 +59,8 @@ from runtime.learned_estimator import Estimate
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, RULED, SOLE_OPINION, STAND_ASIDE, UNANIMOUS,
-    ConflictRuling, CounterArgument, TradeIntent, no_intent,
+    UNDERPERFORMING, UNMEASURED, WORKING, ConflictRuling, CounterArgument, StrategyReview,
+    TradeIntent, no_intent,
 )
 
 BLOCK_PARTS = {
@@ -73,6 +75,7 @@ BLOCK_PARTS = {
     "premortem-writer": "parts.ai_brain.premortem_writer",
     "devils-advocate": "parts.ai_brain.devils_advocate",
     "intent-timing-gate": "parts.ai_brain.intent_timing_gate",
+    "strategy-review-reasoner": "parts.ai_brain.strategy_review_reasoner",
 }
 
 VENUE = "binance-usdm"
@@ -391,12 +394,13 @@ def a_floor(margin=0.0):
 
 def an_arbiter(
     margin=0.0, agreement_bonus=0.05, sole_penalty=0.2, shade=0.05,
-    minimum_competence=0.3, minimum_coverage=0.3,
+    minimum_competence=0.3, minimum_coverage=0.3, strategy_review_discount=0.3,
 ):
     return OpinionArbiter(
         conviction_floor=a_floor(margin), agreement_bonus=agreement_bonus,
         sole_opinion_penalty=sole_penalty, maximum_forecast_shade=shade,
         minimum_competence=minimum_competence, minimum_coverage=minimum_coverage,
+        strategy_review_distrust_discount=strategy_review_discount,
     )
 
 
@@ -473,6 +477,7 @@ def test_a_shade_of_half_the_range_is_refused_at_construction():
         OpinionArbiter(
             conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
             maximum_forecast_shade=0.5, minimum_competence=0.3, minimum_coverage=0.3,
+            strategy_review_distrust_discount=0.3,
         )
 
 
@@ -525,6 +530,36 @@ def test_bot_weights_scale_the_blended_conviction():
 def test_an_unweighted_bot_starts_at_one_not_at_zero():
     """A bot weighted zero could never produce the record that would weight it."""
     assert an_arbiter().weight_of("never-weighed", "reverting") == 1.0
+
+
+def a_strategy_review(bot, assessment=UNDERPERFORMING, is_fitted=True, value=0.3):
+    return StrategyReview(
+        bot=bot, assessment=assessment,
+        confidence=Estimate(
+            value=value, is_fitted=is_fitted, observations=50, prior=0.5,
+            was_clamped=False, bound_low=0.0, bound_high=1.0, reason="test",
+        ),
+        reason="test review", formed_at_ns=Clock()(),
+    )
+
+
+def test_an_underperforming_strategy_review_discounts_a_bots_weight():
+    """A read on the bot's own record, never evidence about this setup."""
+    subject = an_arbiter(agreement_bonus=0.0, strategy_review_discount=0.5)
+    subject.observe_strategy_review(a_strategy_review(BULL, UNDERPERFORMING))
+    trusted = subject.arbitrate([an_opinion(BULL, conviction=0.9)], Regime())
+    distrusted_weight = trusted.opinion_weights[BULL]
+    assert distrusted_weight == pytest.approx(0.5)
+
+
+def test_an_unfitted_or_working_strategy_review_changes_nothing():
+    subject = an_arbiter()
+    subject.observe_strategy_review(a_strategy_review(BULL, UNDERPERFORMING, is_fitted=False))
+    assert subject.trust_multiplier(BULL) == 1.0
+    subject.observe_strategy_review(a_strategy_review(BULL, WORKING))
+    assert subject.trust_multiplier(BULL) == 1.0
+    subject.observe_strategy_review(a_strategy_review(BULL, UNMEASURED))
+    assert subject.trust_multiplier(BULL) == 1.0
 
 
 def test_a_close_opinion_becomes_a_close_intent():
@@ -1138,3 +1173,79 @@ def test_a_model_lesson_citing_an_invented_number_is_removed():
     subject = a_reflector()
     subject.reflect(an_episode(), model_output="The move was 9.9% against us.")
     assert subject.standing.model_sentences_removed == 1
+
+
+# ---- strategy-review-reasoner ------------------------------------------------
+
+def a_reasoner(working_threshold=0.55, minimum_new_trades=5, minimum_observations=20):
+    return StrategyReviewReasoner(
+        prior_hit_rate=0.5, prior_weight=4.0, half_life_observations=500,
+        minimum_observations=minimum_observations, working_threshold=working_threshold,
+        minimum_new_trades=minimum_new_trades, relative_tolerance=0.02, maximum_sentences=3,
+    )
+
+
+def test_a_bot_is_not_due_before_enough_new_trades_close():
+    subject = a_reasoner(minimum_new_trades=5)
+    assert subject.due_for_review(BULL, 3) is False
+    assert subject.due_for_review(BULL, 5) is True
+
+
+def test_fewer_than_minimum_observations_is_unmeasured_not_a_verdict():
+    """No evidence renders as its own state, never as a guess (Rule 8)."""
+    subject = a_reasoner(minimum_observations=50)
+    _facts, assessment, confidence = subject.prepare_review(BULL, trades=10, wins=8, realised=0.1)
+    assert assessment == UNMEASURED
+    assert confidence.is_fitted is False
+
+
+def test_a_high_hit_rate_is_judged_working_once_fitted():
+    subject = a_reasoner(minimum_observations=20, working_threshold=0.55)
+    _facts, assessment, confidence = subject.prepare_review(BULL, trades=30, wins=27, realised=0.5)
+    assert confidence.is_fitted is True
+    assert assessment == WORKING
+
+
+def test_a_low_hit_rate_is_judged_underperforming_once_fitted():
+    subject = a_reasoner(minimum_observations=20, working_threshold=0.55)
+    _facts, assessment, confidence = subject.prepare_review(BULL, trades=30, wins=3, realised=-0.5)
+    assert confidence.is_fitted is True
+    assert assessment == UNDERPERFORMING
+
+
+def test_a_second_review_learns_only_from_the_new_trades():
+    """The scorecard is cumulative; re-observing the same trades would double count."""
+    subject = a_reasoner(minimum_observations=1)
+    subject.prepare_review(BULL, trades=10, wins=10, realised=0.2)
+    _facts, _assessment, confidence = subject.prepare_review(BULL, trades=15, wins=10, realised=0.2)
+    assert confidence.value < 1.0, "five new losses should pull a perfect record down"
+
+
+def test_the_request_carries_the_frozen_facts_the_answer_is_checked_against():
+    subject = a_reasoner()
+    facts, _assessment, _confidence = subject.prepare_review(BULL, trades=30, wins=27, realised=0.5)
+    request = subject.request(BULL, facts)
+    assert request.is_answerable_from_facts
+    assert request.symbol == BULL
+    assert request.facts == facts
+
+
+def test_a_model_sentence_citing_nothing_is_removed():
+    subject = a_reasoner()
+    facts, assessment, confidence = subject.prepare_review(BULL, trades=30, wins=27, realised=0.5)
+    review = subject.review(
+        BULL, facts, assessment, confidence,
+        model_output="This bot has a great vibe and should be trusted completely.",
+    )
+    assert subject.standing.model_sentences_removed == 1
+    assert review.assessment == assessment
+
+
+def test_no_model_falls_back_to_the_measured_facts_not_silence():
+    """A review whose explanation depended on a model would go silent exactly
+    when the model is down."""
+    subject = a_reasoner()
+    facts, assessment, confidence = subject.prepare_review(BULL, trades=30, wins=27, realised=0.5)
+    review = subject.review(BULL, facts, assessment, confidence)
+    assert review.reason
+    assert "trades" in review.reason

@@ -260,6 +260,26 @@ class CounterArgument:
     argued_at_ns: int
 
 
+WORKING = "working"
+UNDERPERFORMING = "underperforming"
+UNMEASURED = "not-enough-trades-to-judge"
+
+
+@dataclass(frozen=True)
+class StrategyReview:
+    """A narrative judgment on one of the system's own bots or detectors.
+
+    Not a per-symbol call -- `opinion-arbiter` folds it into a bot's weight
+    across every symbol, never into one trade-intent directly.
+    """
+
+    bot: str
+    assessment: str
+    confidence: Estimate
+    reason: str
+    formed_at_ns: int
+
+
 @dataclass(frozen=True)
 class PremortemNote:
     """Assume this trade has failed. What happened? Written before entry.

@@ -24,6 +24,10 @@ What raises and lowers conviction, and why each is separate:
   decision, the decision does not get made -- because the argument was
   constructed to be the strongest one available, and dismissing it here would
   make writing it pointless.
+- **The strategy review**, which can only discount. An LLM's read on whether a
+  bot's own record shows it working is not evidence about this specific setup,
+  so it can make the arbiter trust that bot less across every symbol, never
+  more -- the same asymmetry as the counter-argument's veto, sized smaller.
 
 **Coverage and competence are refusals, not adjustments.** A symbol outside the
 system's measured competence is not a low-conviction trade, it is a trade about
@@ -45,7 +49,7 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, REDUCE, RULED, SOLE_OPINION, UNANIMOUS,
-    TradeIntent, no_intent,
+    UNDERPERFORMING, TradeIntent, no_intent,
 )
 
 PART_ID = "opinion-arbiter"
@@ -55,7 +59,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "directional-opinion", "market-regime", "bot-maturity", "regime-break-alert",
         "forecast-bias", "competence-map", "coverage-report", "conflict-ruling",
-        "bot-weight", "counter-argument", "regime-memory",
+        "bot-weight", "counter-argument", "regime-memory", "strategy-review",
     ),
     produces=("trade-intent", "part-health"),
     resource_class="compute-bound",
@@ -94,6 +98,7 @@ class OpinionArbiter:
         maximum_forecast_shade: float,
         minimum_competence: float,
         minimum_coverage: float,
+        strategy_review_distrust_discount: float,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 <= maximum_forecast_shade < 0.5:
@@ -103,6 +108,8 @@ class OpinionArbiter:
             )
         if not 0.0 <= sole_opinion_penalty < 1.0:
             raise ValueError("the penalty scales conviction and must be inside [0, 1)")
+        if not 0.0 <= strategy_review_distrust_discount < 1.0:
+            raise ValueError("the discount scales a bot's weight and must be inside [0, 1)")
         # The floor is each acting opinion's own break-even, and the brain clears
         # the highest of them: an intent acts on every plan behind it, so it must
         # be worth taking against the most demanding one (runtime/edge_arithmetic.py).
@@ -112,12 +119,14 @@ class OpinionArbiter:
         self._maximum_shade = maximum_forecast_shade
         self._minimum_competence = minimum_competence
         self._minimum_coverage = minimum_coverage
+        self._strategy_review_discount = strategy_review_distrust_discount
         self._now_ns = now_ns
         self._weights: dict[tuple[str, str], float] = {}
         self._competence: dict[tuple[str, str], float] = {}
         self._coverage: dict[tuple[str, str], float] = {}
         self._forecast_bias: dict[tuple[str, str], float] = {}
         self._broken_regimes: set[str] = set()
+        self._strategy_reviews: dict[str, object] = {}
         self.standing = ArbiterStanding()
 
     def observe_bot_weight(self, weight) -> None:
@@ -133,6 +142,23 @@ class OpinionArbiter:
 
     def observe_forecast_bias(self, bias) -> None:
         self._forecast_bias[(bias.venue_id, bias.symbol)] = bias.bias if bias.is_trusted else 0.0
+
+    def observe_strategy_review(self, review) -> None:
+        self._strategy_reviews[review.bot] = review
+
+    def trust_multiplier(self, bot: str) -> float:
+        """How far a bot's weight is discounted by its own strategy review.
+
+        Discount only, and only once the review is fitted: an unfitted or
+        working review changes nothing, because this is a read on the bot's
+        general standing, not evidence about the setup in front of it.
+        """
+        review = self._strategy_reviews.get(bot)
+        if review is None or not review.confidence.is_fitted:
+            return 1.0
+        if review.assessment != UNDERPERFORMING:
+            return 1.0
+        return 1.0 - self._strategy_review_discount
 
     def observe_regime_break(self, regime: str, has_broken: bool) -> None:
         if has_broken:
@@ -214,7 +240,8 @@ class OpinionArbiter:
 
         side = acting[0].side
         weights = {
-            opinion.bot: self.weight_of(opinion.bot, regime.regime) for opinion in acting
+            opinion.bot: self.weight_of(opinion.bot, regime.regime) * self.trust_multiplier(opinion.bot)
+            for opinion in acting
         }
         conviction = self._weighted_conviction(acting, weights, agreement)
         shade = self._forecast_shade(venue_id, symbol, side)
@@ -285,6 +312,7 @@ class OpinionArbiter:
                         "conviction": opinion.conviction.value,
                         "is_measured": opinion.conviction.is_fitted,
                         "weight": weights[opinion.bot],
+                        "strategy_trust": self.trust_multiplier(opinion.bot),
                         "reason": opinion.reason,
                     }
                     for opinion in acting
@@ -380,6 +408,7 @@ def describe_arbitration(arbiter: OpinionArbiter) -> dict:
         "intents_by_agreement": dict(sorted(arbiter.standing.by_agreement.items())),
         "strongest_conviction": arbiter.standing.strongest_conviction,
         "bot_weights_held": len(arbiter._weights),
+        "strategy_reviews_held": len(arbiter._strategy_reviews),
     }
 
 
@@ -439,6 +468,7 @@ def start_part(context) -> int:
         key_of=lambda counter: (counter.venue_id, counter.symbol),
     )
     weights = Batch(read=context.bus.reader("bot-weight"))
+    reviews = Batch(read=context.bus.reader("strategy-review"))
     biases = Batch(read=context.bus.reader("forecast-bias"))
     breaks = Batch(read=context.bus.reader("regime-break-alert"))
     competences = Batch(read=context.bus.reader("competence-map"))
@@ -454,6 +484,8 @@ def start_part(context) -> int:
     def read_opinions_and_context(arbiter):
         for weight in weights.payloads():
             arbiter.observe_bot_weight(weight)
+        for review in reviews.payloads():
+            arbiter.observe_strategy_review(review)
         for bias in biases.payloads():
             arbiter.observe_forecast_bias(bias)
         for alert in breaks.payloads():
@@ -504,6 +536,9 @@ def start_part(context) -> int:
             maximum_forecast_shade=context.number("arbiter_maximum_forecast_shade"),
             minimum_competence=context.number("arbiter_minimum_competence"),
             minimum_coverage=context.number("arbiter_minimum_coverage"),
+            strategy_review_distrust_discount=context.number(
+                "arbiter_strategy_review_distrust_discount"
+            ),
         ),
         control_socket=context.control_socket,
         read_opinions_and_context=read_opinions_and_context,

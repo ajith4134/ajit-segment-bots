@@ -3156,6 +3156,11 @@
       "description": "One symbol's mark price and index price on one venue, with the funding rate the venue has declared for the next settlement and the moment it settles. The premium is mark minus index as a fraction of the index, and it is what a funding rate is averaged from -- so it is a different fact from the rate itself, which the venue states about a settlement that has not happened yet.",
       "origin": "proposed",
       "added": "2026-08-28"
+    },
+    {
+      "id": "strategy-review",
+      "name": "strategy review",
+      "description": "A per-bot narrative judgment from an LLM reasoning about which of the system's own bots or detectors is working, and why -- fed to opinion-arbiter as a trust discount, never a vote."
     }
   ],
   "features": [
@@ -4033,7 +4038,8 @@
         "conflict-ruling",
         "bot-weight",
         "counter-argument",
-        "regime-memory"
+        "regime-memory",
+        "strategy-review"
       ],
       "produces": [
         "trade-intent",
@@ -4053,6 +4059,15 @@
           "added": {
             "consumes": [
               "forecast-bias"
+            ]
+          },
+          "origin": "proposed"
+        },
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "strategy-review"
             ]
           },
           "origin": "proposed"
@@ -12078,6 +12093,34 @@
       "evidence": "docs/proposals/the-premium-both-venues-send-and-nobody-reads.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "strategy-review-reasoner",
+      "name": "Strategy review reasoner",
+      "role": "judge, with reasons, which of this system's own bots or detectors is working",
+      "category": "ai-brain",
+      "consumes": [
+        "competence-map",
+        "bot-scorecard",
+        "closed-trade",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "strategy-review",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/llm-reasoning-gets-a-vote.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
       "skipped_tick_effect": "delays"
     }
   ],

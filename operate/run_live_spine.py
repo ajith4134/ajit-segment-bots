@@ -553,6 +553,11 @@ LIVE_SPINE = (
     "forecast-bias-weigher",
     "exploration-pair-opener",
     "brain-self-reflector",
+    # docs/proposals/llm-reasoning-gets-a-vote.md step 1, 2026-08-30: the LLM
+    # foundation's first part that reasons about the system rather than only
+    # answering another part's question. Advisory only -- opinion-arbiter folds
+    # it in as a per-bot trust discount, never a vote.
+    "strategy-review-reasoner",
     # The bull bot's own two stragglers, which its bear twin has had since it
     # started: the weight learner and the watcher on an open position's thesis.
     "bull-setup-weight-learner",
