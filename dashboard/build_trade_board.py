@@ -42,6 +42,7 @@ if str(PROJECT_HOME) not in sys.path:
     sys.path.insert(0, str(PROJECT_HOME))
 
 from parts.ledger.position_recorder import TRADE_CLOSED as CLOSED_TRADE_KIND  # noqa: E402
+from parts.ledger.position_recorder import TRAILED as TRAIL_KIND  # noqa: E402
 from parts.ledger.trade_lifecycle_recorder import (  # noqa: E402
     LIFECYCLE_STAGES,
     REPEATABLE_STAGES,
@@ -96,7 +97,7 @@ CLOSING_CHAIN = (
 # false.
 COLUMNS_A_PART_WOULD_FILL = {
     "target": ("stop-target-placer", "stop-target-plan"),
-    "trailing stop": ("exit-order-chainer", "stop-adjustment"),
+    "trailing stop": ("profit-lock", "stop-adjustment"),
     "forecast price": ("kronos-forecaster", "price-forecast"),
 }
 
@@ -179,6 +180,18 @@ class RecordedTrade:
     stop_price: float | None = None
     horizon_seconds: float | None = None
     conviction: float | None = None
+    # The entry fill's own leverage (runtime/trading_types.Fill.leverage), so
+    # capital_in_quote can state the margin actually posted rather than the
+    # notional. 1.0 (unlevered) when no fill named one, which is the
+    # conservative reading -- never higher than what was actually posted.
+    leverage: float = 1.0
+    # The latest lock from `stop-adjustment`'s trailing shape (profit-lock),
+    # journalled by position-recorder since 2026-08-30. None until one has
+    # moved for this position -- a lock that has not yet formed is a real
+    # state, not a gap to guess at.
+    trailing_new_stop: float | None = None
+    trailing_locked_fraction: float | None = None
+    trailing_outcome: str | None = None
     # Filled from the tape when the row is rendered, not while entries are read:
     # it costs a walk over the venue's own records and only the trades that are
     # listed are worth it.
@@ -192,12 +205,16 @@ class RecordedTrade:
     def capital_in_quote(self) -> float | None:
         """What was actually put into this position, in the quote currency.
 
-        Entry price times quantity -- the notional the position was opened at.
-        Not the margin posted: margin is notional divided by the leverage the
-        trade was opened at, and nothing records a per-trade leverage yet, so
-        stating a margin figure would mean inventing the divisor.
+        The notional the position was opened at, divided by the leverage the
+        entry fill named -- the margin actually posted, which is what
+        maximum_capital_per_trade bounds. Showing the bare notional here read
+        as a trade exceeding its own configured cap whenever it was levered
+        at all, when the capital committed was correctly inside it (found
+        live 2026-08-30).
         """
-        return self.notional or None
+        if not self.notional:
+            return None
+        return self.notional / self.leverage if self.leverage else self.notional
 
     @property
     def is_open(self) -> bool:
@@ -392,9 +409,23 @@ def collect_trades(entries: list[dict], live_from_ns: int | None) -> list[Record
     notices the same symbol again.
     """
     collector = TradeCollector(live_from_ns=live_from_ns, keep_unfilled=True)
+    trail = LatestTrail()
     for entry in entries:
         collector.observe(entry)
-    return collector.trades()
+        trail.observe(entry)
+    trades = collector.trades()
+    attach_trailing_locks(trades, trail)
+    return trades
+
+
+def attach_trailing_locks(trades: list["RecordedTrade"], trail: "LatestTrail") -> None:
+    """Copy each position's latest trail (if any) from the scan onto its row."""
+    for trade in trades:
+        lock = trail.for_position(trade.venue_id, trade.symbol)
+        if lock is not None:
+            trade.trailing_new_stop = lock.get("new_stop")
+            trade.trailing_locked_fraction = lock.get("locked_fraction")
+            trade.trailing_outcome = lock.get("outcome")
 
 
 class TradeCollector:
@@ -474,6 +505,9 @@ class TradeCollector:
             if side == trade.opened_side:
                 trade.quantity += quantity
                 trade.notional += quantity * price
+                leverage = payload.get("leverage")
+                if leverage:
+                    trade.leverage = float(leverage)
             else:
                 # The other side of the same trade: this is the exit closing it.
                 trade.quantity -= quantity
@@ -1371,6 +1405,36 @@ def probe_stale_price_refusals(document) -> ProbeResult:
     return ProbeResult(label, OK, f"{refusals:.0f} refused", proof)
 
 
+class LatestTrail:
+    """The most recent trailing-lock adjustment recorded for each open position.
+
+    A level, not an event: `stop-adjustment`'s lock shape is a level per
+    (venue, symbol) (runtime/level_publishing.LevelPublisherByKey), so the
+    latest entry this scan sees for a symbol -- entries arrive in recorded
+    order -- is the position's current trail, and simply overwriting is
+    correct rather than something to accumulate.
+    """
+
+    KIND = TRAIL_KIND
+
+    def __init__(self) -> None:
+        self._by_symbol: dict[tuple[str, str], dict] = {}
+
+    def observe(self, entry: dict) -> None:
+        if entry.get("kind") != self.KIND:
+            return
+        payload = entry.get("payload") or {}
+        venue_id, symbol = payload.get("venue_id"), payload.get("symbol")
+        if venue_id is None or symbol is None:
+            return
+        self._by_symbol[(venue_id, symbol)] = payload
+
+    def for_position(self, venue_id: str | None, symbol: str | None) -> dict | None:
+        if venue_id is None or symbol is None:
+            return None
+        return self._by_symbol.get((venue_id, symbol))
+
+
 class RefusedDecisionScan:
     """How many decisions to trade actually reached the book, one entry at a time.
 
@@ -1509,12 +1573,14 @@ def run_all_probes():
     noticed = NoticedScan(live_from_ns)
     freshness = FreshnessScan()
     refused = RefusedDecisionScan()
+    trail = LatestTrail()
     closed_entries: list[dict] = []
     for entry in heapq.merge(*streams, key=lambda entry: entry.get("recorded_at_ns", 0)):
         collector.observe(entry)
         noticed.observe(entry)
         freshness.observe(entry)
         refused.observe(entry)
+        trail.observe(entry)
         if entry.get("kind") == CLOSED_TRADE_KIND:
             closed_entries.append(entry)
 
@@ -1522,6 +1588,7 @@ def run_all_probes():
         (report.problem for report in per_file.values() if report.problem), None
     )
     trades = collector.trades()
+    attach_trailing_locks(trades, trail)
     closed = collect_closed_trades(closed_entries)
     running = read_running_parts()
     results = [
@@ -1743,6 +1810,28 @@ def not_built_cell(column: str, running: dict | None = None) -> str:
     )
 
 
+def trailing_cell(trade: RecordedTrade, running: dict | None = None) -> str:
+    """The position's real locked stop, once profit-lock has moved one.
+
+    Reads position-recorder's own journal of stop-adjustment (added
+    2026-08-30 specifically so this column could show something real) rather
+    than asserting a state: "not built"/"none recorded" only when nothing has
+    ever been journalled for this position, never a placeholder standing in
+    for a lock that has genuinely formed.
+    """
+    if trade.trailing_new_stop is None:
+        return not_built_cell("trailing stop", running)
+    locked = (
+        f"{trade.trailing_locked_fraction:.1%} locked"
+        if trade.trailing_locked_fraction is not None
+        else "moved"
+    )
+    outcome = html.escape(trade.trailing_outcome or "")
+    return (
+        f'<td class="mono" title="{outcome}">{trade.trailing_new_stop:,.4f} ({locked})</td>'
+    )
+
+
 def price_cell(window: "PriceWindow | None") -> str:
     """The last traded price and how old it is, because a price without its age
     is a number the reader has to trust rather than judge.
@@ -1810,7 +1899,7 @@ def render_trades(
             + price_cell(trade.prices)
             + f'<td class="mono">{f"{trade.stop_price:,.2f}" if trade.stop_price else "—"}</td>'
             + not_built_cell("target", running)
-            + not_built_cell("trailing stop", running)
+            + trailing_cell(trade, running)
             + not_built_cell("forecast price", running)
             + f'<td class="mono">'
             f'{f"{trade.conviction:.0%}" if trade.conviction is not None else "—"}</td>'

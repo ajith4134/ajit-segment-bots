@@ -12,6 +12,7 @@ code's own output, because every one of these numbers is a claim about money.
 
 import importlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -828,6 +829,49 @@ def test_a_new_position_starts_its_own_extremes():
     recorder.record_position(position(0.0))
     recorder.record_position(position(1.0))
     assert recorder.record_excursion(an_excursion()) is not None
+
+
+def a_lock_adjustment(did_move=True, new_stop=101.0, outcome="trailed"):
+    return SimpleNamespace(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, entry_price=100.0,
+        current_price=102.0, previous_stop=99.0, new_stop=new_stop, outcome=outcome,
+        gain_fraction=0.02, locked_fraction=0.01, adjusted_at_ns=SECOND, did_move=did_move,
+    )
+
+
+def an_initial_exit(should_be_sent=True):
+    """exit-order-chainer's shape on the same stop-adjustment wire."""
+    return SimpleNamespace(
+        venue_id=VENUE, symbol=SYMBOL, exit_side="sell", quantity=1.0,
+        stop_price=95.0, target_price=110.0, should_be_sent=should_be_sent,
+    )
+
+
+def test_a_lock_that_moved_is_journalled():
+    """The live bug (2026-08-30): stop-adjustment was on no recorder's consumes
+    at all, so the board's trailing column had no journalled record of a lock
+    ever forming and could only ever show "not built"."""
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
+    entry = recorder.record_stop_adjustment(a_lock_adjustment(did_move=True))
+    assert entry is not None
+    assert entry.payload["new_stop"] == 101.0
+    assert recorder.standing.stop_adjustments == 1
+
+
+def test_a_lock_that_did_not_move_is_not_journalled():
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
+    assert recorder.record_stop_adjustment(a_lock_adjustment(did_move=False)) is None
+    assert recorder.standing.stop_adjustments_held_skipped == 1
+
+
+def test_exit_order_chainers_shape_on_the_same_wire_is_not_journalled_here():
+    """stop-adjustment carries two shapes; only the lock's belongs in this
+    journal (parts/paper_live_trading/stop_order_manager.py's own
+    read_adjustment documents why a wrong read here is dangerous)."""
+    recorder = PositionRecorder(Journal(), excursion_move_fraction=0.002)
+    assert recorder.record_stop_adjustment(an_initial_exit()) is None
+    assert recorder.standing.stop_adjustments == 0
+    assert recorder.standing.stop_adjustments_held_skipped == 0
 
 
 # ---- learning-recorder -------------------------------------------------------

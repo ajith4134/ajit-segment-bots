@@ -6931,7 +6931,8 @@
       "consumes": [
         "position",
         "closed-trade",
-        "peak-excursion"
+        "peak-excursion",
+        "stop-adjustment"
       ],
       "produces": [
         "journal-entry",
@@ -6947,7 +6948,18 @@
       "proposed": "2026-08-20",
       "resource_class": "io-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "stop-adjustment"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "learning-recorder",

@@ -25,7 +25,7 @@ PART_ID = "position-recorder"
 
 PART_DECLARATION = PartDeclaration(
     part_id="position-recorder",
-    consumes=("position", "closed-trade", "peak-excursion"),
+    consumes=("position", "closed-trade", "peak-excursion", "stop-adjustment"),
     produces=("journal-entry", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -37,6 +37,7 @@ CHANGED = "position-changed"
 CLOSED = "position-closed"
 TRADE_CLOSED = "closed-trade"
 EXCURSION = "peak-excursion"
+TRAILED = "stop-adjustment"
 
 
 @dataclass
@@ -49,6 +50,8 @@ class PositionRecorderStanding:
     closed_trades: int = 0
     excursions: int = 0
     excursions_unchanged_skipped: int = 0
+    stop_adjustments: int = 0
+    stop_adjustments_held_skipped: int = 0
 
 
 class PositionRecorder:
@@ -171,6 +174,51 @@ class PositionRecorder:
             },
         )
 
+    def record_stop_adjustment(self, adjustment) -> JournalEntry | None:
+        """Journal a lock's stop once it actually moves -- to break-even or trailed further.
+
+        `stop-adjustment` is one wire carrying two shapes (documented in
+        parts/paper_live_trading/stop_order_manager.py's own read_adjustment,
+        after that ambiguity once dropped 34 real trails on the live spine):
+        `exit-order-chainer`'s initial exits, named by `exit_side`/`stop_price`,
+        and `profit-lock`'s trailing lock, named by `new_stop`/`direction`. Only
+        the lock's shape belongs in this journal -- the initial exit is already
+        covered by the fill it was chained from. `getattr` rather than
+        `isinstance` for the same reason `read_adjustment` uses it: this part
+        does not import either producer's type (T-4).
+
+        `did_move` false is profit-lock saying nothing moved, which is not a
+        change to record here either. Without this, the board's trailing
+        column had no journalled record of a lock ever forming to read -- it
+        could only ever show "not built" (found live 2026-08-30), because
+        `stop-adjustment` was never on any recorder's consumes.
+        """
+        if getattr(adjustment, "exit_side", None) is not None:
+            return None  # exit-order-chainer's shape; not this journal's concern
+        new_stop = getattr(adjustment, "new_stop", None)
+        if new_stop is None:
+            return None  # unreadable; not this journal's job to guess at a shape
+        if not getattr(adjustment, "did_move", False):
+            self.standing.stop_adjustments_held_skipped += 1
+            return None
+        self.standing.stop_adjustments += 1
+        return self._append(
+            TRAILED,
+            {
+                "venue_id": adjustment.venue_id,
+                "symbol": adjustment.symbol,
+                "direction": adjustment.direction,
+                "entry_price": adjustment.entry_price,
+                "current_price": adjustment.current_price,
+                "previous_stop": adjustment.previous_stop,
+                "new_stop": new_stop,
+                "outcome": adjustment.outcome,
+                "gain_fraction": adjustment.gain_fraction,
+                "locked_fraction": adjustment.locked_fraction,
+                "adjusted_at_ns": adjustment.adjusted_at_ns,
+            },
+        )
+
     def _append(self, kind: str, payload: dict) -> JournalEntry:
         self.standing.recorded += 1
         return self._journal.append(kind=kind, part_id=PART_ID, payload=payload)
@@ -187,6 +235,8 @@ def describe_positions(recorder: PositionRecorder) -> dict:
         "closed_trades": recorder.standing.closed_trades,
         "excursions": recorder.standing.excursions,
         "excursions_unchanged_skipped": recorder.standing.excursions_unchanged_skipped,
+        "stop_adjustments": recorder.standing.stop_adjustments,
+        "stop_adjustments_held_skipped": recorder.standing.stop_adjustments_held_skipped,
     }
 
 
@@ -197,7 +247,7 @@ def run_position_recorder(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        positions, closed_trades, excursions = read_events()
+        positions, closed_trades, excursions, stop_adjustments = read_events()
         entries = [
             entry for position in positions if (entry := recorder.record_position(position))
         ]
@@ -206,6 +256,11 @@ def run_position_recorder(
             entry
             for excursion in excursions
             if (entry := recorder.record_excursion(excursion))
+        ]
+        entries += [
+            entry
+            for adjustment in stop_adjustments
+            if (entry := recorder.record_stop_adjustment(adjustment))
         ]
         publish_entries(tuple(entries))
 
@@ -242,6 +297,7 @@ def start_part(context) -> int:
     positions = Batch(read=context.bus.reader("position"))
     closed_trades = Batch(read=context.bus.reader("closed-trade"))
     excursions = Batch(read=context.bus.reader("peak-excursion"))
+    stop_adjustments = Batch(read=context.bus.reader("stop-adjustment"))
     publish_entries = context.bus.publisher_for("journal-entry")
 
     # This recorder's own file, beside the base the settings name. One writer per
@@ -266,6 +322,7 @@ def start_part(context) -> int:
             tuple(positions.payloads()),
             tuple(closed_trades.payloads()),
             tuple(excursions.payloads()),
+            tuple(stop_adjustments.payloads()),
         )
 
     return run_position_recorder(

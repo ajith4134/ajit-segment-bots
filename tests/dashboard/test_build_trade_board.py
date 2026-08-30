@@ -503,6 +503,84 @@ def test_an_open_position_says_what_capital_went_into_it(board):
     assert "capital in (usdt)" in board.render_trades([trade], pathlib.Path("/tmp/journal.jsonl"))
 
 
+def test_capital_in_quote_is_the_margin_posted_not_the_bare_notional(board):
+    """The live bug (2026-08-30): showing bare notional read as a trade
+    exceeding its own configured maximum_capital_per_trade whenever it was
+    levered at all, when the capital actually committed was correctly inside
+    it."""
+    entries = [
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 0.1, "price": 1000.0, "fee": 0.1,
+                                     "leverage": 10.0},
+         "recorded_at_ns": 1},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.notional == pytest.approx(100.0)
+    assert trade.capital_in_quote == pytest.approx(10.0)
+
+
+def test_no_leverage_named_reads_as_unlevered(board):
+    entries = [
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 1.0, "price": 100.0, "fee": 0.0},
+         "recorded_at_ns": 1},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.capital_in_quote == pytest.approx(100.0)
+
+
+def test_a_position_with_no_lock_yet_says_so_honestly(board):
+    entries = [
+        {"kind": "fill", "payload": {"trade_id": "t1", "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 1.0, "price": 100.0, "fee": 0.0},
+         "recorded_at_ns": 1},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.trailing_new_stop is None
+    cell = board.trailing_cell(trade, running={})
+    assert "not built" in cell or "none recorded" in cell
+
+
+def test_a_moved_lock_shows_the_real_stop_not_a_placeholder(board):
+    """The live bug (2026-08-30): stop-adjustment was never journalled by
+    anything, so this column could only ever render "not built", regardless
+    of whether profit-lock had actually trailed a stop."""
+    entries = [
+        {"kind": "fill", "payload": {"trade_id": "t1", "venue_id": "binance-usdm",
+                                     "symbol": "BTCUSDT", "side": "buy",
+                                     "quantity": 1.0, "price": 100.0, "fee": 0.0},
+         "recorded_at_ns": 1},
+        {"kind": "stop-adjustment",
+         "payload": {"venue_id": "binance-usdm", "symbol": "BTCUSDT", "new_stop": 101.5,
+                     "locked_fraction": 0.4, "outcome": "trailed"},
+         "recorded_at_ns": 2},
+    ]
+    trade = board.collect_trades(entries, live_from_ns=None)[0]
+    assert trade.trailing_new_stop == pytest.approx(101.5)
+    cell = board.trailing_cell(trade, running={})
+    assert "101.5" in cell
+    assert "40.0%" in cell
+
+
+def test_only_the_latest_lock_for_a_symbol_is_kept(board):
+    trail = board.LatestTrail()
+    trail.observe({"kind": "stop-adjustment",
+                   "payload": {"venue_id": "v", "symbol": "s", "new_stop": 1.0}})
+    trail.observe({"kind": "stop-adjustment",
+                   "payload": {"venue_id": "v", "symbol": "s", "new_stop": 2.0}})
+    assert trail.for_position("v", "s")["new_stop"] == 2.0
+
+
+def test_the_other_shape_on_the_same_wire_is_ignored_by_the_scan(board):
+    """exit-order-chainer's initial exits carry no new_stop; this scan is only
+    ever fed real journal payload dicts (not the two dataclasses directly), so
+    it is naturally indifferent to which shape produced a given entry -- but a
+    payload missing venue_id/symbol must not raise or attach anything."""
+    trail = board.LatestTrail()
+    trail.observe({"kind": "stop-adjustment", "payload": {"exit_side": "sell"}})
+    assert trail.for_position(None, None) is None
+
+
 # ---- the wait that used to be invisible --------------------------------------
 
 def test_the_exit_plan_tile_reports_the_closest_symbol_not_the_total(board, monkeypatch):
