@@ -1,15 +1,17 @@
 """The resource governor: fourteen parts, and the refusals that matter most."""
 
 import dataclasses
+import datetime
 import importlib
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from parts.resource_governor.accelerator_scheduler import (
     GRANTED, NO_ACCELERATOR, QUEUED, AcceleratorScheduler,
 )
-from parts.resource_governor.duty_cycle_planner import DutyCyclePlanner
+from parts.resource_governor.duty_cycle_planner import DutyCyclePlanner, fresh_trade_counts_by_hour
 from parts.resource_governor.gate_actuator import FAILED, FLIPPED, GateActuator
 from parts.resource_governor.hardware_scanner import HardwareScanner
 from parts.resource_governor.hog_detector import CPU, MEMORY, HogDetector
@@ -356,6 +358,40 @@ def test_the_quietest_hours_are_chosen_once_a_full_day_is_seen():
     cycle = planner.plan("retrainer")
     assert set(cycle.allowed_hours) == {2, 3, 4}
     assert cycle.quietest_hour in (2, 3, 4)
+
+
+def a_trade(hour=5, day_offset=0, minute=0):
+    when_ns = int(
+        datetime.datetime(2026, 8, 30, hour, minute, tzinfo=datetime.UTC).timestamp() * 1e9
+    ) + day_offset * 86_400_000_000_000
+    return SimpleNamespace(venue_time_ns=when_ns)
+
+
+def test_fresh_trade_counts_never_compound_across_repeated_calls():
+    """The live bug (2026-08-30): handing a running total back to a += accumulator
+    every tick made activity_by_hour reach the billions within an hour."""
+    planner = DutyCyclePlanner(quiet_hours_wanted=4, minimum_days_observed=2)
+    first_day = None
+    for _ in range(5):
+        counts, first_day = fresh_trade_counts_by_hour([a_trade(hour=5)], first_day)
+        for (hour, day), messages in counts.items():
+            planner.observe_market_activity(hour, day, messages)
+    assert planner.standing.activity_by_hour[5] == 5
+
+
+def test_fresh_trade_counts_are_grouped_by_hour_and_day():
+    counts, first_day = fresh_trade_counts_by_hour(
+        [a_trade(hour=5), a_trade(hour=5), a_trade(hour=6, day_offset=1)], None
+    )
+    assert counts[(5, 0)] == 2
+    assert counts[(6, 1)] == 1
+    assert first_day is not None
+
+
+def test_fresh_trade_counts_of_an_empty_batch_is_empty():
+    counts, first_day = fresh_trade_counts_by_hour([], None)
+    assert counts == {}
+    assert first_day is None
 
 
 # ---- accelerator-scheduler ---------------------------------------------------

@@ -73,6 +73,29 @@ class DetectorStanding:
     checkpoint_verdict: str = ""
 
 
+def widen_excursion_with_exit(
+    best: float | None, worst: float | None,
+    entry_price: float, exit_price: float, quantity: float, direction: str,
+) -> tuple[float, float]:
+    """Fold the trade's own exit into its best/worst -- the exit point always
+    sat on the position's unrealised path, whatever `peak-excursion-tracker`
+    had managed to relay back by the time this trade closed.
+
+    `peak-excursion-tracker` and this part learn of the same moment from two
+    independent, unsynchronised feeds -- a price print on the public tape and
+    a fill confirmation from the venue -- so a trade that closes exactly at
+    its own best (a take-profit) or worst (a stop) point can beat that print's
+    excursion update back here. Without this, `best_unrealised` reads as
+    whatever the tracker had last relayed, which can be lower than the
+    realised profit the exit itself represents -- a closed trade whose net
+    exceeds its own recorded peak, found live 2026-08-30.
+    """
+    exit_unrealised = (exit_price - entry_price) * quantity * (1 if direction == LONG else -1)
+    widened_best = exit_unrealised if best is None else max(best, exit_unrealised)
+    widened_worst = exit_unrealised if worst is None else min(worst, exit_unrealised)
+    return widened_best, widened_worst
+
+
 
 class PositionCloseDetector:
     """Emits a closed trade the moment a symbol's position reaches flat.
@@ -234,6 +257,9 @@ class PositionCloseDetector:
             moved = realised / quantity
             exit_price = entry_price + moved if direction == LONG else entry_price - moved
             best, worst = self._excursion.get(key, (None, None))
+            best, worst = widen_excursion_with_exit(
+                best, worst, entry_price, exit_price, quantity, direction
+            )
             venue_id, symbol = key
             self.standing.residues_closed_at_restore += 1
             self.standing.trades_closed += 1
@@ -379,6 +405,9 @@ class PositionCloseDetector:
         self.standing.trades_closed += 1
         entered = self._entered_quantity.get(key, exact_quantity(0))
         entry_price = self._entry_cost.get(key, 0.0) / float(entered) if entered else fill.price
+        best, worst = widen_excursion_with_exit(
+            best, worst, entry_price, fill.price, float(entered), direction
+        )
         return ClosedTrade(
             venue_id=fill.venue_id,
             symbol=fill.symbol,

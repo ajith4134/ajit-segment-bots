@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import time
 from dataclasses import dataclass, field
 
@@ -101,6 +102,26 @@ class DutyCyclePlanner:
         )
 
 
+def fresh_trade_counts_by_hour(trades, first_day):
+    """This call's own trades only, counted per (hour, day) -- never a running total.
+
+    `trades` must already be drained-since-last-call (a `Batch`'s own
+    guarantee), so double-counting here would mean this function was handed
+    the same trade twice, not that it summed wrong. Returns `(counts,
+    first_day)`, `first_day` updated to the earliest trade's date if it was
+    `None` -- the anchor every day_index is measured from.
+    """
+    counts: dict[tuple[int, int], int] = {}
+    for item in trades:
+        when = datetime.datetime.fromtimestamp(item.venue_time_ns / 1e9, datetime.UTC)
+        if first_day is None:
+            first_day = when.date()
+        day_index = (when.date() - first_day).days
+        key = (when.hour, day_index)
+        counts[key] = counts.get(key, 0) + 1
+    return counts, first_day
+
+
 def describe_duty_cycles(planner: DutyCyclePlanner) -> dict:
     return {
         "part_id": PART_ID,
@@ -142,7 +163,6 @@ def start_part(context) -> int:
     part-appetite-meter has measured above duty_cycle_heavy_cpu_fraction of a
     core; which parts are heavy is measured, never listed (T-4).
     """
-    import datetime
     import time as _time
 
     # `market-data` carries trades AND candles: venue-trade-stream-reader
@@ -167,20 +187,20 @@ def start_part(context) -> int:
         minimum_days_observed=int(context.number("duty_cycle_minimum_days_observed")),
     )
     heavy_fraction = context.number("duty_cycle_heavy_cpu_fraction")
-    counts: dict[tuple[int, int], int] = {}
     first_day = [None]
     last_plan = [float("-inf")]
 
     def read_activity():
-        # Counted per (hour, day) as messages arrive; handed over as totals so
-        # far, which the planner keeps as the latest figure for that hour.
-        for item in trades_in(market_data.payloads()):
-            when = datetime.datetime.fromtimestamp(item.venue_time_ns / 1e9, datetime.UTC)
-            if first_day[0] is None:
-                first_day[0] = when.date()
-            day_index = (when.date() - first_day[0]).days
-            counts[(when.hour, day_index)] = counts.get((when.hour, day_index), 0) + 1
-        return tuple((hour, day, messages) for (hour, day), messages in counts.items())
+        # planner.observe_market_activity() does its own += accumulation across
+        # ticks and across days, so this must hand it only this tick's fresh
+        # counts -- handing it a running total as well would add that running
+        # total back into itself every tick, which is what made activity_by_hour
+        # reach the billions within an hour of real trades (found live,
+        # 2026-08-30).
+        fresh, first_day[0] = fresh_trade_counts_by_hour(
+            trades_in(market_data.payloads()), first_day[0]
+        )
+        return tuple((hour, day, messages) for (hour, day), messages in fresh.items())
 
     def read_heavy_parts():
         now = _time.monotonic()

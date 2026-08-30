@@ -337,6 +337,36 @@ def test_a_closed_trade_carries_its_excursion():
     assert trade.best_unrealised == 75.0 and trade.worst_unrealised == -10.0
 
 
+def test_a_stale_excursion_is_widened_by_the_exit_itself():
+    """The live bug (2026-08-30): a trade closing exactly at its own best point
+    can beat peak-excursion-tracker's relayed update back here, since the two
+    parts learn of the same moment from two independent, unsynchronised feeds.
+    A closed trade's net must never exceed its own recorded peak."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_excursion(VENUE, SYMBOL, best=5.0, worst=-10.0)
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
+    trade = detector.observe_fill(fill("f2", SELL, 110.0, 1.0))
+    assert trade.best_unrealised == pytest.approx(10.0)
+    assert trade.realised_pnl <= trade.best_unrealised
+
+
+def test_a_stale_excursion_is_widened_by_a_worse_exit_too():
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_excursion(VENUE, SYMBOL, best=50.0, worst=-5.0)
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
+    trade = detector.observe_fill(fill("f2", SELL, 90.0, 1.0))
+    assert trade.worst_unrealised == pytest.approx(-10.0)
+    assert trade.realised_pnl >= trade.worst_unrealised
+
+
+def test_no_excursion_at_all_falls_back_to_the_exit_itself():
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0))
+    trade = detector.observe_fill(fill("f2", SELL, 110.0, 1.0))
+    assert trade.best_unrealised == pytest.approx(10.0)
+    assert trade.worst_unrealised == pytest.approx(10.0)
+
+
 # ---- peak-excursion-tracker --------------------------------------------------
 
 def test_the_best_and_worst_points_are_both_kept():
