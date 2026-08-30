@@ -408,6 +408,21 @@ def test_going_flat_clears_the_excursion():
     assert tracker.read(VENUE, SYMBOL) is None
 
 
+def test_a_reversal_starts_its_own_excursion_rather_than_inheriting_the_old_one():
+    """The live bug (2026-08-30): a single fill can close one side and open the
+    opposite one without ever publishing an exactly-flat position in between
+    (position-close-detector's own reversal path does this). A position open
+    0 seconds read a peak of +153.18, inherited whole from the opposite-
+    direction position that had just closed into it."""
+    tracker = PeakExcursionTracker()
+    tracker.observe_position(position(1.0, entry=100.0))  # long
+    tracker.observe_price(VENUE, SYMBOL, 200.0, observed_at_ns=6 * SECOND_NS)  # huge favourable peak
+    tracker.observe_position(position(-1.0, entry=200.0, at=7))  # reverses to short, same tick
+    excursion = tracker.observe_price(VENUE, SYMBOL, 199.0, observed_at_ns=8 * SECOND_NS)
+    assert excursion.best_unrealised == pytest.approx(1.0)  # only this leg's own move
+    assert excursion.samples == 1
+
+
 # ---- an open position's excursion survives a restart -------------------------
 #
 # Held in memory alone until 2026-08-29, the same defect regime-classifier and

@@ -88,6 +88,22 @@ class PeakExcursionTracker:
             self._samples.pop(key, None)
             self.standing.positions_closed += 1
         else:
+            previous = self._basis.get(key)
+            if previous is not None and previous[2] != position.direction:
+                # A reversal: one fill closed the old side and opened the
+                # opposite one without ever publishing an exactly-flat
+                # position in between -- position-close-detector's own
+                # reversal path can do this within a single fill. The new
+                # leg's entry price and quantity are unrelated to the old
+                # one's, so its excursion has to start from nothing too, the
+                # same as any other new position -- without this, the new
+                # leg inherited the old, opposite-direction position's whole
+                # extremes list. Found live 2026-08-30: a position open 0
+                # seconds read a peak of +153.18, carried over whole from
+                # the short that had just closed into it.
+                self._extremes.pop(key, None)
+                self._samples.pop(key, None)
+                self.standing.positions_closed += 1
             self._basis[key] = (
                 position.average_entry_price,
                 abs(position.quantity),
