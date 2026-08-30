@@ -3949,3 +3949,23 @@ note  = "operator, 2026-08-30: how many new closed trades a bot needs since its 
 value = 0.3
 unit  = "fraction"
 note  = "operator, 2026-08-30: how much opinion-arbiter discounts a bot's weight when strategy-review-reasoner's fitted assessment of it is underperforming. Discount only, never a boost -- the same asymmetry as the counter-argument's veto: a system-level read of a bot's own record can make the arbiter trust it less, never more, because it is not evidence about this specific setup."
+
+[market_thesis_bellwether_symbols]
+value = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+unit  = "symbols"
+note  = "operator, 2026-08-30: the fixed set market-thesis-reasoner originates a thesis for -- an unbounded 'reason about everything' would be an unbounded token bill, so this is a curated list rather than a dynamic top-by-volume ranking, which the part's declared consumes (market-regime, verified-snapshot) carry no field to compute anyway."
+
+[market_thesis_window_length]
+value = 20.0
+unit  = "observations"
+note  = "operator, 2026-08-30: how many recent verified-snapshot prices market-thesis-reasoner keeps per bellwether symbol to measure its own recent direction from. Deliberately far shorter than regime_window_length (1024 trades): that window fits a Hurst exponent, which needs hundreds of observations to be stable, while this one only reads the sign of a recent price change, and verified-snapshot arrives far less often than raw trades."
+
+[market_thesis_minimum_window_observations]
+value = 10.0
+unit  = "observations"
+note  = "operator, 2026-08-30: below this many prices in the window, the measured recent direction is not read at all -- half the window length, so a symbol newly added to the bellwether list is silent rather than guessing on its first few prints."
+
+[market_thesis_review_interval_seconds]
+value = 900.0
+unit  = "seconds"
+note  = "operator, 2026-08-30: the least time between two reviews of the same bellwether symbol -- fifteen minutes, the same order as symbol_catalogue_refresh_interval (900 s), so a market thesis is refreshed on the same cadence the rest of the system already treats as 'the world may have changed' rather than on every verified-snapshot tick."

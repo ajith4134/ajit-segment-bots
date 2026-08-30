@@ -561,6 +561,9 @@ LIVE_SPINE = (
     # Step 2 of the same proposal, 2026-08-30: a real vote, but only on a
     # candidate another bot already has acting this tick.
     "setup-second-opinion-reasoner",
+    # Step 3 of the same proposal, 2026-08-30, built last: the only one of the
+    # three that originates its own vote rather than reviewing another bot's.
+    "market-thesis-reasoner",
     # The bull bot's own two stragglers, which its bear twin has had since it
     # started: the weight learner and the watcher on an open position's thesis.
     "bull-setup-weight-learner",

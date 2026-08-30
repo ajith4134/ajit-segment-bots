@@ -45,11 +45,15 @@ from parts.ai_brain.opinion_conflict_resolver import (
 from parts.ai_brain.premortem_writer import (
     CONVICTION_WAS_NOT_MEASURED, HORIZON_PASSES, REGIME_CHANGES, STOP_IS_HIT, PremortemWriter,
 )
+from parts.ai_brain.market_thesis_reasoner import (
+    NOT_ENOUGH_PRICE_HISTORY, NO_REGIME_EDGE, MarketThesisReasoner,
+)
 from parts.ai_brain.setup_second_opinion_reasoner import (
     MODEL_FOUND_NOTHING_TO_CONFIRM, NOT_ENOUGH_EVIDENCE, SetupSecondOpinionReasoner,
 )
 from parts.ai_brain.size_hint_writer import SizeHintWriter
 from parts.ai_brain.strategy_review_reasoner import StrategyReviewReasoner
+from parts.opportunity_scanner.regime_classifier import RANDOM, REVERTING, TRENDING, MarketRegime
 from runtime.bot_opinion import (
     CLOSE_POSITION, ENTER_NOW, LONG, SHORT, STAND_DOWN, WAIT_FOR_TRIGGER, BotScorecard,
     DirectionalOpinion, EntryTiming, ExitPlan, ExitTarget,
@@ -81,6 +85,7 @@ BLOCK_PARTS = {
     "intent-timing-gate": "parts.ai_brain.intent_timing_gate",
     "strategy-review-reasoner": "parts.ai_brain.strategy_review_reasoner",
     "setup-second-opinion-reasoner": "parts.ai_brain.setup_second_opinion_reasoner",
+    "market-thesis-reasoner": "parts.ai_brain.market_thesis_reasoner",
 }
 
 VENUE = "binance-usdm"
@@ -1338,4 +1343,107 @@ def test_the_confirming_conviction_is_learned_never_the_models_words():
     modeled = subject.review(
         an_opinion(BULL), model_output="The spread is 4.0 basis points."
     )
+    assert plain.conviction.value == modeled.conviction.value
+
+
+# ---- market-thesis-reasoner ---------------------------------------------------
+
+def a_thesis_reasoner(window_length=5, minimum_window=3, review_interval=1.0):
+    return MarketThesisReasoner(
+        bellwether_symbols=(SYMBOL,), window_length=window_length,
+        minimum_window_observations=minimum_window, review_interval_seconds=review_interval,
+        prior_hit_rate=0.5, prior_weight=4.0, half_life_observations=500,
+        minimum_observations=1, relative_tolerance=0.02, maximum_sentences=3,
+    )
+
+
+def a_regime(regime=TRENDING, hurst=0.7, classified=True):
+    return MarketRegime(
+        venue_id=VENUE, symbol=SYMBOL, regime=regime if classified else "unclassified",
+        hurst=hurst, distance_from_random=hurst - 0.5 if hurst is not None else None,
+        observations=50, volatility=0.01, reason="test", classified_at_ns=Clock()(),
+    )
+
+
+def a_rising_window(subject, prices=(100.0, 101.0, 102.0, 103.0)):
+    for index, price in enumerate(prices):
+        subject.observe_price(VENUE, SYMBOL, price, Clock()() + index)
+
+
+def a_falling_window(subject, prices=(103.0, 102.0, 101.0, 100.0)):
+    for index, price in enumerate(prices):
+        subject.observe_price(VENUE, SYMBOL, price, Clock()() + index)
+
+
+def test_no_price_history_stands_aside_without_a_model():
+    subject = a_thesis_reasoner()
+    opinion = subject.review(VENUE, SYMBOL)
+    assert opinion.action == STAND_DOWN
+    assert opinion.refusal == NOT_ENOUGH_PRICE_HISTORY
+
+
+def test_a_trending_regime_confirms_the_measured_direction():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(TRENDING))
+    opinion = subject.review(VENUE, SYMBOL)
+    assert opinion.action == ENTER_NOW
+    assert opinion.side == LONG
+
+
+def test_a_reverting_regime_bets_against_the_measured_direction():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(REVERTING))
+    opinion = subject.review(VENUE, SYMBOL)
+    assert opinion.action == ENTER_NOW
+    assert opinion.side == SHORT
+
+
+def test_a_random_regime_has_no_edge():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(RANDOM))
+    opinion = subject.review(VENUE, SYMBOL)
+    assert opinion.action == STAND_DOWN
+    assert opinion.refusal == NO_REGIME_EDGE
+
+
+def test_an_unclassified_regime_has_no_edge():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(classified=False, hurst=None))
+    opinion = subject.review(VENUE, SYMBOL)
+    assert opinion.action == STAND_DOWN
+    assert opinion.refusal == NO_REGIME_EDGE
+
+
+def test_a_model_citing_nothing_real_is_a_refusal_not_a_guess():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(TRENDING))
+    opinion = subject.review(
+        VENUE, SYMBOL, model_output="This looks like a great opportunity to buy."
+    )
+    assert opinion.action == STAND_DOWN
+    assert subject.standing.refused_after_the_model_found_nothing == 1
+
+
+def test_a_model_citing_a_real_number_confirms_with_that_reason():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(TRENDING, hurst=0.71))
+    opinion = subject.review(
+        VENUE, SYMBOL, model_output="The Hurst exponent is 0.71, well above a random walk."
+    )
+    assert opinion.action == ENTER_NOW
+    assert "0.71" in opinion.reason
+
+
+def test_the_thesis_conviction_is_learned_never_the_models_words():
+    subject = a_thesis_reasoner()
+    a_rising_window(subject)
+    subject.observe_regime(a_regime(TRENDING, hurst=0.71))
+    plain = subject.review(VENUE, SYMBOL)
+    modeled = subject.review(VENUE, SYMBOL, model_output="The Hurst exponent is 0.71.")
     assert plain.conviction.value == modeled.conviction.value

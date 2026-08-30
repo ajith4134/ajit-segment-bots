@@ -12149,6 +12149,33 @@
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "market-thesis-reasoner",
+      "name": "Market thesis reasoner",
+      "role": "vote a bellwether symbol's own measured recent direction where the regime backs it",
+      "category": "ai-brain",
+      "consumes": [
+        "market-regime",
+        "verified-snapshot",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "directional-opinion",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/llm-reasoning-gets-a-vote.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {
