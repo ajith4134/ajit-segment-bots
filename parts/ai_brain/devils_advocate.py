@@ -42,7 +42,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="devils-advocate",
     consumes=(
         "trade-intent", "directional-opinion", "validated-llm-output",
-        "verified-snapshot", "regime-memory",
+        "verified-snapshot", "regime-memory", "objection-outcome",
     ),
     produces=("counter-argument", "llm-request", "part-health"),
     resource_class="compute-bound",
@@ -216,6 +216,8 @@ class DevilsAdvocate:
                 symbol=intent.symbol,
                 objections=(),
                 strongest_objection=None,
+                strongest_objection_kind=None,
+                regime=regime,
                 would_reverse_the_decision=False,
                 evidence_cited=facts,
                 was_written_by_a_model=model_output is not None,
@@ -255,6 +257,8 @@ class DevilsAdvocate:
             symbol=intent.symbol,
             objections=tuple(text for _, text in ranked),
             strongest_objection=strongest_text,
+            strongest_objection_kind=strongest_kind,
+            regime=regime,
             would_reverse_the_decision=would_reverse,
             evidence_cited=facts,
             was_written_by_a_model=model_output is not None,
@@ -336,6 +340,7 @@ def start_part(context) -> int:
     outputs = Batch(read=context.bus.reader("validated-llm-output"))
     snapshots = Batch(read=context.bus.reader("verified-snapshot"))
     memories = LatestByKey(read=context.bus.reader("regime-memory"), key_of=lambda m: m.regime)
+    outcomes = Batch(read=context.bus.reader("objection-outcome"))
     publish_arguments = context.bus.publisher_for("counter-argument")
     publish_requests = context.bus.publisher_for("llm-request")
     advocate = DevilsAdvocate(
@@ -381,6 +386,8 @@ def start_part(context) -> int:
     def read_intents_and_output(_advocate):
         for snapshot in snapshots.payloads():
             advocate.observe_verified_snapshot(snapshot.venue_id, snapshot.symbol, snapshot.facts)
+        for outcome in outcomes.payloads():
+            advocate.observe_objection_outcome(outcome.objection_kind, outcome.regime, outcome.was_right)
         answered = take_model_outputs()
         judgements = []
         for key, text in answered.items():

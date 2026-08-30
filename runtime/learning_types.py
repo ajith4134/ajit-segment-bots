@@ -64,6 +64,18 @@ class TrainingLabel:
     # when the detector spoke rather than the one current when the label arrived --
     # and by then the market has moved on, which is the whole point of the horizon.
     claimed_at_ns: int = 0
+    # When the trade this label judges was entered. The other half of the same
+    # need: a label built from a closed trade has no claim to be `claimed_at_ns`
+    # of, but a conviction model still has to find the feature vector that was
+    # current at entry to train on. `calibration_key` is what already tells a
+    # reader which of the two times applies -- empty means this field, non-empty
+    # means `claimed_at_ns` -- so a reader with only one of them is reading the
+    # wrong one, not a label with no time at all. Found live 2026-08-30:
+    # bull-conviction-model and bear-conviction-model looked up `claimed_at_ns`
+    # unconditionally, so every label-builder label (claimed_at_ns always 0)
+    # matched no remembered vector and was silently dropped -- neither model
+    # ever trained on a real closed trade, only on a detector's pre-trade claim.
+    opened_at_ns: int = 0
     # How far price actually travelled while this claim was open, as fractions of
     # the price at the moment it was made, signed towards what the claim said:
     # favourable is positive, adverse is negative.
@@ -99,6 +111,21 @@ class TrainingLabel:
             component in self.labels
             for component in (THE_SETUP_WAS_RIGHT, THE_ENTRY_WAS_TIMED, THE_EXIT_WAS_TIMED)
         )
+
+    @property
+    def feature_lookup_at_ns(self) -> int:
+        """When to look up the feature vector this label should train against.
+
+        `calibration_key` is what already tells a reader which of the two
+        times a label carries applies: non-empty means a detector's claim
+        (`claimed_at_ns`), empty means a closed trade (`opened_at_ns`).
+        Reading `claimed_at_ns` unconditionally silently drops every label
+        built from a closed trade, since it defaults to 0 there and matches no
+        remembered vector -- found live 2026-08-30, where it meant
+        bull-conviction-model and bear-conviction-model never trained on a
+        real trade, only on a detector's pre-trade claim.
+        """
+        return self.claimed_at_ns if self.calibration_key else self.opened_at_ns
 
 
 @dataclass(frozen=True)

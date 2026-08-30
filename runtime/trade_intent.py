@@ -258,6 +258,40 @@ class CounterArgument:
     was_written_by_a_model: bool
     reason: str
     argued_at_ns: int
+    # The objection kind (CONVICTION_IS_UNMEASURED, "model", ...) behind
+    # `strongest_objection`'s rendered sentence -- carried separately because
+    # devils-advocate's own learned hit-rate per objection is keyed by kind,
+    # not by the text of whichever sentence happened to win. None only when
+    # no objection survived at all.
+    strongest_objection_kind: str | None = None
+    # The regime this objection was raised in -- devils-advocate's hit-rate is
+    # learned per (kind, regime), and nothing downstream can feed that record
+    # back correctly without knowing which regime it was.
+    regime: str = ""
+
+
+@dataclass(frozen=True)
+class ObjectionOutcome:
+    """Whether a counter-argument's strongest objection was actually right.
+
+    Judged after the fact by brain-self-reflector, which already separates a
+    trade's outcome from the soundness of the reasoning behind it -- this is
+    that judgment, narrowed to the one objection devils-advocate raised, and
+    fed back so its learned hit-rate per (objection kind, regime) can move.
+    Without this, devils-advocate's `observe_objection_outcome` had zero
+    callers anywhere in the codebase: its RateEstimator never advanced past
+    the prior, `is_fitted` was always False, and `would_reverse_the_decision`
+    could never be True in production -- the veto was live in name only
+    (found 2026-08-30).
+    """
+
+    objection_kind: str
+    regime: str
+    was_right: bool
+    venue_id: str
+    symbol: str
+    reason: str
+    decided_at_ns: int
 
 
 WORKING = "working"

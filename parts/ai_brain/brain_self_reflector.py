@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from runtime.claim_verification import make_request, verify_against_facts, written_without_a_model
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trade_intent import ReflectionNote
+from runtime.trade_intent import ObjectionOutcome, ReflectionNote
 
 PART_ID = "brain-self-reflector"
 
@@ -47,7 +47,7 @@ PART_DECLARATION = PartDeclaration(
         "decision-rationale", "trade-episode", "validated-llm-output", "knowledge-snapshot",
         "premortem-note", "counter-argument", "trade-narrative",
     ),
-    produces=("reflection-note", "llm-request", "part-health"),
+    produces=("reflection-note", "llm-request", "part-health", "objection-outcome"),
     resource_class="compute-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
@@ -92,6 +92,9 @@ class ReflectorStanding:
     unsound_and_lost: int = 0
     lessons_beyond_this_trade: int = 0
     model_sentences_removed: int = 0
+    objection_outcomes_written: int = 0
+    objections_confirmed_right: int = 0
+    objections_confirmed_wrong: int = 0
     by_verdict: dict = field(default_factory=dict)
 
 
@@ -184,6 +187,46 @@ class BrainSelfReflector:
         objection = (argument.strongest_objection or "").lower()
         return any(word in objection for word in episode.how_it_ended.lower().split("-"))
 
+    def objection_outcome_for(self, episode: TradeEpisode) -> ObjectionOutcome | None:
+        """Whether the counter-argument raised against this trade was right.
+
+        Fed back to devils-advocate so its learned hit-rate per (objection
+        kind, regime) can move -- without this, `observe_objection_outcome`
+        had no caller anywhere and the veto could never fire (found
+        2026-08-30). Only the two cases this reflector can actually judge are
+        scored: the trade failed exactly the way the objection said (right),
+        or it won despite the objection existing (wrong). A loss that matched
+        neither the objection nor the premortem is not evidence either way,
+        so it is left unscored rather than guessed at.
+        """
+        key = (episode.venue_id, episode.symbol)
+        argument = self._counter_arguments.get(key)
+        if argument is None or argument.strongest_objection_kind is None:
+            return None
+
+        _sound, verdict = self.judge_the_reasoning(episode)
+        if verdict == FAILED_AS_ARGUED:
+            was_right = True
+        elif verdict in (WON_AS_REASONED, WON_DESPITE_THE_REASONING):
+            was_right = False
+        else:
+            return None
+
+        if was_right:
+            self.standing.objections_confirmed_right += 1
+        else:
+            self.standing.objections_confirmed_wrong += 1
+        self.standing.objection_outcomes_written += 1
+        return ObjectionOutcome(
+            objection_kind=argument.strongest_objection_kind,
+            regime=argument.regime,
+            was_right=was_right,
+            venue_id=episode.venue_id,
+            symbol=episode.symbol,
+            reason=f"{verdict}, judged from how the trade actually ended",
+            decided_at_ns=self._now_ns(),
+        )
+
     def reflect(self, episode: TradeEpisode, model_output: str | None = None) -> ReflectionNote:
         self.standing.reflections_written += 1
         facts = self.facts_for(episode)
@@ -248,25 +291,34 @@ def describe_reflection(reflector: BrainSelfReflector) -> dict:
         "unsound_reasoning_that_lost": reflector.standing.unsound_and_lost,
         "lessons_that_apply_beyond_one_trade": reflector.standing.lessons_beyond_this_trade,
         "model_sentences_removed": reflector.standing.model_sentences_removed,
+        "objection_outcomes_written": reflector.standing.objection_outcomes_written,
+        "objections_confirmed_right": reflector.standing.objections_confirmed_right,
+        "objections_confirmed_wrong": reflector.standing.objections_confirmed_wrong,
         "by_verdict": dict(sorted(reflector.standing.by_verdict.items())),
     }
 
 
 def run_brain_self_reflector(
     reflector: BrainSelfReflector, control_socket, read_episodes_and_output,
-    publish_notes, publish_requests, health_interval_seconds: float, emit_health,
+    publish_notes, publish_requests, publish_objection_outcomes, health_interval_seconds: float,
+    emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         notes = []
         requests = []
+        outcomes = []
         for episode, model_output in read_episodes_and_output(reflector):
             if model_output is None:
                 requests.append(reflector.request(episode))
             notes.append(reflector.reflect(episode, model_output))
+            outcome = reflector.objection_outcome_for(episode)
+            if outcome is not None:
+                outcomes.append(outcome)
         publish_notes(tuple(notes))
         publish_requests(tuple(requests))
+        publish_objection_outcomes(tuple(outcomes))
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -299,6 +351,7 @@ def start_part(context) -> int:
     narratives = Batch(read=context.bus.reader("trade-narrative"))
     publish_notes = context.bus.publisher_for("reflection-note")
     publish_requests = context.bus.publisher_for("llm-request")
+    publish_objection_outcomes = context.bus.publisher_for("objection-outcome")
     reflector = BrainSelfReflector(
         relative_tolerance=context.number("llm_claim_relative_tolerance"),
         maximum_sentences=int(context.number("llm_maximum_sentences")),
@@ -350,6 +403,7 @@ def start_part(context) -> int:
         read_episodes_and_output=read_episodes_and_output,
         publish_notes=publish_some(publish_notes),
         publish_requests=publish_some(publish_requests),
+        publish_objection_outcomes=publish_some(publish_objection_outcomes),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

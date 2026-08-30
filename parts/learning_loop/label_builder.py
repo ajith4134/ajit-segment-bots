@@ -210,6 +210,7 @@ class LabelBuilder:
                 resolved_within_horizon=resolved,
                 features=dict(trade.features),
                 built_at_ns=self._now_ns(),
+                opened_at_ns=trade.opened_at_ns,
             ),
             LABELLED,
         )

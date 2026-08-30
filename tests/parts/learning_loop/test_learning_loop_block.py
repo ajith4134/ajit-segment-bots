@@ -158,6 +158,48 @@ def a_prepared_builder(peak=0.08, adverse=0.005, cost=0.001, **kwargs):
     return subject
 
 
+def test_feature_lookup_at_ns_picks_opened_at_ns_when_calibration_key_is_empty():
+    label = TrainingLabel(
+        venue_id=VENUE, symbol=SYMBOL, detector="d", regime="r", labels={},
+        horizon_seconds=1.0, seconds_to_resolve=1.0, resolved_within_horizon=True,
+        features={}, built_at_ns=1, claimed_at_ns=0, opened_at_ns=999,
+    )
+    assert label.calibration_key == ""
+    assert label.feature_lookup_at_ns == 999
+
+
+def test_feature_lookup_at_ns_picks_claimed_at_ns_when_a_calibration_key_is_present():
+    label = TrainingLabel(
+        venue_id=VENUE, symbol=SYMBOL, detector="d", regime="r", labels={},
+        horizon_seconds=1.0, seconds_to_resolve=1.0, resolved_within_horizon=True,
+        features={}, built_at_ns=1, claimed_at_ns=555, opened_at_ns=0,
+        calibration_key="a-detector:setup",
+    )
+    assert label.feature_lookup_at_ns == 555
+
+
+def test_a_labels_own_opened_at_ns_survives_into_the_training_label():
+    """The live bug (2026-08-30): a label built from a closed trade carries
+    claimed_at_ns=0 by design (calibration_key is empty, not this), but
+    bull/bear-conviction-model looked up claimed_at_ns unconditionally and so
+    never matched a remembered vector for one -- neither model ever trained
+    on a real closed trade. opened_at_ns is the field a reader must use
+    instead when calibration_key is empty."""
+    subject = a_label_builder()
+    subject.observe_excursion(
+        VENUE, SYMBOL, 12345,
+        ExcursionRecord(
+            peak_favourable_fraction=0.08, peak_adverse_fraction=0.005,
+            seconds_to_peak_favourable=100.0, seconds_to_peak_adverse=10.0, observations=50,
+        ),
+    )
+    subject.observe_cost_estimate(VENUE, SYMBOL, 0.001)
+    label, _ = subject.build(a_trade(opened=12345))
+    assert label.opened_at_ns == 12345
+    assert label.claimed_at_ns == 0
+    assert label.calibration_key == ""
+
+
 def test_a_right_setup_with_a_bad_exit_is_labelled_as_both():
     """A model trained on profit alone cannot tell them apart."""
     subject = a_prepared_builder(peak=0.08, capture=0.5)

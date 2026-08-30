@@ -534,7 +534,7 @@ def start_part(context) -> int:
 
         weight_by_symbol = weights.mapping()
         for label in labels.payloads():
-            vector = vector_current_at(label.venue_id, label.symbol, label.claimed_at_ns)
+            vector = vector_current_at(label.venue_id, label.symbol, label.feature_lookup_at_ns)
             if vector is None:
                 # A label for a symbol this bot never built a vector for. Not an
                 # error: the labeller scores every detector's claims, and the bull

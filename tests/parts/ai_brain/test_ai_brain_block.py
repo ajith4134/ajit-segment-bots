@@ -67,8 +67,8 @@ from runtime.llm_types import VerifiedSnapshot
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, RULED, SOLE_OPINION, STAND_ASIDE, UNANIMOUS,
-    UNDERPERFORMING, UNMEASURED, WORKING, ConflictRuling, CounterArgument, StrategyReview,
-    TradeIntent, no_intent,
+    UNDERPERFORMING, UNMEASURED, WORKING, ConflictRuling, CounterArgument, ObjectionOutcome,
+    StrategyReview, TradeIntent, no_intent,
 )
 
 BLOCK_PARTS = {
@@ -1155,6 +1155,29 @@ def test_a_loss_for_the_reason_the_advocate_raised_is_unsound_reasoning():
     assert FAILED_AS_ARGUED in note.reason
 
 
+def test_an_objection_that_caused_the_loss_is_fed_back_as_right():
+    """The live bug (2026-08-30): devils-advocate's observe_objection_outcome
+    had no caller anywhere, so its veto could never learn and could never fire."""
+    subject = a_reflector()
+    subject.observe_counter_argument(
+        CounterArgument(
+            venue_id=VENUE, symbol=SYMBOL, objections=("the regime is about to break",),
+            strongest_objection="the regime is about to break",
+            strongest_objection_kind="REGIME_ABOUT_TO_BREAK", regime="reverting",
+            would_reverse_the_decision=False, evidence_cited={},
+            was_written_by_a_model=False, reason="raised", argued_at_ns=Clock()(),
+        )
+    )
+    episode = an_episode(profitable=False, how="regime-break")
+    subject.reflect(episode)
+    outcome = subject.objection_outcome_for(episode)
+    assert outcome == ObjectionOutcome(
+        objection_kind="REGIME_ABOUT_TO_BREAK", regime="reverting", was_right=True,
+        venue_id=VENUE, symbol=SYMBOL, reason=outcome.reason, decided_at_ns=outcome.decided_at_ns,
+    )
+    assert subject.standing.objections_confirmed_right == 1
+
+
 def test_a_win_that_was_vetoed_and_taken_anyway_is_not_a_success():
     subject = a_reflector()
     subject.observe_counter_argument(
@@ -1168,6 +1191,48 @@ def test_a_win_that_was_vetoed_and_taken_anyway_is_not_a_success():
     note = subject.reflect(an_episode(profitable=True))
     assert note.reasoning_was_sound is False
     assert WON_DESPITE_THE_REASONING in note.reason
+
+
+def test_a_win_despite_an_objection_is_fed_back_as_wrong():
+    subject = a_reflector()
+    subject.observe_counter_argument(
+        CounterArgument(
+            venue_id=VENUE, symbol=SYMBOL, objections=("crowded",),
+            strongest_objection="crowded", strongest_objection_kind="CROWDED", regime="trending",
+            would_reverse_the_decision=True, evidence_cited={}, was_written_by_a_model=False,
+            reason="veto", argued_at_ns=Clock()(),
+        )
+    )
+    episode = an_episode(profitable=True)
+    subject.reflect(episode)
+    outcome = subject.objection_outcome_for(episode)
+    assert outcome.was_right is False
+    assert outcome.objection_kind == "CROWDED"
+    assert outcome.regime == "trending"
+    assert subject.standing.objections_confirmed_wrong == 1
+
+
+def test_no_objection_kind_produces_no_outcome_to_feed_back():
+    subject = a_reflector()
+    episode = an_episode(profitable=False, how="exchange-outage")
+    subject.reflect(episode)
+    assert subject.objection_outcome_for(episode) is None
+
+
+def test_an_unmatched_loss_is_not_scored_either_way():
+    """FAILED_UNANTICIPATED is not evidence the objection was right or wrong."""
+    subject = a_reflector()
+    subject.observe_counter_argument(
+        CounterArgument(
+            venue_id=VENUE, symbol=SYMBOL, objections=("crowded",),
+            strongest_objection="crowded", strongest_objection_kind="CROWDED", regime="trending",
+            would_reverse_the_decision=False, evidence_cited={}, was_written_by_a_model=False,
+            reason="raised", argued_at_ns=Clock()(),
+        )
+    )
+    episode = an_episode(profitable=False, how="exchange-outage")
+    subject.reflect(episode)
+    assert subject.objection_outcome_for(episode) is None
 
 
 def test_an_unanticipated_loss_produces_a_lesson_that_generalises():
