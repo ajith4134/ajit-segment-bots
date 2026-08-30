@@ -12122,6 +12122,33 @@
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "setup-second-opinion-reasoner",
+      "name": "Setup second opinion reasoner",
+      "role": "vote on whether the case for a candidate another bot already found holds up",
+      "category": "ai-brain",
+      "consumes": [
+        "directional-opinion",
+        "verified-snapshot",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "directional-opinion",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "evidence": "docs/proposals/llm-reasoning-gets-a-vote.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {

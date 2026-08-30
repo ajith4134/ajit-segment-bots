@@ -45,6 +45,9 @@ from parts.ai_brain.opinion_conflict_resolver import (
 from parts.ai_brain.premortem_writer import (
     CONVICTION_WAS_NOT_MEASURED, HORIZON_PASSES, REGIME_CHANGES, STOP_IS_HIT, PremortemWriter,
 )
+from parts.ai_brain.setup_second_opinion_reasoner import (
+    MODEL_FOUND_NOTHING_TO_CONFIRM, NOT_ENOUGH_EVIDENCE, SetupSecondOpinionReasoner,
+)
 from parts.ai_brain.size_hint_writer import SizeHintWriter
 from parts.ai_brain.strategy_review_reasoner import StrategyReviewReasoner
 from runtime.bot_opinion import (
@@ -56,6 +59,7 @@ from runtime.claim_verification import (
 )
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
+from runtime.llm_types import VerifiedSnapshot
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, RULED, SOLE_OPINION, STAND_ASIDE, UNANIMOUS,
@@ -76,6 +80,7 @@ BLOCK_PARTS = {
     "devils-advocate": "parts.ai_brain.devils_advocate",
     "intent-timing-gate": "parts.ai_brain.intent_timing_gate",
     "strategy-review-reasoner": "parts.ai_brain.strategy_review_reasoner",
+    "setup-second-opinion-reasoner": "parts.ai_brain.setup_second_opinion_reasoner",
 }
 
 VENUE = "binance-usdm"
@@ -560,6 +565,19 @@ def test_an_unfitted_or_working_strategy_review_changes_nothing():
     assert subject.trust_multiplier(BULL) == 1.0
     subject.observe_strategy_review(a_strategy_review(BULL, UNMEASURED))
     assert subject.trust_multiplier(BULL) == 1.0
+
+
+def test_a_higher_conviction_planless_vote_never_sources_the_stop():
+    """A confirming vote with no plan must never null out a real bot's stop."""
+    subject = an_arbiter(agreement_bonus=0.0)
+    planless = DirectionalOpinion(
+        bot="setup-second-opinion-reasoner", side=LONG, venue_id=VENUE, symbol=SYMBOL,
+        action=ENTER_NOW, conviction=an_estimate(0.99), timing=None, exit_plan=None,
+        features_summary={}, refusal=None, reason="confirms", formed_at_ns=Clock()(),
+    )
+    intent = subject.arbitrate([an_opinion(BULL, conviction=0.7), planless], Regime())
+    assert intent.stop_price == 95.0
+    assert intent.horizon_seconds == 600.0
 
 
 def test_a_close_opinion_becomes_a_close_intent():
@@ -1249,3 +1267,75 @@ def test_no_model_falls_back_to_the_measured_facts_not_silence():
     review = subject.review(BULL, facts, assessment, confidence)
     assert review.reason
     assert "trades" in review.reason
+
+
+# ---- setup-second-opinion-reasoner -------------------------------------------
+
+def a_second_opinion_reasoner(minimum_observations=20):
+    return SetupSecondOpinionReasoner(
+        prior_hit_rate=0.5, prior_weight=4.0, half_life_observations=500,
+        minimum_observations=minimum_observations, relative_tolerance=0.02, maximum_sentences=3,
+    )
+
+
+def a_verified_snapshot(complete=True, facts=None):
+    facts = facts if facts is not None else {"spread_bps": 4.0, "book_imbalance": 0.2}
+    return VerifiedSnapshot(
+        snapshot_id="snap-1", venue_id=VENUE, symbol=SYMBOL,
+        facts=facts if complete else {}, measured_at_ns=Clock()(),
+        staleness_seconds=1.0, is_complete=complete,
+        missing_facts=() if complete else ("spread_bps",),
+    )
+
+
+def test_a_candidate_with_no_verified_snapshot_is_refused_not_guessed():
+    subject = a_second_opinion_reasoner()
+    opinion = subject.review(an_opinion(BULL))
+    assert opinion.action == STAND_DOWN
+    assert opinion.refusal == NOT_ENOUGH_EVIDENCE
+    assert subject.standing.refused_for_insufficient_evidence == 1
+
+
+def test_a_candidate_with_evidence_is_confirmed_without_a_model():
+    subject = a_second_opinion_reasoner()
+    subject.observe_verified_snapshot(a_verified_snapshot())
+    opinion = subject.review(an_opinion(BULL))
+    assert opinion.action == ENTER_NOW
+    assert opinion.refusal is None
+    assert opinion.timing is None
+    assert opinion.exit_plan is None
+    assert subject.standing.confirmed == 1
+
+
+def test_a_model_citing_nothing_real_is_a_refusal_not_a_guess():
+    """The verdict rests on whether a real number was found, never on prose."""
+    subject = a_second_opinion_reasoner()
+    subject.observe_verified_snapshot(a_verified_snapshot())
+    opinion = subject.review(
+        an_opinion(BULL), model_output="This setup has a great vibe and should work out."
+    )
+    assert opinion.action == STAND_DOWN
+    assert opinion.refusal == MODEL_FOUND_NOTHING_TO_CONFIRM
+    assert subject.standing.refused_after_the_model_found_nothing == 1
+
+
+def test_a_model_citing_a_real_number_confirms_with_that_reason():
+    subject = a_second_opinion_reasoner()
+    subject.observe_verified_snapshot(a_verified_snapshot())
+    opinion = subject.review(
+        an_opinion(BULL), model_output="The spread is 4.0 basis points, tight enough to confirm."
+    )
+    assert opinion.action == ENTER_NOW
+    assert "4.0" in opinion.reason
+    assert subject.standing.confirmed == 1
+
+
+def test_the_confirming_conviction_is_learned_never_the_models_words():
+    """The model's text may change whether the case is confirmed, never the number."""
+    subject = a_second_opinion_reasoner()
+    subject.observe_verified_snapshot(a_verified_snapshot())
+    plain = subject.review(an_opinion(BULL))
+    modeled = subject.review(
+        an_opinion(BULL), model_output="The spread is 4.0 basis points."
+    )
+    assert plain.conviction.value == modeled.conviction.value

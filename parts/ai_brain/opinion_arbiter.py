@@ -282,7 +282,7 @@ class OpinionArbiter:
         self.standing.by_agreement[agreement] = self.standing.by_agreement.get(agreement, 0) + 1
         self.standing.strongest_conviction = max(self.standing.strongest_conviction, conviction)
 
-        best = max(acting, key=lambda opinion: opinion.conviction.value)
+        best = self._planned_or_acting(acting)
         return TradeIntent(
             venue_id=venue_id,
             symbol=symbol,
@@ -337,6 +337,17 @@ class OpinionArbiter:
             return [], RULED
         kept = [opinion for opinion in acting if opinion.bot == ruling.favoured_bot]
         return kept, RULED
+
+    def _planned_or_acting(self, acting):
+        """The opinion the intent's stop_price and horizon are sourced from.
+
+        A planless vote (setup-second-opinion-reasoner: `timing=None,
+        exit_plan=None` by construction) must never be picked over a bot that
+        actually proposed a plan, however high its conviction -- a position is
+        never sized against a stop nobody computed.
+        """
+        planned = [opinion for opinion in acting if opinion.exit_plan is not None]
+        return max(planned or acting, key=lambda opinion: opinion.conviction.value)
 
     def _floor_for(self, acting) -> tuple[float, str]:
         """The highest break-even among the acting opinions' plans, with its reason."""

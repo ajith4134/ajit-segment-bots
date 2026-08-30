@@ -558,6 +558,9 @@ LIVE_SPINE = (
     # answering another part's question. Advisory only -- opinion-arbiter folds
     # it in as a per-bot trust discount, never a vote.
     "strategy-review-reasoner",
+    # Step 2 of the same proposal, 2026-08-30: a real vote, but only on a
+    # candidate another bot already has acting this tick.
+    "setup-second-opinion-reasoner",
     # The bull bot's own two stragglers, which its bear twin has had since it
     # started: the weight learner and the watcher on an open position's thesis.
     "bull-setup-weight-learner",
