@@ -68,6 +68,24 @@ class BurstStanding:
     series_breaks: int = 0
 
 
+def expectation_word_in(phrase: str) -> str | None:
+    """The recognised continuation/reversion word inside a playbook rule's phrase.
+
+    `runtime.knowledge_types.PlaybookRule.then` is free text compiled by
+    procedural-playbook ("long expecting continuation"), not the bare
+    CONTINUATION/REVERSION vocabulary `set_playbook_expectation` validates
+    against -- passing it through unextracted raised on every real rule and
+    crash-looped this part continuously (found live 2026-08-30). None when
+    neither word appears, which this part reads the same as no rule at all.
+    """
+    lowered = phrase.lower()
+    if CONTINUATION in lowered:
+        return CONTINUATION
+    if REVERSION in lowered:
+        return REVERSION
+    return None
+
+
 class MomentumBurstDetector:
     """Fires on a return far outside this symbol's own distribution of returns."""
 
@@ -301,10 +319,10 @@ def start_part(context) -> int:
         settle_claims_from(labels.payloads(), detector, PART_ID)
         for rule in rules.payloads():
             # A playbook rule about a symbol's bursts says what to expect of them.
-            expectation = getattr(rule, "then", None)
+            expectation = expectation_word_in(str(getattr(rule, "then", "") or ""))
             symbol = getattr(rule, "when", "")
             if expectation and symbol:
-                detector.set_playbook_expectation(str(symbol), str(expectation))
+                detector.set_playbook_expectation(str(symbol), expectation)
         touched = set()
         for trade in levels_in(trades.payloads()):
             detector.observe_price(

@@ -783,6 +783,18 @@ def test_a_playbook_rule_can_only_narrow_never_widen():
     assert shallower <= 120.0
 
 
+def test_a_rule_with_no_detector_is_skipped_not_a_crash():
+    """The live bug (2026-08-30): `playbook-rule` also carries
+    runtime.knowledge_types.PlaybookRule, a different shape with no `detector`
+    at all -- reading it as this part's own crashed the timer on every real
+    one that arrived."""
+    from types import SimpleNamespace
+
+    subject = a_timer()
+    subject.observe_playbook_rule(SimpleNamespace(when="x", then="y", reason="z"))
+    assert subject._rules == {}
+
+
 def test_the_extension_cap_is_learned_per_detector():
     subject = a_timer(cap=0.005)
     for _ in range(30):

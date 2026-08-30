@@ -35,7 +35,7 @@ from parts.opportunity_scanner.mean_reversion_detector import (
     NOT_STRETCHED, NO_VOLATILITY, WRONG_REGIME, MeanReversionDetector,
 )
 from parts.opportunity_scanner.momentum_burst_detector import (
-    NOT_A_BURST, NO_PLAYBOOK, MomentumBurstDetector,
+    NOT_A_BURST, NO_PLAYBOOK, MomentumBurstDetector, expectation_word_in,
 )
 from parts.opportunity_scanner.regime_classifier import (
     RANDOM, REVERTING, TRENDING, UNCLASSIFIED, RegimeClassifier,
@@ -348,6 +348,17 @@ def test_the_playbook_decides_which_way_a_burst_is_traded():
     subject.observe_price(VENUE, SYMBOL, price * 1.10, subject._now_ns())
     candidate, _ = subject.detect(VENUE, SYMBOL, Regime(RANDOM))
     assert candidate.direction == LONG
+
+
+def test_expectation_word_in_extracts_from_a_real_playbook_phrase():
+    """The live bug (2026-08-30): runtime.knowledge_types.PlaybookRule.then is
+    free text ("long expecting continuation"), not the bare CONTINUATION/
+    REVERSION vocabulary set_playbook_expectation validates against -- passing
+    it through unextracted raised on every real rule and crash-looped this
+    part continuously."""
+    assert expectation_word_in("long expecting continuation") == CONTINUATION
+    assert expectation_word_in("short expecting a reversion here") == REVERSION
+    assert expectation_word_in("no recognised word here") is None
 
 
 def test_an_ordinary_move_for_this_symbol_is_not_a_burst(real_trade_prices):

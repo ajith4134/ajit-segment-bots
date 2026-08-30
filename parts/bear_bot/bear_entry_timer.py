@@ -154,8 +154,23 @@ class BearEntryTimer:
             self._prices[key] = window
         window.observe(price, at_ns)
 
-    def observe_playbook_rule(self, rule: PlaybookRule) -> None:
-        self._rules[rule.detector] = rule
+    def observe_playbook_rule(self, rule) -> None:
+        """Hold a rule keyed by the detector it narrows entry for.
+
+        `playbook-rule` also carries `runtime.knowledge_types.PlaybookRule`
+        (procedural-playbook's own, regime/instruction-keyed shape, not
+        detector-keyed) -- two producers on one wire, the same trap
+        `stop-adjustment` already is elsewhere in this codebase. That shape
+        has no `detector` at all, and reading it as this part's own crashed
+        both entry timers on every tick a real one arrived (found live
+        2026-08-30). Read defensively and skip what this table cannot key: a
+        rule this part cannot place under a detector narrows nothing for it,
+        which is the conservative direction to fail in.
+        """
+        detector = getattr(rule, "detector", None)
+        if detector is None:
+            return
+        self._rules[detector] = rule
 
     def observe_entry_quality(self, detector: str, extension_at_entry: float, given_away: float) -> None:
         """What entering this far above the mean actually cost, per detector."""

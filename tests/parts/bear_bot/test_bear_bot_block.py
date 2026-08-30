@@ -628,6 +628,18 @@ def test_a_playbook_rule_can_demand_a_higher_bounce_never_a_lower_one():
     assert subject.decide(a_side_candidate(), ConvictionStub(0.9)).trigger_price >= 90.0
 
 
+def test_a_rule_with_no_detector_is_skipped_not_a_crash():
+    """The live bug (2026-08-30): `playbook-rule` also carries
+    runtime.knowledge_types.PlaybookRule, a different shape with no `detector`
+    at all -- reading it as this part's own crashed the timer on every real
+    one that arrived."""
+    from types import SimpleNamespace
+
+    subject = a_timer()
+    subject.observe_playbook_rule(SimpleNamespace(when="x", then="y", reason="z"))
+    assert subject._rules == {}
+
+
 def test_entry_timer_matches_a_pending_decision_to_its_closing_episode():
     from runtime.knowledge_types import TradeEpisode
 
