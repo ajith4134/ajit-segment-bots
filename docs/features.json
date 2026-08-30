@@ -3161,6 +3161,11 @@
       "id": "strategy-review",
       "name": "strategy review",
       "description": "A per-bot narrative judgment from an LLM reasoning about which of the system's own bots or detectors is working, and why -- fed to opinion-arbiter as a trust discount, never a vote."
+    },
+    {
+      "id": "objection-outcome",
+      "name": "objection outcome",
+      "description": "Whether a counter-argument's strongest objection was actually right, judged by brain-self-reflector from how the trade ended -- fed back to devils-advocate so its learned hit-rate per (objection kind, regime) can move."
     }
   ],
   "features": [
@@ -6617,7 +6622,9 @@
       "name": "Capital allotment reader",
       "role": "read this segment's slice of the settings file: allocated balance, min plus max capital per trade, leverage ceiling (RL-051)",
       "category": "risk-capital-allocation",
-      "consumes": [],
+      "consumes": [
+        "main-account-setting"
+      ],
       "produces": [
         "capital-allotment",
         "leverage-ceiling",
@@ -6638,7 +6645,18 @@
       },
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "main-account-setting"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "leverage-selector",
@@ -7541,7 +7559,8 @@
       "produces": [
         "reflection-note",
         "llm-request",
-        "part-health"
+        "part-health",
+        "objection-outcome"
       ],
       "switchable": true,
       "off_releases_resources": true,
@@ -7553,7 +7572,18 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "produces": [
+              "objection-outcome"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "loss-cause-classifier",
@@ -7913,7 +7943,8 @@
       "consumes": [
         "bounded-order",
         "fill",
-        "account-balance"
+        "account-balance",
+        "stamped-order"
       ],
       "produces": [
         "locked-allocation",
@@ -7929,7 +7960,18 @@
       "evidence": "docs/research/repo-harvest/tensortrade.md Wallet.lock; hummingbot.md BudgetChecker.adjust_candidates",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "stamped-order"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "cost-basis-tracker",
@@ -10707,7 +10749,8 @@
         "directional-opinion",
         "validated-llm-output",
         "verified-snapshot",
-        "regime-memory"
+        "regime-memory",
+        "objection-outcome"
       ],
       "produces": [
         "counter-argument",
@@ -10724,7 +10767,18 @@
       "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "edited": [
+        {
+          "on": "2026-08-30",
+          "added": {
+            "consumes": [
+              "objection-outcome"
+            ]
+          },
+          "origin": "proposed"
+        }
+      ]
     },
     {
       "id": "intent-timing-gate",

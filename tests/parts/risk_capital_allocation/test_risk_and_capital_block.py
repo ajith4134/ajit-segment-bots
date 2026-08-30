@@ -29,6 +29,9 @@ from parts.capital_desk.live_balance_divergence_watch import (
 from parts.capital_desk.paper_currency_converter import (
     CONVERTED, NO_RATE, SAME_CURRENCY, STALE_RATE, PaperCurrencyConverter,
 )
+from parts.risk_capital_allocation.capital_allotment_reader import (
+    AllotmentUnreadable, CapitalAllotmentReader,
+)
 from parts.risk_capital_allocation.drawdown_breaker import DrawdownBreaker
 from parts.risk_capital_allocation.event_risk_limiter import EventRiskLimiter
 from parts.risk_capital_allocation.exit_order_chainer import (
@@ -137,6 +140,73 @@ def test_no_limiter_reporting_is_not_permission():
     tightest = tightest_limit([])
     assert tightest.fraction_of_allotment == NO_RISK_ALLOWED
     assert "silence is not permission" in tightest.reason
+
+
+# ---- capital-allotment-reader -------------------------------------------------
+
+def a_segment_settings_file(tmp_path, maximum_capital_per_trade=500.0, minimum_capital_per_trade=50.0):
+    path = tmp_path / "futures.toml"
+    path.write_text(
+        f"""
+[allocated_balance]
+value = 1000000.0
+unit = "USDT"
+note = "test"
+
+[minimum_capital_per_trade]
+value = {minimum_capital_per_trade}
+unit = "USDT"
+note = "test"
+
+[maximum_capital_per_trade]
+value = {maximum_capital_per_trade}
+unit = "USDT"
+note = "test"
+
+[leverage_ceiling]
+value = 20.0
+unit = "multiple"
+note = "test"
+
+[quote_currency]
+value = "USDT"
+unit = "currency"
+note = "test"
+"""
+    )
+    return path
+
+
+def test_the_segments_own_maximum_binds_when_no_main_account_setting_has_arrived(tmp_path):
+    reader = CapitalAllotmentReader("futures", settings_path=a_segment_settings_file(tmp_path))
+    allotment = reader.read(main_account_maximum_capital_per_trade=None)
+    assert allotment.bounds.maximum_capital == pytest.approx(500.0)
+
+
+def test_the_tighter_of_the_two_maximums_binds(tmp_path):
+    """The live bug (2026-08-30): main-account.toml's own maximum_capital_per_trade
+    was read and published but nothing ever enforced it -- only the segment's own,
+    independently-editable ceiling actually bound an order."""
+    path = a_segment_settings_file(tmp_path, maximum_capital_per_trade=500.0)
+    reader = CapitalAllotmentReader("futures", settings_path=path)
+    allotment = reader.read(main_account_maximum_capital_per_trade=200.0)
+    assert allotment.bounds.maximum_capital == pytest.approx(200.0)
+
+
+def test_the_segments_own_maximum_binds_when_it_is_the_tighter_one(tmp_path):
+    path = a_segment_settings_file(tmp_path, maximum_capital_per_trade=150.0)
+    reader = CapitalAllotmentReader("futures", settings_path=path)
+    allotment = reader.read(main_account_maximum_capital_per_trade=200.0)
+    assert allotment.bounds.maximum_capital == pytest.approx(150.0)
+
+
+def test_a_main_account_maximum_below_the_segments_minimum_is_refused(tmp_path):
+    path = a_segment_settings_file(
+        tmp_path, maximum_capital_per_trade=500.0, minimum_capital_per_trade=50.0,
+    )
+    reader = CapitalAllotmentReader("futures", settings_path=path)
+    with pytest.raises(AllotmentUnreadable):
+        reader.read(main_account_maximum_capital_per_trade=10.0)
 
 
 # ---- drawdown-breaker --------------------------------------------------------

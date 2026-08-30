@@ -649,6 +649,30 @@ def test_releasing_an_unknown_order_is_not_an_error():
     assert ledger.release("never-locked") is None
 
 
+def test_a_fills_client_order_id_releases_the_lock_taken_under_its_intent_id():
+    """The live bug (2026-08-30): a lock is taken under intent_id, but a fill
+    only ever carries order-idempotency-stamper's client_order_id -- a SHA-256
+    of that intent_id, an unrelated-looking string. Locking under one and
+    releasing under the other matched nothing, ever, and free_balance only
+    ever fell."""
+    ledger = FundLockLedger()
+    ledger.set_account_balance(1000.0)
+    ledger.lock("intent-1", VENUE, SYMBOL, 700.0)
+    ledger.observe_stamped_order(client_order_id="deadbeef", intent_id="intent-1")
+    released = ledger.release("deadbeef")
+    assert released is not None
+    assert released.state == RELEASED
+    assert ledger.free_balance == pytest.approx(1000.0)
+    assert ledger.standing.releases_with_no_lock_to_match == 0
+
+
+def test_an_untranslatable_release_is_counted_not_silent():
+    ledger = FundLockLedger()
+    ledger.set_account_balance(10.0)
+    ledger.release("no-mapping-was-ever-learned-for-this")
+    assert ledger.standing.releases_with_no_lock_to_match == 1
+
+
 # ---- usdt-pnl-accountant -----------------------------------------------------
 
 def closed_trade(realised=100.0, fees=1.0, quote="USDT"):

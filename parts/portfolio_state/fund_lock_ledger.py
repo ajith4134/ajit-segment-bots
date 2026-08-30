@@ -18,7 +18,7 @@ PART_ID = "fund-lock-ledger"
 
 PART_DECLARATION = PartDeclaration(
     part_id="fund-lock-ledger",
-    consumes=("bounded-order", "fill", "account-balance"),
+    consumes=("bounded-order", "fill", "account-balance", "stamped-order"),
     produces=("locked-allocation", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -48,6 +48,7 @@ class LockStanding:
     locks_refused: int = 0
     locks_released: int = 0
     double_locks_prevented: int = 0
+    releases_with_no_lock_to_match: int = 0
     locked_total: float = 0.0
     balance: float = 0.0
 
@@ -62,12 +63,26 @@ class FundLockLedger:
     A lock is released when the order fills or is cancelled, and releasing an
     unknown order is a no-op rather than an error: a cancel arriving twice is
     ordinary, and refusing it would leave capital locked against nothing.
+
+    **Locked by intent id, released by client order id -- two different
+    strings for the same order.** A lock is taken the instant `bounded-order`
+    is seen, keyed by the decision's own `intent_id`; the fill that releases
+    it only ever carries `order_id`, which is `client_order_id` --
+    `order-idempotency-stamper`'s SHA-256 of that same intent id, an
+    unrelated-looking string. Locking under one and releasing under the other
+    matched nothing, ever: every lock taken leaked permanently, `free_balance`
+    only ever fell, and it went negative in under half an hour on the live
+    spine (found 2026-08-30) -- the real reason almost nothing sized after the
+    first handful of positions opened. `observe_stamped_order` records the
+    translation the moment `stamped-order` names it, so `release` can look a
+    fill's `order_id` back up to the `intent_id` it was actually locked under.
     """
 
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
         self._balance = 0.0
         self._locks: dict[str, tuple[str, str, float]] = {}
+        self._client_order_id_to_intent_id: dict[str, str] = {}
         self.standing = LockStanding()
 
     def set_account_balance(self, balance: float) -> None:
@@ -82,31 +97,45 @@ class FundLockLedger:
     def free_balance(self) -> float:
         return self._balance - self.locked_total
 
-    def lock(self, order_id: str, venue_id: str, symbol: str, amount: float) -> LockedAllocation:
-        if order_id in self._locks:
+    def observe_stamped_order(self, client_order_id: str, intent_id: str) -> None:
+        if client_order_id and intent_id:
+            self._client_order_id_to_intent_id[client_order_id] = intent_id
+
+    def lock(self, intent_id: str, venue_id: str, symbol: str, amount: float) -> LockedAllocation:
+        if intent_id in self._locks:
             self.standing.double_locks_prevented += 1
-            held = self._locks[order_id]
-            return self._allocation(order_id, venue_id, symbol, held[2], LOCKED, "already locked for this order")
+            held = self._locks[intent_id]
+            return self._allocation(intent_id, venue_id, symbol, held[2], LOCKED, "already locked for this order")
 
         if amount > self.free_balance:
             self.standing.locks_refused += 1
             return self._allocation(
-                order_id, venue_id, symbol, amount, REFUSED,
+                intent_id, venue_id, symbol, amount, REFUSED,
                 f"needs {amount} against {self.free_balance} free of {self._balance}",
             )
 
-        self._locks[order_id] = (venue_id, symbol, amount)
+        self._locks[intent_id] = (venue_id, symbol, amount)
         self.standing.locks_taken += 1
         self.standing.locked_total = self.locked_total
-        return self._allocation(order_id, venue_id, symbol, amount, LOCKED, "held against this order")
+        return self._allocation(intent_id, venue_id, symbol, amount, LOCKED, "held against this order")
 
-    def release(self, order_id: str) -> LockedAllocation | None:
-        held = self._locks.pop(order_id, None)
+    def release(self, client_order_id: str) -> LockedAllocation | None:
+        """Release the lock a fill's own `order_id` was actually taken under.
+
+        `client_order_id` is what a fill carries; the lock lives under the
+        `intent_id` it was derived from, translated by whatever
+        `observe_stamped_order` has learned so far. Untranslatable falls back
+        to the raw id, so an order that was somehow locked and released under
+        the same string still works.
+        """
+        intent_id = self._client_order_id_to_intent_id.pop(client_order_id, client_order_id)
+        held = self._locks.pop(intent_id, None)
         if held is None:
+            self.standing.releases_with_no_lock_to_match += 1
             return None
         self.standing.locks_released += 1
         self.standing.locked_total = self.locked_total
-        return self._allocation(order_id, held[0], held[1], held[2], RELEASED, "order finished")
+        return self._allocation(intent_id, held[0], held[1], held[2], RELEASED, "order finished")
 
     def _allocation(self, order_id, venue_id, symbol, amount, state, reason) -> LockedAllocation:
         return LockedAllocation(
@@ -137,6 +166,7 @@ def describe_locks(ledger: FundLockLedger) -> dict:
         "locks_refused": ledger.standing.locks_refused,
         "locks_released": ledger.standing.locks_released,
         "double_locks_prevented": ledger.standing.double_locks_prevented,
+        "releases_with_no_lock_to_match": ledger.standing.releases_with_no_lock_to_match,
     }
 
 
@@ -165,13 +195,17 @@ def run_fund_lock_ledger(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    A bounded order locks its capital under the decision that produced it;
-    a fill carrying that order id releases it. The free balance it locks
+    A bounded order locks its capital under the decision that produced it.
+    A fill only ever carries `order_id` -- `order-idempotency-stamper`'s
+    client_order_id, a SHA-256 of that same intent_id and not equal to it --
+    so `stamped-order` is read too, purely to learn the client_order_id ->
+    intent_id translation a fill's release needs. The free balance it locks
     against is the segment's cash as the account keeper publishes it.
     """
     from runtime.input_assembly import Batch, LatestByKey
 
     orders = Batch(read=context.bus.reader("bounded-order"))
+    stamped_orders = Batch(read=context.bus.reader("stamped-order"))
     fills = Batch(read=context.bus.reader("fill"))
     balances = LatestByKey(read=context.bus.reader("account-balance"), key_of=lambda b: b.segment)
     publish_locks = context.bus.publisher_for("locked-allocation")
@@ -185,6 +219,8 @@ def start_part(context) -> int:
         for order in orders.payloads():
             if order.quantity > 0 and order.intent_id:
                 ledger.lock(order.intent_id, order.venue_id, order.symbol, order.capital_used)
+        for stamped in stamped_orders.payloads():
+            ledger.observe_stamped_order(stamped.client_order_id, stamped.intent_id)
         for fill in fills.payloads():
             if fill.order_id:
                 ledger.release(fill.order_id)

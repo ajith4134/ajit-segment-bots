@@ -33,7 +33,7 @@ PART_ID = "capital-allotment-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="capital-allotment-reader",
-    consumes=(),
+    consumes=("main-account-setting",),
     produces=("capital-allotment", "leverage-ceiling", "part-health", "trade-capital-bounds"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -80,8 +80,17 @@ class CapitalAllotmentReader:
         """The last allotment that read cleanly, or None if none ever has."""
         return self._current
 
-    def read(self) -> CapitalAllotment:
-        """Read the segment's capital settings, or raise and keep the last good one."""
+    def read(self, main_account_maximum_capital_per_trade: float | None = None) -> CapitalAllotment:
+        """Read the segment's capital settings, or raise and keep the last good one.
+
+        `main_account_maximum_capital_per_trade` is the account-wide ceiling
+        main-account.toml states, and it is checked here rather than only
+        against the segment's own file: the two are independently editable
+        settings, and a looser segment ceiling must never be what actually
+        binds an order. None (main-account-settings-reader has not published
+        yet) leaves the segment's own maximum as the only one in force, which
+        is the reader's behaviour before this existed.
+        """
         self.standing.reads += 1
         try:
             document = load_settings_document(self._path, self._segment)
@@ -95,15 +104,24 @@ class CapitalAllotmentReader:
                 f"how much money a segment may use"
             )
 
+        segment_maximum = float(document.read_value("maximum_capital_per_trade"))
+        effective_maximum = (
+            segment_maximum if main_account_maximum_capital_per_trade is None
+            else min(segment_maximum, main_account_maximum_capital_per_trade)
+        )
         try:
             bounds = TradeCapitalBounds(
                 segment=self._segment,
                 minimum_capital=float(document.read_value("minimum_capital_per_trade")),
-                maximum_capital=float(document.read_value("maximum_capital_per_trade")),
+                maximum_capital=effective_maximum,
                 currency=str(document.read_value("quote_currency")),
             )
         except ValueError as incoherent:
-            return self._refuse(f"{self._path}: {incoherent}")
+            return self._refuse(
+                f"{self._path}: {incoherent} (the tighter of this segment's own "
+                f"{segment_maximum:,.2f} and the main account's "
+                f"{main_account_maximum_capital_per_trade:,.2f} maximum per trade)"
+            )
 
         allotted = float(document.read_value("allocated_balance"))
         ceiling = float(document.read_value("leverage_ceiling"))
@@ -169,12 +187,13 @@ def describe_allotment(reader: CapitalAllotmentReader) -> dict:
 def run_capital_allotment_reader(
     reader: CapitalAllotmentReader, control_socket, publish_allotment,
     health_interval_seconds: float, emit_health,
+    read_main_account_maximum=lambda: None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         try:
-            publish_allotment(reader.read())
+            publish_allotment(reader.read(read_main_account_maximum()))
         except AllotmentUnreadable:
             # Nothing is published. A segment that has never had readable capital
             # settings must not appear downstream with any allocation at all.
@@ -195,15 +214,22 @@ def run_capital_allotment_reader(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Consumes nothing: it reads the operator's capital settings for one segment and
-    publishes what they say. Two types come out of one read because the allotment
-    and the per-trade bounds are the same document read for two different questions
-    -- how much this segment may use in total, and how much one trade may commit.
+    Reads the operator's capital settings for one segment and publishes what
+    they say. Two types come out of one read because the allotment and the
+    per-trade bounds are the same document read for two different questions
+    -- how much this segment may use in total, and how much one trade may
+    commit. `main-account-setting` is consumed too, purely so the segment's
+    own maximum per trade can be checked against the account-wide one and the
+    tighter of the two published -- two independently-editable settings, and
+    a looser segment ceiling must never be the one that actually binds.
 
     A segment whose settings do not read cleanly publishes nothing at all. There is
     no default for how much money something may use, and a part downstream receiving
     a guess would size a real position against it.
     """
+    from runtime.input_assembly import LatestValue
+
+    main_account = LatestValue(read=context.bus.reader("main-account-setting"))
     publish_allotment_type = context.bus.publisher_for("capital-allotment")
     publish_bounds_type = context.bus.publisher_for("trade-capital-bounds")
     # Declared since the blueprint and published since 2026-08-23: the ceiling
@@ -216,11 +242,16 @@ def start_part(context) -> int:
         publish_bounds_type([allotment.bounds])
         publish_ceiling_type([allotment])
 
+    def read_main_account_maximum():
+        setting = main_account.value()
+        return None if setting is None else setting.maximum_capital_per_trade
+
     return run_capital_allotment_reader(
         reader=CapitalAllotmentReader(segment=str(context.setting("segment_id").value)),
         control_socket=context.control_socket,
         publish_allotment=publish_allotment,
         health_interval_seconds=context.health_interval_seconds,
+        read_main_account_maximum=read_main_account_maximum,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
