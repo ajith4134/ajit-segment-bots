@@ -513,7 +513,6 @@ LIVE_SPINE = (
     # the open web by default.
     "exchange-announcement-reader",
     "options-flow-reader",
-    "onchain-flow-aggregator",
     "arxiv-feed-reader",
     "github-strategy-miner",
     "edge-comparator",
@@ -532,11 +531,7 @@ LIVE_SPINE = (
     "liquidity-grader",
     "momentum-burst-detector",
     "mean-reversion-detector",
-    "funding-skew-detector",
-    "liquidation-cascade-detector",
     "volatility-gap-detector",
-    "whale-flow-detector",
-    "sentiment-shift-detector",
     "universal-symbol-sweeper",
     "watch-condition-compiler",
     # The brain's remaining parts. opinion-conflict-resolver is the one that has

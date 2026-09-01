@@ -483,6 +483,36 @@ value = 0.0002
 unit  = "fraction of notional"
 note  = "operator, 2026-08-22: what resting on the book costs per side. Both venues publish 0.0200% maker at the base tier, so unlike the taker rate there is no disagreement to resolve conservatively. Same caveat: the published schedule, not this account's measured rate."
 
+[options_flat_brokerage]
+value = 20.0
+unit  = "INR per executed order"
+note  = "operator, 2026-09-01: Upstox's real Equity Options charge stack (upstox.com/brokerage-charges/, scraped 2026-09-01, post the October 2024 STT/CTT and exchange-transaction-charge revision). Quoted directly: 'Flat Rs20 per executed order.' A flat component, not a percentage of premium -- runtime/indian_options_fee_model.py's own docstring carries the sourced quote for all six of this file's options_* settings."
+
+[options_stt_sell_rate]
+value = 0.001
+unit  = "fraction of premium, sell side only"
+note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: '0.1% on sell side (on premium)'. STT never applies on the buy side -- see indian_options_fee_model.upstox_options_order_cost()."
+
+[options_exchange_transaction_charge_rate]
+value = 0.0003503
+unit  = "fraction of premium"
+note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: NSE options exchange transaction charge '0.03503% (on premium)'. Charged on both buy and sell legs."
+
+[options_ipft_charge_rate]
+value = 0.000005
+unit  = "fraction of premium"
+note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: NSE IPFT charge 'Rs0.50 per lakh of the turnover (Premium value)' -- Rs0.50 / Rs1,00,000 = 0.000005. Charged on both legs."
+
+[options_stamp_duty_buy_rate]
+value = 0.00003
+unit  = "fraction of premium, buy side only"
+note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: '0.003% or Rs300 / crore on buy side'. Stamp duty never applies on the sell side -- see indian_options_fee_model.upstox_options_order_cost()."
+
+[options_gst_rate]
+value = 0.18
+unit  = "fraction of (brokerage + exchange transaction charge + IPFT charge)"
+note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: GST '18% (on brokerage + transaction charges + IPFT charges)' -- explicitly not on STT or stamp duty, which are themselves statutory levies."
+
 [entry_slippage_fraction]
 value = 0.0005
 unit  = "fraction of price"
