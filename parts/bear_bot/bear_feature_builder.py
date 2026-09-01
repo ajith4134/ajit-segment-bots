@@ -8,10 +8,6 @@ only because the short side is asymmetric:
   when price rises. One realised-volatility number treats a 3% drop and a 3%
   rally as the same event; a short cares which, because the move that pays it is
   the one that also widens every spread it will have to exit through.
-- **`funding_carry_over_horizon`.** A perpetual short is paid when funding is
-  positive and charged when it is negative, every settlement, whatever the price
-  does. It is a feature rather than only a filter because its size should change
-  how sure the model is, not merely whether it looks.
 - **`squeeze_room`.** How much of the visible offer side would have to be lifted
   to move price against this short by its own recent volatility. A long's worst
   case is bounded at zero; a short's is not, and it arrives fastest in exactly
@@ -23,6 +19,20 @@ back from, and a feature whose sign means one thing to one bot and the opposite
 to another is a feature that teaches both models wrong.
 
 **A feature that cannot be measured is named as missing, never defaulted.**
+
+**`open_interest_change` and `sell_flow_imbalance` replace `funding_rate`,
+`funding_carry_over_horizon` and `funding_forecast_change`** (2026-09-01,
+options-segment-bots conversion). Funding rate is a crypto perpetual
+mechanic with no Indian equivalent. `funding_carry_over_horizon` -- the
+actual cost of holding a short -- has no honest replacement yet either: that
+needs an index/stock futures basis, which is not built (Phase B, per
+docs/goal.md). Retired without substitute rather than guessed. What
+`funding_rate`/`funding_forecast_change` were a proxy for -- crowd
+positioning pressure -- does have an honest Indian analogue already in
+`broker-open-interest`: `open_interest_change` (shared with the bull
+builder, an unsigned fact about the chain) and `sell_flow_imbalance`,
+signed for the short the same way `offer_side_imbalance` already is --
+positive when sell-side flow is heavier, which favours the short.
 """
 
 from __future__ import annotations
@@ -43,8 +53,8 @@ BOT = "bear-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bear-feature-builder",
     consumes=(
-        "bear-side-candidate", "funding-forecast", "order-book-snapshot",
-        "symbol-price-frame", "symbol-profile", "symbol-universe",
+        "bear-side-candidate", "broker-instrument-listing", "broker-open-interest",
+        "order-book-snapshot", "symbol-price-frame", "symbol-profile", "symbol-universe",
     ),
     produces=("bear-feature-vector", "part-health"),
     resource_class="bandwidth-bound",
@@ -60,9 +70,8 @@ FEATURE_NAMES = (
     "offer_side_imbalance",
     "spread_fraction",
     "squeeze_room",
-    "funding_rate",
-    "funding_carry_over_horizon",
-    "funding_forecast_change",
+    "open_interest_change",
+    "sell_flow_imbalance",
     "detector_strength",
     "detector_hit_rate",
     "setup_weight",
@@ -83,9 +92,9 @@ class BuilderStanding:
 class SymbolObservations:
     short_window: RollingWindow
     long_window: RollingWindow
+    open_interest_window: RollingWindow
     book: tuple | None = None
-    funding_rate: float | None = None
-    funding_forecast: float | None = None
+    sell_flow_imbalance: float | None = None
     # What this symbol's spread usually is, from its profile. Used only when no
     # book snapshot has arrived: the spread now is unknown then, and the spread it
     # usually has is a fact about the symbol rather than about this moment.
@@ -100,7 +109,6 @@ class BearFeatureBuilder:
         short_window: int,
         long_window: int,
         minimum_observations: int,
-        settlements_per_day: float,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
@@ -110,12 +118,9 @@ class BearFeatureBuilder:
                 "the short window must be shorter than the long one, or their ratio carries "
                 "no information about whether volatility is rising"
             )
-        if settlements_per_day <= 0:
-            raise ValueError("funding settles on a schedule; carry cannot be projected without it")
         self._short = short_window
         self._long = long_window
         self._minimum = minimum_observations
-        self._settlements_per_day = settlements_per_day
         self._now_ns = now_ns
         # How long this symbol may be silent before its window is judged to have a
         # hole in it rather than a series. None means the caller stated no bound,
@@ -141,11 +146,18 @@ class BearFeatureBuilder:
     def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
         self._observations_for(venue_id, symbol).book = (tuple(bids), tuple(asks))
 
-    def observe_funding(self, venue_id: str, symbol: str, rate: float) -> None:
-        self._observations_for(venue_id, symbol).funding_rate = rate
-
-    def observe_funding_forecast(self, venue_id: str, symbol: str, forecast: float) -> None:
-        self._observations_for(venue_id, symbol).funding_forecast = forecast
+    def observe_open_interest(
+        self, venue_id: str, symbol: str, open_interest: float,
+        total_buy_quantity: float, total_sell_quantity: float, at_ns: int,
+    ) -> None:
+        """One underlying's option-chain open interest and order flow, already
+        summed across its contracts (runtime.underlying_open_interest)."""
+        observations = self._observations_for(venue_id, symbol)
+        observations.open_interest_window.observe(open_interest, at_ns)
+        total = total_buy_quantity + total_sell_quantity
+        observations.sell_flow_imbalance = (
+            (total_sell_quantity - total_buy_quantity) / total if total > 0 else None
+        )
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, typical_spread: float) -> None:
         """This symbol's usual spread. The bull builder has had one since it was
@@ -226,21 +238,15 @@ class BearFeatureBuilder:
                 "offer-side notional against this symbol's own volatility",
             )
 
-        record("funding_rate", observations.funding_rate, "venue funding rate")
         record(
-            "funding_carry_over_horizon",
-            None
-            if observations.funding_rate is None
-            else -observations.funding_rate
-            * (candidate.horizon_seconds / 86400.0 * self._settlements_per_day),
-            "funding rate over the setup's own horizon, signed as a cost to the short",
+            "open_interest_change",
+            self._return_over(observations.open_interest_window),
+            "broker-open-interest summed across the underlying's option chain",
         )
         record(
-            "funding_forecast_change",
-            None
-            if observations.funding_forecast is None or observations.funding_rate is None
-            else observations.funding_forecast - observations.funding_rate,
-            "funding-forecast minus current",
+            "sell_flow_imbalance", observations.sell_flow_imbalance,
+            "broker-open-interest: sell quantity less buy quantity, over their total "
+            "-- signed for the short, positive when sell-side flow is heavier",
         )
 
         return self._vector(candidate, features, missing, sources)
@@ -272,6 +278,11 @@ class BearFeatureBuilder:
                     length=self._long,
                     maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                ),
+                open_interest_window=RollingWindow(
+                    length=self._long,
+                    maximum_gap_seconds=self._maximum_gap_seconds,
+                    gap_patience_multiple=self._gap_patience_multiple,
                 ),
             )
             self._symbols[key] = observations
@@ -412,32 +423,39 @@ def run_bear_feature_builder(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Prices, books, profiles and funding are all levels the builder accumulates; the
-    side candidates are the events that ask for a vector. Prices are taken in first
-    within a tick, so a vector is built from the market as of the candidate rather
-    than as of the last tick.
+    Prices, books, profiles and open interest are all levels the builder
+    accumulates; the side candidates are the events that ask for a vector.
+    Prices and open interest are taken in first within a tick, so a vector is
+    built from the market as of the candidate rather than as of the last tick.
 
-    Four of its five inputs will be empty in the first run -- nothing is producing
-    order books, symbol profiles or funding forecasts yet. That is why the vector
+    Open interest arrives per option contract (broker-open-interest); the
+    aggregator resolves each contract to its underlying via
+    broker-instrument-listing and sums the chain, so the builder itself only
+    ever sees one figure per underlying (runtime.underlying_open_interest).
+
+    Four of its inputs will be empty in the first run -- nothing is producing
+    order books, symbol profiles or open interest yet. That is why the vector
     names what it could not measure instead of substituting zeros: a missing
-    feature and a feature that measured zero are different, and the composer counts
-    the first.
+    feature and a feature that measured zero are different, and the composer
+    counts the first.
     """
     from runtime.input_assembly import Batch
+    from runtime.underlying_open_interest import UnderlyingOpenInterestAggregator
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("bear-side-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
-    funding = Batch(read=context.bus.reader("funding-forecast"))
-    # The rate the venue is charging right now, which is a listing fact and has
-    # been on symbol-universe since 2026-08-22. Read here since 2026-08-26,
-    # because until then this part had no source for it at all and recorded
-    # funding_rate as missing on every vector it ever built.
-    universe = Batch(read=context.bus.reader("symbol-universe"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_vectors = context.bus.publisher_for("bear-feature-vector")
+    oi_aggregator = UnderlyingOpenInterestAggregator()
 
     def read_candidates_and_market(builder):
+        for listing in listings.payloads():
+            oi_aggregator.observe_listing(listing)
+        for reading in open_interest.payloads():
+            oi_aggregator.observe_open_interest(reading)
         for trade in levels_in(trades.payloads()):
             builder.observe_price(
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
@@ -451,28 +469,22 @@ def start_part(context) -> int:
             typical_spread = profile.value_of(TYPICAL_SPREAD)
             if typical_spread is not None:
                 builder.observe_symbol_profile(profile.venue_id, profile.symbol, typical_spread)
-        for forecast in funding.payloads():
-            # Unpacked, not passed whole: this took the payload as its only
-            # argument until 2026-08-26 and would have raised TypeError the first
-            # time a forecast ever arrived -- which nothing noticed, because the
-            # forecaster has never produced one.
-            if forecast.predicted_rate is not None:
-                builder.observe_funding_forecast(
-                    forecast.venue_id, forecast.symbol, forecast.predicted_rate
+        pending = candidates.payloads()
+        for candidate in pending:
+            totals = oi_aggregator.totals_for(candidate.symbol)
+            if totals is not None:
+                builder.observe_open_interest(
+                    candidate.venue_id, candidate.symbol, totals.open_interest,
+                    totals.total_buy_quantity, totals.total_sell_quantity,
+                    totals.observed_at_ns,
                 )
-        for listed in universe.payloads():
-            if listed.funding_rate_per_settlement is not None:
-                builder.observe_funding(
-                    listed.venue_id, listed.symbol, listed.funding_rate_per_settlement
-                )
-        return candidates.payloads()
+        return pending
 
     return run_bear_feature_builder(
         builder=BearFeatureBuilder(
             short_window=int(context.number("bear_feature_short_window")),
             long_window=int(context.number("bear_feature_long_window")),
             minimum_observations=int(context.number("bear_feature_minimum_observations")),
-            settlements_per_day=context.number("bear_settlements_per_day"),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
         ),

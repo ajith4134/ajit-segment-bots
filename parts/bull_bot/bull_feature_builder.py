@@ -11,10 +11,19 @@ above its own recent mean" transfers between symbols and across a year.
 
 **A feature that cannot be measured is named as missing, never defaulted.** This
 is the rule that costs the most and matters the most. Filling an unavailable
-funding rate with zero teaches the model that unavailable means neutral, and
-nothing downstream can undo that -- the model will have learned it, and it will
-trade on it. So the vector says what it has, says what it does not, and lets the
-parts below decide whether that is enough.
+open-interest change with zero teaches the model that unavailable means neutral,
+and nothing downstream can undo that -- the model will have learned it, and it
+will trade on it. So the vector says what it has, says what it does not, and
+lets the parts below decide whether that is enough.
+
+**`open_interest_change` and `order_flow_imbalance` replace `funding_rate` and
+`funding_forecast_change`** (2026-09-01, options-segment-bots conversion).
+Funding rate is a crypto perpetual mechanic with no Indian equivalent; the
+thing it was a proxy for -- crowd positioning pressure -- has an honest
+Indian analogue already sitting in `broker-open-interest`: how much an
+underlying's option-chain open interest is building, and which side (buy or
+sell) is driving today's volume. `runtime/underlying_open_interest.py` sums
+the per-contract readings into one figure per underlying.
 
 The build is bandwidth-bound rather than compute-bound: the work is reading the
 book and the recent tape for a symbol, not the arithmetic on them.
@@ -38,8 +47,8 @@ BOT = "bull-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bull-feature-builder",
     consumes=(
-        "bull-side-candidate", "funding-forecast", "order-book-snapshot",
-        "symbol-price-frame", "symbol-profile", "symbol-universe",
+        "bull-side-candidate", "broker-instrument-listing", "broker-open-interest",
+        "order-book-snapshot", "symbol-price-frame", "symbol-profile", "symbol-universe",
     ),
     produces=("bull-feature-vector", "part-health"),
     resource_class="bandwidth-bound",
@@ -58,8 +67,8 @@ FEATURE_NAMES = (
     "book_imbalance",
     "spread_fraction",
     "depth_to_size_ratio",
-    "funding_rate",
-    "funding_forecast_change",
+    "open_interest_change",
+    "order_flow_imbalance",
     "detector_strength",
     "detector_hit_rate",
     "setup_weight",
@@ -82,9 +91,9 @@ class SymbolObservations:
 
     short_window: RollingWindow
     long_window: RollingWindow
+    open_interest_window: RollingWindow
     book: tuple | None = None
-    funding_rate: float | None = None
-    funding_forecast: float | None = None
+    order_flow_imbalance: float | None = None
     # What this symbol's spread usually is, from its profile. Used only when no
     # book snapshot has arrived: the spread now is unknown then, and the spread it
     # usually has is a measured fact about the symbol rather than about this
@@ -141,11 +150,18 @@ class BullFeatureBuilder:
     def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
         self._observations_for(venue_id, symbol).book = (tuple(bids), tuple(asks))
 
-    def observe_funding(self, venue_id: str, symbol: str, rate: float) -> None:
-        self._observations_for(venue_id, symbol).funding_rate = rate
-
-    def observe_funding_forecast(self, venue_id: str, symbol: str, forecast: float) -> None:
-        self._observations_for(venue_id, symbol).funding_forecast = forecast
+    def observe_open_interest(
+        self, venue_id: str, symbol: str, open_interest: float,
+        total_buy_quantity: float, total_sell_quantity: float, at_ns: int,
+    ) -> None:
+        """One underlying's option-chain open interest and order flow, already
+        summed across its contracts (runtime.underlying_open_interest)."""
+        observations = self._observations_for(venue_id, symbol)
+        observations.open_interest_window.observe(open_interest, at_ns)
+        total = total_buy_quantity + total_sell_quantity
+        observations.order_flow_imbalance = (
+            (total_buy_quantity - total_sell_quantity) / total if total > 0 else None
+        )
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, typical_spread: float) -> None:
         self._observations_for(venue_id, symbol).typical_spread = typical_spread
@@ -184,7 +200,7 @@ class BullFeatureBuilder:
             for name in (
                 "price_z_score", "return_over_window", "realised_volatility_fraction",
                 "volatility_ratio_short_to_long", "book_imbalance", "spread_fraction",
-                "depth_to_size_ratio", "funding_rate", "funding_forecast_change",
+                "depth_to_size_ratio", "open_interest_change", "order_flow_imbalance",
             ):
                 record(name, None, "nothing observed for this symbol")
             return self._vector(candidate, features, missing, sources)
@@ -232,13 +248,14 @@ class BullFeatureBuilder:
                 f"ask depth against {self._reference_size:g} quote",
             )
 
-        record("funding_rate", observations.funding_rate, "venue funding rate")
         record(
-            "funding_forecast_change",
-            None
-            if observations.funding_forecast is None or observations.funding_rate is None
-            else observations.funding_forecast - observations.funding_rate,
-            "funding-forecast minus current",
+            "open_interest_change",
+            self._return_over(observations.open_interest_window),
+            "broker-open-interest summed across the underlying's option chain",
+        )
+        record(
+            "order_flow_imbalance", observations.order_flow_imbalance,
+            "broker-open-interest: buy quantity less sell quantity, over their total",
         )
 
         return self._vector(candidate, features, missing, sources)
@@ -270,6 +287,11 @@ class BullFeatureBuilder:
                     length=self._long,
                     maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                ),
+                open_interest_window=RollingWindow(
+                    length=self._long,
+                    maximum_gap_seconds=self._maximum_gap_seconds,
+                    gap_patience_multiple=self._gap_patience_multiple,
                 ),
             )
             self._symbols[key] = observations
@@ -394,32 +416,39 @@ def run_bull_feature_builder(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Prices, books, profiles and funding are all levels the builder accumulates; the
-    side candidates are the events that ask for a vector. Prices are taken in first
-    within a tick, so a vector is built from the market as of the candidate rather
-    than as of the last tick.
+    Prices, books, profiles and open interest are all levels the builder
+    accumulates; the side candidates are the events that ask for a vector.
+    Prices and open interest are taken in first within a tick, so a vector is
+    built from the market as of the candidate rather than as of the last tick.
 
-    Four of its five inputs will be empty in the first run -- nothing is producing
-    order books, symbol profiles or funding forecasts yet. That is why the vector
+    Open interest arrives per option contract (broker-open-interest); the
+    aggregator resolves each contract to its underlying via
+    broker-instrument-listing and sums the chain, so the builder itself only
+    ever sees one figure per underlying (runtime.underlying_open_interest).
+
+    Four of its inputs will be empty in the first run -- nothing is producing
+    order books, symbol profiles or open interest yet. That is why the vector
     names what it could not measure instead of substituting zeros: a missing
-    feature and a feature that measured zero are different, and the composer counts
-    the first.
+    feature and a feature that measured zero are different, and the composer
+    counts the first.
     """
     from runtime.input_assembly import Batch
+    from runtime.underlying_open_interest import UnderlyingOpenInterestAggregator
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     candidates = Batch(read=context.bus.reader("bull-side-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
-    funding = Batch(read=context.bus.reader("funding-forecast"))
-    # The rate the venue is charging right now, which is a listing fact and has
-    # been on symbol-universe since 2026-08-22. Read here since 2026-08-26,
-    # because until then this part had no source for it at all and recorded
-    # funding_rate as missing on every vector it ever built.
-    universe = Batch(read=context.bus.reader("symbol-universe"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_vectors = context.bus.publisher_for("bull-feature-vector")
+    oi_aggregator = UnderlyingOpenInterestAggregator()
 
     def read_candidates_and_market(builder):
+        for listing in listings.payloads():
+            oi_aggregator.observe_listing(listing)
+        for reading in open_interest.payloads():
+            oi_aggregator.observe_open_interest(reading)
         for trade in levels_in(trades.payloads()):
             builder.observe_price(
                 trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
@@ -433,21 +462,16 @@ def start_part(context) -> int:
             typical_spread = profile.value_of(TYPICAL_SPREAD)
             if typical_spread is not None:
                 builder.observe_symbol_profile(profile.venue_id, profile.symbol, typical_spread)
-        for forecast in funding.payloads():
-            # Unpacked, not passed whole: this took the payload as its only
-            # argument until 2026-08-26 and would have raised TypeError the first
-            # time a forecast ever arrived -- which nothing noticed, because the
-            # forecaster has never produced one.
-            if forecast.predicted_rate is not None:
-                builder.observe_funding_forecast(
-                    forecast.venue_id, forecast.symbol, forecast.predicted_rate
+        pending = candidates.payloads()
+        for candidate in pending:
+            totals = oi_aggregator.totals_for(candidate.symbol)
+            if totals is not None:
+                builder.observe_open_interest(
+                    candidate.venue_id, candidate.symbol, totals.open_interest,
+                    totals.total_buy_quantity, totals.total_sell_quantity,
+                    totals.observed_at_ns,
                 )
-        for listed in universe.payloads():
-            if listed.funding_rate_per_settlement is not None:
-                builder.observe_funding(
-                    listed.venue_id, listed.symbol, listed.funding_rate_per_settlement
-                )
-        return candidates.payloads()
+        return pending
 
     return run_bull_feature_builder(
         builder=BullFeatureBuilder(

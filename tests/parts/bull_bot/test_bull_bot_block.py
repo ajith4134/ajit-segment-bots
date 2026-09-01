@@ -372,12 +372,28 @@ def a_builder(minimum=5, maximum_gap_seconds=None):
     )
 
 
+def observe_open_interest_series(subject, count=5, start_ns=0):
+    """A short, deterministic open-interest series -- rising OI, buy-heavy flow.
+
+    No captured Indian open-interest tape exists yet (RL-063's honest
+    boundary, same as the Upstox adapter tests): these are test-chosen
+    values against the real BullFeatureBuilder.observe_open_interest API,
+    not an invented shape.
+    """
+    for index in range(count):
+        subject.observe_open_interest(
+            VENUE, SYMBOL, open_interest=10_000.0 + index * 100.0,
+            total_buy_quantity=600.0, total_sell_quantity=400.0,
+            at_ns=start_ns + index * 1_000_000_000,
+        )
+
+
 def test_a_feature_that_could_not_be_measured_is_named_not_defaulted():
     """The rule that costs most and matters most: zero would teach the model."""
     subject = a_builder()
     vector = subject.build(a_side_candidate())
-    assert "funding_rate" in vector.missing
-    assert "funding_rate" not in vector.features
+    assert "open_interest_change" in vector.missing
+    assert "open_interest_change" not in vector.features
     assert vector.is_complete is False
 
 
@@ -386,8 +402,7 @@ def test_a_complete_vector_names_where_every_feature_came_from(read_captured_tra
     for trade in read_captured_trades(limit=60):
         subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
-    subject.observe_funding(VENUE, SYMBOL, 0.0001)
-    subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
+    observe_open_interest_series(subject)
     vector = subject.build(a_side_candidate())
     assert vector.is_complete, f"still missing {vector.missing}"
     assert set(vector.features) <= set(FEATURE_NAMES)
@@ -400,8 +415,7 @@ def test_every_feature_is_a_fraction_not_a_price(read_captured_trades):
     for trade in read_captured_trades(limit=60):
         subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
-    subject.observe_funding(VENUE, SYMBOL, 0.0001)
-    subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
+    observe_open_interest_series(subject)
     vector = subject.build(a_side_candidate())
     assert max(abs(value) for value in vector.features.values()) < 1000
 
@@ -1206,10 +1220,10 @@ def test_a_right_setup_at_the_wrong_moment_stands_down():
 
 def test_too_many_missing_features_stops_the_opinion():
     opinion = a_composer(missing=1).compose(
-        a_vector(missing=("funding_rate", "book_imbalance")), CalibratedStub(0.9), a_timing(), a_plan()
+        a_vector(missing=("open_interest_change", "book_imbalance")), CalibratedStub(0.9), a_timing(), a_plan()
     )
     assert opinion.refusal == FEATURES_INCOMPLETE
-    assert "funding_rate" in opinion.reason
+    assert "open_interest_change" in opinion.reason
 
 
 def test_a_conviction_below_the_floor_stands_down():
@@ -1585,8 +1599,7 @@ def test_a_hole_in_the_feed_is_not_a_return(read_captured_trades):
     for trade in trades:
         subject.observe_price(VENUE, SYMBOL, trade.price, trade.venue_time_ns)
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 1.0),))
-    subject.observe_funding(VENUE, SYMBOL, 0.0001)
-    subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
+    observe_open_interest_series(subject)
     assert subject.build(a_side_candidate()).is_complete
 
     after_the_hole = trades[-1].venue_time_ns + 3_360 * 1_000_000_000

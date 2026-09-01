@@ -237,8 +237,23 @@ def test_a_filter_with_no_settlement_schedule_cannot_project_carry():
 def a_builder(minimum=5):
     return BearFeatureBuilder(
         short_window=10, long_window=50, minimum_observations=minimum,
-        settlements_per_day=SETTLEMENTS_PER_DAY,
     )
+
+
+def observe_open_interest_series(subject, count=5, start_ns=0):
+    """A short, deterministic open-interest series -- rising OI, sell-heavy flow.
+
+    No captured Indian open-interest tape exists yet (RL-063's honest
+    boundary, same as the Upstox adapter tests): these are test-chosen
+    values against the real BearFeatureBuilder.observe_open_interest API,
+    not an invented shape.
+    """
+    for index in range(count):
+        subject.observe_open_interest(
+            VENUE, SYMBOL, open_interest=10_000.0 + index * 100.0,
+            total_buy_quantity=400.0, total_sell_quantity=600.0,
+            at_ns=start_ns + index * 1_000_000_000,
+        )
 
 
 def a_prepared_builder(prices, minimum=5):
@@ -246,8 +261,7 @@ def a_prepared_builder(prices, minimum=5):
     for price in prices:
         subject.observe_price(VENUE, SYMBOL, price, subject._now_ns())
     subject.observe_book(VENUE, SYMBOL, bids=((77400.0, 3.0),), asks=((77420.0, 5.0),))
-    subject.observe_funding(VENUE, SYMBOL, 0.0001)
-    subject.observe_funding_forecast(VENUE, SYMBOL, 0.0004)
+    observe_open_interest_series(subject)
     return subject
 
 
@@ -260,8 +274,8 @@ def test_a_complete_short_vector_names_where_everything_came_from(real_trade_pri
 
 def test_a_feature_that_could_not_be_measured_is_named_not_defaulted():
     vector = a_builder().build(a_side_candidate())
-    assert "funding_rate" in vector.missing
-    assert "funding_rate" not in vector.features
+    assert "open_interest_change" in vector.missing
+    assert "open_interest_change" not in vector.features
 
 
 def test_offer_side_imbalance_is_signed_for_the_short_not_reused_from_the_bull():
@@ -302,15 +316,21 @@ def test_squeeze_room_is_thin_when_a_moving_symbol_has_a_light_offer_side():
     assert thin < deep
 
 
-def test_the_carry_feature_is_signed_as_a_cost_to_the_short():
+def test_sell_flow_imbalance_is_signed_for_the_short_not_reused_from_the_bull():
+    """Positive when sell-side flow is heavier -- favours the short, the same
+    signing convention offer_side_imbalance already uses."""
     subject = a_builder(minimum=5)
-    for _ in range(60):
-        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
-    subject.observe_funding(VENUE, SYMBOL, -0.01)
-    charged = subject.build(a_side_candidate(horizon=86400.0)).features["funding_carry_over_horizon"]
-    subject.observe_funding(VENUE, SYMBOL, 0.01)
-    paid = subject.build(a_side_candidate(horizon=86400.0)).features["funding_carry_over_horizon"]
-    assert charged > 0 > paid
+    subject.observe_open_interest(
+        VENUE, SYMBOL, open_interest=10_000.0,
+        total_buy_quantity=200.0, total_sell_quantity=800.0, at_ns=0,
+    )
+    sell_heavy = subject.build(a_side_candidate()).features["sell_flow_imbalance"]
+    subject.observe_open_interest(
+        VENUE, SYMBOL, open_interest=10_000.0,
+        total_buy_quantity=800.0, total_sell_quantity=200.0, at_ns=1_000_000_000,
+    )
+    buy_heavy = subject.build(a_side_candidate()).features["sell_flow_imbalance"]
+    assert sell_heavy > 0 > buy_heavy
 
 
 # ---- bear-outlier-rejector --------------------------------------------------
