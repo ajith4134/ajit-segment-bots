@@ -85,6 +85,7 @@
         "broker-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
+        "broker-price-frame",
         "cointegrated-pair",
         "consolidated-price",
         "cross-segment-signal",
@@ -12430,7 +12431,8 @@
         "broker-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
-        "broker-price-frame"
+        "broker-price-frame",
+        "training-label"
       ],
       "produces": [
         "entry-candidate",
