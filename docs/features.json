@@ -1563,6 +1563,7 @@
         "broker-open-interest",
         "broker-option-greeks",
         "broker-order-book-snapshot",
+        "broker-price-frame",
         "broker-token-standing",
         "part-health"
       ],
@@ -3249,6 +3250,11 @@
       "id": "broker-account-funds",
       "name": "broker account funds",
       "description": "What a broker says is available right now, and how old that statement is -- span/exposure/adhoc margin, payin amount, notional cash and available margin, split by segment. Direct analogue of account-balance, kept as its own type because the field shape genuinely differs (SEBI margin categories, not free/used/total) and reusing account-balance would wire this into every existing crypto consumer of it via R-01 (spec section 6a)."
+    },
+    {
+      "id": "broker-price-frame",
+      "name": "broker price frame",
+      "description": "Every tracked instrument's latest last-traded price on one broker, at one moment, published on a cadence rather than per tick. Direct analogue of symbol-price-frame -- kept as its own type because reusing that id would auto-wire this into every existing crypto consumer of it via R-01 (docs/proposals/broker-price-quote-samplers.md)."
     }
   ],
   "features": [
@@ -12424,7 +12430,7 @@
         "broker-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
-        "symbol-price-frame"
+        "broker-price-frame"
       ],
       "produces": [
         "entry-candidate",
@@ -12442,6 +12448,31 @@
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-price-level-sampler",
+      "name": "Broker price level sampler",
+      "role": "sample every tracked instrument's latest price into one frame per cadence tick",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-market-data"
+      ],
+      "produces": [
+        "broker-price-frame",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/proposals/broker-price-quote-samplers.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -13045,5 +13076,11 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_options_scanner_first_slice.py",
     "proposal": "docs/proposals/options-scanner-first-slice.md",
     "spec": "docs/superpowers/specs/2026-09-01-options-segment-bots-design.md"
+  },
+  "_proposal_2026-09-01_broker_price_quote_samplers": {
+    "what": "broker-price-level-sampler and broker-quote-level-sampler -- the dependency-ordered first cut of auditing opportunity-scanner/bull-bot/bear-bot/profit-tailgating-bot/ai-brain/instrument-selector's crypto-shaped consumes. Nothing downstream can swap to a real Indian type until this substrate exists.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_broker_price_quote_samplers.py",
+    "proposal": "docs/proposals/broker-price-quote-samplers.md"
   }
 }
