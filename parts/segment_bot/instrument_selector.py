@@ -67,8 +67,18 @@ SEGMENT_OF = {
     PERPETUAL_FUTURE: "futures",
     DATED_FUTURE: "futures",
     SPOT: "spot",
-    OPTION: "options",
+    # "index-options" (was "options", the retired crypto segment id) --
+    # Phase A is index options specifically (2026-09-01, options-segment-
+    # bots conversion). Otherwise every real option candidate would have
+    # been refused as an unbuilt-segment instrument, the same class of bug
+    # already fixed in cross-segment-signal-bridge/cross-segment-lesson-bridge.
+    OPTION: "index-options",
 }
+
+# The broker this segment's instrument-selector prices options against.
+# Only ever Upstox until a second broker adapter exists (spec: Upstox is
+# the first of six planned brokers).
+UPSTOX_VENUE_ID = "upstox"
 
 CHOSEN = "chosen"
 NOTHING_AVAILABLE = "no-instrument-is-listed-for-this-symbol"
@@ -103,6 +113,13 @@ class ListedInstrument:
     round_trip_cost_fraction: float | None
     absorbable_quote: float | None
     seconds_to_fill: float | None
+    # Whether this instrument can express a BULLISH view when bought. True
+    # for every existing crypto instrument (perpetual/dated-future/spot are
+    # all long-capable) -- the default keeps every existing registration
+    # site valid unchanged. A bought PUT is the first instrument that is
+    # bearish-only (2026-09-01, options-segment-bots conversion): nothing
+    # before this needed the symmetric check supports_short already had.
+    supports_long: bool = True
 
     @property
     def segment(self) -> str:
@@ -219,6 +236,111 @@ class InstrumentSelector:
         self._held_grades: dict[tuple[str, str], object] = {}
         self._surfaces: dict[tuple[str, str], object] = {}
         self.standing = SelectorStanding()
+
+        from runtime.atm_strike_tracker import AtmStrikeTracker
+
+        self._atm_tracker = AtmStrikeTracker()
+        # The contract_symbol currently registered as the ATM call/put for
+        # each underlying, so a strike that stops being ATM (the underlying
+        # moved) can be evicted rather than accumulating forever --
+        # observe_listed_instrument only ever replaces an entry with the
+        # *same* contract_symbol, which is right for a funding-rate update
+        # on one perpetual and wrong for a strike that is no longer ATM.
+        self._registered_atm: dict[tuple[str, str, str], str] = {}
+        # An option contract's own last-traded price, keyed by instrument_key.
+        self._option_prices: dict[str, float] = {}
+
+    def observe_option_listing(self, listing) -> None:
+        """One broker-instrument-listing row -- an underlying or an option contract."""
+        self._atm_tracker.observe_listing(listing)
+        underlying_symbol = (
+            listing.trading_symbol if listing.underlying_key is None
+            else self._atm_tracker.underlying_of(listing.instrument_key)
+        )
+        if underlying_symbol is not None:
+            self._refresh_atm_instruments(underlying_symbol)
+
+    def observe_option_greeks(self, greeks) -> None:
+        """A delta changing is exactly what can move which strike is ATM --
+        real listings refresh roughly daily, greeks continuously, so the
+        refresh has to run here too, not only on observe_option_listing."""
+        self._atm_tracker.observe_greeks(greeks)
+        underlying_symbol = self._atm_tracker.underlying_of(greeks.instrument_key)
+        if underlying_symbol is not None:
+            self._refresh_atm_instruments(underlying_symbol)
+
+    def observe_option_price(self, instrument_key: str, last_traded_price: float, at_ns: int) -> None:
+        """One option contract's own LTP (broker-market-data), kept so its
+        premium can be expressed as a fraction of the underlying's spot --
+        the same unit every other carry figure in this part already is.
+
+        Refreshes the same way observe_option_greeks does: a price arriving
+        after the greeks-triggered refresh already ran must not leave the
+        registered candidate's premium_fraction stale at None."""
+        self._option_prices[instrument_key] = last_traded_price
+        underlying_symbol = self._atm_tracker.underlying_of(instrument_key)
+        if underlying_symbol is not None:
+            self._refresh_atm_instruments(underlying_symbol)
+
+    def _refresh_atm_instruments(self, underlying_symbol: str) -> None:
+        """Re-derive the current ATM call/put for this underlying, and
+        (re)register them as the options-kind candidates for it."""
+        for atm in (
+            self._atm_tracker.atm_call_for(underlying_symbol),
+            self._atm_tracker.atm_put_for(underlying_symbol),
+        ):
+            if atm is None:
+                continue
+            # A call's delta is positive (~0.5), a put's is negative
+            # (~-0.5) by convention -- the sign alone says which view this
+            # specific contract can express, no separate "is this a call or
+            # a put" flag needed. Also which of the two ATM slots
+            # (call/put) this is, for eviction below.
+            is_call = atm.delta >= 0
+            slot_key = (UPSTOX_VENUE_ID, underlying_symbol, "call" if is_call else "put")
+            previous = self._registered_atm.get(slot_key)
+            if previous is not None and previous != atm.trading_symbol:
+                self._evict_listed_instrument(UPSTOX_VENUE_ID, underlying_symbol, previous)
+            self._registered_atm[slot_key] = atm.trading_symbol
+
+            spot = self._prices.get((UPSTOX_VENUE_ID, underlying_symbol))
+            option_price = self._option_prices.get(atm.instrument_key)
+            premium_fraction = (
+                option_price / spot.price
+                if option_price is not None and spot is not None and spot.price > 0
+                else None
+            )
+            seconds_to_expiry = (
+                (atm.expiry_ms - self._deciding_at_ns / 1_000_000) / 1000.0
+                if atm.expiry_ms is not None
+                else None
+            )
+
+            self.observe_listed_instrument(
+                ListedInstrument(
+                    venue_id=UPSTOX_VENUE_ID, symbol=underlying_symbol, instrument_kind=OPTION,
+                    contract_symbol=atm.trading_symbol,
+                    funding_rate_per_settlement=None, settlements_per_day=None,
+                    basis_fraction=None,
+                    premium_fraction=premium_fraction,
+                    seconds_to_expiry=seconds_to_expiry,
+                    supports_short=not is_call,
+                    supports_long=is_call,
+                    supports_convexity=True,
+                    round_trip_cost_fraction=self._round_trip_cost_fraction,
+                    absorbable_quote=None,
+                    seconds_to_fill=None,
+                )
+            )
+
+    def _evict_listed_instrument(self, venue_id: str, symbol: str, contract_symbol: str) -> None:
+        """Removes one no-longer-ATM strike, the counterpart to
+        observe_listed_instrument's same-contract_symbol replace."""
+        key = (venue_id, symbol)
+        self._listed[key] = [
+            existing for existing in self._listed.get(key, [])
+            if existing.contract_symbol != contract_symbol
+        ]
 
     def observe_listed_instrument(self, instrument: ListedInstrument) -> None:
         key = (instrument.venue_id, instrument.symbol)
@@ -631,6 +753,8 @@ class InstrumentSelector:
         """Why this instrument cannot express this intent, or None if it can."""
         if not intent.is_long and not instrument.supports_short:
             return "it cannot be sold short"
+        if intent.is_long and not instrument.supports_long:
+            return "it cannot express a long view"
         if getattr(intent, "needs_convexity", False) and not instrument.supports_convexity:
             return "it cannot express a convexity view"
         if (

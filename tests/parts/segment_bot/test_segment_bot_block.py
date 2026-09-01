@@ -140,7 +140,7 @@ def test_an_instrument_that_cannot_express_the_intent_is_not_a_worse_choice():
 
 
 def test_a_convexity_view_needs_an_option():
-    subject = a_selector(built=("futures", "options"))
+    subject = a_selector(built=("futures", "index-options"))
     subject.observe_listed_instrument(a_perpetual())
     subject.observe_listed_instrument(an_option())
     choice = subject.select(Intent(needs_convexity=True))
@@ -161,7 +161,7 @@ def test_the_best_instrument_being_in_an_unbuilt_segment_is_reported_not_skipped
 
 def test_an_options_carry_is_its_time_value_and_decays_with_the_square_root_of_time():
     """A week out of a month costs far less than a quarter of the premium."""
-    subject = a_selector(built=("futures", "options"))
+    subject = a_selector(built=("futures", "index-options"))
     option = an_option(premium=0.02, seconds_to_expiry=30 * 86400.0)
     week = subject.carry_over(option, horizon_seconds=7 * 86400.0)
     assert 0 < week < 0.02 * 0.25
@@ -169,7 +169,7 @@ def test_an_options_carry_is_its_time_value_and_decays_with_the_square_root_of_t
 
 
 def test_an_option_with_no_premium_from_the_surface_cannot_be_priced():
-    subject = a_selector(built=("futures", "options"))
+    subject = a_selector(built=("futures", "index-options"))
     subject.observe_listed_instrument(an_option(premium=None))
     choice = subject.select(Intent(needs_convexity=True))
     assert "implied-vol surface" in choice.rejected["BTC-C-80000"]
@@ -177,7 +177,7 @@ def test_an_option_with_no_premium_from_the_surface_cannot_be_priced():
 
 def test_an_options_premium_is_paid_whichever_way_the_intent_points():
     """Unlike funding, it is not a credit to the other side."""
-    subject = a_selector(built=("futures", "options"))
+    subject = a_selector(built=("futures", "index-options"))
     subject.observe_listed_instrument(an_option())
     long_side = subject.select(Intent(needs_convexity=True, is_long=True))
     short_side = subject.select(Intent(needs_convexity=True, is_long=False))
