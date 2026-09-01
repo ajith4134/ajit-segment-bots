@@ -75,6 +75,7 @@ def test_sums_open_interest_and_flow_across_the_chain_for_one_underlying():
     assert totals.open_interest == 1500.0
     assert totals.total_buy_quantity == 700.0
     assert totals.total_sell_quantity == 700.0
+    assert totals.observed_at_ns == 1_740_000_000_000_000_000
 
 
 def test_a_later_reading_for_one_contract_replaces_rather_than_adds():
@@ -96,6 +97,17 @@ def test_an_equity_listing_with_no_underlying_key_is_never_aggregated():
     # JOCIL has no underlying_key, so it is not an option contract on
     # anything -- nothing to resolve it against, nothing to sum it into.
     assert aggregator.totals_for("JOCIL") is None
+
+
+def test_observed_at_ns_is_the_freshest_contracts_own_time():
+    aggregator = UnderlyingOpenInterestAggregator()
+    aggregator.observe_listing(NIFTY_UNDERLYING_LISTING)
+    aggregator.observe_listing(NIFTY_CALL_LISTING)
+    aggregator.observe_listing(NIFTY_PUT_LISTING)
+    aggregator.observe_open_interest(_oi("NSE_FO|1001", 1000.0, 600.0, 400.0, at_ns=100))
+    aggregator.observe_open_interest(_oi("NSE_FO|1002", 500.0, 100.0, 300.0, at_ns=200))
+
+    assert aggregator.totals_for("NIFTY").observed_at_ns == 200
 
 
 def test_an_unresolved_instrument_key_is_ignored_not_raised():

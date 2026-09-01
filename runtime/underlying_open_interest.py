@@ -21,11 +21,19 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class UnderlyingOpenInterestTotals:
-    """Open interest and order flow, summed across one underlying's option chain."""
+    """Open interest and order flow, summed across one underlying's option chain.
+
+    `observed_at_ns` is the freshest contract's own broker_time_ns among the
+    ones summed, never the moment this aggregator was asked -- a reader that
+    windows this value needs the market's own time for it, the same reason a
+    frame's own price levels carry their observation time rather than the
+    frame's publish time (runtime/price_frames.py).
+    """
 
     open_interest: float
     total_buy_quantity: float
     total_sell_quantity: float
+    observed_at_ns: int
 
 
 class UnderlyingOpenInterestAggregator:
@@ -40,7 +48,7 @@ class UnderlyingOpenInterestAggregator:
         self._underlying_symbol_by_key: dict[str, str] = {}
         self._contract_underlying: dict[str, str] = {}
         self._pending_contracts: dict[str, str] = {}
-        self._latest_by_contract: dict[str, tuple[float, float, float]] = {}
+        self._latest_by_contract: dict[str, tuple[float, float, float, int]] = {}
 
     def observe_listing(self, listing) -> None:
         """One instrument listing -- either an underlying itself, or a contract on one."""
@@ -67,6 +75,7 @@ class UnderlyingOpenInterestAggregator:
         """One contract's latest open-interest reading, replacing its prior one."""
         self._latest_by_contract[reading.instrument_key] = (
             reading.open_interest, reading.total_buy_quantity, reading.total_sell_quantity,
+            reading.broker_time_ns,
         )
 
     def totals_for(self, underlying_symbol: str) -> UnderlyingOpenInterestTotals | None:
@@ -83,9 +92,10 @@ class UnderlyingOpenInterestAggregator:
         if not readings:
             return None
         return UnderlyingOpenInterestTotals(
-            open_interest=sum(oi for oi, _, _ in readings),
-            total_buy_quantity=sum(buy for _, buy, _ in readings),
-            total_sell_quantity=sum(sell for _, _, sell in readings),
+            open_interest=sum(oi for oi, _, _, _ in readings),
+            total_buy_quantity=sum(buy for _, buy, _, _ in readings),
+            total_sell_quantity=sum(sell for _, _, sell, _ in readings),
+            observed_at_ns=max(at_ns for _, _, _, at_ns in readings),
         )
 
 
