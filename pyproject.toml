@@ -38,6 +38,11 @@ dependencies = [
     # bytes as they arrived, which a normalising client does not preserve.
     # Pure-Python wheel, so no compiler.
     "websockets==17.0.1",
+    # Decodes Upstox's protobuf-encoded v3 market feed (spec section 5) --
+    # the only broker adapter needing this so far, but any future adapter
+    # streaming protobuf reuses it rather than adding a second decoder.
+    # cp310-abi3 wheel, forward-compatible with 3.14, no compiler needed.
+    "protobuf==7.36.1",
 ]
 
 [project.optional-dependencies]
