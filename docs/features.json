@@ -135,6 +135,7 @@
       "approved": true,
       "consumes": [
         "broker-instrument-listing",
+        "broker-market-data",
         "broker-option-greeks",
         "implied-vol-surface",
         "liquidity-grade",
@@ -5729,7 +5730,8 @@
         "symbol-universe",
         "symbol-quote-frame",
         "broker-instrument-listing",
-        "broker-option-greeks"
+        "broker-option-greeks",
+        "broker-market-data"
       ],
       "produces": [
         "instrument-choice",

@@ -52,6 +52,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
         "symbol-universe", "symbol-quote-frame", "broker-instrument-listing", "broker-option-greeks",
+        "broker-market-data",
     ),
     produces=("instrument-choice", "part-health"),
     resource_class="compute-bound",
@@ -888,6 +889,7 @@ def start_part(context) -> int:
     `unbuilt_segment_would_have_won` is how that becomes visible.
     """
     from runtime.input_assembly import Batch
+    from runtime.brokers.broker_adapter import LtpUpdate
 
     intents = Batch(read=context.bus.reader("trade-intent"))
     surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
@@ -898,6 +900,7 @@ def start_part(context) -> int:
     universe = Batch(read=context.bus.reader("symbol-universe"))
     listings = Batch(read=context.bus.reader("broker-instrument-listing"))
     greeks = Batch(read=context.bus.reader("broker-option-greeks"))
+    option_prices = Batch(read=context.bus.reader("broker-market-data"))
     publish_choices = context.bus.publisher_for("instrument-choice")
 
     def read_intents_and_instruments(selector):
@@ -914,11 +917,16 @@ def start_part(context) -> int:
             selector.observe_option_listing(listing)
         for reading in greeks.payloads():
             selector.observe_option_greeks(reading)
-        # broker-market-data's option LTP is not wired to observe_option_price
-        # here yet -- it needs LtpUpdate.instrument_key correlated against the
-        # option contract, real additional wiring, named as the next task
-        # rather than rushed into this one (docs/proposals/instrument-
-        # selector-atm-strike.md).
+        for update in option_prices.payloads():
+            # broker-market-data carries every tracked instrument's LTP, not
+            # only option contracts -- observe_option_price is a safe no-op
+            # (via AtmStrikeTracker.underlying_of returning None) for
+            # anything that isn't a known option, so no pre-filtering by
+            # instrument_key set membership is needed here.
+            if isinstance(update, LtpUpdate):
+                selector.observe_option_price(
+                    update.instrument_key, update.last_traded_price, update.broker_time_ns
+                )
         for surface in surfaces.payloads():
             selector.observe_implied_vol_surface(surface)
         for grade in grades.payloads():
