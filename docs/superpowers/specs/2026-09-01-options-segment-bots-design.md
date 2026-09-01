@@ -157,10 +157,12 @@ itself an open question, see below.
 
 ## 7. What's still open — yours to answer, not decided here
 
-- **Which of the two goes first, index options or stock options?** Both
-  are "Phase A," but §6's decomposition still needs a build order between
-  them — RL-050's own precedent ("futures first, fully") was a single
-  choice among several candidates, not "build several at once."
+- ~~**Which of the two goes first**~~ **Confirmed 2026-09-01: index
+  options first, fully.** Far smaller universe to prove the pipeline
+  against (3 underlyings — NIFTY, BANKNIFTY, SENSEX — versus ~180-200 for
+  stock options), typically deeper liquidity, and it's where the
+  zero-to-hero detector lives. Stock options stays declared-but-skeleton
+  (T-1, same template) until index options is proven end-to-end.
 - **Zero-to-hero's exact numeric thresholds** (cheapness cutoff, delta
   cutoff, session-time gate) — need real captured option-chain data to set
   honestly, not a guess at spec time.
