@@ -16,7 +16,7 @@ import pathlib
 import pytest
 
 from runtime.settings_reader import load_settings_document, settings_directory
-from runtime.tape import StreamKind, TradeFidelity
+from runtime.tape import TradeFidelity
 from runtime.venues.adapter_registry import (
     ADAPTER_FACTORY_NAME,
     CAPTURED_VENUES_SETTING,
@@ -26,6 +26,7 @@ from runtime.venues.adapter_registry import (
     read_captured_venue_ids,
 )
 from runtime.venues.venue_adapter import (
+    CRYPTO_STREAM_KINDS,
     QUESTIONS_ANSWERED_FROM_A_VENUE_MESSAGE,
     QUESTIONS_ANSWERED_WITHOUT_VENUE_DATA,
     SequenceContinuity,
@@ -64,7 +65,7 @@ def ask_every_question_answerable_without_venue_data(adapter: VenueAdapter) -> N
         assert fact.source.strip(), f"{adapter.venue_id}'s '{name}' limit cites no source"
 
     topics = []
-    for stream_kind in StreamKind:
+    for stream_kind in CRYPTO_STREAM_KINDS:
         continuity = adapter.sequence_continuity(stream_kind)
         assert isinstance(continuity, SequenceContinuity), (
             f"{adapter.venue_id} does not say what its {stream_kind.name} sequence promises, "

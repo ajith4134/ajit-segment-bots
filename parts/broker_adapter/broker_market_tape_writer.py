@@ -31,7 +31,7 @@ from runtime.tape import StreamKind, TapeWriter
 PART_ID = "broker-market-tape-writer"
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    part_id="broker-market-tape-writer",
     consumes=(
         "broker-market-data", "broker-candle", "broker-order-book-snapshot",
         "broker-open-interest", "broker-option-greeks",

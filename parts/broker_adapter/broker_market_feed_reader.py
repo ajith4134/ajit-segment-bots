@@ -22,7 +22,7 @@ from runtime.part_process import run_part
 PART_ID = "broker-market-feed-reader"
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    part_id="broker-market-feed-reader",
     consumes=("broker-token-standing", "broker-instrument-listing"),
     produces=(
         "broker-market-data", "broker-candle", "broker-order-book-snapshot",

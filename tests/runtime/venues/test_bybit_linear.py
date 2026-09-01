@@ -20,6 +20,7 @@ from runtime.venues.bybit_linear import (
     build_venue_adapter,
 )
 from runtime.venues.venue_adapter import (
+    CRYPTO_STREAM_KINDS,
     SequenceContinuity,
     StreamRequest,
     VenueMessageNotRecognised,
@@ -54,7 +55,7 @@ def data_facts(adapter, records):
 
 
 def test_one_public_endpoint_carries_every_stream_kind(adapter):
-    for stream_kind in StreamKind:
+    for stream_kind in CRYPTO_STREAM_KINDS:
         assert adapter.stream_endpoint_url(stream_kind) == LINEAR_PUBLIC_STREAM
 
 

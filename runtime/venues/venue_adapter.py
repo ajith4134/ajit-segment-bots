@@ -40,6 +40,7 @@ __all__ = [
     "BanSignal",
     "ConnectionDiscipline",
     "ContractFunding",
+    "CRYPTO_STREAM_KINDS",
     "HeartbeatDiscipline",
     "MessageFacts",
     "NormalisedTrade",
@@ -53,6 +54,20 @@ __all__ = [
     "VenueFactWithoutSource",
     "VenueMessageNotRecognised",
 ]
+
+# The StreamKind members a crypto VenueAdapter is asked to answer for.
+# StreamKind stopped being crypto-exclusive on 2026-09-01 (OPEN_INTEREST,
+# OPTION_GREEKS added for the Indian-markets broker adapter -- see
+# runtime/brokers/broker_adapter.py) -- no crypto perpetual/spot venue has
+# open interest or option greeks in the sense those two carry, so a
+# conformance test asking every captured venue to answer for every
+# StreamKind member would ask Binance/Bybit a question their own domain
+# does not have. This is the crypto-scoped subset those conformance tests
+# iterate instead of the raw enum.
+CRYPTO_STREAM_KINDS = (
+    StreamKind.TRADE, StreamKind.CANDLE, StreamKind.BOOK,
+    StreamKind.QUOTE, StreamKind.PREMIUM,
+)
 
 
 class VenueFactWithoutSource(ValueError):

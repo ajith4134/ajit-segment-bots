@@ -20,7 +20,7 @@ from runtime.part_process import run_part
 PART_ID = "broker-instrument-catalogue-reader"
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    part_id="broker-instrument-catalogue-reader",
     consumes=(),
     produces=("broker-instrument-listing", "part-health"),
     resource_class="io-bound",

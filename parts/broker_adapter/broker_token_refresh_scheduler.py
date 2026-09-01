@@ -23,7 +23,7 @@ PART_ID = "broker-token-refresh-scheduler"
 IST = ZoneInfo("Asia/Kolkata")
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    part_id="broker-token-refresh-scheduler",
     consumes=(),
     produces=("broker-token-standing", "part-health"),
     resource_class="io-bound",
@@ -99,14 +99,40 @@ class TokenFileStore:
         )
 
 
+@dataclasses.dataclass
+class RefreshStanding:
+    """What the last refresh attempt actually did. Every field counted, none
+    asserted -- separate from the returned TokenStanding because a failure
+    with no existing token has nothing to attach `last_failure` to otherwise
+    (there is no TokenStanding yet to carry it), and a login failure must
+    still be visible on the part's health rather than silently swallowed
+    (Rule 8)."""
+
+    refresh_attempts: int = 0
+    last_failure: str | None = None
+
+
 def refresh_if_needed(
     store: TokenFileStore,
     daily_expiry_time_ist: datetime.time,
     generate_token,
+    standing: RefreshStanding | None = None,
     now: datetime.datetime | None = None,
-) -> TokenStanding:
+) -> TokenStanding | None:
     """The scheduling core: refresh only when the stored token is no longer
     valid, keep the stale token on a failed refresh rather than discarding it.
+
+    **Never raises.** A broker login failing is an ordinary operating
+    condition -- bad network, an expired TOTP secret, credentials not yet
+    configured -- not a reason to end the part that exists to keep retrying
+    it. Found the hard way: this used to re-raise when there was no existing
+    token to fall back on, and the integration test that launches every
+    declared part in a real subprocess caught it immediately -- the process
+    exited on its first tick, before ever reporting a heartbeat.
+
+    Returns None (nothing to publish this tick) rather than raising when
+    there is no existing token and the fresh attempt also failed;
+    `standing.last_failure` still carries the reason either way.
 
     `generate_token` is a zero-argument callable returning a fresh access
     token string, or raising. Injected so this function never imports
@@ -117,32 +143,45 @@ def refresh_if_needed(
     existing = store.load()
     if existing is not None and existing.is_still_valid(now):
         return existing
+    if standing is not None:
+        standing.refresh_attempts += 1
     try:
         token = generate_token()
     except Exception as failure:
+        reason = f"{type(failure).__name__}: {failure}"
+        if standing is not None:
+            standing.last_failure = reason
         if existing is not None:
-            failed = dataclasses.replace(existing, last_failure=f"{type(failure).__name__}: {failure}")
+            failed = dataclasses.replace(existing, last_failure=reason)
             store.save(failed)
             return failed
-        raise
-    standing = TokenStanding(
+        return None
+    if standing is not None:
+        standing.last_failure = None
+    fresh = TokenStanding(
         broker_id="upstox", access_token=token, generated_at=now,
         daily_expiry_time_ist=daily_expiry_time_ist,
     )
-    store.save(standing)
-    return standing
+    store.save(fresh)
+    return fresh
 
 
-def describe_standing(standing: TokenStanding | None) -> dict:
+def describe_standing(standing: TokenStanding | None, refresh_standing: RefreshStanding) -> dict:
     if standing is None:
-        return {"part_id": PART_ID, "has_token": False}
+        return {
+            "part_id": PART_ID,
+            "has_token": False,
+            "refresh_attempts": refresh_standing.refresh_attempts,
+            "last_failure": refresh_standing.last_failure,
+        }
     return {
         "part_id": PART_ID,
         "has_token": True,
         "broker_id": standing.broker_id,
         "is_valid": standing.is_still_valid(),
         "generated_at": standing.generated_at.isoformat(),
-        "last_failure": standing.last_failure,
+        "refresh_attempts": refresh_standing.refresh_attempts,
+        "last_failure": standing.last_failure or refresh_standing.last_failure,
     }
 
 
@@ -172,13 +211,15 @@ def start_part(context) -> int:
     # more than one broker.
     daily_expiry_time_ist = datetime.time(3, 30)
     current: list[TokenStanding | None] = [None]
+    refresh_standing = RefreshStanding()
 
     def refresh_if_due() -> None:
         current[0] = refresh_if_needed(
             store=store, daily_expiry_time_ist=daily_expiry_time_ist,
-            generate_token=generate_token,
+            generate_token=generate_token, standing=refresh_standing,
         )
-        publish_standing(current[0])
+        if current[0] is not None:
+            publish_standing(current[0])
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -188,13 +229,14 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
-        read_standing=lambda: describe_standing(current[0]),
+        read_standing=lambda: describe_standing(current[0], refresh_standing),
     )
 
 
 __all__ = [
     "PART_DECLARATION",
     "PART_ID",
+    "RefreshStanding",
     "TokenFileStore",
     "TokenStanding",
     "describe_standing",

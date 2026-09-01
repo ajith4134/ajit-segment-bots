@@ -140,3 +140,32 @@ def test_refresh_if_needed_records_failure_and_keeps_the_stale_token(tmp_path):
     # refresh must not leave every consumer with nothing at all.
     assert standing.access_token == "stale"
     assert "bad TOTP" in standing.last_failure
+
+
+def test_refresh_if_needed_never_raises_on_first_ever_failure(tmp_path):
+    # No stored token at all yet -- e.g. credentials not configured (this
+    # project's real state right now: placeholders in secrets.enc.yaml,
+    # docs/secrets.md). Found via the full integration test suite: the part
+    # crashed on its very first tick because this branch used to re-raise,
+    # taking the whole process down (launched.is_running went False) instead
+    # of staying up to report the failure.
+    from parts.broker_adapter.broker_token_refresh_scheduler import (
+        TokenFileStore, RefreshStanding, refresh_if_needed,
+    )
+
+    store = TokenFileStore(token_file_path=tmp_path / "upstox.json")
+    refresh_standing = RefreshStanding()
+
+    def failing_generate_token():
+        raise RuntimeError("UPSTOX_USERNAME not set")
+
+    result = refresh_if_needed(
+        store=store, daily_expiry_time_ist=datetime.time(3, 30),
+        generate_token=failing_generate_token,
+        standing=refresh_standing,
+        now=datetime.datetime(2026, 9, 1, 8, 0, tzinfo=IST),
+    )
+    assert result is None  # nothing to publish yet -- not a crash
+    assert refresh_standing.refresh_attempts == 1
+    assert "UPSTOX_USERNAME" in refresh_standing.last_failure
+    assert store.load() is None  # never had anything to save
