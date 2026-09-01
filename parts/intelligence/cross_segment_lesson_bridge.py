@@ -1,22 +1,22 @@
 """cross-segment-lesson-bridge: a lesson learned once, applied where it also holds.
 
-When the futures segment loses money because a venue's funding settled during a
-position it had sized without carry, that is not a futures lesson. It is a lesson
-about carry, and the options segment will make the same mistake unless something
-carries it across.
+When the index-options segment loses money because a position was held past
+its own theta decay without pricing the carry, that is not an index-options
+lesson. It is a lesson about carry, and the stock-options and futures
+segments will make the same mistake unless something carries it across.
 
 But most lessons do not travel, and a bridge that forwarded everything would
 teach every segment the other segments' particulars. So the discipline is in
 **what does not cross**:
 
 - **A lesson about a mechanism travels. A lesson about an instrument does not.**
-  "Funding settles against the short in the regimes where shorts look best" is
-  about perpetuals; "carry accrues against a position whose horizon exceeds the
-  settlement interval" is about carry, and only the second applies to a segment
-  with different instruments.
+  "This strike decays fastest in the last hour before expiry" is about the
+  instrument; "carry accrues against a position whose horizon exceeds the
+  decay it was priced for" is about carry, and only the second applies to a
+  segment with different instruments.
 - **A lesson travels only to segments that can act on it.** A lesson about
-  option expiry means nothing to a spot segment, and forwarding it anyway trains
-  every receiver to ignore the bridge.
+  option expiry means nothing to a cash-equity segment, and forwarding it
+  anyway trains every receiver to ignore the bridge.
 - **A lesson carries the evidence that produced it**, so the receiving segment
   can judge whether its own conditions match rather than adopting a conclusion
   reached under conditions it does not share.
@@ -24,6 +24,15 @@ teach every segment the other segments' particulars. So the discipline is in
 **A lesson is not an instruction.** It changes what a segment weighs; whether it
 changes what a segment does is that segment's decision, which is what keeps every
 trade decision inside the segment that owns it (RL-048).
+
+**2026-09-01, options-segment-bots conversion:** the segment vocabulary
+moved from the old 3 crypto segments (futures/spot/options) to the real 6.
+`mechanism_of`'s carry-detection in `start_part` still checks
+`instruction.change` for the substring `"funding"` -- a crypto-only keyword
+that will simply never match on Indian data until closed-trade-decoding's
+own Indian carry/theta concept is built (a separate, unaudited part of the
+pipeline). Harmless now, not yet honest for options -- named so it is not
+lost.
 """
 
 from __future__ import annotations
@@ -46,9 +55,19 @@ PART_DECLARATION = PartDeclaration(
     skipped_tick_effect="corrupts",
 )
 
-FUTURES = "futures"
-SPOT = "spot"
-OPTIONS = "options"
+INDEX_OPTIONS = "index-options"
+STOCK_OPTIONS = "stock-options"
+INDEX_FUTURES = "index-futures"
+STOCK_FUTURES = "stock-futures"
+COMMODITIES = "commodities"
+CASH_EQUITY = "cash-equity"
+ALL_SEGMENTS = (INDEX_OPTIONS, STOCK_OPTIONS, INDEX_FUTURES, STOCK_FUTURES, COMMODITIES, CASH_EQUITY)
+# The segments that hold a position over time against a real running cost --
+# an option's theta decay, a future's basis. Cash equity and (as built so
+# far) commodities do not (2026-09-01, options-segment-bots conversion --
+# was (FUTURES, OPTIONS) under the old 3-segment crypto vocabulary, where
+# CARRY meant perpetual funding specifically).
+DERIVATIVE_SEGMENTS = (INDEX_OPTIONS, STOCK_OPTIONS, INDEX_FUTURES, STOCK_FUTURES)
 
 # What a lesson can be about. A lesson about a mechanism travels; one about an
 # instrument does not, and the difference is the whole design.
@@ -62,12 +81,12 @@ INSTRUMENT_SPECIFIC = "instrument-specific"
 
 # Which segments each mechanism can be acted on by.
 APPLIES_TO = {
-    CARRY: (FUTURES, OPTIONS),
-    LIQUIDITY: (FUTURES, SPOT, OPTIONS),
-    EXECUTION: (FUTURES, SPOT, OPTIONS),
-    SIZING: (FUTURES, SPOT, OPTIONS),
-    REGIME: (FUTURES, SPOT, OPTIONS),
-    VENUE_BEHAVIOUR: (FUTURES, SPOT, OPTIONS),
+    CARRY: DERIVATIVE_SEGMENTS,
+    LIQUIDITY: ALL_SEGMENTS,
+    EXECUTION: ALL_SEGMENTS,
+    SIZING: ALL_SEGMENTS,
+    REGIME: ALL_SEGMENTS,
+    VENUE_BEHAVIOUR: ALL_SEGMENTS,
     INSTRUMENT_SPECIFIC: (),
 }
 

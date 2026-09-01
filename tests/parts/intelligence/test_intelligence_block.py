@@ -30,8 +30,9 @@ from parts.intelligence.counterfactual_replayer import (
 )
 from parts.intelligence.cross_segment_exposure_watch import CrossSegmentExposureWatch
 from parts.intelligence.cross_segment_lesson_bridge import (
-    CARRY, CROSSED, INSTRUMENT_SPECIFIC, LIQUIDITY, NOT_YET_PROVEN, NO_RECEIVER,
-    STAYS_HOME, CrossSegmentLessonBridge,
+    CARRY, CROSSED, INDEX_FUTURES as LESSON_INDEX_FUTURES,
+    INDEX_OPTIONS as LESSON_INDEX_OPTIONS, INSTRUMENT_SPECIFIC, LIQUIDITY, NOT_YET_PROVEN,
+    NO_RECEIVER, STAYS_HOME, CrossSegmentLessonBridge,
 )
 from parts.intelligence.cross_segment_signal_bridge import (
     CrossSegmentSignalBridge, INDEX_FUTURES, INDEX_OPTIONS, OPEN_INTEREST_SURGE,
@@ -1452,15 +1453,17 @@ def test_a_mechanism_lesson_travels():
     subject = a_lesson_bridge(minimum=5)
     for _ in range(30):
         subject.observe_occurrence(CARRY, "carry accrues past the settlement interval", True)
-    lesson = subject.bridge(CARRY, "carry accrues past the settlement interval", FUTURES, {})
+    lesson = subject.bridge(
+        CARRY, "carry accrues past the settlement interval", LESSON_INDEX_FUTURES, {}
+    )
     assert lesson.travels
-    assert OPTIONS in lesson.applies_to
+    assert LESSON_INDEX_OPTIONS in lesson.applies_to
 
 
 def test_an_instrument_lesson_stays_home():
     """A bridge that forwarded everything would teach every segment the others' particulars."""
     subject = a_lesson_bridge()
-    lesson = subject.bridge(INSTRUMENT_SPECIFIC, "BTCUSDT ticks in 0.1", FUTURES, {})
+    lesson = subject.bridge(INSTRUMENT_SPECIFIC, "NIFTY ticks in 0.05", LESSON_INDEX_FUTURES, {})
     assert lesson.state == STAYS_HOME
     assert lesson.travels is False
 
@@ -1469,7 +1472,7 @@ def test_a_lesson_that_has_not_held_often_enough_does_not_cross():
     subject = a_lesson_bridge(minimum=5, hold_rate=0.8)
     for index in range(30):
         subject.observe_occurrence(LIQUIDITY, "thin books widen on the hour", index % 3 == 0)
-    lesson = subject.bridge(LIQUIDITY, "thin books widen on the hour", FUTURES, {})
+    lesson = subject.bridge(LIQUIDITY, "thin books widen on the hour", LESSON_INDEX_FUTURES, {})
     assert lesson.state == NOT_YET_PROVEN
 
 
@@ -1478,7 +1481,7 @@ def test_a_lesson_carries_its_evidence():
     for _ in range(30):
         subject.observe_occurrence(LIQUIDITY, "books thin at settlement", True)
     lesson = subject.bridge(
-        LIQUIDITY, "books thin at settlement", FUTURES, {"observed_on": "40 settlements"}
+        LIQUIDITY, "books thin at settlement", LESSON_INDEX_FUTURES, {"observed_on": "40 settlements"}
     )
     assert lesson.evidence["observed_on"] == "40 settlements"
     assert "judge whether its own conditions match" in lesson.reason
@@ -1488,7 +1491,7 @@ def test_a_lesson_is_never_an_instruction():
     subject = a_lesson_bridge(minimum=5)
     for _ in range(30):
         subject.observe_occurrence(CARRY, "a lesson", True)
-    assert subject.bridge(CARRY, "a lesson", FUTURES, {}).is_an_instruction is False
+    assert subject.bridge(CARRY, "a lesson", LESSON_INDEX_FUTURES, {}).is_an_instruction is False
 
 
 # ---- open-web-reader --------------------------------------------------------
