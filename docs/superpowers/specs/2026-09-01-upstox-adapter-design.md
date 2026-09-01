@@ -44,24 +44,60 @@ did, because Upstox's own API doesn't either:
 | Market data | `wss://.../feed/market-data-feed` (v3) | WebSocket, protobuf-encoded, one bundled message per instrument |
 | Orders & margin | `api-hft.upstox.com/v2/order/*`, `api.upstox.com/v2/charges/margin` | REST, JSON |
 
-## 3. Auth and the daily token expiry — the operational fact that shapes everything else
+## 3. Auth and the daily token expiry — solved, not blocking
 
 **Confirmed**: `access_token` is valid until **3:30 AM the next day**,
 regardless of when it was generated (`get-token` docs). There is no refresh
-token in the standard flow. Three ways to get a token:
+token in the standard, documented flow (authorization-code click-through,
+semi-automated-with-approval, or manual copy — all three need a human once
+every 24 hours).
 
-1. **Authorization-code flow** — a customer clicks through a login page.
-   Requires a human in the loop.
-2. **Semi-automated** — the app triggers an auth request at a scheduled time;
-   a human still approves it (click a notification or visit the developer
-   dashboard); the token is then pushed to a notifier URL the app listens on.
-3. **Manual** — copy a token from the developer dashboard by hand.
+**A fully unattended path exists, verified 2026-09-01.** Precedent already
+exists in this user's prior NSE project (`ajith4134/nse-botonly`,
+`src/nse_algo_trader/broker_sessions/kite_totp_auto_login.py`) — a real,
+tested, working headless daily login for Zerodha Kite: stores user id,
+password and TOTP secret, computes the current OTP locally with `pyotp`, and
+replays the login + 2FA + redirect sequence over plain `requests` to obtain
+the day's token with no browser and no human. Upstox's own login page also
+offers TOTP as a 2FA method (confirmed in its auth docs, §Before-you-begin),
+and the same pattern is published for it: **`upstox-totp`**
+(PyPI, MIT license, actively maintained — last release 2025-09-23, v1.0.8).
+It takes `UPSTOX_USERNAME` (mobile number), `UPSTOX_PASSWORD`,
+`UPSTOX_PIN_CODE`, `UPSTOX_TOTP_SECRET`, plus the registered app's
+`UPSTOX_CLIENT_ID`/`UPSTOX_CLIENT_SECRET`/`UPSTOX_REDIRECT_URI`, and returns
+the day's `access_token` — same shape as the Zerodha precedent, one broker
+later.
 
-**None of the three is a fully unattended daily re-auth.** Every path needs a
-human action once every 24 hours before 3:30 AM, or the spine trades on a dead
-token starting that morning. This is the single biggest fact this spec
-surfaces for the user's decision (§8) — it is not solvable by better code, it
-is a property of Upstox's auth model.
+**Recommendation: depend on `upstox-totp` rather than reimplementing it**
+(RL-065 — proven library for a solved problem). It is explicitly unofficial —
+its own README says so and tells the user to check Upstox's ToS — which is
+worth naming plainly rather than glossing over, the same as the Zerodha
+script replays undocumented internal endpoints. Neither is the documented
+public API; both are the standard, widely-used way retail algo traders in
+India get a daily token without touching a browser.
+
+`token_expiry_policy()` on the adapter now answers "expires daily at a fixed
+IST time, auto-refreshable via TOTP" rather than "human-gated" — a
+`broker-token-refresh-scheduler` part (mirroring the crypto build's own
+part-per-job discipline) runs this once daily, before market open, and
+persists the result the way `KiteAccessTokenFileStore` already does: a
+gitignored, chmod-600 file carrying the token and its own generation time, so
+a consumer asks `is_still_valid()` rather than assuming.
+
+**Credential storage — still open, and now covers more than an API key.**
+The mobile number, password, PIN and TOTP secret are login credentials, not
+API credentials, same distinction the old repo drew (`KiteLoginCredentials`
+kept separate from `BrokerApiCredentials`). The old repo stored them in a
+gitignored `.env`; this project's own convention (`docs/secrets.md`) is
+sops+age, encrypted at rest, outside the repo entirely — worth carrying that
+stricter standard forward here rather than regressing to a `.env` file,
+especially since a leaked TOTP secret plus password is a full account
+takeover, not just an API-scoped credential. Recommend a new entry in
+`~/.config/ajit-segment-bots/secrets.enc.yaml` (§8) holding both the
+`upstox_api` (`client_id`, `client_secret`) and `upstox_login`
+(`username`, `password`, `pin_code`, `totp_secret`) key groups. Confirm
+before any of this is implemented — Rule 0's ask-first bucket names
+credential-touching changes explicitly.
 
 `extended_token` also appears in the token response, unexplained by the pages
 fetched — **UNVERIFIED** what its own validity window is or what it's scoped
@@ -261,23 +297,29 @@ would act on.
 
 ## 8. Open items — yours to decide before implementation starts
 
-- **Daily re-auth**: semi-automated flow (scheduled request, you approve via
-  notification/dashboard once a day) is the closest thing to automated Upstox
-  offers. Fully unattended is not available in the standard flow. Confirm
-  this is acceptable, or say if a different broker in the six should be
-  primary specifically because it doesn't have this constraint (worth
-  checking Zerodha/Angel One/Fyers token lifetimes before assuming they're
-  better — not yet verified for any of the other five).
+- **Depend on `upstox-totp` (PyPI, MIT) for daily auto-login, or port the
+  Zerodha script's approach and write our own?** Recommendation is to depend
+  on the maintained package (RL-065) rather than duplicate what it already
+  does — pin an exact version, same as every other dependency in this
+  project. Confirm.
+- **Credential storage**: a new `~/.config/ajit-segment-bots/secrets.enc.yaml`
+  (sops+age, matching `docs/secrets.md`'s existing pattern rather than the old
+  repo's gitignored `.env`), holding `upstox_api` (client_id, client_secret)
+  and `upstox_login` (username, password, pin_code, totp_secret) as separate
+  key groups, plus the daily `access_token` in its own gitignored,
+  chmod-600 file per the Zerodha precedent — not inside the encrypted store,
+  since it rotates daily and doesn't need sops's protection the way a
+  standing password does. Confirm this split.
+- **Unofficial-endpoint risk, named plainly**: both the Zerodha script and
+  `upstox-totp` replay internal login-page endpoints rather than each
+  broker's documented OAuth API. This is the standard approach in the retail
+  algo community (both projects' own docs say so), but it can break without
+  notice on either broker's side, and using it is each user's own call
+  against that broker's terms of service — not something code can verify or
+  guarantee compliance with.
 - **`extended_token`**: unexplained by the pages fetched. Worth checking
   before implementation — if it extends market-data access past 3:30 AM, that
   changes how much of the spine actually goes dark each night.
-- **Secrets storage**: following `docs/secrets.md`'s existing pattern
-  (sops+age, `~/.config/<project>/secrets.enc.yaml`) — this project's crypto
-  keys lived in the shared `~/.config/trading/` store because they were the
-  same real exchange accounts as `~/trading-system`. Upstox credentials are
-  unrelated to that store. Recommend a new
-  `~/.config/ajit-segment-bots/secrets.enc.yaml`, created fresh, holding
-  `upstox: {client_id, client_secret}` and (daily) `access_token`. Confirm.
 - **Option-chain width vs subscription caps**: sizing the nearest-expiry
   index-options chain against the 1500-2000 combined "Full" mode cap needs a
   real chain width (varies by index, by day), not a guess — defer to
