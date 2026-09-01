@@ -70,6 +70,14 @@ RESIZE = "resize-stop-to-the-position"
 # position that can only lose: the plan that placed the stop named a target in
 # the same breath, and a target nobody places is a plan half carried out.
 PLACE_TARGET = "place-target"
+# The target's own counterpart to RESIZE. A target was placed once for whatever
+# the position held at that moment and never touched again -- so a position
+# that grew after its target was resting closed only the target's original
+# quantity when it filled, leaving the growth as unprotected, ungated dust.
+# Measured live 2026-08-30: ADAUSDT grew from 244.379 to 244.618, its target
+# still resting for 244.379, and it closed to exactly 0.239 -- the difference,
+# to the thousandth -- when the target filled.
+RESIZE_TARGET = "resize-target-to-the-position"
 CANCEL_EXIT = "cancel-the-other-exit"
 REFUSED_WIDENING = "refused-would-widen-the-stop"
 REFUSED_NO_POSITION = "refused-no-position-to-protect"
@@ -95,7 +103,7 @@ class StopOrderAction:
 
     @property
     def is_actionable(self) -> bool:
-        return self.action in (PLACE_NEW, REPLACE, PLACE_TARGET, CANCEL_EXIT)
+        return self.action in (PLACE_NEW, REPLACE, PLACE_TARGET, RESIZE_TARGET, CANCEL_EXIT)
 
     @property
     def is_cancel_only(self) -> bool:
@@ -132,6 +140,11 @@ class _RestingStop:
     quantity: float
     target_order_id: str | None = None
     target_price: float | None = None
+    # The quantity the resting target order was actually placed for -- separate
+    # from `quantity` (the stop's), because resizing one has never resized the
+    # other. None until a target exists; a target's own quantity is a fact
+    # about the target, not something to infer from the stop's.
+    target_quantity: float | None = None
 
 
 @dataclass
@@ -147,6 +160,10 @@ class ManagerStanding:
     # on 2026-08-28 `binance-usdm|AKEUSDT` held 231,812 units with a stop resting
     # for 198.634 -- 0.09% of it -- and the board painted that position protected.
     resized_to_the_position: int = 0
+    # The target's own counterpart. Absent until 2026-08-30, a position that
+    # grew after its target was resting closed only the target's original
+    # quantity when it filled -- see RESIZE_TARGET.
+    resized_target_to_the_position: int = 0
     refused_no_position: int = 0
     refused_no_mode: int = 0
     unprotected_windows: int = 0
@@ -194,6 +211,7 @@ class StopOrderManager:
                     "quantity": held.quantity,
                     "target_order_id": held.target_order_id,
                     "target_price": held.target_price,
+                    "target_quantity": held.target_quantity,
                 }
                 for key, held in self._resting.items()
             },
@@ -210,6 +228,9 @@ class StopOrderManager:
                 target_order_id=held.get("target_order_id"),
                 target_price=(
                     None if held.get("target_price") is None else float(held["target_price"])
+                ),
+                target_quantity=(
+                    None if held.get("target_quantity") is None else float(held["target_quantity"])
                 ),
             )
             for text, held in (state.get("resting") or {}).items()
@@ -305,10 +326,12 @@ class StopOrderManager:
             self._resting[(venue_id, symbol)] = _RestingStop(
                 order_id="", stop_price=0.0, quantity=quantity,
                 target_order_id=target_order_id, target_price=target_price,
+                target_quantity=quantity,
             )
         else:
             held.target_order_id = target_order_id
             held.target_price = target_price
+            held.target_quantity = quantity
         self.standing.targets_placed += 1
         self.standing.stops_resting = len(self._resting)
         return self._action(
@@ -368,6 +391,7 @@ class StopOrderManager:
                 new_order_id, stop_price, quantity,
                 target_order_id=held.target_order_id if held else None,
                 target_price=held.target_price if held else None,
+                target_quantity=held.target_quantity if held else None,
             )
             self.standing.placed += 1
             self.standing.stops_resting = len(self._resting)
@@ -385,6 +409,7 @@ class StopOrderManager:
         self._resting[key] = _RestingStop(
             new_order_id, stop_price, quantity,
             target_order_id=held.target_order_id, target_price=held.target_price,
+            target_quantity=held.target_quantity,
         )
         self.standing.replaced += 1
         self.standing.unprotected_windows += 0
@@ -443,6 +468,7 @@ class StopOrderManager:
         self._resting[key] = _RestingStop(
             new_order_id, held.stop_price, quantity,
             target_order_id=held.target_order_id, target_price=held.target_price,
+            target_quantity=held.target_quantity,
         )
         self.standing.resized_to_the_position += 1
         return self._action(
@@ -450,6 +476,64 @@ class StopOrderManager:
             side, quantity, held.stop_price, held.stop_price,
             f"the position holds {quantity:,.6g} and the stop resting at "
             f"{held.stop_price:g} closed {was:,.6g} of it; re-cut to the whole position",
+        )
+
+    def resize_target_to_the_position(
+        self,
+        venue_id: str,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        money_mode,
+        quantity_increment: float,
+    ) -> StopOrderAction | None:
+        """Re-cut a resting target to what the position now holds. None when it fits.
+
+        The target's counterpart to `resize_stop_to_the_position`, and for the
+        same reason: a target is placed for whatever was held at the moment it
+        was proposed, and every later fill changes that quantity without
+        proposing a new one. Unlike the stop, a target has no price-widening
+        question -- the price is carried across untouched here too, only the
+        quantity moves -- so this is a pure size correction with no refusal
+        case beyond "there is nothing to resize."
+        """
+        key = (venue_id, symbol)
+        held = self._resting.get(key)
+        if held is None or not held.target_order_id:
+            return None
+        if quantity <= 0:
+            return None
+        if held.target_quantity is not None and abs(quantity - held.target_quantity) < quantity_increment:
+            return None
+        if money_mode is None:
+            self.standing.refused_no_mode += 1
+            return self._action(
+                venue_id, symbol, REFUSED_NO_MODE, "", None, None, "", quantity,
+                held.target_price or 0.0, None,
+                "the money mode could not be read; a target must not be guessed into a destination",
+            )
+        destination = LIVE_VENUE if money_mode.mode == "live" else PAPER_BOOK
+        side = SELL if direction == LONG else BUY
+        was = held.target_quantity
+        self._sequence += 1
+        new_target_order_id = f"target-{venue_id}-{symbol}-{self._sequence}"
+        old_target_order_id = held.target_order_id
+        # Place first, cancel second, exactly as the stop's own resize does:
+        # two targets briefly resting is recoverable, no target briefly resting
+        # leaves the position able to close only on its stop.
+        self._resting[key] = _RestingStop(
+            held.order_id, held.stop_price, held.quantity,
+            target_order_id=new_target_order_id, target_price=held.target_price,
+            target_quantity=quantity,
+        )
+        self.standing.resized_target_to_the_position += 1
+        target_price = held.target_price or 0.0
+        was_text = "an unknown quantity" if was is None else f"{was:,.6g}"
+        return self._action(
+            venue_id, symbol, RESIZE_TARGET, destination, new_target_order_id, old_target_order_id,
+            side, quantity, target_price, held.target_price,
+            f"the position holds {quantity:,.6g} and the target resting at "
+            f"{target_price:g} closed {was_text} of it; re-cut to the whole position",
         )
 
     def resting_quantity(self, venue_id: str, symbol: str) -> float | None:
@@ -460,6 +544,11 @@ class StopOrderManager:
     def resting_stop(self, venue_id: str, symbol: str) -> float | None:
         held = self._resting.get((venue_id, symbol))
         return held.stop_price if held else None
+
+    def resting_target_quantity(self, venue_id: str, symbol: str) -> float | None:
+        """How much the resting target would close, or None when none is resting."""
+        held = self._resting.get((venue_id, symbol))
+        return held.target_quantity if held else None
 
     def _action(
         self, venue_id, symbol, action, destination, place_id, cancel_id,
@@ -488,6 +577,7 @@ def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
         "replaced": manager.standing.replaced,
         "refused_widening": manager.standing.refused_widening,
         "resized_to_the_position": manager.standing.resized_to_the_position,
+        "resized_target_to_the_position": manager.standing.resized_target_to_the_position,
         "refused_no_position": manager.standing.refused_no_position,
         "refused_no_mode": manager.standing.refused_no_mode,
         "stops_resting": manager.standing.stops_resting,
@@ -545,6 +635,13 @@ def run_stop_order_manager(
                 )
                 if resize is not None:
                     actions.append(resize)
+                resize_target = manager.resize_target_to_the_position(
+                    venue_id=venue_id, symbol=symbol, direction=direction,
+                    quantity=quantity, money_mode=mode,
+                    quantity_increment=quantity_increment,
+                )
+                if resize_target is not None:
+                    actions.append(resize_target)
         for adjustment in read_adjustments():
             target_price = adjustment.pop("target_price", None)
             actions.append(manager.apply_adjustment(**adjustment))
@@ -574,6 +671,7 @@ def run_stop_order_manager(
                 manager.standing.placed
                 + manager.standing.exits_withdrawn
                 + manager.standing.resized_to_the_position
+                + manager.standing.resized_target_to_the_position
             )
 
     return run_part(
