@@ -644,6 +644,7 @@
       "approved": true,
       "consumes": [
         "broker-instrument-listing",
+        "broker-market-data",
         "broker-price-frame",
         "candle",
         "feed-gap",
@@ -12484,6 +12485,32 @@
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-market-data-bridge",
+      "name": "Broker market data bridge",
+      "role": "republish a broker's own LTP updates as market-data",
+      "category": "market-data-feed",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-market-data"
+      ],
+      "produces": [
+        "market-data",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/proposals/broker-market-data-bridge.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -13144,5 +13171,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_instrument_selector_atm_strike.py",
     "proposal": "docs/proposals/instrument-selector-atm-strike.md"
+  },
+  "_proposal_2026-09-01_broker_market_data_bridge": {
+    "what": "broker-market-data-bridge -- republishes Upstox's LTP as market-data, unblocking paper-fill-simulator and ~30 other detector/execution-layer parts for the options segment.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_broker_market_data_bridge.py",
+    "proposal": "docs/proposals/broker-market-data-bridge.md"
   }
 }
