@@ -34,7 +34,8 @@ from parts.intelligence.cross_segment_lesson_bridge import (
     STAYS_HOME, CrossSegmentLessonBridge,
 )
 from parts.intelligence.cross_segment_signal_bridge import (
-    CrossSegmentSignalBridge, FUNDING_SKEW, POSITIONING, WHALE_FLOW,
+    CrossSegmentSignalBridge, INDEX_FUTURES, INDEX_OPTIONS, OPEN_INTEREST_SURGE,
+    POSITIONING, STOCK_FUTURES, STOCK_OPTIONS,
 )
 from parts.intelligence.decision_quality_critic import (
     CONVICTION_WAS_MEASURED, EVIDENCE_WAS_COMPLETE, IT_BEAT_ITS_ALTERNATIVES,
@@ -806,35 +807,37 @@ def a_signal_bridge(threshold=2.0, minimum=10, validity=3600.0, clock=None):
 def test_an_ordinary_observation_does_not_cross():
     subject = a_signal_bridge(threshold=3.0, minimum=5)
     for index in range(30):
-        subject.observe_whale_transfer("BTC", FUTURES, 1.0 + (index % 2), "inflow")
-    assert subject.observe_whale_transfer("BTC", FUTURES, 1.5, "inflow") == ()
+        subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_000.0 + (index % 2) * 100.0)
+    assert subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_050.0) == ()
 
 
 def test_an_unusual_observation_crosses_to_segments_that_can_act_on_it():
     subject = a_signal_bridge(threshold=2.0, minimum=5)
     for index in range(30):
-        subject.observe_whale_transfer("BTC", FUTURES, 1.0 + (index % 2), "inflow")
-    signals = subject.observe_whale_transfer("BTC", FUTURES, 500.0, "inflow")
+        subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_000.0 + (index % 2) * 100.0)
+    signals = subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 500_000.0)
     assert signals
-    assert FUTURES not in signals[0].relevant_to
-    assert set(signals[0].relevant_to) == {SPOT, OPTIONS}
+    assert signals[0].signal == OPEN_INTEREST_SURGE
+    assert INDEX_OPTIONS not in signals[0].relevant_to
+    assert set(signals[0].relevant_to) == {STOCK_OPTIONS, INDEX_FUTURES, STOCK_FUTURES}
 
 
-def test_a_funding_observation_never_reaches_a_segment_with_no_perpetual():
+def test_an_open_interest_signal_never_reaches_a_segment_with_no_derivative():
     """Forwarding it anyway trains every receiver to ignore the bridge."""
     subject = a_signal_bridge(threshold=2.0, minimum=5)
     for index in range(30):
-        subject.observe_funding("BTC", FUTURES, 0.0001 * (1 if index % 2 else -1))
-    signals = subject.observe_funding("BTC", FUTURES, 0.05)
+        subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_000.0 + (index % 2) * 100.0)
+    signals = subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 500_000.0)
     assert signals
-    assert SPOT not in signals[0].relevant_to
+    assert "cash-equity" not in signals[0].relevant_to
+    assert "commodities" not in signals[0].relevant_to
 
 
 def test_a_signal_carries_no_opinion():
     subject = a_signal_bridge(threshold=2.0, minimum=5)
     for index in range(30):
-        subject.observe_whale_transfer("BTC", FUTURES, 1.0 + (index % 2), "inflow")
-    signal = subject.observe_whale_transfer("BTC", FUTURES, 500.0, "inflow")[0]
+        subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_000.0 + (index % 2) * 100.0)
+    signal = subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 500_000.0)[0]
     assert signal.carries_an_opinion is False
     assert "not what to do about it" in signal.reason
 
@@ -844,8 +847,8 @@ def test_a_signal_expires():
     clock = Clock()
     subject = a_signal_bridge(threshold=2.0, minimum=5, validity=60.0, clock=clock)
     for index in range(30):
-        subject.observe_whale_transfer("BTC", FUTURES, 1.0 + (index % 2), "inflow")
-    signals = subject.observe_whale_transfer("BTC", FUTURES, 500.0, "inflow")
+        subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 10_000.0 + (index % 2) * 100.0)
+    signals = subject.observe_open_interest_signal("NIFTY", INDEX_OPTIONS, 500_000.0)
     assert subject.drop_expired(signals) == signals
     clock.advance_seconds(61)
     assert subject.drop_expired(signals) == ()
@@ -853,8 +856,8 @@ def test_a_signal_expires():
 
 def test_another_segment_already_holding_it_is_told():
     subject = a_signal_bridge()
-    subject.observe_position(FUTURES, "BTC", True)
-    signals = subject.signals_for(SPOT, "BTC")
+    subject.observe_position(INDEX_OPTIONS, "NIFTY", True)
+    signals = subject.signals_for(INDEX_FUTURES, "NIFTY")
     assert signals
     assert signals[0].signal == POSITIONING
     assert "adding to, not diversifying from" in signals[0].reason

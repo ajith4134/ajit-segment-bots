@@ -1,30 +1,43 @@
 """cross-segment-signal-bridge: what one segment sees that another needs.
 
-The three segments trade different instruments on the same underlying markets,
-and each sees things the others cannot. Futures sees funding and open interest;
-spot sees the actual coin moving between wallets; options sees what the market
-pays for uncertainty. A signal visible in one is often about all three, and
-without something carrying it across, each segment rediscovers it late or not at
-all.
+Six segments trade different instruments on the same underlying markets, and
+each sees things the others cannot. Index/stock futures and options see
+open interest build; cash equity sees the actual price the underlying trades
+at. A signal visible in one is often about all of them, and without something
+carrying it across, each segment rediscovers it late or not at all.
 
 This is that carrier, and its restraint is the design:
 
-- **It carries observations, never opinions.** "Exchange inflows are four
+- **It carries observations, never opinions.** "Open interest is four
   deviations above normal" travels; "therefore short" does not. A bridge that
   carried conclusions would be a fourth bot with none of a bot's checks, and its
   conclusions would arrive already weighted by a segment that does not trade
   what the receiver trades.
-- **Every signal names where it was observed and what it is about.** A funding
-  spike observed on the futures segment is about the underlying, and a receiver
-  needs both facts to know whether it applies to the instrument it trades.
-- **A signal expires.** Whale transfers, funding skews and positioning are all
-  about a moment; a bridge without expiry lets a segment act on a fact that
-  stopped being true hours ago, and the segment cannot tell because the fact
-  arrived without a clock.
+- **Every signal names where it was observed and what it is about.** An
+  open-interest surge observed on the index-options segment is about the
+  underlying, and a receiver needs both facts to know whether it applies to
+  the instrument it trades.
+- **A signal expires.** Open-interest surges and positioning are all about a
+  moment; a bridge without expiry lets a segment act on a fact that stopped
+  being true hours ago, and the segment cannot tell because the fact arrived
+  without a clock.
 
-**A signal the receiving segment cannot act on is not sent.** A funding
-observation means nothing to a spot segment with no perpetual; forwarding it
-anyway trains every receiver to ignore the bridge.
+**A signal the receiving segment cannot act on is not sent.** An
+open-interest observation means nothing to a cash-equity segment with no
+derivative to hold open interest at all; forwarding it anyway trains every
+receiver to ignore the bridge.
+
+**2026-09-01, options-segment-bots conversion:** `WHALE_FLOW` (on-chain
+transfers) and `FUNDING_SKEW` (perpetual funding rate) are both retired --
+crypto-only concepts with no Indian equivalent. `FUNDING_SKEW`'s *role* --
+an unusual, forwardable observation about crowd positioning -- has an honest
+Indian analogue in `OPEN_INTEREST_SURGE`, sourced from `broker-open-interest`
+the same way the bull/bear feature builders already read it
+(`runtime/underlying_open_interest.py`). `PRICE_DISLOCATION` was already
+segment-agnostic and, once index-futures exists, becomes the honest carrier
+of what funding skew used to proxy for anyway: the same underlying priced
+differently in a derivative than in the market it settles against -- that is
+a basis, not a guess.
 """
 
 from __future__ import annotations
@@ -41,30 +54,35 @@ PART_ID = "cross-segment-signal-bridge"
 
 PART_DECLARATION = PartDeclaration(
     part_id="cross-segment-signal-bridge",
-    consumes=("whale-transfer", "symbol-price-frame", "funding-forecast", "position"),
+    consumes=(
+        "broker-instrument-listing", "broker-open-interest", "symbol-price-frame", "position",
+    ),
     produces=("cross-segment-signal", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
 
-WHALE_FLOW = "large-transfer-to-or-from-an-exchange"
-FUNDING_SKEW = "perpetual-funding-is-far-from-its-own-normal"
+OPEN_INTEREST_SURGE = "underlying-open-interest-far-from-its-own-normal"
 POSITIONING = "this-system-already-holds-this-underlying-in-another-segment"
 PRICE_DISLOCATION = "the-same-underlying-is-priced-differently-across-segments"
 
-FUTURES = "futures"
-SPOT = "spot"
-OPTIONS = "options"
+INDEX_OPTIONS = "index-options"
+STOCK_OPTIONS = "stock-options"
+INDEX_FUTURES = "index-futures"
+STOCK_FUTURES = "stock-futures"
+COMMODITIES = "commodities"
+CASH_EQUITY = "cash-equity"
+ALL_SEGMENTS = (INDEX_OPTIONS, STOCK_OPTIONS, INDEX_FUTURES, STOCK_FUTURES, COMMODITIES, CASH_EQUITY)
 
-# Which segments can act on each kind of observation. A funding observation is
-# meaningless to a segment with no perpetual, and forwarding it anyway trains
-# every receiver to ignore the bridge.
+# Which segments can act on each kind of observation. Open interest is a
+# derivatives concept -- cash equity and commodities (as built so far, MCX
+# futures aside) hold none, and forwarding it anyway trains every receiver to
+# ignore the bridge.
 RELEVANT_TO = {
-    WHALE_FLOW: (FUTURES, SPOT, OPTIONS),
-    FUNDING_SKEW: (FUTURES, OPTIONS),
-    POSITIONING: (FUTURES, SPOT, OPTIONS),
-    PRICE_DISLOCATION: (FUTURES, SPOT),
+    OPEN_INTEREST_SURGE: (INDEX_OPTIONS, STOCK_OPTIONS, INDEX_FUTURES, STOCK_FUTURES),
+    POSITIONING: ALL_SEGMENTS,
+    PRICE_DISLOCATION: ALL_SEGMENTS,
 }
 
 
@@ -141,17 +159,16 @@ class CrossSegmentSignalBridge:
     def observe_segment_price(self, segment: str, underlying: str, price: float) -> None:
         self._prices[(segment, underlying)] = price
 
-    def observe_whale_transfer(
-        self, underlying: str, observed_in: str, quantity: float, direction: str
+    def observe_open_interest_signal(
+        self, underlying: str, observed_in: str, open_interest: float
     ) -> tuple:
-        """A large transfer, forwarded only if it is large *for this underlying*."""
+        """One underlying's summed open interest, forwarded only if it is
+        unusual *for this underlying's own history* -- the same reasoning
+        the retired funding-skew signal used, real Indian data instead."""
         return self._forward(
-            WHALE_FLOW, underlying, observed_in, quantity,
-            {"direction": direction, "quantity": quantity},
+            OPEN_INTEREST_SURGE, underlying, observed_in, open_interest,
+            {"open_interest": open_interest},
         )
-
-    def observe_funding(self, underlying: str, observed_in: str, rate: float) -> tuple:
-        return self._forward(FUNDING_SKEW, underlying, observed_in, rate, {"rate": rate})
 
     def signals_for(self, segment: str, underlying: str) -> tuple:
         """Everything this segment should know about this underlying right now."""
@@ -292,8 +309,15 @@ def run_cross_segment_signal_bridge(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        requests = read_observations(bridge)
-        signals = []
+        requests, direct_signals = read_observations(bridge)
+        # `direct_signals` is what an _forward()-based observe_* call returned
+        # this tick -- an open-interest surge, say -- and it must be published
+        # here rather than only relied on for its side effect. Discarding it
+        # was a real defect: the observation still updated the moving normal
+        # it is judged against, but the signal it crossed the threshold to
+        # produce never reached the bus (found while retiring
+        # observe_whale_transfer/observe_funding, which had the same shape).
+        signals = list(direct_signals)
         for segment, underlying in requests:
             signals.extend(bridge.signals_for(segment, underlying))
         publish_signals(bridge.drop_expired(tuple(signals)))
@@ -313,36 +337,46 @@ def run_cross_segment_signal_bridge(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    This segment's prices, positions and funding forecasts are observed
-    under its own name; a whale transfer is observed under the chain it was
-    seen on. Each tick asks, for every underlying touched, what the other
-    two segments should know about it. An underlying is the symbol with the
-    settlement currency taken off its end.
+    This segment's prices, positions and open interest are observed under
+    its own name. Open interest arrives per option contract
+    (broker-open-interest); the aggregator resolves each contract to its
+    underlying via broker-instrument-listing and sums the chain
+    (runtime.underlying_open_interest), the same as the bull/bear feature
+    builders. Each tick asks, for every underlying touched, what the other
+    five segments should know about it. An underlying is the symbol with the
+    settlement currency taken off its end -- a crypto-era normalisation that
+    is a harmless no-op on an Indian trading_symbol, which never carries one.
     """
     from runtime.input_assembly import Batch
+    from runtime.underlying_open_interest import UnderlyingOpenInterestAggregator
 
-    transfers = Batch(read=context.bus.reader("whale-transfer"))
     # A frame already carries the latest price per symbol, so a keyed level shape
     # on top of it would be keeping the latest of the latest. Read as a batch and
     # flattened to its levels.
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
-    forecasts = Batch(read=context.bus.reader("funding-forecast"))
     positions = Batch(read=context.bus.reader("position"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_signals = context.bus.publisher_for("cross-segment-signal")
     segment = str(context.setting("segment_id").value)
     settlement = str(context.setting("settlement_currency").value)
-    others = tuple(s for s in (FUTURES, SPOT, OPTIONS) if s != segment)
+    others = tuple(s for s in ALL_SEGMENTS if s != segment)
     bridge = CrossSegmentSignalBridge(
         deviation_threshold=context.number("signal_bridge_deviation_threshold"),
         minimum_observations=int(context.number("signal_bridge_minimum_observations")),
         half_life_observations=context.number("learning_half_life_observations"),
         validity_seconds=context.number("signal_bridge_validity_seconds"),
     )
+    oi_aggregator = UnderlyingOpenInterestAggregator()
 
     def underlying_of(symbol: str) -> str:
         return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
 
     def read_observations(_bridge):
+        for listing in listings.payloads():
+            oi_aggregator.observe_listing(listing)
+        for reading in open_interest.payloads():
+            oi_aggregator.observe_open_interest(reading)
         touched: set[str] = set()
         for level in levels_in(trades.payloads()):
             underlying = underlying_of(level.symbol)
@@ -352,22 +386,15 @@ def start_part(context) -> int:
             underlying = underlying_of(position.symbol)
             bridge.observe_position(segment, underlying, position.quantity != 0)
             touched.add(underlying)
-        for forecast in forecasts.payloads():
-            if forecast.predicted_rate is None:
-                continue
-            underlying = underlying_of(forecast.symbol)
-            bridge.observe_funding(underlying, segment, float(forecast.predicted_rate))
-            touched.add(underlying)
-        for read in transfers.payloads():
-            transfer = getattr(read, "transfer", None)
-            if transfer is None:
-                continue
-            bridge.observe_whale_transfer(
-                str(transfer.asset), str(transfer.chain), float(transfer.quantity),
-                f"{transfer.from_kind}->{transfer.to_kind}",
-            )
-            touched.add(str(transfer.asset))
-        return tuple((other, underlying) for underlying in sorted(touched) for other in others)
+        direct_signals: list = []
+        for underlying in sorted(touched):
+            totals = oi_aggregator.totals_for(underlying)
+            if totals is not None:
+                direct_signals.extend(
+                    bridge.observe_open_interest_signal(underlying, segment, totals.open_interest)
+                )
+        requests = tuple((other, underlying) for underlying in sorted(touched) for other in others)
+        return requests, tuple(direct_signals)
 
     def publish(items) -> None:
         kept = tuple(item for item in items if item is not None)

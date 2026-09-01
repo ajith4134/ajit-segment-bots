@@ -515,7 +515,6 @@ LIVE_SPINE = (
     "exchange-announcement-reader",
     "options-flow-reader",
     "onchain-flow-aggregator",
-    "whale-transfer-reader",
     "arxiv-feed-reader",
     "github-strategy-miner",
     "edge-comparator",

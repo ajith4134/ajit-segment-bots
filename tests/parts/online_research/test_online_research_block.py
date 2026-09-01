@@ -55,10 +55,6 @@ from parts.online_research.strategy_decoder import (
 from parts.online_research.trader_record_verifier import (
     CONTRADICTED, ONE_TRADE, TOO_SHORT, TraderRecordVerifier, UNVERIFIABLE, VERIFIED,
 )
-from parts.online_research.whale_transfer_reader import (
-    CUSTODY, EXCHANGE_DEPOSIT, EXCHANGE_INTERNAL, EXCHANGE_WITHDRAWAL, INTERNAL_ROTATION,
-    NOT_LARGE_ENOUGH, READ as TRANSFER_READ, UNKNOWN_WALLET, WhaleTransferReader,
-)
 from runtime.external_research_types import (
     ExternalPosition, TrackedTrader, VENUE_PUBLISHED, WebIdea,
 )
@@ -71,7 +67,6 @@ BLOCK_PARTS = {
     "strategy-decoder": "parts.online_research.strategy_decoder",
     "edge-comparator": "parts.online_research.edge_comparator",
     "copy-worthiness-scorer": "parts.online_research.copy_worthiness_scorer",
-    "whale-transfer-reader": "parts.online_research.whale_transfer_reader",
     "social-sentiment-reader": "parts.online_research.social_sentiment_reader",
     "trader-record-verifier": "parts.online_research.trader_record_verifier",
     "copy-latency-estimator": "parts.online_research.copy_latency_estimator",
@@ -668,75 +663,6 @@ def test_unequal_samples_are_refused():
     for index in range(10):
         subject.observe_our_episode(an_episode("BTCUSDT", 0.01, index * DAY_NS, (index + 1) * DAY_NS))
     assert subject.compare("alice").state == EDGE_TOO_FEW_TRADES
-
-
-# ---- whale-transfer-reader --------------------------------------------------
-
-def a_transfer_reader(minimum=1_000_000.0, confirmations=6):
-    return WhaleTransferReader(
-        minimum_quote_value=minimum, confirmations_required=confirmations, now_ns=Clock(),
-    )
-
-
-def a_transfer_row(transfer_id="tx-1", quantity=100.0, confirmations=10,
-                   from_address="w-1", to_address="w-2"):
-    return {
-        "transfer_id": transfer_id, "chain": "ethereum", "asset": "ETH",
-        "quantity": quantity, "confirmations": confirmations,
-        "from_address": from_address, "to_address": to_address,
-        "confirmed_at_ns": 1_000,
-    }
-
-
-def test_an_exchange_rotating_its_own_wallets_is_not_flow():
-    """The largest single source of false whale alerts."""
-    subject = a_transfer_reader()
-    subject.observe_address("hot", EXCHANGE_INTERNAL, "binance")
-    subject.observe_address("cold", CUSTODY)
-    subject.observe_price("ETH", 3_000.0, subject._now_ns())
-    result = subject.read(a_transfer_row(from_address="hot", to_address="cold"))
-    assert result.state == INTERNAL_ROTATION
-
-
-def test_coins_reaching_a_deposit_address_create_the_option_to_sell():
-    subject = a_transfer_reader(minimum=1_000.0)
-    subject.observe_address("w-1", UNKNOWN_WALLET)
-    subject.observe_address("w-2", EXCHANGE_DEPOSIT, "binance")
-    subject.observe_price("ETH", 3_000.0, subject._now_ns())
-    result = subject.read(a_transfer_row())
-    assert result.state == TRANSFER_READ
-    assert result.transfer.could_become_supply
-    assert "which is not the same as selling" in result.reason
-
-
-def test_coins_leaving_an_exchange_remove_the_option_to_sell():
-    subject = a_transfer_reader(minimum=1_000.0)
-    subject.observe_address("w-1", EXCHANGE_WITHDRAWAL, "binance")
-    subject.observe_address("w-2", CUSTODY)
-    subject.observe_price("ETH", 3_000.0, subject._now_ns())
-    result = subject.read(a_transfer_row())
-    assert result.transfer.leaves_the_market
-
-
-def test_size_is_measured_in_quote_value_not_units():
-    subject = a_transfer_reader(minimum=1_000_000.0)
-    subject.observe_address("w-2", EXCHANGE_DEPOSIT, "binance")
-    subject.observe_price("ETH", 10.0, subject._now_ns())
-    assert subject.read(a_transfer_row(quantity=100.0)).state == NOT_LARGE_ENOUGH
-
-
-def test_an_unverifiable_address_category_is_refused_at_declaration():
-    subject = a_transfer_reader()
-    with pytest.raises(ValueError):
-        subject.observe_address("w-9", "probably-a-whale")
-
-
-def test_the_reader_infers_no_intent():
-    described = importlib.import_module(
-        BLOCK_PARTS["whale-transfer-reader"]
-    ).describe_transfer_reading(a_transfer_reader())
-    assert described["infers_intent"] is False
-    assert described["claims_a_transfer_is_a_trade"] is False
 
 
 # ---- social-sentiment-reader ------------------------------------------------

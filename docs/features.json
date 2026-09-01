@@ -167,6 +167,8 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
+        "broker-instrument-listing",
+        "broker-open-interest",
         "consolidated-price",
         "counter-argument",
         "counterfactual-outcome",
@@ -178,7 +180,6 @@
         "feed-coverage",
         "feed-gap",
         "forgetting-report",
-        "funding-forecast",
         "instruction-history",
         "instruction-scorecard",
         "journal-entry",
@@ -190,6 +191,7 @@
         "mutated-hypothesis",
         "near-miss-episode",
         "opportunity-instruction",
+        "order-book-snapshot",
         "outcome-significance",
         "position",
         "premortem-note",
@@ -197,6 +199,7 @@
         "regime-memory",
         "sentiment-reading",
         "skill-gap",
+        "symbol-price-frame",
         "trade-cluster",
         "trade-episode",
         "trade-intent",
@@ -204,8 +207,7 @@
         "validated-llm-output",
         "venue-announcement",
         "verified-snapshot",
-        "web-idea",
-        "whale-transfer"
+        "web-idea"
       ],
       "produces": [
         "competence-map",
@@ -233,7 +235,7 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -498,9 +500,9 @@
       "consumes": [
         "copy-latency",
         "external-position",
-        "market-data",
         "research-finding",
         "skill-gap",
+        "symbol-price-frame",
         "symbol-universe",
         "tracked-trader",
         "trade-episode",
@@ -513,7 +515,6 @@
         "copy-score",
         "external-position",
         "llm-request",
-        "onchain-flow",
         "options-flow",
         "part-health",
         "research-finding",
@@ -522,14 +523,13 @@
         "strategy-gap",
         "tracked-trader",
         "venue-announcement",
-        "verified-record",
-        "whale-transfer"
+        "verified-record"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -6246,28 +6246,6 @@
       "skipped_tick_effect": "delays"
     },
     {
-      "id": "whale-transfer-reader",
-      "name": "Whale transfer reader",
-      "role": "read large on-chain transfers into or out of exchanges",
-      "category": "online-research",
-      "consumes": [],
-      "produces": [
-        "whale-transfer",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "io-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
       "id": "social-sentiment-reader",
       "name": "Social sentiment reader",
       "role": "read how the crowd is talking about each symbol, source counted",
@@ -9610,9 +9588,9 @@
       "role": "restate a reading from one segment for the sweepers of the other two",
       "category": "intelligence",
       "consumes": [
-        "whale-transfer",
+        "broker-instrument-listing",
+        "broker-open-interest",
         "symbol-price-frame",
-        "funding-forecast",
         "position"
       ],
       "produces": [
@@ -13144,5 +13122,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_bull_bear_feature_builders_open_interest.py",
     "proposal": "docs/proposals/bull-bear-feature-builders-open-interest.md"
+  },
+  "_proposal_2026-09-01_cross_segment_signal_bridge_open_interest": {
+    "what": "cross-segment-signal-bridge redirected from whale-transfer/funding-forecast to broker-instrument-listing + broker-open-interest (OPEN_INTEREST_SURGE replaces FUNDING_SKEW's role), segment vocabulary moved from 3 crypto segments to the real 6. whale-transfer-reader retired -- its only consumer just stopped reading whale-transfer.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_cross_segment_signal_bridge_open_interest.py",
+    "proposal": "docs/proposals/cross-segment-signal-bridge-open-interest.md"
   }
 }
