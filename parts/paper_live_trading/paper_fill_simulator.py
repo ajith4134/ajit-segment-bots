@@ -68,6 +68,11 @@ RESTING = "resting-limit-not-reached"
 # limit, because the two are opposite instructions at the same price and an
 # operator reading a resting exit needs to know which one is protecting them.
 RESTING_STOP = "resting-stop-not-triggered"
+# A market order waiting for the first price on its symbol. Distinct from RESTING,
+# which is a limit waiting for a price it names: this one names no price and fills
+# at whatever arrives, so an operator reading the book must not take it for an
+# order that is choosing to wait.
+RESTING_UNPRICED = "resting-no-price-has-arrived-yet"
 STOP_TRIGGERED = "stop-triggered"
 CANCELLED = "cancelled"
 HELD_IN_FLIGHT = "held-until-the-round-trip-elapses"
@@ -150,6 +155,12 @@ class SimulatorStanding:
     released_without_a_verdict: int = 0
     refused_feed_jump: int = 0
     refused_no_price: int = 0
+    # Market orders put on the book because no price had arrived for their symbol
+    # yet. They are not refusals and must not be counted as one: a refusal is an
+    # order that is gone, this is an order that has not filled yet. Read beside
+    # `orders_on_the_book` -- a count here that keeps climbing while that one does
+    # too is a symbol nothing is trading, which is a fact about the symbol.
+    market_orders_waiting_for_a_first_price: int = 0
     refused_already_filled: int = 0
     fees_charged: float = 0.0
     worst_slippage_fraction: float = 0.0
@@ -300,6 +311,21 @@ class PaperFillSimulator:
                 note=f"the market reached {price:g} and this limit rested at {order.limit_price:g}",
             )
 
+        if order.order_type == MARKET:
+            # A market order names no price, so the first one that arrives is the
+            # one it fills at. It rested only because this book could not price
+            # its symbol when it was placed; it was never waiting *for* a price
+            # in the sense a limit is, and holding it any longer once a price
+            # exists would be inventing a condition nobody asked for.
+            self._resting.pop(order.client_order_id, None)
+            return self._fill(
+                order, price, fillable=order.quantity, is_taker=True, slippage=None,
+                note=(
+                    f"filled at {price:g}, the first price to arrive for this symbol after "
+                    f"the order was placed"
+                ),
+            )
+
         return None
 
     @staticmethod
@@ -443,6 +469,39 @@ class PaperFillSimulator:
                         RESTING,
                         f"a {side} limit at {limit_price:g} is on the book; no price has arrived "
                         f"for this symbol yet, which is a reason to wait and not to refuse",
+                    )
+                if order_type == MARKET:
+                    # The same reasoning as the limit above, and it belongs here
+                    # just as much: a symbol this process has not yet seen a
+                    # trade for is a reason to wait, not a reason to refuse.
+                    #
+                    # `last_price` is built from `market-data` as it arrives and
+                    # starts empty on every restart, so for the first seconds of
+                    # a run this book can price nothing. Refusing there discards
+                    # the order permanently -- measured 2026-08-30, four exits
+                    # from a `close-positions` flatten were refused in the first
+                    # seconds after a restart (AIXBTUSDT, MVLLUSDT, STORJUSDT,
+                    # TURBOUSDT) and the positions were stranded open, while the
+                    # tape showed prints for two of them 1 and 11 seconds later.
+                    # A venue does not reject a market order because the last
+                    # trade has not printed in some client's memory.
+                    #
+                    # A symbol that never prices again -- a settled contract, as
+                    # STORJUSDT is -- leaves its order on the book rather than
+                    # silently gone, which is the honest rendering of a position
+                    # that cannot be closed because nothing will trade it.
+                    self.standing.market_orders_waiting_for_a_first_price += 1
+                    return self._rest(
+                        RestingOrder(
+                            client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
+                            side=side, quantity=quantity, order_type=MARKET,
+                            limit_price=None, stop_price=None,
+                            rested_at_ns=self._now_ns(), leverage=leverage,
+                        ),
+                        RESTING_UNPRICED,
+                        f"a {side} market order is on the book; no price has arrived for this "
+                        f"symbol yet, which is a reason to wait and not to refuse. It fills at "
+                        f"the first price that does arrive",
                     )
                 self.standing.refused_no_price += 1
                 return self._result(

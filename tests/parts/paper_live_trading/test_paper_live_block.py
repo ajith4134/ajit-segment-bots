@@ -33,14 +33,14 @@ from parts.paper_live_trading.paper_account_keeper import (
 )
 from parts.paper_live_trading.paper_fill_simulator import (
     ALREADY_FILLED, CANCELLED, FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED,
-    REFUSED_FEED_JUMP, REFUSED_NO_PRICE, RESTING, RESTING_STOP, STOP_MARKET,
+    REFUSED_FEED_JUMP, REFUSED_NO_PRICE, RESTING, RESTING_STOP, RESTING_UNPRICED, STOP_MARKET,
     TAKE_PROFIT_MARKET, PaperFillSimulator,
 )
 from parts.paper_live_trading.paper_liquidation_simulator import (
     LIQUIDATED, NOT_WATCHED, SURVIVED, PaperLiquidationSimulator,
 )
 from parts.paper_live_trading.stop_order_manager import (
-    PLACE_NEW, REFUSED_NO_POSITION, REFUSED_WIDENING, REPLACE, RESIZE,
+    PLACE_NEW, REFUSED_NO_POSITION, REFUSED_WIDENING, REPLACE, RESIZE, RESIZE_TARGET,
     StopOrderManager,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -458,11 +458,14 @@ def test_a_partially_filled_order_fills_only_what_is_left():
     assert rest.remaining_quantity == pytest.approx(0.0)
 
 
-def test_no_price_at_all_fills_nothing():
-    result = fill_simulator().simulate(
-        **an_order(fill_price_estimate=None, market_price=None)
-    )
-    assert result.outcome == REFUSED_NO_PRICE
+def test_no_price_at_all_rests_a_market_order_instead_of_refusing_it():
+    """Operator, 2026-08-30: no price yet is a reason to wait, not to discard the order."""
+    subject = fill_simulator()
+    result = subject.simulate(**an_order(fill_price_estimate=None, market_price=None))
+    assert result.outcome == RESTING_UNPRICED
+    assert result.fill is None
+    assert subject.standing.market_orders_waiting_for_a_first_price == 1
+    assert subject.standing.refused_no_price == 0
 
 
 # ---- paper-account-keeper ----------------------------------------------------
@@ -1510,7 +1513,108 @@ def test_a_position_scaled_out_of_has_its_stop_cut_down_too():
     )
     assert action.action == RESIZE
     assert action.quantity == pytest.approx(4.0)
-    assert manager.resting_quantity(VENUE, SYMBOL) == pytest.approx(4.0)
+
+
+def test_a_position_that_grew_gets_its_target_re_cut_to_the_whole_of_it():
+    """ADAUSDT, live, 2026-08-30: 244.379 held when the target was placed, grew to
+    244.618, and the target -- never resized -- closed only its original 244.379
+    when it filled, leaving exactly 0.239 as unprotected, ungated dust.
+    """
+    manager = StopOrderManager()
+    manager.place_target(VENUE, SYMBOL, LONG, 244.379, 110.0, Mode("paper"))
+    action = manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=244.618,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action is not None
+    assert action.action == RESIZE_TARGET
+    assert action.quantity == pytest.approx(244.618)
+    # The target price is not this method's decision and must come across untouched.
+    assert action.stop_price == 110.0
+    assert manager.resting_target_quantity(VENUE, SYMBOL) == pytest.approx(244.618)
+    # Placed before cancelled, like the stop's own resize.
+    assert action.place_order_id and action.cancel_order_id
+    assert manager.standing.resized_target_to_the_position == 1
+
+
+def test_a_target_that_already_fits_the_position_is_not_re_cut():
+    """Otherwise every fill churns an order that changes nothing."""
+    manager = StopOrderManager()
+    manager.place_target(VENUE, SYMBOL, LONG, 10.0, 110.0, Mode("paper"))
+    assert manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=10.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+    # Nor for a difference smaller than one tradeable step.
+    assert manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=10.0002,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+    assert manager.standing.resized_target_to_the_position == 0
+
+
+def test_nothing_is_re_cut_for_a_position_with_no_target_resting():
+    """A resize places no new target: a position with only a stop stays that way."""
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 5.0, 98.0, Mode("paper"))
+    assert manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=5.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    ) is None
+
+
+def test_a_position_scaled_out_of_has_its_target_cut_down_too():
+    """A target for more than is held would close a quantity that is not there."""
+    manager = StopOrderManager()
+    manager.place_target(VENUE, SYMBOL, LONG, 10.0, 110.0, Mode("paper"))
+    action = manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=4.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action.action == RESIZE_TARGET
+    assert action.quantity == pytest.approx(4.0)
+
+
+def test_a_target_restored_with_no_known_quantity_still_resizes():
+    """Crashed the live spine 2026-08-30: a checkpoint written before
+    target_quantity existed restores a resting target with `target_order_id`
+    set and `target_quantity=None`. The resize must not assume that quantity
+    is known -- it re-cuts to the position regardless -- and must not crash
+    formatting a None into the reason string.
+    """
+    manager = StopOrderManager()
+    manager.restore_from_checkpoint({
+        "resting": {
+            f"{VENUE}|{SYMBOL}": {
+                "order_id": "stop-1", "stop_price": 98.0, "quantity": 10.0,
+                "target_order_id": "target-1", "target_price": 110.0,
+                # target_quantity omitted, as a pre-2026-08-30 checkpoint would.
+            },
+        },
+        "sequence": 1,
+    })
+    action = manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=15.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert action is not None
+    assert action.action == RESIZE_TARGET
+    assert action.quantity == pytest.approx(15.0)
+    assert manager.resting_target_quantity(VENUE, SYMBOL) == pytest.approx(15.0)
+
+
+def test_resizing_the_target_leaves_the_stop_untouched():
+    """The two exits are resized independently -- one moving must not perturb the other."""
+    manager = StopOrderManager()
+    manager.apply_adjustment(VENUE, SYMBOL, LONG, 10.0, 98.0, Mode("paper"))
+    manager.place_target(VENUE, SYMBOL, LONG, 10.0, 110.0, Mode("paper"))
+    manager.resize_target_to_the_position(
+        venue_id=VENUE, symbol=SYMBOL, direction=LONG, quantity=15.0,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert manager.resting_stop(VENUE, SYMBOL) == 98.0
+    assert manager.resting_quantity(VENUE, SYMBOL) == pytest.approx(10.0)
+    assert manager.resting_target_quantity(VENUE, SYMBOL) == pytest.approx(15.0)
 
 
 def test_a_short_position_has_its_stop_re_cut_too():
