@@ -178,3 +178,112 @@ def test_encode_subscribe_frame_refuses_mixed_modes_in_one_call():
             SubscriptionRequest(instrument_key="A", mode=SubscriptionMode.FULL),
             SubscriptionRequest(instrument_key="B", mode=SubscriptionMode.LTPC),
         ])
+
+
+# ------------------------------------------------------------- order placement
+
+from runtime.brokers.upstox import OrderRequest  # noqa: E402
+
+
+def test_build_order_request_payload_matches_upstox_own_sample_shape():
+    # Source: upstox.com/developer/api-documentation/place-order, request
+    # sample, fetched 2026-09-01. Field name is instrument_token in this one
+    # request body, not instrument_key -- Upstox's own inconsistency,
+    # preserved rather than "fixed" here.
+    order = OrderRequest(
+        instrument_key="NSE_EQ|INE669E01016", quantity=1, product="D",
+        order_type="MARKET", transaction_type="BUY", validity="DAY",
+        price=0, tag="string", disclosed_quantity=0, trigger_price=0,
+        is_amo=False, market_protection=0,
+    )
+    adapter = UpstoxAdapter()
+    payload = adapter.build_order_request_payload(order)
+    assert payload == {
+        "quantity": 1, "product": "D", "validity": "DAY", "price": 0,
+        "tag": "string", "instrument_token": "NSE_EQ|INE669E01016",
+        "order_type": "MARKET", "transaction_type": "BUY",
+        "disclosed_quantity": 0, "trigger_price": 0, "is_amo": False,
+        "market_protection": 0,
+    }
+
+
+def test_order_endpoint_is_the_low_latency_host():
+    adapter = UpstoxAdapter()
+    assert adapter.order_endpoint_url() == "https://api-hft.upstox.com/v2/order/place"
+
+
+def test_read_order_result_from_upstox_own_sample():
+    # Source: same page, response sample.
+    response = {"status": "success", "data": {"order_id": "1644490272000"}}
+    adapter = UpstoxAdapter()
+    result = adapter.read_order_result(response)
+    assert result.order_id == "1644490272000"
+
+
+def test_read_order_result_refuses_a_failed_response():
+    import pytest
+    from runtime.brokers.upstox import OrderPlacementRefused
+
+    response = {"status": "error", "errors": [{"errorCode": "UDAPI1026", "message": "x"}]}
+    adapter = UpstoxAdapter()
+    with pytest.raises(OrderPlacementRefused):
+        adapter.read_order_result(response)
+
+
+# --------------------------------------------------------------- margin quote
+
+from runtime.brokers.upstox import MarginQuoteRequest  # noqa: E402
+
+
+def test_margin_endpoint_is_the_regular_host():
+    adapter = UpstoxAdapter()
+    assert adapter.margin_endpoint_url() == "https://api.upstox.com/v2/charges/margin"
+
+
+def test_build_margin_quote_request_payload_matches_upstox_own_sample_shape():
+    # Source: upstox.com/developer/api-documentation/margin, request sample,
+    # fetched 2026-09-01.
+    requests = [
+        MarginQuoteRequest(
+            instrument_key="NSE_EQ|INE669E01016", quantity=1,
+            transaction_type="BUY", product="D",
+        )
+    ]
+    adapter = UpstoxAdapter()
+    payload = adapter.build_margin_quote_request_payload(requests)
+    assert payload == {
+        "instruments": [{
+            "instrument_key": "NSE_EQ|INE669E01016", "quantity": 1,
+            "product": "D", "transaction_type": "BUY",
+        }]
+    }
+
+
+def test_build_margin_quote_request_payload_refuses_more_than_twenty():
+    import pytest
+
+    requests = [
+        MarginQuoteRequest(
+            instrument_key=f"NSE_EQ|{i}", quantity=1,
+            transaction_type="BUY", product="D",
+        )
+        for i in range(21)
+    ]
+    adapter = UpstoxAdapter()
+    with pytest.raises(ValueError):
+        adapter.build_margin_quote_request_payload(requests)
+
+
+def test_read_margin_quotes_from_upstox_own_sample():
+    # Source: same page, EQ response sample, fetched 2026-09-01.
+    response = {
+        "status": "success",
+        "data": {"margins": [{
+            "span_margin": 0, "exposure_margin": 0, "equity_margin": 33.6,
+            "net_buy_premium": 0, "additional_margin": 0,
+        }]},
+    }
+    adapter = UpstoxAdapter()
+    quotes = adapter.read_margin_quotes(response, instrument_keys=["NSE_EQ|INE669E01016"])
+    assert quotes["NSE_EQ|INE669E01016"].equity_margin == 33.6
+    assert quotes["NSE_EQ|INE669E01016"].span_margin == 0

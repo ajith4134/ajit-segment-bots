@@ -4,6 +4,7 @@ to live (docs/superpowers/specs/2026-09-01-upstox-adapter-design.md).
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 import uuid
@@ -31,6 +32,72 @@ from runtime.brokers.broker_adapter import (
 )
 
 UPSTOX_BROKER_ID = "upstox"
+
+# Order placement and per-order margin -- UpstoxAdapter methods, not yet a
+# declared part (spec section 6a). Both need an order intent as input and
+# nothing in this project produces one for Indian markets yet, so no
+# broker-order-router is declared: it would be an R-01 dangling input, not
+# a formality. These types and methods exist so declaring that part, the
+# day something produces broker-order-request, is a thin wiring layer
+# rather than a redesign.
+
+
+class OrderPlacementRefused(ValueError):
+    """Upstox's own response said the order was not accepted."""
+
+
+@dataclasses.dataclass(frozen=True)
+class OrderRequest:
+    """One order, in the fields Upstox's place-order API actually takes.
+
+    `product` is `I` (intraday), `D` (delivery) or `MTF` -- no plain `CNC`
+    string, delivery is `D`. `market_protection` of `-1` means "exchange
+    default"; `0` means none, which the exchange itself refuses for a
+    MARKET order placed through the API.
+    """
+
+    instrument_key: str
+    quantity: int
+    product: str
+    order_type: str
+    transaction_type: str
+    validity: str = "DAY"
+    price: float = 0.0
+    trigger_price: float = 0.0
+    disclosed_quantity: int = 0
+    is_amo: bool = False
+    market_protection: int = -1
+    tag: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class OrderResult:
+    order_id: str
+
+
+@dataclasses.dataclass(frozen=True)
+class MarginQuoteRequest:
+    """One candidate order to price margin for -- not yet placed."""
+
+    instrument_key: str
+    quantity: int
+    transaction_type: str
+    product: str
+    price: float | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class MarginQuote:
+    """What Upstox says this candidate order would cost in margin."""
+
+    span_margin: float
+    exposure_margin: float
+    equity_margin: float
+    net_buy_premium: float
+    additional_margin: float
+
+
+MAXIMUM_MARGIN_QUOTE_INSTRUMENTS = 20  # Upstox's own documented cap per call
 
 # Source for every figure below: upstox.com/developer/api-documentation/v3/get-market-data-feed,
 # fetched 2026-09-01. Free-tier limits -- Upstox Plus limits are a settings
@@ -346,5 +413,94 @@ class UpstoxAdapter(BrokerAdapter):
             )
         return None
 
+    # -- order placement and per-order margin (spec section 6/6a) --------
+    # Not part of the BrokerAdapter ABC: order fields are the most
+    # broker-specific part of this whole contract, and standardising them
+    # into the shared interface before a second broker's real API has been
+    # read against it would be exactly the premature abstraction T-6 warns
+    # against. These live on UpstoxAdapter alone for now.
 
-__all__ = ["UPSTOX_BROKER_ID", "UpstoxAdapter"]
+    def order_endpoint_url(self) -> str:
+        # Separate low-latency host from the rest of the API, per Upstox's
+        # own docs -- worth preserving as a fact this method states rather
+        # than a URL a caller hardcodes.
+        return "https://api-hft.upstox.com/v2/order/place"
+
+    def build_order_request_payload(self, order: OrderRequest) -> dict:
+        return {
+            "quantity": order.quantity,
+            "product": order.product,
+            "validity": order.validity,
+            "price": order.price,
+            "tag": order.tag,
+            # Upstox's own place-order body names this field
+            # instrument_token, not instrument_key -- its own
+            # inconsistency, preserved rather than "fixed" here.
+            "instrument_token": order.instrument_key,
+            "order_type": order.order_type,
+            "transaction_type": order.transaction_type,
+            "disclosed_quantity": order.disclosed_quantity,
+            "trigger_price": order.trigger_price,
+            "is_amo": order.is_amo,
+            "market_protection": order.market_protection,
+        }
+
+    def read_order_result(self, response: dict) -> OrderResult:
+        if response.get("status") != "success":
+            raise OrderPlacementRefused(f"Upstox refused the order: {response}")
+        return OrderResult(order_id=response["data"]["order_id"])
+
+    def margin_endpoint_url(self) -> str:
+        return "https://api.upstox.com/v2/charges/margin"
+
+    def build_margin_quote_request_payload(
+        self, requests: Sequence[MarginQuoteRequest]
+    ) -> dict:
+        if len(requests) > MAXIMUM_MARGIN_QUOTE_INSTRUMENTS:
+            raise ValueError(
+                f"asked to price margin for {len(requests)} instruments; Upstox's own "
+                f"margin endpoint accepts at most {MAXIMUM_MARGIN_QUOTE_INSTRUMENTS} per call"
+            )
+        instruments = []
+        for request in requests:
+            entry = {
+                "instrument_key": request.instrument_key,
+                "quantity": request.quantity,
+                "product": request.product,
+                "transaction_type": request.transaction_type,
+            }
+            if request.price is not None:
+                entry["price"] = request.price
+            instruments.append(entry)
+        return {"instruments": instruments}
+
+    def read_margin_quotes(
+        self, response: dict, instrument_keys: Sequence[str]
+    ) -> Mapping[str, MarginQuote]:
+        # Upstox returns margins as an ordered array, not keyed by
+        # instrument -- the order matches the request's own instrument
+        # order, which is why the caller's own request order is threaded
+        # back in here rather than read from the response itself.
+        margins = response.get("data", {}).get("margins", [])
+        return {
+            instrument_key: MarginQuote(
+                span_margin=entry["span_margin"],
+                exposure_margin=entry["exposure_margin"],
+                equity_margin=entry["equity_margin"],
+                net_buy_premium=entry["net_buy_premium"],
+                additional_margin=entry["additional_margin"],
+            )
+            for instrument_key, entry in zip(instrument_keys, margins)
+        }
+
+
+__all__ = [
+    "MAXIMUM_MARGIN_QUOTE_INSTRUMENTS",
+    "MarginQuote",
+    "MarginQuoteRequest",
+    "OrderPlacementRefused",
+    "OrderRequest",
+    "OrderResult",
+    "UPSTOX_BROKER_ID",
+    "UpstoxAdapter",
+]
