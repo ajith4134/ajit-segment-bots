@@ -295,6 +295,15 @@ class NormalisedTrade:
     direction outright. A consumer reasoning about buying pressure must not have to
     know which venue phrased it which way.
 
+    `side` is `None` when the source genuinely has no aggressor to report --
+    a broker's last-traded-price ticker restates the exchange's own last
+    print rather than streaming individual prints with a taker side
+    (2026-09-01, options-segment-bots conversion: verified by an exhaustive
+    search across every real market-data consumer in the codebase that
+    nothing reads `.side` or `.signed_quantity` on this type before this
+    was widened -- a fabricated side would have been silently wrong with no
+    reader to ever notice).
+
     `fidelity` travels with the trade because the two venues do not mean the same
     thing by "a trade": Binance offers only 100 ms aggregates and Bybit sends every
     print. A consumer counting trades per second is counting different things on
@@ -305,14 +314,20 @@ class NormalisedTrade:
     symbol: str
     price: float
     quantity: float
-    side: str
+    side: str | None
     venue_time_ns: int
     sequence: int
     fidelity: TradeFidelity
 
     @property
-    def signed_quantity(self) -> float:
-        """Positive when the aggressor bought, negative when it sold."""
+    def signed_quantity(self) -> float | None:
+        """Positive when the aggressor bought, negative when it sold.
+
+        None when side itself is None -- a trade with no aggressor to
+        report has no sign to give it, and returning -quantity would state
+        a sell that was never observed."""
+        if self.side is None:
+            return None
         return self.quantity if self.side == BUY else -self.quantity
 
     @property
