@@ -1536,6 +1536,40 @@
         "from": "its parts",
         "origin": "proposed"
       }
+    },
+    {
+      "id": "broker-adapter",
+      "name": "Broker adapter (Indian markets)",
+      "summary": "Reads, and later trades through, India's retail broker APIs -- one BrokerAdapter contract that any of the six brokers named in docs/goal.md can satisfy. Upstox is the first and only implementation; part ids are broker-agnostic on purpose, same as execution-venue-adapter never naming Binance or Bybit -- which broker answers is a settings choice, not a part's identity.",
+      "origin": "proposed",
+      "approved": true,
+      "consumes": [
+        "broker-candle",
+        "broker-instrument-listing",
+        "broker-market-data",
+        "broker-open-interest",
+        "broker-option-greeks",
+        "broker-order-book-snapshot",
+        "broker-token-standing"
+      ],
+      "produces": [
+        "broker-candle",
+        "broker-instrument-listing",
+        "broker-market-data",
+        "broker-open-interest",
+        "broker-option-greeks",
+        "broker-order-book-snapshot",
+        "broker-token-standing",
+        "part-health"
+      ],
+      "flow_origin": "agreed-provisional",
+      "scope": "global",
+      "scope_origin": "claude-flagged",
+      "contract_recomputed": {
+        "on": "2026-09-01",
+        "from": "its parts",
+        "origin": "proposed"
+      }
     }
   ],
   "state_vocabulary": [
@@ -3171,6 +3205,41 @@
       "id": "online-model-score",
       "name": "online model score",
       "description": "A continuously-trained model's own prequential score for one of its slots (champion or challenger) -- each example judged by that slot's error on it before training on it, which is what makes the running mean a held-out measure without a separate validation split. Read by champion-challenger-gate in place of model-version.validation_score for a model with no discrete trained artefact for that ledger to hold."
+    },
+    {
+      "id": "broker-token-standing",
+      "name": "broker token standing",
+      "description": "Whether the day's broker session token is still valid right now, and until when -- the daily-expiry analogue of a venue's key-standing, since a broker session here is a whole login rather than a signed API key (spec section 3)."
+    },
+    {
+      "id": "broker-instrument-listing",
+      "name": "broker instrument listing",
+      "description": "One contract as an Indian broker's own instrument master lists it: instrument key, exchange, segment, lot size, tick size, and -- for a derivative -- its expiry, strike and option type. Kept separate from symbol-universe because the shape genuinely differs (spec section 4)."
+    },
+    {
+      "id": "broker-market-data",
+      "name": "broker market data",
+      "description": "One trade or last-traded-price update from a broker's feed. Carries the same TradeFidelity distinction as market-data, extended with LAST_TRADED_PRICE_ONLY for a retail feed that states the exchange's last print rather than streaming every one (spec section 5)."
+    },
+    {
+      "id": "broker-candle",
+      "name": "broker candle",
+      "description": "One OHLC bar from a broker's feed, same shape as candle -- kept separate rather than merged into it so this edit stays self-contained (docs/proposals/upstox-broker-adapter.md)."
+    },
+    {
+      "id": "broker-order-book-snapshot",
+      "name": "broker order book snapshot",
+      "description": "Bid/ask depth from a broker's feed, same shape as order-book-snapshot -- kept separate for the same reason as broker-candle."
+    },
+    {
+      "id": "broker-open-interest",
+      "name": "broker open interest",
+      "description": "Open interest and today's traded volume/buy-sell quantity for one derivative contract, from a broker's feed. No crypto equivalent -- a spot/perpetual venue never published this (spec section 5)."
+    },
+    {
+      "id": "broker-option-greeks",
+      "name": "broker option greeks",
+      "description": "Delta, theta, gamma, vega, rho and implied volatility for one options contract, from a broker's feed. No crypto equivalent (spec section 5)."
     }
   ],
   "features": [
@@ -12335,6 +12404,110 @@
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-token-refresh-scheduler",
+      "name": "Broker token refresh scheduler",
+      "role": "keep today's broker session token valid, refreshed automatically before market open",
+      "category": "broker-adapter",
+      "consumes": [],
+      "produces": [
+        "broker-token-standing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-instrument-catalogue-reader",
+      "name": "Broker instrument catalogue reader",
+      "role": "fetch a broker's daily instrument master, every tradable contract as the broker lists it",
+      "category": "broker-adapter",
+      "consumes": [],
+      "produces": [
+        "broker-instrument-listing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-market-feed-reader",
+      "name": "Broker market feed reader",
+      "role": "stream a broker's feed, decomposed into this project's own record kinds",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-token-standing",
+        "broker-instrument-listing"
+      ],
+      "produces": [
+        "broker-market-data",
+        "broker-candle",
+        "broker-order-book-snapshot",
+        "broker-open-interest",
+        "broker-option-greeks",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-market-tape-writer",
+      "name": "Broker market tape writer",
+      "role": "persist every decomposed broker feed record to the tape before anything else reads it",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-market-data",
+        "broker-candle",
+        "broker-order-book-snapshot",
+        "broker-open-interest",
+        "broker-option-greeks"
+      ],
+      "produces": [
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {
@@ -12917,5 +13090,12 @@
     "origin": "proposed by Claude at the user's request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-08-20_closed_trade_decoding.py",
     "rationale": "docs/proposals/closed-trade-decoding-expansion.md"
+  },
+  "_proposal_2026-09-01_upstox_broker_adapter": {
+    "what": "First four parts of the broker-adapter block: token refresh, instrument catalogue, market feed, tape write. Read-side substrate only -- order placement and margin stay undeclared until this segment moves toward live orders (RL-062).",
+    "origin": "designed by Claude against the user's 2026-09-01 crypto-to-India conversion",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_upstox_broker_adapter.py",
+    "proposal": "docs/proposals/upstox-broker-adapter.md",
+    "spec": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md"
   }
 }
