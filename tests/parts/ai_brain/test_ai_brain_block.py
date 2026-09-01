@@ -405,12 +405,14 @@ def a_floor(margin=0.0):
 def an_arbiter(
     margin=0.0, agreement_bonus=0.05, sole_penalty=0.2, shade=0.05,
     minimum_competence=0.3, minimum_coverage=0.3, strategy_review_discount=0.3,
+    regime_memory_distrust=0.05,
 ):
     return OpinionArbiter(
         conviction_floor=a_floor(margin), agreement_bonus=agreement_bonus,
         sole_opinion_penalty=sole_penalty, maximum_forecast_shade=shade,
         minimum_competence=minimum_competence, minimum_coverage=minimum_coverage,
         strategy_review_distrust_discount=strategy_review_discount,
+        regime_memory_maximum_distrust=regime_memory_distrust,
     )
 
 
@@ -487,8 +489,56 @@ def test_a_shade_of_half_the_range_is_refused_at_construction():
         OpinionArbiter(
             conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
             maximum_forecast_shade=0.5, minimum_competence=0.3, minimum_coverage=0.3,
-            strategy_review_distrust_discount=0.3,
+            strategy_review_distrust_discount=0.3, regime_memory_maximum_distrust=0.05,
         )
+
+
+def test_a_distrust_of_half_the_range_is_refused_at_construction():
+    with pytest.raises(ValueError):
+        OpinionArbiter(
+            conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
+            maximum_forecast_shade=0.1, minimum_competence=0.3, minimum_coverage=0.3,
+            strategy_review_distrust_discount=0.3, regime_memory_maximum_distrust=0.5,
+        )
+
+
+class Memory:
+    """A stub matching regime_memory_store.RegimeMemory's fields this consumer reads."""
+
+    def __init__(self, regime, is_worth_acting_on, duration_is_predictable):
+        self.regime = regime
+        self.is_worth_acting_on = is_worth_acting_on
+        self.duration_is_predictable = duration_is_predictable
+
+
+def test_an_unrecognised_regime_is_discounted_not_refused():
+    """Regime memory the arbiter has never consumed was 635,965 messages a bug ago."""
+    subject = an_arbiter(agreement_bonus=0.0, regime_memory_distrust=0.05)
+    subject.observe_regime_memory(Memory("trending", is_worth_acting_on=False, duration_is_predictable=False))
+    intent = subject.arbitrate([an_opinion(BULL, conviction=0.7)], Regime("trending"))
+    assert intent.evidence["regime_memory_distrust"] == pytest.approx(0.05)
+
+
+def test_a_recognised_predictable_regime_is_not_discounted():
+    subject = an_arbiter(agreement_bonus=0.0, regime_memory_distrust=0.05)
+    subject.observe_regime_memory(Memory("trending", is_worth_acting_on=True, duration_is_predictable=True))
+    intent = subject.arbitrate([an_opinion(BULL, conviction=0.7)], Regime("trending"))
+    assert intent.evidence["regime_memory_distrust"] == 0.0
+
+
+def test_regime_memory_never_becomes_confidence():
+    """Recognised but with an unpredictable duration still gets held back, not boosted."""
+    subject = an_arbiter(agreement_bonus=0.0, regime_memory_distrust=0.05)
+    subject.observe_regime_memory(Memory("trending", is_worth_acting_on=True, duration_is_predictable=False))
+    intent = subject.arbitrate([an_opinion(BULL, conviction=0.7)], Regime("trending"))
+    assert intent.evidence["regime_memory_distrust"] == pytest.approx(0.05)
+
+
+def test_no_memory_recorded_is_neutral():
+    """No information about a regime is not distrust of it."""
+    subject = an_arbiter(agreement_bonus=0.0, regime_memory_distrust=0.05)
+    intent = subject.arbitrate([an_opinion(BULL, conviction=0.7)], Regime("trending"))
+    assert intent.evidence["regime_memory_distrust"] == 0.0
 
 
 def test_the_counter_argument_vetoes_rather_than_discounts():
