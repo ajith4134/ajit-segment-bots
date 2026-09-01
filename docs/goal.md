@@ -23,6 +23,18 @@ headroom**, not parallel capital across accounts — one broker executes live
 orders, the rest cover data redundancy and split API load. Paper trading before
 any live order, same standing rule as the crypto build.
 
+**Build order corrected 2026-09-01, the user's own words:**
+
+> In goal: first build the options index and options stocks — 2 segment bots
+> — complete, with paper trading on historic data, and when market opens on
+> real live data with all the 332 and more parts working and trading on this
+> new segment bots. Only after [that] we move to the other segment bots like
+> the stocks intraday with margin bot, and futures and commodity. When we
+> complete them end to end, then our goal is complete.
+
+(Lightly cleaned up from the original for readability; nothing added or
+removed in meaning.) See item 3 below for what this establishes.
+
 ## What that establishes
 
 1. **Full domain conversion, not an addition.** Crypto-specific parts (venue
@@ -35,10 +47,29 @@ any live order, same standing rule as the crypto build.
    futures, stock futures, commodities (MCX), and cash equity (delivery +
    intraday with margin/leverage).
 
-3. **Build order:** intraday equity (F&O-eligible universe, ~180-200 symbols)
-   and index options (nearest expiry) go first and go fully, mirroring RL-050's
-   "one vertical first, fully" pattern. Stock futures, commodities, delivery
-   equity, and stock options stay skeleton until their turn.
+3. **Build order — corrected 2026-09-01.** Options first, both of them,
+   fully, before anything else moves:
+
+   - **Phase A: index options and stock options — two segment bots, each
+     complete end-to-end.** Paper trading on historic data first; when the
+     market is open, paper trading continues on real live data, with all
+     332+ parts genuinely running and trading on these two segment bots —
+     not skeleton, not a subset. Phase A is not done until both are live-data
+     paper-trading for real, fully wired.
+   - **Phase B, only after Phase A is fully complete:** the remaining
+     segment bots — intraday equity (with the margin/leverage bot), stock
+     futures, index futures, commodities. Same discipline: each one built
+     completely end-to-end before the next starts, not several in parallel
+     half-done.
+   - **The goal is complete when every segment bot from both phases is
+     built end-to-end** — Phase A's two plus Phase B's remaining ones.
+
+   This replaces the earlier reading of "start with intraday stocks and
+   index options" as *both* going first together — the user's correction
+   makes options-only Phase A explicit, with intraday equity (and its
+   margin bot), futures and commodities moved to Phase B. Mirrors RL-050's
+   "one vertical first, fully" pattern, now applied at the two-segment-bots
+   granularity rather than the whole six at once.
 
 4. **Full NSE cash universe (~2000+ symbols) is a planned upgrade, not in scope
    now.** Tracked in `docs/future-upgrades.md` so it isn't lost or silently
