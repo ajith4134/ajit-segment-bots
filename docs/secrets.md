@@ -1,8 +1,7 @@
 # Secrets — where they live and why not here
 
-The user asked for the private key and the API/secret key list from the old
-project to be saved in this project. **The values are not in this repository and
-must never be**, and this file explains what was done instead.
+**The values are not in this repository and must never be.** This file
+explains what was done instead.
 
 ## Why no values are in the repo
 
@@ -12,39 +11,48 @@ a safety property either: private repositories get cloned onto laptops, forked
 into other accounts, and made public by a single settings click, at which point
 the entire history is exposed, not just the current files.
 
-A credential committed once is a credential that must be rotated. With live
-exchange keys that means an account that can move money.
+A credential committed once is a credential that must be rotated. With a real
+broker login that means an account that can place orders and move money.
 
 So the split is: **the repo carries the inventory, the machine carries the
 values.**
 
-## What already exists on this server, and where
+## The store — `~/.config/ajit-segment-bots/`
 
-The old project already stored these correctly — encrypted at rest with sops+age,
-outside every git repository, at user level. Nothing needed moving. This project
-reads the same store.
+Created 2026-09-01, when the project's goal converted from crypto to Indian
+stock trading (`docs/goal.md`) and its credential needs stopped being the
+crypto exchange keys the project previously borrowed from `~/.config/trading/`.
+Own store now, same age identity:
 
 | What | Path | Notes |
 |---|---|---|
-| age private key | `~/.config/sops/age/keys.txt` | this is "the private key". It decrypts the store. Not in any repo. |
-| encrypted store | `~/.config/trading/secrets.enc.yaml` | mode 600, values encrypted, key names in clear |
-| sops recipients | `~/.config/trading/.sops.yaml` | public keys only, safe by design |
+| age private key | `~/.config/sops/age/keys.txt` | same identity as the old crypto store. Decrypts both. Not in any repo. |
+| encrypted store | `~/.config/ajit-segment-bots/secrets.enc.yaml` | mode 600, values encrypted, key names in clear |
+| sops recipients | `~/.config/ajit-segment-bots/.sops.yaml` | public key only, safe by design. Broader `encrypted_regex` than the crypto store's — see the file's own header comment for why. |
 
-## The venues currently in the store
+**Crypto's old store (`~/.config/trading/`) is untouched and no longer read by
+this project.** It held `binance`/`coinbase`/`bybit` API keys for the retired
+crypto build; git history (`git log -p docs/secrets.md`) has the prior version
+of this file if that's ever needed again.
 
-Read from the encrypted file's key names. **No values were decrypted, printed, or
-copied at any point.**
+## What's in the store now
 
-| venue | fields |
+Read from the encrypted file's key names only. **No value has ever been
+decrypted, printed, or copied into this conversation or any transcript.**
+
+| group | fields |
 |---|---|
-| `binance` | `api_key`, `api_secret` |
-| `coinbase` | `api_key`, `api_secret` |
-| `bybit` | `api_key`, `api_secret` |
+| `upstox_api` | `client_id`, `client_secret`, `redirect_uri` |
+| `upstox_login` | `username`, `password`, `pin_code`, `totp_secret` |
 
-Whether each holds a real key or still the shipped `PLACEHOLDER_` value is **not
-known** — checking would require decrypting, which was not done. The old
-project's reader rejects placeholders by prefix, and this project will do the
-same.
+All still hold the shipped `PLACEHOLDER_` values — real credentials have not
+been entered. `upstox_login` exists because the daily-token-refresh design
+(`docs/superpowers/specs/2026-09-01-upstox-adapter-design.md`) depends on
+`upstox-totp` for fully unattended auth, which needs the account's login
+credentials, not just the OAuth app's API key pair — a full account
+takeover if leaked, not merely API-scoped access, which is why the whole
+group is encrypted (`password`, `pin_code`, `totp_secret`, `username`) rather
+than just the traditional `api_key`/`api_secret` pair.
 
 ## Rules this project inherits
 
@@ -70,16 +78,21 @@ To those, this project adds:
 
 ## Adding or rotating a key
 
-    sops ~/.config/trading/secrets.enc.yaml
+    sops ~/.config/ajit-segment-bots/secrets.enc.yaml
 
-Opens the decrypted YAML in an editor and re-encrypts on save. The schema is:
+Opens the decrypted YAML in an editor and re-encrypts on save. Current schema:
 
-    <venue>:
-      api_key: ...
-      api_secret: ...
+    upstox_api:
+      client_id: ...
+      client_secret: ...
+      redirect_uri: ...
+    upstox_login:
+      username: ...
+      password: ...
+      pin_code: ...
+      totp_secret: ...
 
-## If a separate store is wanted for this project
-
-Say so and it is created at `~/.config/ajit-segment-bots/secrets.enc.yaml`,
-encrypted to the same age key. It was **not** done by default, because these are
-the same real exchange accounts and rule 4 above applies.
+Each of the six brokers in `docs/goal.md` §6 gets its own `<broker>_api` (and
+`<broker>_login` where a broker needs auto-login credentials, not every one
+will) group as its adapter is built — same shape, added when it's earned,
+never all six pre-created against brokers with no adapter yet.

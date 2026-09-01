@@ -297,19 +297,23 @@ would act on.
 
 ## 8. Open items — yours to decide before implementation starts
 
-- **Depend on `upstox-totp` (PyPI, MIT) for daily auto-login, or port the
-  Zerodha script's approach and write our own?** Recommendation is to depend
-  on the maintained package (RL-065) rather than duplicate what it already
-  does — pin an exact version, same as every other dependency in this
-  project. Confirm.
-- **Credential storage**: a new `~/.config/ajit-segment-bots/secrets.enc.yaml`
-  (sops+age, matching `docs/secrets.md`'s existing pattern rather than the old
-  repo's gitignored `.env`), holding `upstox_api` (client_id, client_secret)
-  and `upstox_login` (username, password, pin_code, totp_secret) as separate
-  key groups, plus the daily `access_token` in its own gitignored,
-  chmod-600 file per the Zerodha precedent — not inside the encrypted store,
-  since it rotates daily and doesn't need sops's protection the way a
-  standing password does. Confirm this split.
+- ~~**Depend on `upstox-totp`**~~ **CONFIRMED 2026-09-01.** Depend on the
+  maintained package (RL-065) rather than duplicate what it already does.
+  Pin exact version `1.0.8` (PyPI, checked 2026-09-01) when the dependency
+  file is actually touched, at implementation time — not done yet, this spec
+  doesn't cross into code.
+- ~~**Credential storage**~~ **CONFIRMED and set up 2026-09-01.**
+  `~/.config/ajit-segment-bots/secrets.enc.yaml` now exists (sops+age, same
+  age identity as the old crypto store, own `.sops.yaml` with a broader
+  `encrypted_regex` covering password/pin_code/totp_secret alongside the
+  usual api_key/api_secret) holding `upstox_api`
+  (client_id/client_secret/redirect_uri) and `upstox_login`
+  (username/password/pin_code/totp_secret) — both still placeholder values,
+  no real credential entered. Documented in `docs/secrets.md`. The daily
+  `access_token` still gets its own gitignored, chmod-600 file per the
+  Zerodha precedent (`KiteAccessTokenFileStore`) — it rotates daily and
+  doesn't need sops's protection the way a standing password does; not
+  created yet, that's implementation.
 - **Unofficial-endpoint risk, named plainly**: both the Zerodha script and
   `upstox-totp` replay internal login-page endpoints rather than each
   broker's documented OAuth API. This is the standard approach in the retail
