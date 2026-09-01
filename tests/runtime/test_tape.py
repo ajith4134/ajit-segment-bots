@@ -387,3 +387,23 @@ def test_a_record_of_the_wrong_kind_is_refused_by_its_writer(tape_root):
     with TapeWriter(tape_root, VENUE, SYMBOL, WRITEBACK_INTERVAL) as writer:
         with pytest.raises(TapeKindRefused):
             writer.append(StreamKind.CANDLE, b'{"candle":1}', received_at_ns=NOON_NS)
+
+
+def test_stream_kind_gains_open_interest_and_option_greeks_without_renumbering_existing():
+    # Existing five must be unchanged -- a tape written before this change
+    # reads back identically, since StreamKind is stored as one byte (T-5).
+    assert StreamKind.TRADE == 1
+    assert StreamKind.CANDLE == 2
+    assert StreamKind.BOOK == 3
+    assert StreamKind.QUOTE == 4
+    assert StreamKind.PREMIUM == 5
+    assert StreamKind.OPEN_INTEREST == 6
+    assert StreamKind.OPTION_GREEKS == 7
+
+
+def test_trade_fidelity_gains_last_traded_price_only():
+    from runtime.tape import TradeFidelity
+
+    assert TradeFidelity.EVERY_PRINT == "every-print"
+    assert TradeFidelity.VENUE_AGGREGATED == "venue-aggregated"
+    assert TradeFidelity.LAST_TRADED_PRICE_ONLY == "last-traded-price-only"

@@ -95,6 +95,16 @@ class StreamKind(enum.IntEnum):
     # settlement from the premium -- mark minus index -- and neither number was
     # on any wire, so it forecast nothing at all and said so in its standing.
     PREMIUM = 5
+    # Open interest and today's traded volume/buy-sell quantity for one
+    # derivative contract. Added 2026-09-01 for the Indian-markets broker
+    # adapter -- no crypto perpetual venue ever published this (spot/perp
+    # pricing has no concept of open interest the way a listed derivative
+    # contract does). Appended, never inserted, so a tape written before this
+    # change reads back with every existing value unchanged.
+    OPEN_INTEREST = 6
+    # Delta, theta, gamma, vega, rho and implied volatility for one options
+    # contract. Added 2026-09-01, same reasoning as OPEN_INTEREST above.
+    OPTION_GREEKS = 7
 
 
 class TradeFidelity(enum.StrEnum):
@@ -108,6 +118,13 @@ class TradeFidelity(enum.StrEnum):
 
     EVERY_PRINT = "every-print"
     VENUE_AGGREGATED = "venue-aggregated"
+    # A retail broker's last-traded-price ticker: the exchange's own last
+    # print, restated on update, not a stream of every individual print the
+    # way a crypto venue's trade feed is. Added 2026-09-01 -- Upstox's feed
+    # has no per-print trade stream at all (spec section 5); recording an LTP
+    # update as EVERY_PRINT or VENUE_AGGREGATED would claim a resolution this
+    # feed does not have, the same reasoning the other two values exist for.
+    LAST_TRADED_PRICE_ONLY = "last-traded-price-only"
 
 
 # One index record. Packed rather than aligned so the layout is exactly these
