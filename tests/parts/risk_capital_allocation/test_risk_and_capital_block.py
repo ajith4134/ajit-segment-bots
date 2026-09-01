@@ -41,7 +41,7 @@ from parts.risk_capital_allocation.exposure_limiter import (
     PER_CLUSTER, PER_POSITION, TOTAL_GROSS, ExposureLimiter,
 )
 from parts.risk_capital_allocation.halt_enforcer import (
-    HUMAN_OVERRIDE, POLICY_REFUSAL, TRADING_HALT, HaltEnforcer,
+    HUMAN_OVERRIDE, POLICY_REFUSAL, TRADING_HALT, HaltEnforcer, wants_halt,
 )
 from parts.risk_capital_allocation.leverage_selector import (
     AT_CEILING, CHOSEN, NO_LEVERAGE, UNLEVERAGED_NO_FORECAST, LeverageSelector,
@@ -306,6 +306,21 @@ def test_a_halt_is_only_lifted_explicitly():
 
 def test_nothing_halting_permits_trading():
     assert HaltEnforcer(allowed_fraction_when_clear=1.0).read_limit().fraction_of_allotment == 1.0
+
+
+def test_every_real_human_override_instruction_that_should_halt_does():
+    """Until 2026-08-30 this checked `"halt" in instruction.lower()`, which
+    matches none of human-override-reader's five real instructions -- an
+    operator's stop-trading was published, read, and enforced nothing.
+    """
+    assert wants_halt("stop-everything") is True
+    assert wants_halt("stop-trading") is True
+    assert wants_halt("close-positions") is True
+
+
+def test_instructions_that_are_not_about_stopping_trading_do_not_halt():
+    assert wants_halt("stop-self-modification") is False
+    assert wants_halt("resume") is False
 
 
 # ---- exposure-limiter --------------------------------------------------------

@@ -39,6 +39,41 @@ TRADING_HALT = "trading-halt"
 POLICY_REFUSAL = "policy-refusal"
 SETTINGS_INVALID = "capital-settings-invalid"
 
+# The instructions human-override-reader actually publishes (its own
+# INSTRUCTIONS tuple) that mean trading itself must stop. Named locally
+# rather than imported from that part (T-4: a part names data, never
+# another part) -- `position_flattener.py` names its own `CLOSE_POSITIONS`
+# the same way.
+#
+# Until 2026-08-30 this checked `"halt" in override.instruction.lower()`,
+# and none of the five real instructions -- stop-everything, stop-trading,
+# stop-self-modification, close-positions, resume -- contain the word
+# "halt". So an operator's stop-trading override, the system's own
+# emergency door, published and read correctly all the way to this part
+# and then enforced nothing: risk-limit never went to zero, and the sizer
+# went on producing new orders under an active stop.
+STOP_EVERYTHING = "stop-everything"
+STOP_TRADING = "stop-trading"
+# Closing every position and opening new ones are not two operations an
+# operator asking for the first would want running at once: measured
+# 2026-08-30, running `close-positions` alone let the bots open 71 new
+# positions across other symbols while position-flattener worked through
+# the original 50, because nothing about "close everything" also meant
+# "stop opening things" until this line existed.
+CLOSE_POSITIONS = "close-positions"
+HALTING_INSTRUCTIONS = (STOP_EVERYTHING, STOP_TRADING, CLOSE_POSITIONS)
+
+
+def wants_halt(instruction: str) -> bool:
+    """Whether a human-override instruction means trading itself must stop.
+
+    A named, tested function rather than inline logic: the previous
+    (`"halt" in instruction.lower()`) version lived only inside `start_part`'s
+    closure, which is why no test caught it matching none of the five real
+    instructions for over four days on the live spine.
+    """
+    return instruction in HALTING_INSTRUCTIONS
+
 # Which stop outranks which when several are in force. A human's decision is
 # first because it is the one nothing in the system is entitled to reason past.
 PRECEDENCE = (HUMAN_OVERRIDE, TRADING_HALT, POLICY_REFUSAL, SETTINGS_INVALID)
@@ -230,10 +265,10 @@ def start_part(context) -> int:
             else:
                 enforcer.raise_halt(POLICY_REFUSAL, decision.envelope_level, decision.reason)
         for override in overrides.payloads():
-            wants_halt = "halt" in override.instruction.lower()
-            if override.is_active and wants_halt:
+            should_halt = wants_halt(override.instruction)
+            if override.is_active and should_halt:
                 enforcer.raise_halt(HUMAN_OVERRIDE, override.source_reference, override.instruction)
-            elif wants_halt:
+            elif should_halt:
                 enforcer.release_halt(HUMAN_OVERRIDE)
         for verdict in verdicts.payloads():
             if verdict.segment != segment:
