@@ -43,6 +43,13 @@ dependencies = [
     # streaming protobuf reuses it rather than adding a second decoder.
     # cp310-abi3 wheel, forward-compatible with 3.14, no compiler needed.
     "protobuf==7.36.1",
+    # Fully-automated daily Upstox login (mobile+password+PIN+TOTP -> access
+    # token), so broker-token-refresh-scheduler needs no human click. MIT,
+    # actively maintained (PyPI, checked 2026-09-01). Unofficial -- replays
+    # Upstox's internal login endpoints, same as every retail algo trader's
+    # approach to this; see docs/secrets.md for where the credentials it
+    # needs are stored.
+    "upstox-totp==1.0.8",
 ]
 
 [project.optional-dependencies]
