@@ -1811,25 +1811,49 @@ def not_built_cell(column: str, running: dict | None = None) -> str:
 
 
 def trailing_cell(trade: RecordedTrade, running: dict | None = None) -> str:
-    """The position's real locked stop, once profit-lock has moved one.
+    """What a trail is worth in USDT: real once profit-lock has moved a stop,
+    a shadow figure before that.
 
-    Reads position-recorder's own journal of stop-adjustment (added
-    2026-08-30 specifically so this column could show something real) rather
-    than asserting a state: "not built"/"none recorded" only when nothing has
-    ever been journalled for this position, never a placeholder standing in
-    for a lock that has genuinely formed.
+    Real: reads position-recorder's own journal of stop-adjustment (added
+    2026-08-30 so this column could show something real), and converts the
+    stop to money with `profit_at` -- the same formula peak_profit, worst_loss
+    and profit_now already use, so a locked figure and an unrealised one are
+    directly comparable rather than one being a price/fraction and the other
+    a dollar amount. Since profit-lock's stop only ever moves in the trade's
+    favour, this number can only climb while it is real.
+
+    Shadow: profit-lock refuses to move a stop until a trade clears its own
+    round-trip fee cost (locking earlier guarantees a loss after fees), so
+    most open positions never get a real entry here at all -- 292 trailed
+    against 1,558,186 adjustments decided, measured 2026-08-30. Before that
+    gate is cleared this shows the position's current unrealised profit
+    instead, styled and labelled as what it is: informational, not a stop
+    that has actually been placed, and never asserted to be locked.
+
+    Neither is shown for a position with no profit at all -- there is
+    nothing to lock and nothing building, which is `not_built_cell`'s
+    "none recorded"/"not built" distinction, not a third state to invent here.
     """
-    if trade.trailing_new_stop is None:
-        return not_built_cell("trailing stop", running)
-    locked = (
-        f"{trade.trailing_locked_fraction:.1%} locked"
-        if trade.trailing_locked_fraction is not None
-        else "moved"
-    )
-    outcome = html.escape(trade.trailing_outcome or "")
-    return (
-        f'<td class="mono" title="{outcome}">{trade.trailing_new_stop:,.4f} ({locked})</td>'
-    )
+    if trade.trailing_new_stop is not None:
+        locked_quote = trade.profit_at(trade.trailing_new_stop)
+        amount = as_money(locked_quote) if locked_quote is not None else "—"
+        fraction = trade.trailing_locked_fraction
+        fraction_part = f", {fraction:.1%} locked" if fraction is not None else ""
+        title = html.escape(
+            f"{trade.trailing_outcome or ''} to {trade.trailing_new_stop:g}{fraction_part}"
+        )
+        return (
+            f'<td class="mono{profit_class(locked_quote)}" title="{title}">'
+            f"{amount} locked</td>"
+        )
+    profit_now = trade.profit_now
+    if profit_now is not None and profit_now > 0:
+        return (
+            f'<td class="mono shadow{profit_class(profit_now)}" '
+            f'title="profit-lock has not moved a stop for this position -- this is the '
+            f'current unrealised profit, not a real order">{as_money(profit_now)} building</td>'
+        )
+    return not_built_cell("trailing stop", running)
 
 
 def price_cell(window: "PriceWindow | None") -> str:
@@ -1916,7 +1940,7 @@ def render_trades(
         "<thead><tr>"
         "<th>symbol</th><th>side</th><th>quantity</th><th>entry</th>"
         "<th>capital in (usdt)</th>"
-        "<th>price now</th><th>stop</th><th>target</th><th>trailing</th><th>forecast</th>"
+        "<th>price now</th><th>stop</th><th>target</th><th>trailing (usdt)</th><th>forecast</th>"
         "<th>conviction</th><th>peak profit</th><th>worst loss</th><th>profit now</th>"
         "<th>fees</th><th>state</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
@@ -2010,6 +2034,7 @@ PAGE = """<title>Segment Bots Trade Board</title>
   }}
   .chip.live {{ color: var(--ok); }}
   .chip.test {{ color: var(--muted); }}
+  .shadow {{ font-style: italic; opacity: .75; }}
   .empty {{ color: var(--muted); border: 1px dashed var(--line-strong); padding: 1rem; border-radius: 3px; }}
   .note {{ color: var(--muted); font-size: .85rem; margin: 0 0 1rem; max-width: 46rem; }}
   footer {{
