@@ -315,7 +315,15 @@ class PositionCloseDetector:
         book = self._books.setdefault(key, LotBook())
         direction = self._direction.get(key, FLAT)
         fill_direction = LONG if fill.side == BUY else SHORT
-        self._fees[key] = self._fees.get(key, 0.0) + fill.fee
+        # A reopen starts a new round trip's fees at this fill's own, not at
+        # whatever the last one finished at. Every other per-key state resets
+        # here (`_opened_at`, `_realised`, `_entered_quantity`, `_entry_cost`,
+        # `_notional_at_leverage`, a few lines down) -- fees never did, so a
+        # symbol traded five times in a session reported its sixth trade's fee
+        # as the sum of all six: measured live 2026-08-30, ADAUSDT closed a
+        # $50.07 trade with fees_paid=37.287, the accumulation of every round
+        # trip this process had made on that symbol, not this one's ~$0.05.
+        self._fees[key] = fill.fee if direction == FLAT else self._fees.get(key, 0.0) + fill.fee
 
         # Exact from here down. Every quantity comparison below decides whether a
         # round trip is over, and a float that missed flat by 9e-18 left the

@@ -150,6 +150,46 @@ def test_a_short_realises_the_opposite_way():
     assert held.realised_pnl == pytest.approx(10.0)
 
 
+def test_a_reopen_starts_its_own_fees_not_the_last_round_trips():
+    """ADAUSDT, live, 2026-08-30: a position closed with fees_paid=37.23 (five
+    round trips deep), reopened, and reported fees_paid=37.26 -- barely moved
+    by the new fill's own ~0.03, because the reopen kept accumulating instead
+    of starting fresh.
+    """
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    reconciler.observe_fill(fill("f1", BUY, 100.0, 1.0, fee=5.0))
+    reconciler.observe_fill(fill("f2", SELL, 100.0, 1.0, fee=5.0))  # closes flat
+    held = reconciler.observe_fill(fill("f3", BUY, 100.0, 1.0, fee=0.03))
+    assert held.quantity == 1.0
+    assert held.fees_paid == pytest.approx(0.03)
+
+
+def test_a_reopen_starts_its_own_realised_pnl_not_the_last_round_trips():
+    """The same accumulation bug, one field over: `bull`/`bear-position-
+    invalidation-watcher` score a close as a win or loss off `realised_pnl > 0`,
+    which must be this round trip's result, not the symbol's lifetime total.
+    """
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    reconciler.observe_fill(fill("f1", BUY, 100.0, 1.0))
+    reconciler.observe_fill(fill("f2", SELL, 200.0, 1.0))  # +100, closes flat
+    held = reconciler.observe_fill(fill("f3", BUY, 100.0, 1.0))
+    assert held.quantity == 1.0
+    assert held.realised_pnl == pytest.approx(0.0)
+
+
+def test_adding_to_an_open_position_still_accumulates_fees_and_realised():
+    """The reset is only for a reopen from flat -- an add-to or a partial close
+    on an already-open position must keep accumulating exactly as before.
+    """
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    reconciler.observe_fill(fill("f1", BUY, 100.0, 2.0, fee=0.1))
+    held = reconciler.observe_fill(fill("f2", BUY, 100.0, 1.0, fee=0.1))
+    assert held.fees_paid == pytest.approx(0.2)
+    held = reconciler.observe_fill(fill("f3", SELL, 150.0, 1.0, fee=0.1))
+    assert held.fees_paid == pytest.approx(0.3)
+    assert held.realised_pnl == pytest.approx(50.0)
+
+
 def test_the_venue_disagreeing_is_reported_not_adopted():
     """A divergence means a fill was missed, duplicated or invented."""
     reconciler = FillReconciler(quantity_tolerance=1e-9)
@@ -192,6 +232,20 @@ def test_reaching_flat_emits_the_round_trip():
     assert trade.direction == LONG
     assert trade.realised_pnl == pytest.approx(100.0)
     assert trade.holding_seconds == pytest.approx(2.0)
+
+
+def test_a_reopened_symbol_s_closed_trade_reports_only_its_own_fees():
+    """ADAUSDT, live, 2026-08-30: a $50.07 trade closed with fees_paid=37.287 --
+    every round trip this process had ever made on the symbol, summed, because
+    only realised/entered/entry-cost reset on a reopen and fees never did.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("f1", BUY, 100.0, 1.0, at=1, fee=5.0))
+    first = detector.observe_fill(fill("f2", SELL, 100.0, 1.0, at=2, fee=5.0))
+    assert first.fees_paid == pytest.approx(10.0)
+    detector.observe_fill(fill("f3", BUY, 100.0, 1.0, at=3, fee=0.02))
+    second = detector.observe_fill(fill("f4", SELL, 100.0, 1.0, at=4, fee=0.02))
+    assert second.fees_paid == pytest.approx(0.04)
 
 
 def test_a_round_trip_closed_in_slices_reaches_flat_and_emits_its_trade():

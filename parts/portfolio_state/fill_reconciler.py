@@ -201,7 +201,16 @@ class FillReconciler:
     def _apply(self, held: Position, fill) -> Position:
         signed = fill.signed_quantity
         new_quantity = held.quantity + signed
-        realised = held.realised_pnl
+        # A reopen starts a new round trip: its realised P&L and fees begin at
+        # zero and this fill's own, never at what the last round trip on this
+        # symbol finished with. `opened_at_ns` and `leverage` already special-
+        # case `held.quantity == 0` below for the same reason; these two did
+        # not, so `bull-position-invalidation-watcher` and
+        # `bear-position-invalidation-watcher` scored a close's win/loss off
+        # `position.realised_pnl > 0` -- the symbol's lifetime total across
+        # every round trip this process had made, not this one's result.
+        realised = 0.0 if held.quantity == 0 else held.realised_pnl
+        fees_paid = fill.fee if held.quantity == 0 else held.fees_paid + fill.fee
         average = held.average_entry_price
 
         increasing = held.quantity == 0 or (held.quantity > 0) == (signed > 0)
@@ -225,7 +234,7 @@ class FillReconciler:
             quantity=new_quantity,
             average_entry_price=average if new_quantity != 0 else 0.0,
             realised_pnl=realised,
-            fees_paid=held.fees_paid + fill.fee,
+            fees_paid=fees_paid,
             opened_at_ns=held.opened_at_ns if held.quantity != 0 else fill.filled_at_ns,
             updated_at_ns=fill.filled_at_ns,
             # A position reopened from flat takes the new fill's leverage; one
