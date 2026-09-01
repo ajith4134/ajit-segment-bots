@@ -279,7 +279,6 @@ LIVE_SPINE = (
     "onchain-position-reader",
     "tail-copy-selector",
     "tail-move-remaining-estimator",
-    "social-sentiment-reader",
     "tail-crowding-detector",
     "tail-follow-conviction-model",
     "tail-trailing-exit-planner",

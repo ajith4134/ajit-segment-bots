@@ -44,7 +44,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="idea-generator",
     consumes=(
         "web-idea", "trade-episode", "bot-scorecard", "validated-llm-output",
-        "sentiment-reading", "instruction-history", "knowledge-link", "regime-memory",
+        "instruction-history", "knowledge-link", "regime-memory",
     ),
     produces=("novel-idea", "part-health", "llm-request"),
     resource_class="compute-bound",
@@ -353,7 +353,13 @@ def start_part(context) -> int:
     histories = Batch(read=context.bus.reader("instruction-history"))
     links = Batch(read=context.bus.reader("knowledge-link"))
     memories = Batch(read=context.bus.reader("regime-memory"))
-    drained = (Batch(read=context.bus.reader("bot-scorecard")), Batch(read=context.bus.reader("sentiment-reading")))
+    # bot-scorecard is one of this part's own four stated sources (docstring:
+    # "what the scorecards say is missing") but its wiring into gap detection
+    # was never finished -- drained here, not yet read for real. A real gap,
+    # left named rather than silently dropped (2026-09-01 audit found it,
+    # RL-058 says no shortcut code, but finishing it is a separate task from
+    # the crypto retirement this edit is part of).
+    drained = (Batch(read=context.bus.reader("bot-scorecard")),)
     publish_ideas = context.bus.publisher_for("novel-idea")
     publish_requests = context.bus.publisher_for("llm-request")
     generator = IdeaGenerator(

@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import (
-    ESTIMATES_DISAGREE, FROM_FUNDING, FROM_SENTIMENT, FROM_THE_BOOK, CalibratedConviction,
+    ESTIMATES_DISAGREE, FROM_ORDER_FLOW, FROM_THE_BOOK, CalibratedConviction,
 )
 from runtime.online_learner import OnlineLogisticModel, ProbabilityCalibrator
 from runtime.part_declaration import PartDeclaration
@@ -158,7 +158,7 @@ class TailFollowConvictionModel:
                     remaining.remaining_fraction / candidate.entry_cost_fraction
                 )
 
-        for source in (FROM_THE_BOOK, FROM_FUNDING, FROM_SENTIMENT):
+        for source in (FROM_THE_BOOK, FROM_ORDER_FLOW):
             value = crowding.readings.get(source)
             if value is not None:
                 features[f"crowding_{source}"] = value

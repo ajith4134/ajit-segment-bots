@@ -360,8 +360,12 @@ class MoveRemaining:
 
 
 FROM_THE_BOOK = "the-book-is-one-sided"
-FROM_FUNDING = "funding-is-the-price-of-consensus"
-FROM_SENTIMENT = "sentiment-has-converged"
+# FROM_FUNDING replaced by FROM_ORDER_FLOW 2026-09-01 (options-segment-bots
+# conversion): funding rate has no Indian equivalent; order-flow imbalance
+# from broker-open-interest plays the same role -- the price of consensus,
+# in a market that doesn't charge one directly. FROM_SENTIMENT retired with
+# no replacement: no Indian sentiment data source exists yet.
+FROM_ORDER_FLOW = "order-flow-favours-one-side"
 
 NOT_CROWDED = "not-crowded"
 CROWDED = "crowded"

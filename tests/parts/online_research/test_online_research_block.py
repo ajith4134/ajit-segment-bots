@@ -45,9 +45,6 @@ from parts.online_research.options_flow_reader import (
     AT_THE_MONEY, BUY, CALL, EXPIRED, FAR_OUT_OF_THE_MONEY, OptionsFlowReader, PUT,
     RECORDED as FLOW_RECORDED, SELL, TOO_SMALL,
 )
-from parts.online_research.social_sentiment_reader import (
-    LOOKS_COORDINATED, NO_BASELINE, READ as SENTIMENT_READ, SocialSentimentReader, TOO_QUIET,
-)
 from parts.online_research.strategy_decoder import (
     AWAITING_PHRASING, DECODED, DIRECTION_BIAS, MEASURABLE_REGULARITIES, NO_PATTERN,
     StrategyDecoder, TOO_FEW_POSITIONS,
@@ -67,7 +64,6 @@ BLOCK_PARTS = {
     "strategy-decoder": "parts.online_research.strategy_decoder",
     "edge-comparator": "parts.online_research.edge_comparator",
     "copy-worthiness-scorer": "parts.online_research.copy_worthiness_scorer",
-    "social-sentiment-reader": "parts.online_research.social_sentiment_reader",
     "trader-record-verifier": "parts.online_research.trader_record_verifier",
     "copy-latency-estimator": "parts.online_research.copy_latency_estimator",
     "exchange-announcement-reader": "parts.online_research.exchange_announcement_reader",
@@ -664,57 +660,6 @@ def test_unequal_samples_are_refused():
         subject.observe_our_episode(an_episode("BTCUSDT", 0.01, index * DAY_NS, (index + 1) * DAY_NS))
     assert subject.compare("alice").state == EDGE_TOO_FEW_TRADES
 
-
-# ---- social-sentiment-reader ------------------------------------------------
-
-def a_sentiment_reader(posts=3, accounts=3, baseline=3, concentration=0.7):
-    return SocialSentimentReader(
-        minimum_posts=posts, minimum_distinct_accounts=accounts,
-        baseline_window=baseline, concentration_threshold=concentration,
-        window_seconds=3600.0, now_ns=Clock(),
-    )
-
-
-def _posts(count, accounts, score=0.5):
-    return [
-        {"account": f"account-{index % accounts}", "score": score}
-        for index in range(count)
-    ]
-
-
-def test_a_campaign_is_marked_rather_than_dropped():
-    """A coordinated push is a real thing happening to the symbol."""
-    subject = a_sentiment_reader()
-    subject.install_reader(lambda symbol: (_posts(40, 3), "forum://x", True))
-    result = subject.read("BTCUSDT")
-    assert result.state == LOOKS_COORDINATED
-    assert result.reading is not None
-    assert result.reading.looks_coordinated
-
-
-def test_change_is_measured_against_this_symbols_own_baseline():
-    subject = a_sentiment_reader(baseline=3)
-    scores = iter([0.5, 0.5, 0.5, 0.9])
-    subject.install_reader(lambda symbol: (_posts(10, 10, next(scores)), "forum://x", True))
-    for _ in range(3):
-        assert subject.read("BTCUSDT").state == NO_BASELINE
-    result = subject.read("BTCUSDT")
-    assert result.state == SENTIMENT_READ
-    assert result.change == pytest.approx(0.4)
-
-
-def test_a_quiet_forum_is_a_reading_about_the_forum():
-    subject = a_sentiment_reader(posts=10, accounts=5)
-    subject.install_reader(lambda symbol: (_posts(2, 2), "forum://x", True))
-    assert subject.read("BTCUSDT").state == TOO_QUIET
-
-
-def test_the_reader_does_not_convert_sentiment_into_a_direction():
-    described = importlib.import_module(
-        BLOCK_PARTS["social-sentiment-reader"]
-    ).describe_sentiment_reading(a_sentiment_reader())
-    assert described["converts_sentiment_into_a_direction"] is False
-    assert described["uses_one_neutral_point_for_every_symbol"] is False
 
 
 # ---- exchange-announcement-reader -------------------------------------------

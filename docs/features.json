@@ -197,7 +197,6 @@
         "premortem-note",
         "recalled-episode",
         "regime-memory",
-        "sentiment-reading",
         "skill-gap",
         "symbol-price-frame",
         "trade-cluster",
@@ -518,7 +517,6 @@
         "options-flow",
         "part-health",
         "research-finding",
-        "sentiment-reading",
         "source-document",
         "strategy-gap",
         "tracked-trader",
@@ -1391,6 +1389,8 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
+        "broker-instrument-listing",
+        "broker-open-interest",
         "champion-choice",
         "copy-latency",
         "copy-score",
@@ -1400,7 +1400,6 @@
         "exit-counterfactual",
         "external-position",
         "follow-candidate",
-        "funding-forecast",
         "learning-reward",
         "market-data",
         "move-remaining",
@@ -1411,7 +1410,7 @@
         "price-forecast",
         "retrain-request",
         "sample-weight",
-        "sentiment-reading",
+        "symbol-price-frame",
         "symbol-profile",
         "tail-calibrated-conviction",
         "tail-exit-plan",
@@ -1438,7 +1437,7 @@
         "RL-047"
       ],
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       },
@@ -4446,7 +4445,6 @@
         "trade-episode",
         "bot-scorecard",
         "validated-llm-output",
-        "sentiment-reading",
         "instruction-history",
         "knowledge-link",
         "regime-memory"
@@ -6244,30 +6242,6 @@
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
       "skipped_tick_effect": "delays"
-    },
-    {
-      "id": "social-sentiment-reader",
-      "name": "Social sentiment reader",
-      "role": "read how the crowd is talking about each symbol, source counted",
-      "category": "online-research",
-      "consumes": [
-        "symbol-universe"
-      ],
-      "produces": [
-        "sentiment-reading",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "io-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
     },
     {
       "id": "local-model-caller",
@@ -9299,8 +9273,8 @@
       "consumes": [
         "follow-candidate",
         "order-book-snapshot",
-        "funding-forecast",
-        "sentiment-reading"
+        "broker-instrument-listing",
+        "broker-open-interest"
       ],
       "produces": [
         "crowding-reading",
@@ -13128,5 +13102,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_cross_segment_signal_bridge_open_interest.py",
     "proposal": "docs/proposals/cross-segment-signal-bridge-open-interest.md"
+  },
+  "_proposal_2026-09-01_tail_crowding_detector_order_flow": {
+    "what": "tail-crowding-detector redirected from funding-forecast/sentiment-reading to broker-instrument-listing + broker-open-interest (FROM_ORDER_FLOW replaces FROM_FUNDING's role, sentiment retired with no replacement). idea-generator's dead sentiment-reading consume trimmed. social-sentiment-reader retired -- nothing reads its type.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_tail_crowding_detector_order_flow.py",
+    "proposal": "docs/proposals/tail-crowding-detector-order-flow.md"
   }
 }

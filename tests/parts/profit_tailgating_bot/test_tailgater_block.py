@@ -48,7 +48,7 @@ from runtime.trade_decoding_types import (
 )
 from runtime.bot_opinion import (
     CROWDED, CROWDING_NOT_MEASURED, ENTER_NOW, ESTIMATES_AGREE, ESTIMATES_DISAGREE,
-    FROM_A_SCANNER_MOVE, FROM_A_TRACKED_TRADER, FROM_FUNDING, FROM_OUR_OWN_WINNER,
+    FROM_A_SCANNER_MOVE, FROM_A_TRACKED_TRADER, FROM_ORDER_FLOW, FROM_OUR_OWN_WINNER,
     FROM_THE_BOOK, LONG, NOT_CROWDED, NO_EXIT_PLAN, ONLY_ONE_ESTIMATE, SHORT, STAND_DOWN,
     BotScorecard, CrowdingReading, ExitTarget, FollowCandidate, MoveRemaining,
 )
@@ -123,7 +123,7 @@ def a_crowding(state=NOT_CROWDED, readings=None, tripped=()):
     return CrowdingReading(
         bot="profit-tailgating-bot", venue_id=VENUE, symbol=SYMBOL, direction=LONG,
         state=state, tripped_by=tuple(tripped),
-        readings=readings if readings is not None else {FROM_THE_BOOK: 0.1, FROM_FUNDING: 0.2},
+        readings=readings if readings is not None else {FROM_THE_BOOK: 0.1, FROM_ORDER_FLOW: 0.2},
         sources_measured=2, sources_unavailable=(), reason="read", read_at_ns=Clock()(),
     )
 
@@ -537,18 +537,16 @@ def test_an_estimate_never_exceeds_the_largest_move_ever_recorded():
 
 # ---- tail-crowding-detector -------------------------------------------------
 
-def a_crowding_detector(book=0.6, funding=2.0, sentiment=2.0, minimum_sources=2):
+def a_crowding_detector(book=0.6, order_flow=2.0, minimum_sources=2):
     return TailCrowdingDetector(
-        book_imbalance_threshold=book, funding_deviation_threshold=funding,
-        sentiment_deviation_threshold=sentiment, minimum_observations=10,
-        half_life_observations=200, minimum_sources=minimum_sources,
+        book_imbalance_threshold=book, order_flow_deviation_threshold=order_flow,
+        minimum_observations=10, half_life_observations=200, minimum_sources=minimum_sources,
     )
 
 
 def teach_crowding_normal(detector, count=50):
     for index in range(count):
-        detector.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
-        detector.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
+        detector.observe_order_flow(VENUE, SYMBOL, 0.01 * (1 if index % 2 else -1))
 
 
 def test_an_uncrowded_move_reads_as_uncrowded():
@@ -557,11 +555,11 @@ def test_an_uncrowded_move_reads_as_uncrowded():
     subject.observe_book(VENUE, SYMBOL, bids=((99.0, 10.0),), asks=((101.0, 10.0),))
     reading = subject.read(a_follow())
     assert reading.state == NOT_CROWDED
-    assert reading.sources_measured == 3
+    assert reading.sources_measured == 2
 
 
-def test_any_one_extreme_source_is_a_refusal_not_a_third_of_one():
-    """Averaging three readings is how a crowded trade gets taken."""
+def test_any_one_extreme_source_is_a_refusal_not_half_of_one():
+    """Averaging two readings is how a crowded trade gets taken."""
     subject = a_crowding_detector(book=0.5)
     teach_crowding_normal(subject)
     subject.observe_book(VENUE, SYMBOL, bids=((99.0, 100.0),), asks=((101.0, 1.0),))
@@ -570,13 +568,13 @@ def test_any_one_extreme_source_is_a_refusal_not_a_third_of_one():
     assert reading.tripped_by == (FROM_THE_BOOK,)
 
 
-def test_extreme_funding_is_the_crowd_paying_to_stay_in():
-    subject = a_crowding_detector(funding=2.0)
+def test_extreme_order_flow_is_the_crowd_paying_to_stay_in():
+    subject = a_crowding_detector(order_flow=2.0)
     teach_crowding_normal(subject)
     subject.observe_book(VENUE, SYMBOL, bids=((99.0, 10.0),), asks=((101.0, 10.0),))
-    subject.observe_funding(VENUE, SYMBOL, 0.02)
+    subject.observe_order_flow(VENUE, SYMBOL, 0.9)
     reading = subject.read(a_follow())
-    assert FROM_FUNDING in reading.tripped_by
+    assert FROM_ORDER_FLOW in reading.tripped_by
 
 
 def test_a_symbol_nobody_could_read_is_not_an_uncrowded_symbol():

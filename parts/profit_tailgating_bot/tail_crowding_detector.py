@@ -5,22 +5,26 @@ thing making a move visible is the crowd that has already taken it. Crowding is
 not a small negative on a good setup; it inverts the setup, because the exit that
 ends a crowded move is the same exit for everyone in it.
 
-Three independent readings, from sources that crowd differently:
+Two independent readings, from sources that crowd differently:
 
 - **The book.** A one-sided book with thin resting size behind the move is a
   crowd that has already lifted the other side. It shows crowding first and is
   the noisiest.
-- **Funding.** Perpetual funding is the price of consensus: everyone long pays,
-  and an extreme rate is the crowd paying to stay in. It lags the book and is far
-  harder to fake.
-- **Sentiment.** Slowest, least reliable alone, and the only one that can see a
-  crowd forming outside the venue.
+- **Order flow.** How lopsided today's buy vs. sell quantity is across an
+  underlying's option chain (`broker-open-interest`) is the price of
+  consensus in a market that doesn't charge one directly -- the honest
+  Indian analogue of funding rate's role, not a guess (2026-09-01,
+  options-segment-bots conversion). It lags the book and is harder to fake.
 
-**Any one of them extreme is a refusal, not a third of one.** Averaging three
-crowding readings is how a crowded trade gets taken on the strength of the two
-sources that had not caught up yet. The reading names which source tripped,
+**Sentiment retired with no replacement** (2026-09-01) -- no Indian
+sentiment data source exists yet, and inventing one would be exactly the
+fabricated-to-fit-a-checker move this project refuses elsewhere.
+
+**Any one of them extreme is a refusal, not half of one.** Averaging two
+crowding readings is how a crowded trade gets taken on the strength of the
+source that had not caught up yet. The reading names which source tripped,
 because they have different remedies: a crowded book clears in minutes, and
-crowded funding does not.
+crowded order flow does not.
 
 **"Not measured" is its own state**, never a low reading (Rule 8). A symbol
 nobody could read is not an uncrowded symbol.
@@ -32,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.bot_opinion import (
-    CROWDED, CROWDING_NOT_MEASURED as NOT_MEASURED, FROM_FUNDING, FROM_SENTIMENT,
+    CROWDED, CROWDING_NOT_MEASURED as NOT_MEASURED, FROM_ORDER_FLOW,
     FROM_THE_BOOK, NOT_CROWDED, CrowdingReading,
 )
 from runtime.online_learner import RunningMoments
@@ -44,7 +48,10 @@ BOT = "profit-tailgating-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="tail-crowding-detector",
-    consumes=("follow-candidate", "order-book-snapshot", "funding-forecast", "sentiment-reading"),
+    consumes=(
+        "follow-candidate", "order-book-snapshot", "broker-instrument-listing",
+        "broker-open-interest",
+    ),
     produces=("crowding-reading", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -61,13 +68,12 @@ class DetectorStanding:
 
 
 class TailCrowdingDetector:
-    """Reads crowding from three sources and refuses on any one of them."""
+    """Reads crowding from two sources and refuses on either of them."""
 
     def __init__(
         self,
         book_imbalance_threshold: float,
-        funding_deviation_threshold: float,
-        sentiment_deviation_threshold: float,
+        order_flow_deviation_threshold: float,
         minimum_observations: int,
         half_life_observations: float,
         minimum_sources: int,
@@ -80,31 +86,25 @@ class TailCrowdingDetector:
                 "a reading from no source is not a reading; at least one must be available"
             )
         self._book_threshold = book_imbalance_threshold
-        self._funding_threshold = funding_deviation_threshold
-        self._sentiment_threshold = sentiment_deviation_threshold
+        self._order_flow_threshold = order_flow_deviation_threshold
         self._minimum = minimum_observations
         self._half_life = half_life_observations
         self._minimum_sources = minimum_sources
         self._now_ns = now_ns
         self._books: dict[tuple[str, str], tuple] = {}
-        self._funding: dict[tuple[str, str], float] = {}
-        self._sentiment: dict[tuple[str, str], float] = {}
-        self._funding_moments: dict[tuple[str, str], RunningMoments] = {}
-        self._sentiment_moments: dict[tuple[str, str], RunningMoments] = {}
+        self._order_flow: dict[tuple[str, str], float] = {}
+        self._order_flow_moments: dict[tuple[str, str], RunningMoments] = {}
         self.standing = DetectorStanding()
 
     def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
         self._books[(venue_id, symbol)] = (tuple(bids), tuple(asks))
 
-    def observe_funding(self, venue_id: str, symbol: str, rate: float) -> None:
+    def observe_order_flow(self, venue_id: str, symbol: str, imbalance: float) -> None:
+        """Buy quantity less sell quantity over their total, for one underlying's
+        option chain -- the price of consensus in a market with no funding rate."""
         key = (venue_id, symbol)
-        self._funding[key] = rate
-        self._moments(self._funding_moments, key).observe(rate)
-
-    def observe_sentiment(self, venue_id: str, symbol: str, reading: float) -> None:
-        key = (venue_id, symbol)
-        self._sentiment[key] = reading
-        self._moments(self._sentiment_moments, key).observe(reading)
+        self._order_flow[key] = imbalance
+        self._moments(self._order_flow_moments, key).observe(imbalance)
 
     def read(self, candidate) -> CrowdingReading:
         self.standing.readings += 1
@@ -123,21 +123,13 @@ class TailCrowdingDetector:
             if book > self._book_threshold:
                 tripped.append(FROM_THE_BOOK)
 
-        funding = self._funding_crowding(key, long_move)
-        if funding is None:
-            unavailable.append(FROM_FUNDING)
+        order_flow = self._order_flow_crowding(key, long_move)
+        if order_flow is None:
+            unavailable.append(FROM_ORDER_FLOW)
         else:
-            readings[FROM_FUNDING] = funding
-            if funding > self._funding_threshold:
-                tripped.append(FROM_FUNDING)
-
-        sentiment = self._sentiment_crowding(key, long_move)
-        if sentiment is None:
-            unavailable.append(FROM_SENTIMENT)
-        else:
-            readings[FROM_SENTIMENT] = sentiment
-            if sentiment > self._sentiment_threshold:
-                tripped.append(FROM_SENTIMENT)
+            readings[FROM_ORDER_FLOW] = order_flow
+            if order_flow > self._order_flow_threshold:
+                tripped.append(FROM_ORDER_FLOW)
 
         for source in unavailable:
             self.standing.sources_unavailable[source] = (
@@ -148,7 +140,7 @@ class TailCrowdingDetector:
             self.standing.not_measured += 1
             return self._reading(
                 candidate, NOT_MEASURED, (), readings, unavailable,
-                f"only {len(readings)} of three crowding sources could be read, below the "
+                f"only {len(readings)} of two crowding sources could be read, below the "
                 f"{self._minimum_sources} needed. A symbol nobody could read is not an "
                 f"uncrowded symbol, so this reports as unmeasured rather than as clear",
             )
@@ -163,9 +155,9 @@ class TailCrowdingDetector:
                 candidate, CROWDED, tuple(tripped), readings, unavailable,
                 f"crowded on {len(tripped)} source(s): "
                 + "; ".join(f"{source} at {readings[source]:.2f}" for source in tripped)
-                + ". Any one is a refusal rather than a third of one -- averaging three "
+                + ". Either is a refusal rather than half of one -- averaging two "
                 "crowding readings is how a crowded trade gets taken on the strength of the "
-                "sources that had not caught up yet",
+                "source that had not caught up yet",
             )
 
         return self._reading(
@@ -192,23 +184,13 @@ class TailCrowdingDetector:
         imbalance = (bid_size - ask_size) / total
         return max(0.0, imbalance if long_move else -imbalance)
 
-    def _funding_crowding(self, key, long_move: bool) -> float | None:
-        """How far funding sits from its own normal, in the direction that means consensus."""
-        rate = self._funding.get(key)
-        moments = self._funding_moments.get(key)
-        if rate is None or moments is None:
+    def _order_flow_crowding(self, key, long_move: bool) -> float | None:
+        """How far order flow sits from its own normal, in the direction that means consensus."""
+        imbalance = self._order_flow.get(key)
+        moments = self._order_flow_moments.get(key)
+        if imbalance is None or moments is None:
             return None
-        standardised = moments.standardise(rate, self._minimum)
-        if standardised is None:
-            return None
-        return max(0.0, standardised if long_move else -standardised)
-
-    def _sentiment_crowding(self, key, long_move: bool) -> float | None:
-        reading = self._sentiment.get(key)
-        moments = self._sentiment_moments.get(key)
-        if reading is None or moments is None:
-            return None
-        standardised = moments.standardise(reading, self._minimum)
+        standardised = moments.standardise(imbalance, self._minimum)
         if standardised is None:
             return None
         return max(0.0, standardised if long_move else -standardised)
@@ -244,8 +226,7 @@ def describe_crowding(detector: TailCrowdingDetector) -> dict:
         "not_measured": detector.standing.not_measured,
         "tripped_by_source": dict(sorted(detector.standing.by_tripping_source.items())),
         "sources_unavailable": dict(sorted(detector.standing.sources_unavailable.items())),
-        "symbols_with_a_funding_normal": len(detector._funding_moments),
-        "symbols_with_a_sentiment_normal": len(detector._sentiment_moments),
+        "symbols_with_an_order_flow_normal": len(detector._order_flow_moments),
     }
 
 
@@ -272,38 +253,48 @@ def run_tail_crowding_detector(
 
 
 def start_part(context) -> int:
-    """The one entry point every part carries (T-1)."""
+    """The one entry point every part carries (T-1).
+
+    Open interest arrives per option contract (broker-open-interest); the
+    aggregator resolves each contract to its underlying via
+    broker-instrument-listing and sums the chain, the same as the bull/bear
+    feature builders (runtime.underlying_open_interest).
+    """
     from runtime.input_assembly import Batch
     from runtime.order_book import OrderBookSnapshot
+    from runtime.underlying_open_interest import UnderlyingOpenInterestAggregator
 
     candidates = Batch(read=context.bus.reader("follow-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
-    funding = Batch(read=context.bus.reader("funding-forecast"))
-    sentiment = Batch(read=context.bus.reader("sentiment-reading"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_readings = context.bus.publisher_for("crowding-reading")
     detector = TailCrowdingDetector(
         book_imbalance_threshold=context.number("tail_crowding_book_imbalance_threshold"),
-        funding_deviation_threshold=context.number("tail_crowding_funding_deviation_threshold"),
-        sentiment_deviation_threshold=context.number("tail_crowding_sentiment_deviation_threshold"),
+        order_flow_deviation_threshold=context.number("tail_crowding_order_flow_deviation_threshold"),
         minimum_observations=int(context.number("learning_minimum_observations")),
         half_life_observations=context.number("learning_half_life_observations"),
         minimum_sources=int(context.number("tail_crowding_minimum_sources")),
     )
-    venues_of: dict[str, set[str]] = {}
+    oi_aggregator = UnderlyingOpenInterestAggregator()
 
     def read_candidates_and_sources(_detector):
         for book in books.payloads():
             if isinstance(book, OrderBookSnapshot):
                 detector.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
-                venues_of.setdefault(book.symbol, set()).add(book.venue_id)
-        for forecast in funding.payloads():
-            if forecast.predicted_rate is not None:
-                detector.observe_funding(forecast.venue_id, forecast.symbol, forecast.predicted_rate)
-                venues_of.setdefault(forecast.symbol, set()).add(forecast.venue_id)
-        for reading in sentiment.payloads():
-            for venue_id in venues_of.get(reading.symbol, ()):
-                detector.observe_sentiment(venue_id, reading.symbol, reading.level)
-        return tuple(candidates.payloads())
+        for listing in listings.payloads():
+            oi_aggregator.observe_listing(listing)
+        for reading in open_interest.payloads():
+            oi_aggregator.observe_open_interest(reading)
+        pending = tuple(candidates.payloads())
+        for candidate in pending:
+            totals = oi_aggregator.totals_for(candidate.symbol)
+            if totals is not None:
+                total = totals.total_buy_quantity + totals.total_sell_quantity
+                if total > 0:
+                    imbalance = (totals.total_buy_quantity - totals.total_sell_quantity) / total
+                    detector.observe_order_flow(candidate.venue_id, candidate.symbol, imbalance)
+        return pending
 
     def publish(items) -> None:
         if items:
