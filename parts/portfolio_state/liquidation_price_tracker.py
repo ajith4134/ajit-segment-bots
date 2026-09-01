@@ -218,9 +218,23 @@ def start_part(context) -> int:
 
     Positions from the reconciler, leverage from the selector's choice per
     symbol, the mark from the latest trade, and the maintenance rate from the
-    one setting every liquidation distance is built from. Recomputed for
-    every tracked position once per health interval: a liquidation price
-    moves with the position, not with every print.
+    one setting every liquidation distance is built from. The full book is
+    recomputed once per health interval -- a liquidation price moves with the
+    position, not with every print -- but a symbol whose position or leverage
+    just changed is computed and published immediately, on the same tick,
+    never held back by that throttle.
+
+    Without the immediate path, a position opened between two health-interval
+    sweeps had no liquidation price of its own to check against -- only
+    whatever this part last published for that key, which could describe a
+    position that closed minutes or hours earlier, or none at all. That is
+    exactly how a live BTCUSDC short was liquidated 58ms after it opened, at
+    395.95 against an entry of 78,769.4: paper-liquidation-simulator watched
+    it against a stale liquidation-price message left over from an earlier
+    position on the same symbol, and the mismatch made the stop line sit
+    almost at zero -- trivially touched by any real print. A position's own
+    liquidation price must exist before anything is allowed to check a price
+    against it, not up to health_interval_seconds later.
     """
     import time as _time
 
@@ -234,26 +248,43 @@ def start_part(context) -> int:
     tracker = LiquidationPriceTracker()
     last_compute = [float("-inf")]
 
-    def read_inputs(_tracker) -> None:
+    def read_inputs(_tracker) -> tuple[tuple[str, str], ...]:
+        changed_keys = []
         for position in positions.payloads():
             tracker.observe_position(position)
             tracker.set_maintenance_margin_rate(position.venue_id, position.symbol, maintenance_rate)
+            changed_keys.append((position.venue_id, position.symbol))
         for choice in choices.payloads():
             tracker.set_leverage(choice.venue_id, choice.symbol, choice.leverage)
+            changed_keys.append((choice.venue_id, choice.symbol))
         for trade in levels_in(trades.payloads()):
                 tracker.observe_price(
                     trade.venue_id, trade.symbol, trade.price, trade.observed_at_ns
                 )
+        return tuple(changed_keys)
 
     def tick() -> None:
-        read_inputs(tracker)
+        changed_keys = read_inputs(tracker)
         now = _time.monotonic()
-        if now - last_compute[0] < context.health_interval_seconds:
-            return
-        computed = tracker.compute_all()
+        if now - last_compute[0] >= context.health_interval_seconds:
+            computed = tracker.compute_all()
+            last_compute[0] = now
+        else:
+            # Not due for the full sweep -- but a key that just changed cannot
+            # wait for one. compute() returns None for a key with nothing
+            # tracked (closed to flat since), which correctly publishes
+            # nothing rather than a stale reading for a position that is gone.
+            seen: set[tuple[str, str]] = set()
+            computed = []
+            for key in changed_keys:
+                if key in seen:
+                    continue
+                seen.add(key)
+                one = tracker.compute(*key)
+                if one is not None:
+                    computed.append(one)
         if computed:
-            publish_liquidations(computed)
-        last_compute[0] = now
+            publish_liquidations(tuple(computed))
 
     return run_part(
         declaration=PART_DECLARATION,

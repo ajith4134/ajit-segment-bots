@@ -239,11 +239,25 @@ def run_paper_liquidation_simulator(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    on_liquidated=lambda venue_id, symbol: None,
 ) -> int:
     def tick() -> None:
         intervals = read_positions_and_candles(simulator)
         results = [simulator.check_interval(**interval) for interval in intervals]
-        publish_fills(tuple(result.fill for result in results if result.was_liquidated))
+        liquidated = [result for result in results if result.was_liquidated]
+        # Told immediately, in the same tick as the fill: the position this
+        # just closed must not be re-watched from a local cache that has not
+        # yet seen the fill it caused. Without this, `venue_id`/`symbol` stayed
+        # in read_positions_and_candles' own open_positions until the fill
+        # round-tripped through fill-reconciler and came back as a real
+        # `position` message -- one or more ticks later -- and every tick in
+        # between re-armed the same already-liquidated position from the same
+        # stale snapshot and fired another liquidation fill at the same price.
+        # Measured live: a BTCUSDC short liquidated twice 44ms apart, the
+        # second fill flipping it into a phantom long nobody opened.
+        for result in liquidated:
+            on_liquidated(result.venue_id, result.symbol)
+        publish_fills(tuple(result.fill for result in liquidated))
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -272,7 +286,21 @@ def start_part(context) -> int:
 
     positions = Batch(read=context.bus.reader("position"))
     trades = Batch(read=context.bus.reader("market-data"))
-    liquidations = LatestByKey(read=context.bus.reader("liquidation-price"), key_of=lambda l: (l.venue_id, l.symbol))
+    liquidations = LatestByKey(
+        read=context.bus.reader("liquidation-price"),
+        key_of=lambda l: (l.venue_id, l.symbol),
+        # Unbounded, a liquidation-price message outlives the position it was
+        # computed for -- LatestByKey holds a key's last value forever unless
+        # told otherwise -- so a brand new position on a symbol that traded
+        # before would be checked against whatever this part last received for
+        # that key, from a different position, possibly long closed. Bounded
+        # to a few sweeps of liquidation-price-tracker's own health interval,
+        # the same reasoning part_usage_reading_maximum_age_seconds uses: a
+        # reading this old is not evidence of anything current, and a position
+        # with no fresh liquidation price is one this part must treat as
+        # having none, never as safe.
+        maximum_age_seconds=context.number("liquidation_price_maximum_age_seconds"),
+    )
     modes = LatestByKey(read=context.bus.reader("money-mode"), key_of=lambda m: m.segment)
     publish_fills = context.bus.publisher_for("fill")
     segment = str(context.setting("segment_id").value)
@@ -321,6 +349,14 @@ def start_part(context) -> int:
         if fills:
             publish_fills(fills)
 
+    def forget_liquidated_position(venue_id: str, symbol: str) -> None:
+        # Removed from this part's own cache the instant its fill is decided --
+        # not on the next `position` message, which is a full round trip
+        # through fill-reconciler away and is exactly the window a stale
+        # open_positions entry re-armed and double-liquidated the same
+        # position in (see run_paper_liquidation_simulator's on_liquidated).
+        open_positions.pop((venue_id, symbol), None)
+
     return run_paper_liquidation_simulator(
         simulator=simulator,
         control_socket=context.control_socket,
@@ -330,4 +366,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        on_liquidated=forget_liquidated_position,
     )

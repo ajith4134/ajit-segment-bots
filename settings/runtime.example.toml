@@ -3935,6 +3935,11 @@ value = 5.0
 unit  = "seconds"
 note  = "Claude, 2026-08-26: how old the cross-venue reference may be before market-anomaly-detector refuses to check against it. The detector kept each symbol's last consolidated price forever, so a fresh print could be compared against a reference from any time ago and read as a venue that moved alone -- the same immortal-level shape that made a scoped risk limit permanent on the same day. Five seconds, matching consolidated_price_maximum_quote_age: the consolidator already drops a contributor after five, so a reading older than that is built from prices the market has left twice over."
 
+[liquidation_price_maximum_age_seconds]
+value = 3.0
+unit  = "seconds"
+note  = "Claude, 2026-08-30: how old a liquidation-price message may be before paper-liquidation-simulator refuses to check a position against it. LatestByKey held the last liquidation-price forever per (venue, symbol) with no bound, so a symbol's key kept whatever this part last received for it even after that position closed -- and a brand new position opened on the same symbol was checked against a stale reading computed for a different position entirely. Measured live 2026-08-30: a BTCUSDC short opened at 78,769.4 and was liquidated 58ms later at 395.95, because liquidation-price-tracker had not yet published a fresh reading for the new short and this part used whatever it had cached instead of refusing. liquidation-price-tracker now publishes immediately on any position or leverage change rather than waiting for its health-interval sweep, so a correct reading should exist inside one tick; three seconds is three part_health_interval periods, the same margin heartbeat_silent_after_seconds and reference_price_maximum_age_seconds give a report that is late rather than gone."
+
 [symbol_universe_restatement_interval]
 value = 30.0
 unit  = "seconds"
