@@ -65,6 +65,19 @@ QUANTITY = 0.01
 TAKER_FEE_RATE = 0.0004
 MAKER_FEE_RATE = 0.0002
 
+# Upstox's real Equity Options charge stack (runtime/indian_options_fee_model.py's
+# own docstring carries the sourced quotes). This test's venue is crypto, so
+# these never actually apply to a fill here -- passed because
+# PaperFillSimulator requires every fee-model rate explicitly, the same as
+# TAKER_FEE_RATE/MAKER_FEE_RATE above, rather than defaulting to a number
+# nobody chose.
+OPTIONS_FLAT_BROKERAGE = 20.0
+OPTIONS_STT_SELL_RATE = 0.001
+OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE = 0.0003503
+OPTIONS_IPFT_CHARGE_RATE = 0.000005
+OPTIONS_STAMP_DUTY_BUY_RATE = 0.00003
+OPTIONS_GST_RATE = 0.18
+
 # The venue quantity step, matching the shipped `order_quantity_increment`. It is
 # what `fill-reconciler` already reconciles against below, and what decides when
 # a book holds nothing an order could sell.
@@ -113,7 +126,13 @@ class TheClosingChain:
 
     def __init__(self) -> None:
         self.book = PaperFillSimulator(
-            taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE
+            taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE,
+            options_flat_brokerage=OPTIONS_FLAT_BROKERAGE,
+            options_stt_sell_rate=OPTIONS_STT_SELL_RATE,
+            options_exchange_transaction_charge_rate=OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE,
+            options_ipft_charge_rate=OPTIONS_IPFT_CHARGE_RATE,
+            options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
+            options_gst_rate=OPTIONS_GST_RATE,
         )
         self.reconciler = FillReconciler(quantity_tolerance=QUANTITY_INCREMENT)
         self.cost_basis = CostBasisTracker(QUANTITY_INCREMENT)
@@ -445,7 +464,15 @@ def test_a_standing_intent_republished_as_the_market_moves_is_one_order(real_tra
     )
 
     stamper = OrderIdempotencyStamper()
-    book = PaperFillSimulator(taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE)
+    book = PaperFillSimulator(
+        taker_fee_rate=TAKER_FEE_RATE, maker_fee_rate=MAKER_FEE_RATE,
+        options_flat_brokerage=OPTIONS_FLAT_BROKERAGE,
+        options_stt_sell_rate=OPTIONS_STT_SELL_RATE,
+        options_exchange_transaction_charge_rate=OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE,
+        options_ipft_charge_rate=OPTIONS_IPFT_CHARGE_RATE,
+        options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
+        options_gst_rate=OPTIONS_GST_RATE,
+    )
 
     class BoundedForThisTick:
         """What the gate publishes: the same decision, priced at this tick."""

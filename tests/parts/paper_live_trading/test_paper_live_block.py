@@ -353,8 +353,29 @@ def test_the_delay_follows_measured_round_trips():
 
 # ---- paper-fill-simulator ----------------------------------------------------
 
+# Upstox's real Equity Options charge stack (runtime/indian_options_fee_model.py's
+# own docstring carries the sourced quotes). Every test in this block trades a
+# crypto venue symbol, so these never actually apply to a fill here -- passed
+# because PaperFillSimulator requires every fee-model rate explicitly, the
+# same as taker/maker below, rather than defaulting to a number nobody chose.
+OPTIONS_FLAT_BROKERAGE = 20.0
+OPTIONS_STT_SELL_RATE = 0.001
+OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE = 0.0003503
+OPTIONS_IPFT_CHARGE_RATE = 0.000005
+OPTIONS_STAMP_DUTY_BUY_RATE = 0.00003
+OPTIONS_GST_RATE = 0.18
+
+
 def fill_simulator(taker=0.0004, maker=0.0002):
-    return PaperFillSimulator(taker_fee_rate=taker, maker_fee_rate=maker)
+    return PaperFillSimulator(
+        taker_fee_rate=taker, maker_fee_rate=maker,
+        options_flat_brokerage=OPTIONS_FLAT_BROKERAGE,
+        options_stt_sell_rate=OPTIONS_STT_SELL_RATE,
+        options_exchange_transaction_charge_rate=OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE,
+        options_ipft_charge_rate=OPTIONS_IPFT_CHARGE_RATE,
+        options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
+        options_gst_rate=OPTIONS_GST_RATE,
+    )
 
 
 class Estimate:
@@ -815,7 +836,7 @@ def test_a_paper_trade_end_to_end_costs_what_it_should():
         prior_latency_seconds=0.05, maximum_latency_seconds=1.0,
         minimum_observations=3, window=10, monotonic=clock.monotonic, draw=lambda: 0.5,
     )
-    filler = PaperFillSimulator(taker_fee_rate=0.0004, maker_fee_rate=0.0002)
+    filler = fill_simulator()
     account = keeper(10_000.0)
 
     stamped = stamper.stamp(BoundedStub(quantity=3.0), "intent-1")
@@ -864,7 +885,7 @@ def test_the_leverage_the_desk_sized_at_survives_every_hop_to_the_account():
     """
     stamper = OrderIdempotencyStamper()
     router = OrderDestinationRouter()
-    filler = PaperFillSimulator(taker_fee_rate=0.0004, maker_fee_rate=0.0002)
+    filler = fill_simulator()
     account = keeper(10_000.0)
 
     stamped = stamper.stamp(BoundedStub(quantity=10.0, leverage=10.0), "intent-levered")
@@ -893,7 +914,7 @@ def test_an_exit_is_unlevered_and_still_closes_a_levered_position():
     What comes back is the margin the position posted, which the account already
     knows -- so an exit carrying the default is not a lost number.
     """
-    filler = PaperFillSimulator(taker_fee_rate=0.0, maker_fee_rate=0.0)
+    filler = fill_simulator(taker=0.0, maker=0.0)
     account = keeper(10_000.0)
     entry = filler.simulate(
         client_order_id="entry-1", venue_id=VENUE, symbol=SYMBOL, side=BUY, quantity=10.0,

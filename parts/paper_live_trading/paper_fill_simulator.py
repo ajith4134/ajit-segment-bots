@@ -19,8 +19,12 @@ Four things it will not do, each corresponding to a way paper trading lies:
   then fills as a market order at the price the trigger found rather than at the
   stop, because that is what a venue does and the difference is the slippage a
   strategy actually pays.
-- **It does not ignore fees.** Every fill is charged the venue's real taker or
-  maker rate, because a strategy profitable before fees is not profitable.
+- **It does not ignore fees.** A crypto venue fill is charged its real taker or
+  maker rate; an Upstox options fill is charged Upstox's real flat brokerage
+  plus STT, exchange transaction charge, IPFT charge, stamp duty and GST
+  (`runtime/indian_options_fee_model.py`) -- two different fee *models*, not
+  one rate swapped for another, because that is what the two venues actually
+  charge. A strategy profitable before fees is not profitable.
 
 And one thing it refuses: **a fill during a feed jump**. If the price series
 jumped, the prices around the gap are not prices anything could have traded at,
@@ -32,6 +36,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.indian_options_fee_model import upstox_options_order_cost
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.trading_types import (
@@ -48,6 +53,9 @@ from runtime.trading_types import (
 )
 
 PART_ID = "paper-fill-simulator"
+# Same local-constant pattern as every broker-bridge part built this session
+# (T-4: naming a value, not importing another part's constant).
+UPSTOX_VENUE_ID = "upstox"
 
 PART_DECLARATION = PartDeclaration(
     part_id="paper-fill-simulator",
@@ -187,11 +195,28 @@ class PaperFillSimulator:
     close a position: a stop is an order whose entire purpose is to wait.
     """
 
-    def __init__(self, taker_fee_rate: float, maker_fee_rate: float, now_ns=time.time_ns) -> None:
+    def __init__(
+        self, taker_fee_rate: float, maker_fee_rate: float,
+        options_flat_brokerage: float, options_stt_sell_rate: float,
+        options_exchange_transaction_charge_rate: float, options_ipft_charge_rate: float,
+        options_stamp_duty_buy_rate: float, options_gst_rate: float,
+        now_ns=time.time_ns,
+    ) -> None:
         if taker_fee_rate < 0 or maker_fee_rate < 0:
             raise ValueError("a fee rate cannot be negative")
         self._taker_fee = taker_fee_rate
         self._maker_fee = maker_fee_rate
+        # Upstox's real options charge stack -- a flat brokerage plus five
+        # percentage-of-premium components, not a taker/maker rate (see
+        # runtime/indian_options_fee_model.py). Kept as the raw rates rather
+        # than a bundled object so each one is a plain settings.number()
+        # read, matching taker_fee_rate/maker_fee_rate's own shape.
+        self._options_flat_brokerage = options_flat_brokerage
+        self._options_stt_sell_rate = options_stt_sell_rate
+        self._options_exchange_transaction_charge_rate = options_exchange_transaction_charge_rate
+        self._options_ipft_charge_rate = options_ipft_charge_rate
+        self._options_stamp_duty_buy_rate = options_stamp_duty_buy_rate
+        self._options_gst_rate = options_gst_rate
         self._now_ns = now_ns
         self._jumped_symbols: set[tuple[str, str]] = set()
         self._filled_so_far: dict[str, float] = {}
@@ -595,8 +620,26 @@ class PaperFillSimulator:
                 "the book showed no fillable quantity at any price",
             )
 
-        fee_rate = self._taker_fee if is_taker else self._maker_fee
-        fee = fillable * price * fee_rate
+        if order.venue_id == UPSTOX_VENUE_ID:
+            # Upstox charges a flat brokerage plus five percentage-of-premium
+            # components (STT, exchange transaction charge, IPFT charge,
+            # stamp duty, GST) -- a different fee model from a crypto
+            # venue's blended taker/maker rate, not just a different number.
+            # is_taker plays no part: none of Upstox's six components read
+            # whether the fill crossed the spread, only the order's side and
+            # the premium it traded.
+            fee = upstox_options_order_cost(
+                fillable * price, order.side,
+                flat_brokerage=self._options_flat_brokerage,
+                stt_sell_rate=self._options_stt_sell_rate,
+                exchange_transaction_charge_rate=self._options_exchange_transaction_charge_rate,
+                ipft_charge_rate=self._options_ipft_charge_rate,
+                stamp_duty_buy_rate=self._options_stamp_duty_buy_rate,
+                gst_rate=self._options_gst_rate,
+            ).total
+        else:
+            fee_rate = self._taker_fee if is_taker else self._maker_fee
+            fee = fillable * price * fee_rate
         self.standing.fees_charged += fee
         if slippage is not None:
             self.standing.worst_slippage_fraction = max(
@@ -904,6 +947,14 @@ def start_part(context) -> int:
         simulator=PaperFillSimulator(
             taker_fee_rate=context.number("taker_fee_rate"),
             maker_fee_rate=context.number("maker_fee_rate"),
+            options_flat_brokerage=context.number("options_flat_brokerage"),
+            options_stt_sell_rate=context.number("options_stt_sell_rate"),
+            options_exchange_transaction_charge_rate=context.number(
+                "options_exchange_transaction_charge_rate"
+            ),
+            options_ipft_charge_rate=context.number("options_ipft_charge_rate"),
+            options_stamp_duty_buy_rate=context.number("options_stamp_duty_buy_rate"),
+            options_gst_rate=context.number("options_gst_rate"),
         ),
         control_socket=context.control_socket,
         read_orders=read_orders,
