@@ -839,6 +839,7 @@
         "allocation-proposal",
         "board-link",
         "board-snapshot",
+        "broker-account-funds",
         "capital-allotment",
         "capital-settings-verdict",
         "capital-utilisation",
@@ -878,7 +879,7 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -1553,6 +1554,7 @@
         "broker-token-standing"
       ],
       "produces": [
+        "broker-account-funds",
         "broker-candle",
         "broker-instrument-listing",
         "broker-market-data",
@@ -3240,6 +3242,11 @@
       "id": "broker-option-greeks",
       "name": "broker option greeks",
       "description": "Delta, theta, gamma, vega, rho and implied volatility for one options contract, from a broker's feed. No crypto equivalent (spec section 5)."
+    },
+    {
+      "id": "broker-account-funds",
+      "name": "broker account funds",
+      "description": "What a broker says is available right now, and how old that statement is -- span/exposure/adhoc margin, payin amount, notional cash and available margin, split by segment. Direct analogue of account-balance, kept as its own type because the field shape genuinely differs (SEBI margin categories, not free/used/total) and reusing account-balance would wire this into every existing crypto consumer of it via R-01 (spec section 6a)."
     }
   ],
   "features": [
@@ -7313,24 +7320,25 @@
       "role": "render the whole system's measured state, every tile traced to a probe (RL-012)",
       "category": "observability",
       "consumes": [
-        "heartbeat-table",
-        "probe-result",
-        "usdt-pnl-statement",
-        "alert",
-        "switch-record",
         "account-balance",
-        "feed-coverage",
-        "competence-map",
-        "main-account-setting",
-        "capital-allotment",
-        "trade-capital-bounds",
-        "leverage-ceiling",
+        "alert",
         "allocation-headroom",
+        "allocation-proposal",
+        "broker-account-funds",
+        "capital-allotment",
         "capital-settings-verdict",
         "capital-utilisation",
-        "allocation-proposal",
+        "competence-map",
         "decision-cost",
-        "prompt-score"
+        "feed-coverage",
+        "heartbeat-table",
+        "leverage-ceiling",
+        "main-account-setting",
+        "probe-result",
+        "prompt-score",
+        "switch-record",
+        "trade-capital-bounds",
+        "usdt-pnl-statement"
       ],
       "produces": [
         "board-snapshot",
@@ -12508,6 +12516,31 @@
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-account-funds-reader",
+      "name": "Broker account funds reader",
+      "role": "fetch a broker's account funds, refusing a reading past its freshness bound",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-token-standing"
+      ],
+      "produces": [
+        "broker-account-funds",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {
@@ -13096,6 +13129,13 @@
     "origin": "designed by Claude against the user's 2026-09-01 crypto-to-India conversion",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_upstox_broker_adapter.py",
     "proposal": "docs/proposals/upstox-broker-adapter.md",
+    "spec": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md"
+  },
+  "_proposal_2026-09-01_upstox_account_funds": {
+    "what": "broker-account-funds-reader: the self-contained half of 'order placement and margin' -- account funds needs only a token. Order placement and per-order margin need an order intent nothing produces yet, so they land as tested UpstoxAdapter methods instead of a part with nothing upstream to call it.",
+    "origin": "designed by Claude against the user's 2026-09-01 'next phase' request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_upstox_account_funds.py",
+    "proposal": "docs/proposals/upstox-broker-account-funds.md",
     "spec": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md"
   }
 }
