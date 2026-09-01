@@ -35,6 +35,12 @@ PART_DECLARATION = PartDeclaration(
         "capital-allotment", "trade-capital-bounds", "leverage-ceiling", "allocation-headroom",
         "capital-settings-verdict", "capital-utilisation", "allocation-proposal",
         "decision-cost", "prompt-score",
+        # Added 2026-09-01 for the Indian-markets broker-adapter block --
+        # account-balance's own analogue, kept as a separate type because the
+        # field shape genuinely differs (SEBI margin categories). Read into
+        # `sources` by the same generic loop below; no bespoke tile for it
+        # yet, matching several of the types above.
+        "broker-account-funds",
     ),
     produces=("board-snapshot", "part-health"),
     resource_class="compute-bound",

@@ -88,9 +88,14 @@ add_part(
 # probe" -- account-balance (crypto's version) is already one of its
 # inputs. Adding this one is extending an existing global sink to a new
 # data type it should render, not inventing a part to satisfy a checker.
+#
+# Appended, never sorted: RL-067's wiring check (dashboard/build_part_
+# monitor.py) compares this list against board_snapshot_builder.py's own
+# PART_DECLARATION.consumes tuple as literal sequences, not sets -- an
+# alphabetical .sort() here would silently stop matching that file's
+# insertion order even though the two sides name the same set of types.
 if "broker-account-funds" not in feats["board-snapshot-builder"]["consumes"]:
     feats["board-snapshot-builder"]["consumes"].append("broker-account-funds")
-    feats["board-snapshot-builder"]["consumes"].sort()
 
 # ------------------------------------------------- recompute ONLY this block's contract
 c = cats[cid]
