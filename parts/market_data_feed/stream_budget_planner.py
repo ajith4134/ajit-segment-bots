@@ -349,6 +349,7 @@ def run_stream_budget_planner(
     control_socket,
     read_symbol_universe,
     read_venues_withheld,
+    read_hardware,
     stream_kinds: Sequence[StreamKind],
     open_file_headroom: int,
     candle_interval: str,
@@ -363,27 +364,37 @@ def run_stream_budget_planner(
 ) -> int:
     """Re-plan on every tick and hand the result to whoever publishes `stream-plan`.
 
-    The hardware is re-measured each time rather than read once at start: a
-    plan's whole claim is that the machine can carry it, and a machine whose
-    available memory has halved since start is a different machine.
+    The hardware is read fresh from `hardware-capacity` every tick rather than
+    cached from the first reading: a plan's whole claim is that the machine can
+    carry it, and a machine whose available memory has halved since start is a
+    different machine. `read_hardware` is the one shared measurement
+    `hardware-scanner` publishes -- this part declared "hardware-capacity" as
+    consumed but never created a reader for it until 2026-08-30, calling
+    `measure_hardware_facts()` locally instead: a second, private measurement
+    of the same machine that no plan or board could tell apart from the
+    canonical one, and that hardware-scanner's 16,104 published readings never
+    reached.
 
     A refusal does not end the part. It is reported and the previous plan stands,
     because a reader already holding a workable plan should keep capturing while
     the reason for the refusal is looked at -- stopping would cost tape for a
     condition that may be a transient reading.
     """
-    from runtime.hardware_facts import measure_hardware_facts
-
     last_budget: list = [None]
     refusals: list[int] = [0]
 
     def plan_once() -> None:
+        hardware = read_hardware()
+        if hardware is None:
+            refusals[0] += 1
+            publish_plan(None, "hardware-scanner has not published a reading yet -- nothing to plan against")
+            return
         try:
             budget = plan_stream_budget(
                 adapters=adapters,
                 symbol_universe=read_symbol_universe(),
                 stream_kinds=stream_kinds,
-                hardware=measure_hardware_facts(),
+                hardware=hardware,
                 open_file_headroom=open_file_headroom,
                 candle_interval=candle_interval,
                 book_depth_levels=book_depth_levels,
@@ -459,7 +470,7 @@ def start_part(context) -> int:
     venues, and a map keyed by symbol alone would silently let one venue's listing
     overwrite the other's.
     """
-    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
     from runtime.tape import StreamKind
     from runtime.venues.adapter_registry import load_captured_venue_adapters
 
@@ -476,6 +487,7 @@ def start_part(context) -> int:
         key_of=lambda entry: (entry.venue_id, entry.symbol),
     )
     withheld = Batch(read=context.bus.reader("venue-standing"))
+    capacity = LatestValue(read=context.bus.reader("hardware-capacity"))
     publish_plan_messages = context.bus.publisher_for("stream-plan")
 
     def read_symbol_universe():
@@ -490,6 +502,13 @@ def start_part(context) -> int:
             for standing in withheld.payloads()
             if not getattr(standing, "may_request", True)
         )
+
+    def read_hardware():
+        # `hardware-capacity` carries a HardwareCapacity (facts + what could not
+        # be measured); plan_stream_budget wants the HardwareFacts underneath,
+        # the same shape measure_hardware_facts() used to hand it directly.
+        reading = capacity.value()
+        return None if reading is None else reading.facts
 
     import time as _time
 
@@ -524,6 +543,7 @@ def start_part(context) -> int:
         control_socket=context.control_socket,
         read_symbol_universe=read_symbol_universe,
         read_venues_withheld=read_venues_withheld,
+        read_hardware=read_hardware,
         # Quotes alongside trades. A trade is what the venue printed and is what
         # the tape keeps; a quote is what the symbol is worth right now and is
         # what a decision is sized against. A symbol that has not traded has only
