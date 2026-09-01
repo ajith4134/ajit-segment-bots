@@ -3965,6 +3965,11 @@ value = 0.3
 unit  = "fraction"
 note  = "operator, 2026-08-30: how much opinion-arbiter discounts a bot's weight when strategy-review-reasoner's fitted assessment of it is underperforming. Discount only, never a boost -- the same asymmetry as the counter-argument's veto: a system-level read of a bot's own record can make the arbiter trust it less, never more, because it is not evidence about this specific setup."
 
+[arbiter_regime_memory_maximum_distrust]
+value = 0.05
+unit  = "fraction, subtracted from conviction"
+note  = "Claude, 2026-08-30: how much opinion-arbiter holds conviction back when the current regime is one regime-memory-store has never recognised, or has recognised but whose duration has swung between a day and a year. Discount only, never a boost -- the module's own docstring already says memory of a regime does not become confidence in it -- and bounded well under arbiter_maximum_forecast_shade's ceiling so it can only ever tip a marginal decision, never overturn the bots on its own. Fixed 2026-08-30: opinion-arbiter declared regime-memory as consumed but never created a reader for it at all -- 635,965 messages published by regime-memory-store, 0 ever received -- so this setting and the wiring it drives are new, not a retuned existing behaviour. Small (5%) until this has a live measurement behind it, matching arbiter_maximum_forecast_shade's own caution around an unmeasured input."
+
 [market_thesis_bellwether_symbols]
 value = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 unit  = "symbols"
