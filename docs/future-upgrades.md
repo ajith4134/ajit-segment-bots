@@ -21,3 +21,22 @@ before any of the six-broker data-redundancy layer is even accounted for —
 sizing this against real measured load, the way
 `measurements/2026-08-26-what-fits-on-this-box/` did for the crypto build, is
 part of doing this upgrade, not a footnote to it.
+
+## Options writing/selling — spreads and covered strategies
+
+**Deferred 2026-09-01.** The two Phase A segment bots (index options, stock
+options) trade **buy-only** — long calls and long puts, defined risk (max
+loss is the premium paid). Writing/selling options (naked or covered),
+spreads, and other multi-leg structures are explicitly out of scope for
+Phase A and named here as their own future bot rather than folded in.
+
+Why a separate bot rather than an extension: a written option carries
+undefined risk and needs real SPAN margin blocked against it before the
+order goes out — `build_margin_quote_request_payload`/`read_margin_quotes`
+(`runtime/brokers/upstox.py`) already exist for exactly this, but nothing
+consumes them yet, and multi-leg order coordination (one strategy, several
+legs, atomic or not) is a materially different execution shape from the
+single-leg buy-only order the Phase A bots place. Bolting that onto a
+buy-only bot would be exactly the "two parts welded together" T-6 warns
+against — this earns its own segment-bot instance when it's actually
+built, sharing the same opportunity-scanner/ai-brain template Phase A does.
