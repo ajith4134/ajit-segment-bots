@@ -375,6 +375,19 @@ class PaperFillSimulator:
                 cancels_client_order_id,
                 f"withdrawn by {client_order_id}, which replaces it",
             )
+            if quantity <= 0:
+                # A pure cancel (as_order_request's is_cancel_only) carries no
+                # quantity -- it names only the id above to withdraw, nothing to
+                # place. Falling through priced this placeholder as a real order:
+                # harmless while an unpriced market order was refused, but once
+                # that became RESTING_UNPRICED (2026-08-30) it left a phantom
+                # zero-quantity order sitting on the book forever, which is what
+                # made `orders_on_the_book` never return to 0 after a position
+                # closed on one exit and withdrew the other.
+                return self._result(
+                    client_order_id, venue_id, symbol, side, CANCELLED, None, 0.0, 0.0,
+                    None, 0.0, None, "no quantity named; this call only withdrew an id",
+                )
 
         if money_mode != "paper":
             return self._result(
