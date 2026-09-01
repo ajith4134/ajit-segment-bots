@@ -497,6 +497,7 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "broker-instrument-listing",
         "copy-latency",
         "external-position",
         "research-finding",
@@ -10255,7 +10256,7 @@
       "role": "read listings, delistings, maintenance windows plus rule changes each venue publishes",
       "category": "online-research",
       "consumes": [
-        "symbol-universe"
+        "broker-instrument-listing"
       ],
       "produces": [
         "venue-announcement",
@@ -12482,40 +12483,55 @@
     "note": "T-2 — the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
   },
   "segments": {
-    "note": "Every segment is a bot with all of this inside it. The user's words. The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a put in options is a short in futures.",
+    "note": "Every segment is a bot with all of this inside it. The user's words (docs/goal.md). The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a long call in index-options is a long in index-futures.",
     "members": [
       {
-        "id": "spot",
-        "name": "Spot"
+        "id": "index-options",
+        "name": "Index Options"
       },
       {
-        "id": "futures",
-        "name": "Futures"
+        "id": "stock-options",
+        "name": "Stock Options"
       },
       {
-        "id": "options",
-        "name": "Options"
+        "id": "index-futures",
+        "name": "Index Futures"
+      },
+      {
+        "id": "stock-futures",
+        "name": "Stock Futures"
+      },
+      {
+        "id": "commodities",
+        "name": "Commodities"
+      },
+      {
+        "id": "cash-equity",
+        "name": "Cash Equity"
       }
     ],
     "origin": "user",
     "scope_decision": {
       "choice": "split",
       "given": "2026-08-20",
-      "note": "Each segment gets its own of every block. Three risk allocators, three portfolios, three ledgers, three feeds, three hypothesis features. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself.",
-      "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- three of them, each blind to the other two, would compete for the same RAM and recreate the queueing C-11 exists to prevent. One board, one place to look.",
-      "edges": "The 19 edges were accepted provisionally on 2026-08-20, with the user's words: decide them again when the design is locked and implementation starts. flow_origin reads agreed-provisional, never agreed."
+      "note": "Each segment gets its own of every block. Complete isolation: a fault in one segment cannot reach another, and each segment learns only from itself. Confirmed to still hold under the 2026-09-01 goal correction -- the split itself did not change, only which six segments are being split.",
+      "flagged": "CONFIRMED by the user 2026-08-20: the hardware resource governor and observability stay global. One machine means one governor -- six of them, each blind to the others, would compete for the same RAM. One board, one place to look.",
+      "edges": "The edges from the crypto-era design were accepted provisionally on 2026-08-20 and have not been re-decided against the real six segments -- flow_origin reads agreed-provisional, never agreed."
     },
     "build_order": {
-      "ruling": "RL-050",
-      "given": "2026-08-20",
+      "ruling": "docs/goal.md item 3, corrected 2026-09-01",
+      "given": "2026-09-01",
       "implement_now": [
-        "futures"
+        "index-options",
+        "stock-options"
       ],
       "skeleton_only": [
-        "spot",
-        "options"
+        "index-futures",
+        "stock-futures",
+        "commodities",
+        "cash-equity"
       ],
-      "note": "Futures is built first and fully. Spot and options keep every block declared (same template, T-1) and get placeholders, not working code, until futures is done."
+      "note": "Phase A: index options and stock options, both, fully -- paper on historic data, then live-data paper trading, all parts genuinely running, before Phase B starts. Phase B (only after Phase A is fully complete): intraday equity with margin/leverage, stock futures, index futures, commodities. Same one-vertical-first discipline RL-050 established for the retired crypto build, now applied at the two-segment-bots granularity."
     }
   },
   "thinking_shape": {
@@ -13108,5 +13124,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_tail_crowding_detector_order_flow.py",
     "proposal": "docs/proposals/tail-crowding-detector-order-flow.md"
+  },
+  "_proposal_2026-09-01_exchange_announcement_reader_broker_listing": {
+    "what": "exchange-announcement-reader redirected from symbol-universe to broker-instrument-listing -- not crypto-only in concept, only its universe input was.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_exchange_announcement_reader_broker_listing.py",
+    "proposal": "docs/proposals/exchange-announcement-reader-broker-listing.md"
   }
 }

@@ -17,9 +17,10 @@ Four things this part gets right that a naive feed reader does not:
   Thursday is not actionable today and is critical on Thursday. Both stamps are
   carried, and "already in effect" is a distinct state from "coming".
 - **A notice names symbols, and the naming is messy.** Venues write "BTCUSDT
-  perpetual", "BTC/USDT", and "BTCUSDT" for the same instrument. Matching is done
-  against the declared universe rather than by substring, because a substring match
-  on "BTC" hits forty symbols.
+  perpetual", "BTC/USDT", and "BTCUSDT" for the same instrument -- or, for a
+  broker, "NIFTY 24500 CE" and "NIFTY24500CE". Matching is done against the
+  declared universe rather than by substring, because a substring match on
+  "NIFTY" hits every option in the chain.
 - **Kind matters more than text.** A delisting and a fee promotion arrive through
   the same feed. Only some kinds change how a symbol trades, and that set is
   explicit rather than inferred from wording.
@@ -41,7 +42,7 @@ PART_ID = "exchange-announcement-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="exchange-announcement-reader",
-    consumes=("symbol-universe",),
+    consumes=("broker-instrument-listing",),
     produces=("venue-announcement", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -286,24 +287,24 @@ def run_exchange_announcement_reader(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    The universe is observed so an announcement's symbols can be matched.
-    No announcement feed is connected on this box -- the venues' notice
-    pages are on no input this part declares -- so no row arrives and
-    nothing is published; the reader reports health and waits.
+    The universe is observed (2026-09-01: broker-instrument-listing's own
+    trading_symbol, not crypto's symbol-universe) so an announcement's
+    symbols can be matched. No announcement feed is connected on this box
+    -- Upstox's own notice pages are on no input this part declares, same
+    as no venue's ever was -- so no row arrives and nothing is published;
+    the reader reports health and waits.
     """
     from runtime.input_assembly import Batch
+    from runtime.brokers.upstox import UPSTOX_BROKER_ID
 
-    universe = Batch(read=context.bus.reader("symbol-universe"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
     publish_announcements = context.bus.publisher_for("venue-announcement")
     reader = ExchangeAnnouncementReader()
 
     def read_rows():
-        for selection in universe.payloads():
-            by_venue: dict[str, list] = {}
-            for entry in selection if isinstance(selection, (tuple, list)) else (selection,):
-                by_venue.setdefault(entry.venue_id, []).append(entry.symbol)
-            for venue_id, symbols in by_venue.items():
-                reader.observe_universe(venue_id, tuple(symbols))
+        symbols = [listing.trading_symbol for listing in listings.payloads()]
+        if symbols:
+            reader.observe_universe(UPSTOX_BROKER_ID, tuple(symbols))
         return ()
 
     return run_exchange_announcement_reader(
