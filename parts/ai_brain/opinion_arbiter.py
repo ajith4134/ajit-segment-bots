@@ -99,6 +99,7 @@ class OpinionArbiter:
         minimum_competence: float,
         minimum_coverage: float,
         strategy_review_distrust_discount: float,
+        regime_memory_maximum_distrust: float,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 <= maximum_forecast_shade < 0.5:
@@ -110,6 +111,11 @@ class OpinionArbiter:
             raise ValueError("the penalty scales conviction and must be inside [0, 1)")
         if not 0.0 <= strategy_review_distrust_discount < 1.0:
             raise ValueError("the discount scales a bot's weight and must be inside [0, 1)")
+        if not 0.0 <= regime_memory_maximum_distrust < 0.5:
+            raise ValueError(
+                "regime memory may only discount conviction, never decide it; a distrust of "
+                "half the probability range would let it overturn the bots on its own"
+            )
         # The floor is each acting opinion's own break-even, and the brain clears
         # the highest of them: an intent acts on every plan behind it, so it must
         # be worth taking against the most demanding one (runtime/edge_arithmetic.py).
@@ -120,6 +126,7 @@ class OpinionArbiter:
         self._minimum_competence = minimum_competence
         self._minimum_coverage = minimum_coverage
         self._strategy_review_discount = strategy_review_distrust_discount
+        self._regime_memory_distrust = regime_memory_maximum_distrust
         self._now_ns = now_ns
         self._weights: dict[tuple[str, str], float] = {}
         self._competence: dict[tuple[str, str], float] = {}
@@ -127,6 +134,7 @@ class OpinionArbiter:
         self._forecast_bias: dict[tuple[str, str], float] = {}
         self._broken_regimes: set[str] = set()
         self._strategy_reviews: dict[str, object] = {}
+        self._regime_memories: dict[str, object] = {}
         self.standing = ArbiterStanding()
 
     def observe_bot_weight(self, weight) -> None:
@@ -159,6 +167,14 @@ class OpinionArbiter:
         if review.assessment != UNDERPERFORMING:
             return 1.0
         return 1.0 - self._strategy_review_discount
+
+    def observe_regime_memory(self, memory) -> None:
+        """What is remembered about the regime these opinions were formed in.
+
+        A level per regime name, matching the signature this store's own
+        producer keys by (regime_memory_store.RegimeMemory.regime).
+        """
+        self._regime_memories[memory.regime] = memory
 
     def observe_regime_break(self, regime: str, has_broken: bool) -> None:
         if has_broken:
@@ -245,7 +261,8 @@ class OpinionArbiter:
         }
         conviction = self._weighted_conviction(acting, weights, agreement)
         shade = self._forecast_shade(venue_id, symbol, side)
-        conviction = min(0.999, max(0.001, conviction + shade))
+        memory_distrust = self._regime_memory_distrust_for(regime.regime)
+        conviction = min(0.999, max(0.001, conviction + shade - memory_distrust))
 
         if counter_argument is not None and counter_argument.would_reverse_the_decision:
             # A veto rather than a discount: the argument was constructed to be
@@ -319,12 +336,18 @@ class OpinionArbiter:
                 },
                 "regime": regime.regime,
                 "forecast_shade": shade,
+                "regime_memory_distrust": memory_distrust,
                 "ruling": None if ruling is None else ruling.ruling,
             },
             reason=(
                 f"{side} {symbol}: {len(acting)} bot(s) agree ({agreement}) at a weighted "
                 f"{conviction:.1%} in {regime.regime}"
                 + (f", shaded {shade:+.1%} by the forecast" if shade else "")
+                + (
+                    f", discounted {memory_distrust:.1%} for an unfamiliar or unpredictable regime"
+                    if memory_distrust
+                    else ""
+                )
                 + (f"; {', '.join(dissenting)} dissent" if dissenting else "")
                 + f". Strongest case: {best.reason}"
             ),
@@ -381,6 +404,26 @@ class OpinionArbiter:
             weighted *= 1.0 - self._sole_penalty
         return weighted
 
+    def _regime_memory_distrust_for(self, regime: str) -> float:
+        """How much to hold back because this regime is unfamiliar or unpredictable.
+
+        Discount only, never a boost -- "memory of a regime does not become
+        confidence in it" (module docstring). No memory recorded yet, or a
+        regime this store has recognised from its signature with a duration
+        history tight enough to trust: no discount. A regime nothing
+        remembered looks like, or one recognised but whose duration has swung
+        between a day and a year, gets the full, bounded distrust -- there is
+        no partial credit for "recognised but unpredictable," since a system
+        that cannot say how long this regime lasts cannot say the plans
+        formed in it will still apply when it ends.
+        """
+        memory = self._regime_memories.get(regime)
+        if memory is None:
+            return 0.0
+        if memory.is_worth_acting_on and memory.duration_is_predictable:
+            return 0.0
+        return self._regime_memory_distrust
+
     def _forecast_shade(self, venue_id: str, symbol: str, side: str) -> float:
         """How far the forecast may move the conviction, bounded so it cannot decide."""
         bias = self._forecast_bias.get((venue_id, symbol), 0.0)
@@ -420,6 +463,7 @@ def describe_arbitration(arbiter: OpinionArbiter) -> dict:
         "strongest_conviction": arbiter.standing.strongest_conviction,
         "bot_weights_held": len(arbiter._weights),
         "strategy_reviews_held": len(arbiter._strategy_reviews),
+        "regime_memories_held": len(arbiter._regime_memories),
     }
 
 
@@ -484,6 +528,7 @@ def start_part(context) -> int:
     breaks = Batch(read=context.bus.reader("regime-break-alert"))
     competences = Batch(read=context.bus.reader("competence-map"))
     coverages = Batch(read=context.bus.reader("coverage-report"))
+    memories = Batch(read=context.bus.reader("regime-memory"))
     publish_intents = context.bus.publisher_for("trade-intent")
 
     # Every opinion currently held, by symbol and then by bot. Held across ticks
@@ -514,6 +559,8 @@ def start_part(context) -> int:
         for report in coverages.payloads():
             if report.coverage is not None:
                 arbiter.observe_coverage(report.venue_id, report.symbol, report.coverage)
+        for memory in memories.payloads():
+            arbiter.observe_regime_memory(memory)
 
         regime_by_symbol = regimes.mapping()
         ruling_by_symbol = rulings.mapping()
@@ -549,6 +596,9 @@ def start_part(context) -> int:
             minimum_coverage=context.number("arbiter_minimum_coverage"),
             strategy_review_distrust_discount=context.number(
                 "arbiter_strategy_review_distrust_discount"
+            ),
+            regime_memory_maximum_distrust=context.number(
+                "arbiter_regime_memory_maximum_distrust"
             ),
         ),
         control_socket=context.control_socket,
