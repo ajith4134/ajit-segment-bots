@@ -244,12 +244,57 @@ algo name. This is the concrete mechanism behind the SEBI algo-ID requirement
 flagged in `docs/goal.md` — not needed for paper trading, required the day
 this adapter starts placing live orders.
 
-**Margin** (`POST /v2/charges/margin`, max 20 instruments per call): returns
-`span_margin`, `exposure_margin`, `equity_margin`, `net_buy_premium`,
-`additional_margin` per instrument — the real SEBI SPAN+exposure figures, not
-a flat leverage assumption. This is what should price a position's capital
-requirement, the same way the crypto build priced funding from the venue's
-own numbers rather than a platform default (RL-061).
+**Margin, per candidate order** (`POST /v2/charges/margin`, max 20
+instruments per call): returns `span_margin`, `exposure_margin`,
+`equity_margin`, `net_buy_premium`, `additional_margin` per instrument — the
+real SEBI SPAN+exposure figures, not a flat leverage assumption. This is what
+should price a position's capital requirement, the same way the crypto build
+priced funding from the venue's own numbers rather than a platform default
+(RL-061). **Needs an order to price** — instrument, quantity, transaction
+type, product — so nothing can call this until something produces an order
+intent.
+
+**Account funds, self-contained** (`GET /v2/user/get-funds-and-margin`,
+verified 2026-09-01): `used_margin`, `payin_amount`, `span_margin`,
+`adhoc_margin`, `notional_cash`, `available_margin`, `exposure_margin`, split
+by `equity`/`commodity` segment. Needs only a valid token — no order, no
+instrument. Down for maintenance 12:00 AM–5:30 AM IST daily (worth knowing so
+a reader doesn't mistake scheduled downtime for a fault). This is the direct
+analogue of the crypto build's `venue-balance-reader` (`key-standing` in,
+`account-balance` out, no order dependency) and is what actually gets built
+in this phase — see §9a.
+
+### 6a. Order placement and per-order margin have no producer yet — 2026-09-01
+
+Asked to build "order placement and margin" as the phase after market-data.
+Investigation found: **account funds is self-contained and buildable now**
+(above); **order placement and per-order margin genuinely are not** — both
+need an order intent (instrument, side, size) as input, and no part in this
+project produces one for Indian markets. The crypto build's equivalent
+(`order-request`) is produced by `order-destination-router` /
+`stop-order-manager`, deep in a fully-wired opportunity-scanner → sizing →
+risk-gate pipeline that has no Indian-markets counterpart yet (§8's open
+item, and the option the user did *not* pick when asked "which next
+phase" — the trading vertical itself).
+
+Reusing the crypto `order-request` type was considered and rejected, same
+reasoning as market-data (§5, `docs/proposals/upstox-broker-adapter.md`):
+it would auto-wire a new consumer into every existing producer of that type
+via R-01, meaning `order-destination-router`'s crypto-shaped orders
+(`venue_id="binance"`, symbol-style, not `instrument_key`) would flow into
+an Upstox order-router that cannot read them. A new `broker-order-request`
+type has no producer at all yet, so a part consuming it would be an
+R-01 dangling input — a real, mechanically-checked violation, not a
+formality to route around.
+
+**So order placement and per-order margin land as adapter capability, not a
+declared part**, this phase: `UpstoxAdapter` gains `build_order_request`,
+`read_order_result`, `build_margin_quote_request`, `read_margin_quotes` —
+real methods, tested against Upstox's own documented request/response
+shapes, callable and correct. No `broker-order-router` blueprint entry yet;
+that gets declared the day an Indian opportunity-scanner/sizing pipeline
+exists to call it, the same way `venue-order-status-translator` and friends
+were declared alongside a real `order-request` producer, not before one.
 
 ## 7. Contract sketch — `runtime/brokers/broker_adapter.py`
 
@@ -334,13 +379,25 @@ would act on.
 
 ## 9. What this becomes in the blueprint
 
-Mirrors the crypto pattern (`market-data-feed` block, `execution_venue_adapter`
-parts) rather than inventing a new one: an `upstox-instrument-catalogue-reader`
-(daily file fetch + parse), an `upstox-market-feed-reader` (WebSocket +
-protobuf decode + tape write, one part per T-1), and later, when this segment
-moves toward live orders, an `upstox-order-router` and `upstox-margin-reader`
-peer to the crypto build's `ccxt_order_router.py` /
-`venue_balance_reader.py` equivalents. None of this is declared in
-`docs/features.json` yet — that's the next step, a blueprint edit
-(`dashboard/blueprint_edits/`) once this spec is approved, per the project's
-own rule that a design change is a blueprint edit first, code follows.
+**§9a — declared and built, 2026-09-01.** New `broker-adapter` category, four
+parts, broker-agnostic ids (T-1, T-4 — same shape as `execution-venue-adapter`
+never naming Binance or Bybit): `broker-token-refresh-scheduler`,
+`broker-instrument-catalogue-reader`, `broker-market-feed-reader`,
+`broker-market-tape-writer`. Full reasoning in
+`docs/proposals/upstox-broker-adapter.md`, implemented per
+`docs/superpowers/plans/2026-09-01-upstox-broker-adapter.md`.
+
+**§9b — declared and built, same day, second pass.** `broker-account-funds-reader`
+— the direct analogue of `venue-balance-reader` (§6, `get-funds-and-margin`
+is self-contained: token in, funds out, no order dependency). Added via a
+second blueprint edit alongside the first four, once the read-side existed
+as real substrate to build against.
+
+**Not yet declared, and why (§6a):** `broker-order-router` and a per-order
+margin-quote part. Both need an order intent as input and nothing in this
+project produces one for Indian markets yet — that's the trading-vertical
+phase (opportunity scanner / sizing / risk-gate equivalent), explicitly not
+chosen when asked "which next phase" on 2026-09-01. `UpstoxAdapter` carries
+the order-placement and margin-quote *methods* now (tested, real, callable)
+so the day a producer exists, declaring the part is a blueprint edit and a
+thin wiring layer — not a redesign.
