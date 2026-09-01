@@ -51,7 +51,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="instrument-selector",
     consumes=(
         "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
-        "symbol-universe", "symbol-quote-frame",
+        "symbol-universe", "symbol-quote-frame", "broker-instrument-listing", "broker-option-greeks",
     ),
     produces=("instrument-choice", "part-health"),
     resource_class="compute-bound",
@@ -896,6 +896,8 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     quotes = Batch(read=context.bus.reader("symbol-quote-frame"))
     universe = Batch(read=context.bus.reader("symbol-universe"))
+    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    greeks = Batch(read=context.bus.reader("broker-option-greeks"))
     publish_choices = context.bus.publisher_for("instrument-choice")
 
     def read_intents_and_instruments(selector):
@@ -908,6 +910,15 @@ def start_part(context) -> int:
         # `observe_listed_instrument` keys on the contract symbol and overwrites.
         for listed in universe.payloads():
             selector.observe_listed_symbol(listed)
+        for listing in listings.payloads():
+            selector.observe_option_listing(listing)
+        for reading in greeks.payloads():
+            selector.observe_option_greeks(reading)
+        # broker-market-data's option LTP is not wired to observe_option_price
+        # here yet -- it needs LtpUpdate.instrument_key correlated against the
+        # option contract, real additional wiring, named as the next task
+        # rather than rushed into this one (docs/proposals/instrument-
+        # selector-atm-strike.md).
         for surface in surfaces.payloads():
             selector.observe_implied_vol_surface(surface)
         for grade in grades.payloads():

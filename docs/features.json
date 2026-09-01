@@ -134,9 +134,13 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "broker-instrument-listing",
+        "broker-option-greeks",
         "implied-vol-surface",
         "liquidity-grade",
-        "market-data",
+        "symbol-price-frame",
+        "symbol-quote-frame",
+        "symbol-universe",
         "timed-intent",
         "trade-intent"
       ],
@@ -154,7 +158,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -5723,7 +5727,9 @@
         "liquidity-grade",
         "timed-intent",
         "symbol-universe",
-        "symbol-quote-frame"
+        "symbol-quote-frame",
+        "broker-instrument-listing",
+        "broker-option-greeks"
       ],
       "produces": [
         "instrument-choice",
@@ -13130,5 +13136,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_exchange_announcement_reader_broker_listing.py",
     "proposal": "docs/proposals/exchange-announcement-reader-broker-listing.md"
+  },
+  "_proposal_2026-09-01_instrument_selector_atm_strike": {
+    "what": "instrument-selector gains ATM strike selection for the index-options segment -- broker-instrument-listing and broker-option-greeks added to its consumes, additive only.",
+    "origin": "designed by Claude against the user's 2026-09-01 audit request",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_instrument_selector_atm_strike.py",
+    "proposal": "docs/proposals/instrument-selector-atm-strike.md"
   }
 }
