@@ -205,12 +205,27 @@ def test_how_far_a_part_is_built_tells_running_from_startable_from_absent(board)
     # fork, which is a different state from unwritten and must read as one.
     # Found rather than named, because parts gain start_part as they are built
     # and a named example stopped being one on 2026-08-23.
-    from runtime.part_launcher import PART_ENTRY_POINT, resolve_part_module
+    from runtime.part_launcher import PART_ENTRY_POINT, PartHasNoModule, resolve_part_module
     from runtime.wiring_plan import load_blueprint
     import importlib
+
+    def has_real_code_but_no_start_part(feature_id: str) -> bool:
+        # A DECLARED-only part (no module at all, e.g. one just added to the
+        # blueprint ahead of its implementation) is a different state from
+        # this search's target and must be skipped, not let a
+        # PartHasNoModule from resolve_part_module end the search early --
+        # found 2026-09-01 when expiry-day-zero-to-hero-detector landed
+        # DECLARED and this generator, which never caught the exception,
+        # crashed on the first one it met instead of skipping past it.
+        try:
+            module = importlib.import_module(resolve_part_module(feature_id))
+        except PartHasNoModule:
+            return False
+        return not callable(getattr(module, PART_ENTRY_POINT, None))
+
     unlaunchable = next(
         (feature["id"] for feature in load_blueprint()["features"]
-         if not callable(getattr(importlib.import_module(resolve_part_module(feature["id"])), PART_ENTRY_POINT, None))),
+         if has_real_code_but_no_start_part(feature["id"])),
         None,
     )
     if unlaunchable is not None:

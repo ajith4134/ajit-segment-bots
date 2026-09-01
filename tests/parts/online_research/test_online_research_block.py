@@ -38,9 +38,6 @@ from parts.online_research.github_strategy_miner import (
 from parts.online_research.leaderboard_reader import (
     EMPTY_BOARD, LeaderboardReader, RATE_LIMITED, READ as BOARD_READ, READ_FAILED,
 )
-from parts.online_research.onchain_flow_aggregator import (
-    AGGREGATED, COVERAGE_TOO_THIN, NOTHING_IN_WINDOW, OnchainFlowAggregator,
-)
 from parts.online_research.onchain_position_reader import (
     NOT_CONFIRMED, NOT_PUBLIC, OnchainPositionReader, READ as POSITION_READ, STALE_HEIGHT,
 )
@@ -79,7 +76,6 @@ BLOCK_PARTS = {
     "trader-record-verifier": "parts.online_research.trader_record_verifier",
     "copy-latency-estimator": "parts.online_research.copy_latency_estimator",
     "exchange-announcement-reader": "parts.online_research.exchange_announcement_reader",
-    "onchain-flow-aggregator": "parts.online_research.onchain_flow_aggregator",
     "options-flow-reader": "parts.online_research.options_flow_reader",
     "arxiv-feed-reader": "parts.online_research.arxiv_feed_reader",
     "github-strategy-miner": "parts.online_research.github_strategy_miner",
@@ -741,85 +737,6 @@ def test_the_reader_infers_no_intent():
     ).describe_transfer_reading(a_transfer_reader())
     assert described["infers_intent"] is False
     assert described["claims_a_transfer_is_a_trade"] is False
-
-
-# ---- onchain-flow-aggregator ------------------------------------------------
-
-def an_aggregator(window=3600.0, coverage=0.6, clock=None):
-    return OnchainFlowAggregator(
-        window_seconds=window, minimum_coverage_fraction=coverage,
-        now_ns=clock or Clock(),
-    )
-
-
-def _a_transfer(reader, transfer_id, to_kind=EXCHANGE_DEPOSIT, quantity=100.0,
-                confirmed_at_ns=None, clock=None):
-    reader.observe_address("in", UNKNOWN_WALLET)
-    reader.observe_address("out", to_kind, "binance")
-    reader.observe_price("ETH", 3_000.0, reader._now_ns())
-    row = a_transfer_row(transfer_id, quantity=quantity, from_address="in", to_address="out")
-    row["confirmed_at_ns"] = confirmed_at_ns if confirmed_at_ns is not None else clock.now_ns
-    return reader.read(row).transfer
-
-
-def test_thin_coverage_is_published_as_unusable_rather_than_as_a_smaller_figure():
-    """A partial figure can have the opposite sign to the complete one."""
-    clock = Clock()
-    subject = an_aggregator(coverage=0.9, clock=clock)
-    for cluster in ("binance", "okx", "bybit", "kraken"):
-        subject.declare_cluster("ETH", cluster)
-    reader = a_transfer_reader(minimum=1.0)
-    subject.observe_transfer(_a_transfer(reader, "tx-1", clock=clock), cluster="binance")
-    reading = subject.measure("ETH")
-    assert reading.state == COVERAGE_TOO_THIN
-    assert "would reverse the sign" in reading.reason
-
-
-def test_inflow_and_outflow_are_kept_separately():
-    """A quiet day and a heavily two-sided day net the same."""
-    clock = Clock()
-    subject = an_aggregator(coverage=0.5, clock=clock)
-    subject.declare_cluster("ETH", "binance")
-    reader = a_transfer_reader(minimum=1.0)
-    subject.observe_transfer(
-        _a_transfer(reader, "tx-1", EXCHANGE_DEPOSIT, 100.0, clock=clock), "binance"
-    )
-    reader_out = a_transfer_reader(minimum=1.0)
-    reader_out.observe_address("in", EXCHANGE_WITHDRAWAL, "binance")
-    reader_out.observe_address("out", CUSTODY)
-    reader_out.observe_price("ETH", 3_000.0, reader_out._now_ns())
-    row = a_transfer_row("tx-2", quantity=100.0, from_address="in", to_address="out")
-    row["confirmed_at_ns"] = clock.now_ns
-    subject.observe_transfer(reader_out.read(row).transfer, "binance")
-    reading = subject.measure("ETH")
-    assert reading.state == AGGREGATED
-    assert reading.flow.net_flow == pytest.approx(0.0)
-    assert reading.flow.inflow > 0 and reading.flow.outflow > 0
-
-
-def test_transfers_older_than_the_window_fall_out():
-    clock = Clock()
-    subject = an_aggregator(window=60.0, coverage=0.5, clock=clock)
-    subject.declare_cluster("ETH", "binance")
-    reader = a_transfer_reader(minimum=1.0)
-    subject.observe_transfer(
-        _a_transfer(reader, "tx-1", confirmed_at_ns=clock.now_ns, clock=clock), "binance"
-    )
-    clock.now_ns += 120_000_000_000
-    assert subject.measure("ETH").state == NOTHING_IN_WINDOW
-    assert subject.standing.transfers_expired_out == 1
-
-
-def test_a_quiet_window_is_not_a_zero_net_flow():
-    reading = an_aggregator().measure("ETH")
-    assert reading.state == NOTHING_IN_WINDOW
-    assert reading.flow is None
-
-
-def test_the_aggregator_keeps_no_running_total_since_start():
-    assert importlib.import_module(
-        BLOCK_PARTS["onchain-flow-aggregator"]
-    ).describe_flow_aggregation(an_aggregator())["keeps_a_running_total_since_start"] is False
 
 
 # ---- social-sentiment-reader ------------------------------------------------

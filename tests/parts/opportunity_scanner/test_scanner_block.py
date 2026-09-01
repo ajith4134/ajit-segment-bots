@@ -22,12 +22,6 @@ from parts.opportunity_scanner.cointegration_pair_finder import (
     COINTEGRATED, CORRELATED_ONLY, TOO_FEW_OBSERVATIONS as PAIR_TOO_FEW, UNRELATED,
     CointegrationPairFinder,
 )
-from parts.opportunity_scanner.funding_skew_detector import (
-    NOT_SKEWED, PRICE_STILL_REWARDING, FundingSkewDetector,
-)
-from parts.opportunity_scanner.liquidation_cascade_detector import (
-    CLUSTER_TOO_THIN, NO_CLUSTER_IN_REACH, LiquidationCascadeDetector, LiquidationCluster,
-)
 from parts.opportunity_scanner.liquidity_grader import (
     DEEP, THIN, TRADEABLE, UNGRADEABLE, UNTRADEABLE, LiquidityGrader,
 )
@@ -40,9 +34,6 @@ from parts.opportunity_scanner.momentum_burst_detector import (
 from parts.opportunity_scanner.regime_classifier import (
     RANDOM, REVERTING, TRENDING, UNCLASSIFIED, RegimeClassifier,
 )
-from parts.opportunity_scanner.sentiment_shift_detector import (
-    NO_DIVERGENCE, SENTIMENT_STEADY, SentimentShiftDetector,
-)
 from parts.opportunity_scanner.spread_reversion_detector import (
     A_LEG_IS_STALE, PAIR_NOT_COINTEGRATED, SpreadReversionDetector,
 )
@@ -52,9 +43,6 @@ from parts.opportunity_scanner.volatility_gap_detector import (
 )
 from parts.opportunity_scanner.watch_condition_compiler import (
     ABOVE, BELOW, BETWEEN, CROSSES_ABOVE, ConditionRefused, WatchConditionCompiler,
-)
-from parts.opportunity_scanner.whale_flow_detector import (
-    INFLOW, NOT_LARGE_ENOUGH, OUTFLOW, WhaleFlowDetector,
 )
 from runtime.market_signal import (
     CONTINUATION, LONG, REVERSION, SHORT, UNWIND, SignalCalibrator,
@@ -72,10 +60,6 @@ BLOCK_PARTS = {
     "universal-symbol-sweeper": "parts.opportunity_scanner.universal_symbol_sweeper",
     "liquidity-grader": "parts.opportunity_scanner.liquidity_grader",
     "momentum-burst-detector": "parts.opportunity_scanner.momentum_burst_detector",
-    "funding-skew-detector": "parts.opportunity_scanner.funding_skew_detector",
-    "whale-flow-detector": "parts.opportunity_scanner.whale_flow_detector",
-    "liquidation-cascade-detector": "parts.opportunity_scanner.liquidation_cascade_detector",
-    "sentiment-shift-detector": "parts.opportunity_scanner.sentiment_shift_detector",
 }
 
 SECOND_NS = 1_000_000_000
@@ -580,93 +564,6 @@ def test_a_retired_pair_produces_nothing_however_stretched():
     assert outcome == PAIR_NOT_COINTEGRATED
 
 
-# ---- funding-skew-detector ---------------------------------------------------
-
-def funding_detector(z=2.0, minimum=20):
-    return FundingSkewDetector(
-        window_length=100, minimum_observations=minimum, skew_z_threshold=z,
-        price_confirmation_window=20, horizon_seconds=3600.0, calibrator=calibrator(),
-    )
-
-
-def test_extreme_funding_with_price_no_longer_paying_fires():
-    subject = funding_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
-    subject.observe_funding(VENUE, SYMBOL, 0.01)
-    for index in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0 - index, subject._now_ns())
-    candidate, _ = subject.detect(VENUE, SYMBOL)
-    assert candidate is not None
-    assert candidate.direction == SHORT
-    assert candidate.expectation == UNWIND
-
-
-def test_extreme_funding_while_price_still_rises_does_not_fire():
-    """Fading a rate the whole way up is how a funding strategy loses."""
-    subject = funding_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
-    subject.observe_funding(VENUE, SYMBOL, 0.01)
-    for index in range(10):
-        subject.observe_price(VENUE, SYMBOL, 100.0 + index, subject._now_ns())
-    candidate, outcome = subject.detect(VENUE, SYMBOL)
-    assert candidate is None
-    assert outcome == PRICE_STILL_REWARDING
-
-
-def test_an_ordinary_funding_rate_does_not_fire():
-    subject = funding_detector(z=3.0, minimum=20)
-    for index in range(40):
-        subject.observe_funding(VENUE, SYMBOL, 0.0001 * (1 if index % 2 else -1))
-    candidate, outcome = subject.detect(VENUE, SYMBOL)
-    assert outcome == NOT_SKEWED
-
-
-# ---- liquidation-cascade-detector --------------------------------------------
-
-def cascade_detector(reach=2.0, minimum_notional=1_000_000.0, depth_multiple=2.0):
-    return LiquidationCascadeDetector(
-        window_length=100, minimum_observations=20, reach_in_volatilities=reach,
-        minimum_cluster_notional=minimum_notional, cascade_depth_multiple=depth_multiple,
-        horizon_seconds=600.0, calibrator=calibrator(),
-    )
-
-
-def feed_volatility(subject, price=100.0, steps=40):
-    for index in range(steps):
-        subject.observe_price(VENUE, SYMBOL, price * (1 + (0.005 if index % 2 else -0.005)), subject._now_ns())
-
-
-def test_a_dense_cluster_in_reach_fires_toward_it():
-    subject = cascade_detector()
-    feed_volatility(subject)
-    subject.set_book_depth(VENUE, SYMBOL, 100_000.0)
-    subject.set_clusters(VENUE, SYMBOL, (LiquidationCluster(price=99.5, notional=5_000_000.0, side="long"),))
-    candidate, _ = subject.detect(VENUE, SYMBOL)
-    assert candidate is not None
-    assert candidate.direction == SHORT
-
-
-def test_a_thin_cluster_absorbs_and_does_not_fire():
-    subject = cascade_detector(minimum_notional=1_000_000.0)
-    feed_volatility(subject)
-    subject.set_book_depth(VENUE, SYMBOL, 100_000.0)
-    subject.set_clusters(VENUE, SYMBOL, (LiquidationCluster(price=99.5, notional=1000.0, side="long"),))
-    candidate, outcome = subject.detect(VENUE, SYMBOL)
-    assert candidate is None
-    assert outcome == CLUSTER_TOO_THIN
-
-
-def test_a_distant_cluster_is_out_of_reach():
-    subject = cascade_detector(reach=1.0)
-    feed_volatility(subject)
-    subject.set_clusters(VENUE, SYMBOL, (LiquidationCluster(price=50.0, notional=9_000_000.0, side="long"),))
-    candidate, outcome = subject.detect(VENUE, SYMBOL)
-    assert candidate is None
-    assert outcome == NO_CLUSTER_IN_REACH
-
-
 # ---- volatility-gap-detector -------------------------------------------------
 
 def gap_detector(minimum_gap=0.2):
@@ -702,99 +599,6 @@ def test_a_small_gap_is_inside_the_noise():
     subject.observe_implied(VENUE, SYMBOL, 0.52)
     candidate, outcome = subject.detect(VENUE, SYMBOL)
     assert outcome == GAP_TOO_SMALL
-
-
-# ---- whale-flow-detector -----------------------------------------------------
-
-def whale_detector(z=2.5, minimum=20):
-    return WhaleFlowDetector(
-        window_length=100, minimum_observations=minimum, flow_z_threshold=z,
-        horizon_seconds=3600.0, calibrator=calibrator(),
-    )
-
-
-def test_a_large_inflow_is_read_as_selling_pressure():
-    subject = whale_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_transfer(VENUE, SYMBOL, quantity=1.0, direction=INFLOW if index % 2 else OUTFLOW)
-    candidate, _ = subject.observe_transfer(VENUE, SYMBOL, quantity=500.0, direction=INFLOW)
-    assert candidate is not None
-    assert candidate.direction == SHORT
-
-
-def test_a_large_outflow_is_read_the_other_way():
-    """Coins leaving reduce the float available to sell, which reads backwards until you think about it."""
-    subject = whale_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_transfer(VENUE, SYMBOL, quantity=1.0, direction=INFLOW if index % 2 else OUTFLOW)
-    candidate, _ = subject.observe_transfer(VENUE, SYMBOL, quantity=500.0, direction=OUTFLOW)
-    assert candidate is not None
-    assert candidate.direction == LONG
-
-
-def test_an_ordinary_transfer_for_this_venue_does_not_fire():
-    subject = whale_detector(z=3.0, minimum=20)
-    for index in range(40):
-        subject.observe_transfer(VENUE, SYMBOL, quantity=1.0, direction=INFLOW if index % 2 else OUTFLOW)
-    _, outcome = subject.observe_transfer(VENUE, SYMBOL, quantity=1.2, direction=INFLOW)
-    assert outcome == NOT_LARGE_ENOUGH
-
-
-def test_a_candidate_admits_a_transfer_may_not_be_a_trade():
-    subject = whale_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_transfer(VENUE, SYMBOL, quantity=1.0, direction=INFLOW if index % 2 else OUTFLOW)
-    candidate, _ = subject.observe_transfer(VENUE, SYMBOL, quantity=500.0, direction=INFLOW)
-    assert candidate.evidence["may_not_be_a_trade"] is True
-
-
-# ---- sentiment-shift-detector ------------------------------------------------
-
-def sentiment_detector(z=2.0, minimum=20, agreement=0.01):
-    return SentimentShiftDetector(
-        window_length=100, minimum_observations=minimum, shift_z_threshold=z,
-        price_agreement_fraction=agreement, horizon_seconds=3600.0, calibrator=calibrator(),
-    )
-
-
-def test_sentiment_moving_while_price_has_not_is_the_signal():
-    subject = sentiment_detector(z=2.0, minimum=20)
-    for index in range(30):
-        subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
-    subject.observe_sentiment(VENUE, SYMBOL, 0.95)
-    candidate, _ = subject.detect(VENUE, SYMBOL)
-    assert candidate is not None
-
-
-def test_sentiment_that_price_has_already_followed_is_not_a_divergence():
-    subject = sentiment_detector(z=2.0, minimum=20, agreement=0.01)
-    for index in range(30):
-        subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
-    subject.observe_sentiment(VENUE, SYMBOL, 0.95)
-    for index in range(6):
-        subject.observe_price(VENUE, SYMBOL, 100.0 * (1.01 ** (index + 1)), subject._now_ns())
-    candidate, outcome = subject.detect(VENUE, SYMBOL)
-    assert candidate is None
-    assert outcome == NO_DIVERGENCE
-
-
-def test_which_way_to_trade_sentiment_is_learned_not_assumed():
-    """Sentiment leads price sometimes and is contrarian at extremes."""
-    shared = calibrator(prior=0.5, minimum=5)
-    subject = SentimentShiftDetector(
-        window_length=100, minimum_observations=20, shift_z_threshold=2.0,
-        price_agreement_fraction=0.01, horizon_seconds=3600.0, calibrator=shared,
-    )
-    for index in range(30):
-        subject.observe_sentiment(VENUE, SYMBOL, 0.5 + (0.01 if index % 2 else -0.01))
-        subject.observe_price(VENUE, SYMBOL, 100.0, subject._now_ns())
-    for _ in range(20):
-        subject.observe_outcome("sentiment-is-contrarian-at-extremes", True)
-    subject.observe_sentiment(VENUE, SYMBOL, 0.95)
-    candidate, _ = subject.detect(VENUE, SYMBOL)
-    assert candidate.direction == SHORT, "learned contrarian, so a bullish shift is faded"
 
 
 # ---- watch-condition-compiler ------------------------------------------------

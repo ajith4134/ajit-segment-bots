@@ -82,29 +82,31 @@
       "origin": "user",
       "approved": true,
       "consumes": [
+        "broker-instrument-listing",
+        "broker-market-data",
+        "broker-option-greeks",
         "cointegrated-pair",
         "consolidated-price",
         "cross-segment-signal",
-        "funding-forecast",
         "implied-vol-surface",
-        "liquidation-map",
         "liquidity-grade",
         "market-data",
         "market-regime",
-        "onchain-flow",
+        "opportunity-instruction",
         "options-flow",
         "order-book-snapshot",
         "playbook-rule",
         "position",
         "proven-instruction",
         "retired-instruction",
-        "sentiment-reading",
+        "symbol-price-frame",
         "symbol-profile",
+        "symbol-quote-frame",
         "symbol-universe",
+        "training-label",
         "venue-announcement",
         "volatility-forecast",
-        "watch-condition",
-        "whale-transfer"
+        "watch-condition"
       ],
       "produces": [
         "cointegrated-pair",
@@ -119,7 +121,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-01",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -5684,113 +5686,6 @@
       "skipped_tick_effect": "corrupts"
     },
     {
-      "id": "funding-skew-detector",
-      "name": "Funding skew detector",
-      "role": "spot a funding rate stretched far enough that the crowded side tends to unwind",
-      "category": "opportunity-scanner",
-      "consumes": [
-        "symbol-price-frame",
-        "funding-forecast",
-        "playbook-rule",
-        "training-label"
-      ],
-      "produces": [
-        "entry-candidate",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "compute-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
-      "id": "whale-flow-detector",
-      "name": "Whale flow detector",
-      "role": "spot an exchange inflow or outflow large enough to precede a move",
-      "category": "opportunity-scanner",
-      "consumes": [
-        "whale-transfer",
-        "symbol-price-frame",
-        "onchain-flow",
-        "training-label"
-      ],
-      "produces": [
-        "entry-candidate",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "compute-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
-      "id": "liquidation-cascade-detector",
-      "name": "Liquidation cascade detector",
-      "role": "spot price approaching a liquidation cluster dense enough to cascade",
-      "category": "opportunity-scanner",
-      "consumes": [
-        "liquidation-map",
-        "symbol-price-frame",
-        "training-label"
-      ],
-      "produces": [
-        "entry-candidate",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "compute-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
-      "id": "sentiment-shift-detector",
-      "name": "Sentiment shift detector",
-      "role": "spot crowd sentiment turning faster than price has",
-      "category": "opportunity-scanner",
-      "consumes": [
-        "sentiment-reading",
-        "symbol-price-frame",
-        "playbook-rule",
-        "training-label"
-      ],
-      "produces": [
-        "entry-candidate",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "compute-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
       "id": "instrument-selector",
       "name": "Instrument selector",
       "role": "choose the contract, strike, expiry or pair that expresses a trade intent in this segment",
@@ -10398,28 +10293,6 @@
       "skipped_tick_effect": "corrupts"
     },
     {
-      "id": "onchain-flow-aggregator",
-      "name": "On-chain flow aggregator",
-      "role": "aggregate stablecoin mints, burns, exchange reserves plus bridge flows into money moving toward or away from trading",
-      "category": "online-research",
-      "consumes": [],
-      "produces": [
-        "onchain-flow",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
-      "resource_class": "bandwidth-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
       "id": "options-flow-reader",
       "name": "Options flow reader",
       "role": "read large option block trades: strike, expiry, side, size",
@@ -12541,6 +12414,34 @@
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "expiry-day-zero-to-hero-detector",
+      "name": "Expiry day zero to hero detector",
+      "role": "spot a far-out-of-the-money index option cheap enough to spike sharply if the underlying reaches its strike before today's close",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-market-data",
+        "broker-option-greeks",
+        "symbol-price-frame"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-01",
+      "evidence": "docs/superpowers/specs/2026-09-01-options-segment-bots-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {
@@ -13137,5 +13038,12 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_upstox_account_funds.py",
     "proposal": "docs/proposals/upstox-broker-account-funds.md",
     "spec": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md"
+  },
+  "_proposal_2026-09-01_options_scanner_first_slice": {
+    "what": "Retire 4 crypto-only opportunity-scanner detectors plus one orphaned producer (onchain-flow-aggregator), add expiry-day-zero-to-hero-detector. Deliberately not the full conversion -- segments.members and the bull-bot/bear-bot/instrument-selector consumes audit are explicitly deferred.",
+    "origin": "designed by Claude against the user's 2026-09-01 options segment bots brainstorm",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_options_scanner_first_slice.py",
+    "proposal": "docs/proposals/options-scanner-first-slice.md",
+    "spec": "docs/superpowers/specs/2026-09-01-options-segment-bots-design.md"
   }
 }
