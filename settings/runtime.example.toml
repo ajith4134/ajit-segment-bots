@@ -4066,3 +4066,22 @@ note  = "Claude, 2026-09-02: how long the unchanged restriction level may go uns
 value = 3600.0
 unit  = "seconds between fetches"
 note  = "Claude, 2026-09-02: how often corporate-action-reader re-reads www.nseindia.com/api/corporates-corporateActions. The endpoint returns the actions around the current date and changes when a company files, which is a daily-to-weekly event per name rather than an intraday one -- so hourly is already far finer than the data moves. What actually matters is that an action is seen before its ex-date, and an hourly poll gives roughly twenty-four chances between a filing and the next open."
+[market_session_segment]
+value = "FO"
+unit  = "NSE holiday-master segment key"
+note  = "Claude, 2026-09-02: which of the twelve segment keys in www.nseindia.com/api/holiday-master?type=trading market-session-calendar reads. \"FO\" is equity derivatives, the segment both Phase A bots trade (index options and stock options; docs/goal.md). The other keys seen live on 2026-09-02 are CBM, CD, CM, CMOT, COM, EGR, IRD, MF, NDM, NTRP, SLBS -- a commodity holiday is not a derivatives holiday, so reading them together would close the market on days it trades."
+
+[market_session_opens_at_ist]
+value = "09:15"
+unit  = "IST clock time"
+note  = "Claude, 2026-09-02: when the NSE equity-derivatives session opens. NSE's published normal market timing for the F&O segment is 09:15-15:30 IST. Pre-open (09:00-09:15) is a cash-segment auction and is deliberately NOT counted as open here -- an order sent into it behaves differently from a normal-market order, and this project has no pre-open order type. Re-derive if a pre-open strategy is ever built."
+
+[market_session_closes_at_ist]
+value = "15:30"
+unit  = "IST clock time"
+note  = "Claude, 2026-09-02: when the NSE equity-derivatives session closes. Pairs with market_session_opens_at_ist; NSE's published normal market timing. The post-close window (15:40-16:00, cash only) is not counted as open for the same reason pre-open is not."
+
+[market_session_poll_seconds]
+value = 21600.0
+unit  = "seconds between fetches"
+note  = "Claude, 2026-09-02: how often market-session-calendar re-reads the holiday list. The list is published annually and amended rarely (an unscheduled closure, an election day), so four fetches a day is already generous -- the session state itself is recomputed from the clock on every tick, and only the holiday list needs fetching."
