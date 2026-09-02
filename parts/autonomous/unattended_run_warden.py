@@ -23,6 +23,23 @@ state**, because a restart mid-position risks losing track of a live position --
 part is stopped and escalated instead. And **it never restarts to clear a fault it
 does not understand**: an unrecognised fault is escalated, since restarting is a
 treatment for a specific class of failure and not a general-purpose remedy.
+
+**An escalation is an event; the fault it comes from is a level** (2026-09-02).
+`part-fault` is republished by failing-part-detector on a refresh interval -- that is
+what makes a standing fault knowable rather than a thing you had to be listening for
+at the right moment -- and this part read every restatement as a new event. Measured
+on the live spine: ~300 escalations per part per five minutes, ~180 journal lines a
+second, every part in the system, almost all of them SUSPICIOUSLY_PERFECT, which is
+simply true of a working part. A repeated escalation is worse than a quiet one: it
+buries the escalation that means something, and it inflates the journal that
+`build_trade_board.py` reads end to end, which is much of why that generator went
+from ten minutes to over an hour.
+
+So an escalation goes out when the claim *changes*, and a standing claim is restated
+on its own interval rather than on the producer's. Suppressed is not silenced: the
+count is in the standing, and a fault still standing after the repeat interval is
+said again -- an unattended run cannot afford quiet that hides a fault any more than
+it can afford noise that buries one.
 """
 
 from __future__ import annotations
@@ -80,6 +97,10 @@ class WardenStanding:
     refused_capital_state: int = 0
     refused_unrecognised: int = 0
     escalations: int = 0
+    # Restatements of a claim already escalated. Counted rather than dropped
+    # silently: this number is how loudly the detector is restating a standing
+    # fault, and a board that could not see it is how the storm went unnoticed.
+    escalations_suppressed: int = 0
 
 
 class UnattendedRunWarden:
@@ -92,6 +113,8 @@ class UnattendedRunWarden:
         initial_backoff_seconds: float,
         backoff_multiplier: float,
         system_wide_ceiling: int,
+        escalation_repeat_seconds: float,
+        escalation_forget_seconds: float,
         monotonic=time.monotonic,
         now_ns=time.time_ns,
     ) -> None:
@@ -108,16 +131,39 @@ class UnattendedRunWarden:
                 "many parts restarting at once is one cause, and a ceiling below two "
                 "cannot express that"
             )
+        if escalation_repeat_seconds <= 0 or escalation_forget_seconds <= 0:
+            raise ValueError(
+                "a standing fault is restated on an interval and forgotten after one; "
+                "neither can be zero, or the warden either never repeats itself or "
+                "never stops"
+            )
+        if escalation_forget_seconds > escalation_repeat_seconds:
+            raise ValueError(
+                "forgetting a fault before it would have been restated makes every "
+                "restatement look like a new fault, which is the storm this exists to "
+                f"stop; got forget={escalation_forget_seconds}s, "
+                f"repeat={escalation_repeat_seconds}s"
+            )
         self._maximum_restarts = maximum_restarts
         self._within_seconds = within_seconds
         self._initial_backoff = initial_backoff_seconds
         self._backoff_multiplier = backoff_multiplier
         self._system_wide_ceiling = system_wide_ceiling
+        self._escalation_repeat_seconds = escalation_repeat_seconds
+        self._escalation_forget_seconds = escalation_forget_seconds
         self._monotonic = monotonic
         self._now_ns = now_ns
         self._restarts: dict[str, list] = {}
         self._last_restart: dict[str, float] = {}
         self._holds_capital_state: set = set()
+        # Per part: what was last escalated about it, when that was said, and when
+        # the claim was last seen at all. The last of the three is what lets a
+        # fault that stopped being restated be forgotten -- the detector drops the
+        # key rather than publishing an all-clear, so absence is the only signal
+        # a cleared fault has.
+        self._escalated_claim: dict[str, tuple[str, str]] = {}
+        self._escalated_at: dict[str, float] = {}
+        self._claim_last_seen_at: dict[str, float] = {}
         self.standing = WardenStanding()
 
     def declare_holds_capital_state(self, part_id: str) -> None:
@@ -141,15 +187,48 @@ class UnattendedRunWarden:
     def backoff_for(self, attempts: int) -> float:
         return self._initial_backoff * (self._backoff_multiplier ** max(attempts - 1, 0))
 
+    def _is_worth_saying_again(self, part_id: str, claim: tuple[str, str]) -> bool:
+        """Whether this claim about this part is news, or the same thing restated.
+
+        News is: a claim nothing has been said about, a claim different from the
+        last one, a claim whose last saying is older than the repeat interval, or
+        a claim that stopped being restated for long enough to be forgotten and
+        has now returned. Everything else is the producer restating a level, and
+        the warden is not obliged to restate it to a human at the same rate.
+        """
+        now = self._monotonic()
+        last_seen = self._claim_last_seen_at.get(part_id)
+        went_quiet = (
+            last_seen is not None and now - last_seen > self._escalation_forget_seconds
+        )
+        if went_quiet:
+            self._escalated_claim.pop(part_id, None)
+            self._escalated_at.pop(part_id, None)
+        self._claim_last_seen_at[part_id] = now
+
+        if self._escalated_claim.get(part_id) != claim:
+            return True
+        said_at = self._escalated_at.get(part_id)
+        return said_at is None or now - said_at >= self._escalation_repeat_seconds
+
+    def _escalation(self, part_id, state, reason, kind) -> WardenDecision:
+        """One escalation decision, said to a human only when it is news."""
+        if self._is_worth_saying_again(part_id, (state, kind)):
+            self._escalated_claim[part_id] = (state, kind)
+            self._escalated_at[part_id] = self._monotonic()
+            self.standing.escalations += 1
+            return self._decision(part_id, state, None, True, reason)
+        self.standing.escalations_suppressed += 1
+        return self._decision(part_id, state, None, False, reason)
+
     def decide(self, fault) -> WardenDecision:
         self.standing.faults_seen += 1
         part_id = fault.part_id
 
         if fault.kind not in RESTARTABLE_FAULTS:
             self.standing.refused_unrecognised += 1
-            self.standing.escalations += 1
-            return self._decision(
-                part_id, UNRECOGNISED_FAULT, None, True,
+            return self._escalation(
+                part_id, UNRECOGNISED_FAULT, kind=fault.kind, reason=
                 f"{fault.kind} is not something a restart treats. Restarting is a "
                 f"treatment for a specific class of failure, not a general-purpose "
                 f"remedy, so this is escalated instead",
@@ -157,9 +236,8 @@ class UnattendedRunWarden:
 
         if part_id in self._holds_capital_state:
             self.standing.refused_capital_state += 1
-            self.standing.escalations += 1
-            return self._decision(
-                part_id, HOLDS_CAPITAL_STATE, None, True,
+            return self._escalation(
+                part_id, HOLDS_CAPITAL_STATE, kind=fault.kind, reason=
                 f"{part_id} holds capital-bearing state. Restarting it mid-position could "
                 f"lose track of a live position, so it is stopped and escalated rather "
                 f"than restarted",
@@ -167,9 +245,8 @@ class UnattendedRunWarden:
 
         if self.parts_restarting_now() >= self._system_wide_ceiling:
             self.standing.refused_system_wide += 1
-            self.standing.escalations += 1
-            return self._decision(
-                part_id, SYSTEM_WIDE_CAUSE, None, True,
+            return self._escalation(
+                part_id, SYSTEM_WIDE_CAUSE, kind=fault.kind, reason=
                 f"{self.parts_restarting_now()} part(s) are already restarting. That is "
                 f"one cause rather than many independent faults, and restarting into it "
                 f"makes the cause harder to see",
@@ -178,9 +255,8 @@ class UnattendedRunWarden:
         attempts = self.restarts_in_window(part_id)
         if attempts >= self._maximum_restarts:
             self.standing.given_up_on += 1
-            self.standing.escalations += 1
-            return self._decision(
-                part_id, GIVE_UP_AND_REPLACE, None, True,
+            return self._escalation(
+                part_id, GIVE_UP_AND_REPLACE, kind=fault.kind, reason=
                 f"{attempts} restart(s) in {self._within_seconds:.0f}s and it is still "
                 f"failing. A part that will not stay up needs changing, not restarting",
             )
@@ -235,6 +311,7 @@ def describe_warden(warden: UnattendedRunWarden) -> dict:
         "refused_holds_capital_state": warden.standing.refused_capital_state,
         "refused_unrecognised_fault": warden.standing.refused_unrecognised,
         "escalations": warden.standing.escalations,
+        "escalations_suppressed": warden.standing.escalations_suppressed,
         "restartable_faults": list(RESTARTABLE_FAULTS),
         "restarts_without_a_ceiling": False,
         "restarts_a_part_holding_capital_state": False,
@@ -293,6 +370,8 @@ def start_part(context) -> int:
         initial_backoff_seconds=context.number("warden_initial_backoff_seconds"),
         backoff_multiplier=context.number("warden_backoff_multiplier"),
         system_wide_ceiling=int(context.number("warden_system_wide_ceiling")),
+        escalation_repeat_seconds=context.number("warden_escalation_repeat_seconds"),
+        escalation_forget_seconds=context.number("warden_escalation_forget_seconds"),
     )
     for part in context.setting("capital_state_parts").value:
         warden.declare_holds_capital_state(str(part))

@@ -3840,6 +3840,16 @@ value = 5
 unit  = "parts restarting at once"
 note  = "operator, 2026-08-24: more than this many parts failing together is one cause, not many faults, and restarting into it hides the cause."
 
+[warden_escalation_repeat_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long a standing fault may go unsaid before unattended-run-warden says it to a human again. An escalation is an event and part-fault is a level: failing-part-detector restates every part's fault every level_refresh_interval_seconds (1.0 s), and the warden escalated each restatement. Measured on the live spine: ~300 escalations per part per five minutes, ~180 journal lines a second across every part, almost all of them reporting-no-error-at-all-over-a-long-run, which is simply true of a working part. An hour because a fault nobody has fixed does not become more actionable by being said again sooner, and because the journal is what build_trade_board.py streams end to end -- the storm is much of why that generator went from ten minutes to over an hour. Suppressed is not silenced: the count rides on the warden's own standing."
+
+[warden_escalation_forget_seconds]
+value = 10.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long a fault must stop being restated before the warden treats its return as news. failing-part-detector drops the key rather than publishing an all-clear, so absence is the only signal a cleared fault has. Ten seconds is ten refreshes at level_refresh_interval_seconds (1.0 s) -- the same reasoning and the same number as part_usage_reading_maximum_age_seconds, which also ages a level out only after ten chances to hear it restated. Must not exceed warden_escalation_repeat_seconds, or every restatement would look like a new fault and the storm would return in a new place; the warden refuses that configuration rather than running with it."
+
 [outage_silence_seconds]
 value = 60.0
 unit  = "seconds since a symbol's last print"

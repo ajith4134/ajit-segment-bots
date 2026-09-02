@@ -329,10 +329,18 @@ def test_an_unnamed_stage_is_refused():
 
 # ---- unattended-run-warden --------------------------------------------------
 
-def a_warden(maximum=3, window=60.0, ceiling=3, monotonic=None):
+# The operator's own values are in runtime.toml; a test states the ones it
+# exercises so what it is checking is visible in the test.
+ESCALATION_REPEAT_SECONDS = 3600.0
+ESCALATION_FORGET_SECONDS = 300.0
+
+
+def a_warden(maximum=3, window=60.0, ceiling=3, monotonic=None,
+             repeat=ESCALATION_REPEAT_SECONDS, forget=ESCALATION_FORGET_SECONDS):
     return UnattendedRunWarden(
         maximum_restarts=maximum, within_seconds=window, initial_backoff_seconds=1.0,
         backoff_multiplier=2.0, system_wide_ceiling=ceiling,
+        escalation_repeat_seconds=repeat, escalation_forget_seconds=forget,
         monotonic=monotonic or TickingClock(), now_ns=Clock(),
     )
 
@@ -1277,3 +1285,77 @@ def test_a_measured_shutdown_tier_still_halts_trading():
     decision = decider.decide()
     assert decision.halt.is_halted
     assert "not-enough-resource" in " ".join(decision.halt.causes)
+
+
+# ---- unattended-run-warden: an escalation is an event, the fault is a level ----
+
+def test_a_restated_fault_is_not_escalated_again():
+    """The storm measured on the live spine, 2026-09-02: ~180 journal lines a
+    second, ~300 escalations per part per five minutes.
+
+    `part-fault` is a level -- failing-part-detector restates each part's fault
+    on a refresh interval, which is right and is what makes a standing fault
+    knowable. The warden read every restatement as a new event and printed an
+    escalation for each, so a fault that never changed was escalated forever.
+    SUSPICIOUSLY_PERFECT is true of nearly every working part in this system,
+    which is why it was every part rather than a few.
+
+    A repeated escalation is worse than a quiet one: it buries the escalation
+    that means something, and it inflates the journal the trade board reads --
+    which is a large part of why that generator now takes over an hour.
+    """
+    clock = TickingClock()
+    subject = a_warden(monotonic=clock)
+    fault = a_fault(kind="producing-the-same-answer-every-time")
+
+    first = subject.decide(fault)
+    assert first.escalate, "the first sighting of a fault must reach a human"
+
+    for _ in range(50):
+        again = subject.decide(fault)
+        assert not again.escalate, "the same standing fault must not be re-escalated"
+    assert subject.standing.escalations_suppressed == 50
+
+
+def test_a_fault_that_changes_is_escalated_again():
+    """Suppression is per standing claim, not per part: a part whose fault kind
+    changes is saying something new."""
+    clock = TickingClock()
+    subject = a_warden(monotonic=clock)
+    assert subject.decide(a_fault(kind="producing-the-same-answer-every-time")).escalate
+    assert not subject.decide(a_fault(kind="producing-the-same-answer-every-time")).escalate
+
+    changed = subject.decide(a_fault(part_id="some-part", kind="a-kind-nobody-declared"))
+    assert changed.escalate, "a different fault is a different thing to say"
+
+
+def test_a_standing_fault_is_restated_to_a_human_eventually():
+    """Suppressed is not silenced. A fault that is still standing an hour later
+    must still be visible, or the quiet becomes its own failure -- the thing an
+    unattended run cannot afford."""
+    clock = TickingClock()
+    subject = a_warden(monotonic=clock)
+    fault = a_fault(kind="producing-the-same-answer-every-time")
+    assert subject.decide(fault).escalate
+    assert not subject.decide(fault).escalate
+
+    clock.now += ESCALATION_REPEAT_SECONDS + 1.0
+    assert subject.decide(fault).escalate, (
+        "a fault still standing after the repeat interval must be restated"
+    )
+
+
+def test_a_fault_that_stops_being_restated_escalates_again_when_it_returns():
+    """The only way a cleared fault can be known: the restatements stop.
+
+    failing-part-detector drops the key rather than publishing an all-clear, so
+    absence is the signal -- the same shape as every other level here.
+    """
+    clock = TickingClock()
+    subject = a_warden(monotonic=clock)
+    fault = a_fault(kind="producing-the-same-answer-every-time")
+    assert subject.decide(fault).escalate
+
+    clock.now += ESCALATION_FORGET_SECONDS + 1.0
+    returned = subject.decide(fault)
+    assert returned.escalate, "a fault that went away and came back is news again"
