@@ -620,3 +620,65 @@ def test_a_slow_consumer_of_one_type_cannot_silence_a_part_s_health(bus_root, re
     assert health_standing["refused_by_a_full_buffer"] == 0, (
         "health was refused against a send buffer another data type filled"
     )
+
+
+def test_what_health_calls_published_is_what_was_delivered(bus_root, real_trades):
+    """Measured 2026-09-02: it counted every refusal as a publish.
+
+    `messages_published` summed every outcome -- delivered, refused too large,
+    refused by a full buffer, withheld from a consumer that is off, skipped as
+    known off. So a part sending 500 messages to an address nobody had bound
+    reported 500 published and delivered none, and every board reading that
+    number showed it working. Rule 8 in the substrate: a display must show what
+    was measured, and delivery to nobody was never measured.
+
+    What did not get through is not dropped from the report -- it moves to
+    `messages_not_delivered`, where it is a different fact rather than a missing
+    one.
+    """
+    producer = open_bus(
+        wiring_for(
+            bus_root,
+            "venue-trade-stream-reader",
+            produces=("market-data",),
+            sends_to={"market-data": ("a-part-that-never-started",)},
+        )
+    )
+    try:
+        producer.publish("market-data", real_trades[:5])
+        published = dict(producer.messages_published())
+        not_delivered = dict(producer.messages_not_delivered())
+        outcomes = producer.standing()["outputs"]["market-data"]
+    finally:
+        producer.close()
+
+    assert outcomes["delivered"] == 0, "nobody bound that address; nothing can have arrived"
+    assert published.get("market-data", 0) == 0, (
+        f"health reported {published.get('market-data')} published to a part that never "
+        "started -- that is an assertion, not a measurement"
+    )
+    assert not_delivered["market-data"] == 5
+
+
+def test_what_was_delivered_is_reported_as_published(bus_root, real_trades):
+    consumer = open_bus(wiring_for(bus_root, "feed-gap-detector", consumes=("market-data",)))
+    producer = open_bus(
+        wiring_for(
+            bus_root,
+            "venue-trade-stream-reader",
+            produces=("market-data",),
+            sends_to={"market-data": ("feed-gap-detector",)},
+        )
+    )
+    try:
+        producer.publish("market-data", real_trades[:5])
+        received = consumer.reader("market-data")()
+        published = dict(producer.messages_published())
+        not_delivered = dict(producer.messages_not_delivered())
+    finally:
+        producer.close()
+        consumer.close()
+
+    assert len(received) == 5
+    assert published["market-data"] == 5
+    assert not_delivered == {}

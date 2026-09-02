@@ -30,10 +30,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.frame_splitting import batches_that_fit, frame_size_measured_by
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "price-level-sampler"
+# The wire this part's frames ride, named once so the splitter measures a frame
+# against the same type the publisher will send it as.
+FRAME_TYPE = "symbol-price-frame"
 
 PART_DECLARATION = PartDeclaration(
     part_id="price-level-sampler",
@@ -100,6 +104,7 @@ class PriceLevelSampler:
         self,
         cadence_seconds: float,
         maximum_symbols_per_frame: int,
+        maximum_frame_bytes: int,
         now_ns=time.time_ns,
     ) -> None:
         if not cadence_seconds > 0:
@@ -112,8 +117,14 @@ class PriceLevelSampler:
                 "a frame carries at least one symbol; a bound below that publishes nothing "
                 f"while looking like a working sampler. Got {maximum_symbols_per_frame!r}"
             )
+        if maximum_frame_bytes < 1:
+            raise ValueError(
+                "the byte bound is what the bus will actually carry, and must be positive; "
+                f"got {maximum_frame_bytes!r}"
+            )
         self._cadence_ns = int(cadence_seconds * 1e9)
         self._maximum_symbols = maximum_symbols_per_frame
+        self._maximum_frame_bytes = maximum_frame_bytes
         self._now_ns = now_ns
         self._levels: dict[str, dict[str, SymbolPriceLevel]] = {}
         self._last_published_at_ns: int | None = None
@@ -134,6 +145,20 @@ class PriceLevelSampler:
         self.standing.venues_tracked = len(self._levels)
         self.standing.symbols_tracked = sum(len(symbols) for symbols in self._levels.values())
 
+    def _frame_size_of(self, venue_id: str):
+        """What a batch of this venue's levels would weigh as a frame on the bus."""
+        return frame_size_measured_by(
+            data_type=FRAME_TYPE,
+            producer_part_id=PART_ID,
+            build_payload=lambda batch, part_number, of_parts: SymbolPriceFrame(
+                venue_id=venue_id,
+                levels=tuple(batch),
+                published_at_ns=part_number,
+                part_number=part_number,
+                of_parts=of_parts,
+            ),
+        )
+
     def frames_due(self, now_ns: int | None = None) -> tuple[SymbolPriceFrame, ...]:
         """The frames to publish at this moment, or none if the cadence has not elapsed.
 
@@ -152,10 +177,12 @@ class PriceLevelSampler:
             )
             if not levels:
                 continue
-            batches = [
-                levels[start : start + self._maximum_symbols]
-                for start in range(0, len(levels), self._maximum_symbols)
-            ]
+            batches = batches_that_fit(
+                levels,
+                most_items_per_batch=self._maximum_symbols,
+                maximum_bytes=self._maximum_frame_bytes,
+                size_of=self._frame_size_of(venue_id),
+            )
             if len(batches) > 1:
                 self.standing.frames_split += 1
             for number, batch in enumerate(batches, start=1):
@@ -237,6 +264,9 @@ def start_part(context) -> int:
 
     return run_price_level_sampler(
         sampler=PriceLevelSampler(
+            # The bus's own ceiling, not a second number that could drift from it:
+            # the frame is split against the size the thing carrying it enforces.
+            maximum_frame_bytes=int(context.number("maximum_message_bytes")),
             cadence_seconds=context.number("price_frame_cadence_seconds"),
             maximum_symbols_per_frame=int(context.number("price_frame_maximum_symbols")),
         ),

@@ -130,6 +130,28 @@ class InputStanding:
     highest_sequence_by_producer: dict[str, int] = field(default_factory=dict)
 
 
+def build_frame(
+    data_type: str,
+    producer_part_id: str,
+    sequence: int,
+    published_at_ns: int,
+    payload: object,
+) -> bytes:
+    """The datagram itself, with no opinion about whether it is too large.
+
+    Separate from `encode_frame` so a producer can ask what a payload would weigh
+    before committing to it. A part that splits its output has to know the real
+    size, and the only honest source of that is the encoder that will carry it --
+    a count of items is not a size, which is what a 2000-symbol cap on a frame
+    the bus refuses at 1521 symbols cost (2026-09-02).
+    """
+    body = pickle.dumps(
+        (data_type, producer_part_id, sequence, published_at_ns, payload),
+        protocol=pickle.HIGHEST_PROTOCOL,
+    )
+    return CODEC_VERSION.to_bytes(CODEC_VERSION_BYTES, CODEC_BYTE_ORDER) + body
+
+
 def encode_frame(
     data_type: str,
     producer_part_id: str,
@@ -139,11 +161,13 @@ def encode_frame(
     maximum_message_bytes: int,
 ) -> bytes:
     """One datagram: a version byte the reader checks before it trusts anything else."""
-    body = pickle.dumps(
-        (data_type, producer_part_id, sequence, published_at_ns, payload),
-        protocol=pickle.HIGHEST_PROTOCOL,
+    frame = build_frame(
+        data_type=data_type,
+        producer_part_id=producer_part_id,
+        sequence=sequence,
+        published_at_ns=published_at_ns,
+        payload=payload,
     )
-    frame = CODEC_VERSION.to_bytes(CODEC_VERSION_BYTES, CODEC_BYTE_ORDER) + body
     if len(frame) > maximum_message_bytes:
         raise MessageTooLarge(
             f"a '{data_type}' message from '{producer_part_id}' is {len(frame)} bytes and the bus "
@@ -538,14 +562,37 @@ class PartBus:
         )
 
     def messages_published(self) -> tuple[tuple[str, int], ...]:
-        """Per produced type, how many messages this part actually sent."""
-        sent = []
+        """Per produced type, how many messages actually reached a consumer.
+
+        Delivered, and nothing else. Until 2026-09-02 this summed every outcome --
+        delivered plus refused-too-large, refused-by-a-full-buffer, withheld and
+        skipped -- so a part sending 500 messages to an address nobody had bound
+        reported 500 published and delivered none, and every board reading the
+        number showed it working. A count of attempts is not a measurement of
+        delivery, and this is the field RL-072's "exchanging its declared data
+        with a real neighbour" is read from.
+        """
+        return tuple(
+            (data_type, standing.delivered)
+            for data_type, standing in sorted(self._publisher.standing.items())
+            if standing.delivered
+        )
+
+    def messages_not_delivered(self) -> tuple[tuple[str, int], ...]:
+        """Per produced type, how many sends did not reach a consumer.
+
+        The other half of the same fact, kept rather than dropped: a part whose
+        output is going nowhere and a part with nothing to say are different, and
+        only this number tells them apart. Why each one failed stays in
+        `standing()`, which is where a board goes for the reason.
+        """
+        counts = []
         for data_type, standing in sorted(self._publisher.standing.items()):
-            counts = standing.outcome_counts()
-            total = sum(counts.values())
-            if total:
-                sent.append((data_type, total))
-        return tuple(sent)
+            outcomes = standing.outcome_counts()
+            missed = sum(outcomes.values()) - outcomes["delivered"]
+            if missed:
+                counts.append((data_type, missed))
+        return tuple(counts)
 
     def standing(self) -> dict:
         """Everything the board needs about this part's wiring, all of it measured."""

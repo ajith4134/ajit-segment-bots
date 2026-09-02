@@ -23,10 +23,15 @@ from parts.market_data_feed.venue_quote_stream_reader import (
     QuoteReaderStanding,
     describe_quote_reading,
 )
+from runtime.bus import encode_frame
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.quote_assembly import QuoteAssembler
 from runtime.quote_frames import quote_levels_in
 from runtime.venues.adapter_registry import load_venue_adapter
+
+# The operator's own values, restated here so what the test exercises is visible.
+CONFIGURED_MAXIMUM_SYMBOLS = 2_000
+MAXIMUM_MESSAGE_BYTES = 131_072
 
 QUOTE_PARTS = {
     "venue-quote-stream-reader": "parts.market_data_feed.venue_quote_stream_reader",
@@ -66,7 +71,8 @@ def test_a_captured_stream_becomes_levels_a_decision_can_be_sized_against(
     venue_id, read_captured_payloads
 ):
     """The whole chain: venue bytes -> changes -> quotes -> frame -> level."""
-    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000)
+    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     for quote in quotes_from(venue_id, read_captured_payloads):
         sampler.observe_quote(quote)
 
@@ -84,7 +90,8 @@ def test_a_captured_stream_becomes_levels_a_decision_can_be_sized_against(
 def test_a_level_keeps_the_venue_s_moment_never_the_frame_s(read_captured_payloads):
     """The property the whole design turns on, checked on real timestamps."""
     quotes = quotes_from("binance-usdm", read_captured_payloads)
-    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000)
+    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     for quote in quotes:
         sampler.observe_quote(quote)
 
@@ -108,7 +115,8 @@ def test_a_crossed_quote_is_refused_rather_than_priced(read_captured_payloads):
     real = quotes_from("binance-usdm", read_captured_payloads)[0]
     crossed = replace(real, bid_price=real.ask_price + 1.0)
 
-    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000)
+    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     sampler.observe_quote(crossed)
 
     assert describe_quote_sampling(sampler)["crossed_quotes_refused"] == 1
@@ -117,7 +125,8 @@ def test_a_crossed_quote_is_refused_rather_than_priced(read_captured_payloads):
 
 
 def test_no_frame_is_published_before_the_cadence_has_elapsed(read_captured_payloads):
-    sampler = QuoteLevelSampler(cadence_seconds=1.0, maximum_symbols_per_frame=2000)
+    sampler = QuoteLevelSampler(cadence_seconds=1.0, maximum_symbols_per_frame=2000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     for quote in quotes_from("binance-usdm", read_captured_payloads):
         sampler.observe_quote(quote)
 
@@ -131,7 +140,8 @@ def test_a_universe_too_large_for_one_frame_is_split_and_says_so(read_captured_p
     quotes = quotes_from("binance-usdm", read_captured_payloads)
     assert len(quotes) > 4, "this fixture is too small to test splitting"
 
-    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2)
+    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     for quote in quotes:
         sampler.observe_quote(quote)
 
@@ -145,19 +155,22 @@ def test_a_universe_too_large_for_one_frame_is_split_and_says_so(read_captured_p
 
 
 def test_the_sampler_reports_itself_under_its_own_part_id(read_captured_payloads):
-    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000)
+    sampler = QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=2000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
     assert describe_quote_sampling(sampler)["part_id"] == SAMPLER_PART_ID
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0])
 def test_a_cadence_that_would_never_publish_is_refused(bad):
     with pytest.raises(ValueError):
-        QuoteLevelSampler(cadence_seconds=bad, maximum_symbols_per_frame=10)
+        QuoteLevelSampler(cadence_seconds=bad, maximum_symbols_per_frame=10,
+            maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
 
 
 def test_a_frame_bound_below_one_symbol_is_refused():
     with pytest.raises(ValueError):
-        QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=0)
+        QuoteLevelSampler(cadence_seconds=0.25, maximum_symbols_per_frame=0,
+            maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES)
 
 
 # ---- venue-quote-stream-reader ---------------------------------------------------
@@ -207,3 +220,53 @@ class _StubReader:
             quotes_published=published,
             assembler={"symbols_held": 6, "changes_naming_no_side": 1},
         )
+
+
+class _Quote:
+    """A merged quote, as this part reads it."""
+
+    def __init__(self, symbol, venue_id="binance-usdm", at_ns=1_000_000_000):
+        self.venue_id = venue_id
+        self.symbol = symbol
+        self.bid_price = 1.0
+        self.bid_quantity = 2.0
+        self.ask_price = 3.0
+        self.ask_quantity = 4.0
+        self.venue_time_ns = at_ns
+
+
+def test_every_quote_frame_fits_the_bus_at_the_configured_cap():
+    """The cap is 480 symbols past the size at which the bus refuses the frame.
+
+    Measured 2026-09-02: a quote level encodes to about 86 bytes against a price
+    level's 53, and both parts read the same `price_frame_maximum_symbols` = 2000.
+    So one number cannot bound both -- at the cap this frame is 172,280 bytes
+    against the 131,072-byte ceiling, and `encode_frame` refuses it whole rather
+    than splitting it. The part goes on ticking and publishes nothing, and
+    `messages_published` counts every refusal as a publish, so no board shows it.
+
+    A count cannot bound a size. The frame is measured with the bus's own encoder.
+    """
+    sampler = QuoteLevelSampler(
+        cadence_seconds=0.25,
+        maximum_symbols_per_frame=CONFIGURED_MAXIMUM_SYMBOLS,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
+    for index in range(CONFIGURED_MAXIMUM_SYMBOLS):
+        sampler.observe_quote(_Quote(f"SYMBOL{index:05d}USDT"))
+
+    frames = sampler.frames_due(now_ns=2**62)
+
+    assert frames, "the sampler saw the whole universe and must publish it"
+    for number, frame in enumerate(frames, start=1):
+        encode_frame(
+            data_type="quote-frame",
+            producer_part_id=SAMPLER_PART_ID,
+            sequence=number,
+            published_at_ns=2**62,
+            payload=frame,
+            maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+        )
+    assert sum(len(frame.levels) for frame in frames) == CONFIGURED_MAXIMUM_SYMBOLS, (
+        "splitting must not lose a symbol"
+    )

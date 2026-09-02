@@ -22,10 +22,14 @@ from parts.market_data_feed.price_level_sampler import (
     PriceLevelSampler,
     describe_sampling,
 )
+from runtime.bus import encode_frame
 from runtime.part_declaration import load_declaration_from_blueprint
 
 SECOND_NS = 1_000_000_000
 VENUE = "binance-usdm"
+# The operator's own values, restated here so what the test exercises is visible.
+CONFIGURED_MAXIMUM_SYMBOLS = 2_000
+MAXIMUM_MESSAGE_BYTES = 131_072
 
 
 class Trade:
@@ -42,6 +46,7 @@ def a_sampler(cadence=0.25, maximum_symbols_per_frame=2_000):
     return PriceLevelSampler(
         cadence_seconds=cadence,
         maximum_symbols_per_frame=maximum_symbols_per_frame,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
 
 
@@ -197,3 +202,37 @@ def test_what_it_says_about_itself_is_countable():
     assert described["symbols_tracked"] == 1
     assert described["frames_published"] == 1
     assert described["trades_observed"] == 1
+
+
+def test_every_frame_fits_the_bus_at_the_configured_cap():
+    """A count cap cannot know how large a frame is, measured 2026-09-02.
+
+    `price_frame_maximum_symbols` is 2000 and is read by this part and by
+    quote-level-sampler alike, but a price level encodes to about 53 bytes and a
+    quote level to 86 -- so one number cannot bound both, and for the quote frame
+    2000 symbols is 172,280 bytes against a 131,072-byte ceiling. A frame over
+    the ceiling is not split, it is refused whole by `encode_frame`, and the part
+    goes on ticking while publishing nothing.
+
+    The bound that matters is the one the bus actually enforces, so the frame is
+    measured with the bus's own encoder rather than counted.
+    """
+    subject = a_sampler(maximum_symbols_per_frame=CONFIGURED_MAXIMUM_SYMBOLS)
+    for index in range(CONFIGURED_MAXIMUM_SYMBOLS):
+        subject.observe_trade(Trade(f"SYMBOL{index:05d}USDT", 1.0 + index, SECOND_NS))
+
+    frames = subject.frames_due(now_ns=10 * SECOND_NS)
+
+    assert frames, "the sampler saw the whole universe and must publish it"
+    for number, frame in enumerate(frames, start=1):
+        encode_frame(
+            data_type="price-frame",
+            producer_part_id=PART_ID,
+            sequence=number,
+            published_at_ns=10 * SECOND_NS,
+            payload=frame,
+            maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+        )
+    assert sum(len(frame.levels) for frame in frames) == CONFIGURED_MAXIMUM_SYMBOLS, (
+        "splitting must not lose a symbol"
+    )

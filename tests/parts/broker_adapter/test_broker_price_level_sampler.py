@@ -3,6 +3,9 @@ from parts.broker_adapter.broker_price_level_sampler import (
 )
 from runtime.brokers.broker_adapter import LtpUpdate
 
+# The operator's own ceiling, restated here so what the test exercises is visible.
+MAXIMUM_MESSAGE_BYTES = 131_072
+
 
 def _ltp(instrument_key, price, ltt_ms=1_740_000_000_000):
     return LtpUpdate(
@@ -15,6 +18,7 @@ def _ltp(instrument_key, price, ltt_ms=1_740_000_000_000):
 def test_the_first_frame_publishes_immediately_but_the_next_waits_for_cadence():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=1000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     sampler.observe_ltp(_ltp("NSE_EQ|A", 100.0))
     first = sampler.frames_due(now_ns=0)
@@ -27,6 +31,7 @@ def test_the_first_frame_publishes_immediately_but_the_next_waits_for_cadence():
 def test_a_frame_carries_every_instrument_s_latest_price():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=1000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     sampler.observe_ltp(_ltp("NSE_EQ|A", 100.0))
     sampler.observe_ltp(_ltp("NSE_EQ|B", 200.0))
@@ -42,6 +47,7 @@ def test_a_frame_carries_every_instrument_s_latest_price():
 def test_a_level_carries_the_broker_s_own_print_time_not_publication_time():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=1000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     sampler.observe_ltp(_ltp("NSE_EQ|A", 100.0, ltt_ms=1_740_000_000_000))
     frame = sampler.frames_due(now_ns=5_000_000_000)[0]
@@ -53,6 +59,7 @@ def test_a_level_carries_the_broker_s_own_print_time_not_publication_time():
 def test_a_frame_larger_than_the_maximum_is_split():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=2,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     for i in range(5):
         sampler.observe_ltp(_ltp(f"NSE_EQ|{i}", float(i + 1)))
@@ -68,6 +75,7 @@ def test_a_frame_larger_than_the_maximum_is_split():
 def test_nothing_observed_publishes_no_frame():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=1000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     assert sampler.frames_due(now_ns=5_000_000_000) == ()
 
@@ -75,6 +83,7 @@ def test_nothing_observed_publishes_no_frame():
 def test_zero_or_negative_price_is_not_observed():
     sampler = BrokerPriceLevelSampler(
         broker_id="upstox", cadence_seconds=1.0, maximum_symbols_per_frame=1000,
+        maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
     )
     sampler.observe_ltp(_ltp("NSE_EQ|A", 0.0))
     sampler.observe_ltp(_ltp("NSE_EQ|B", -5.0))
@@ -85,4 +94,7 @@ def test_cadence_must_be_positive():
     import pytest
 
     with pytest.raises(ValueError):
-        BrokerPriceLevelSampler(broker_id="upstox", cadence_seconds=0.0, maximum_symbols_per_frame=10)
+        BrokerPriceLevelSampler(
+            broker_id="upstox", cadence_seconds=0.0, maximum_symbols_per_frame=10,
+            maximum_frame_bytes=MAXIMUM_MESSAGE_BYTES,
+        )
