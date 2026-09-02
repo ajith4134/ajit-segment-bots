@@ -36,17 +36,22 @@
       "approved": true,
       "consumes": [
         "bot-maturity",
+        "bot-scorecard",
         "bounded-order",
         "capital-allotment",
+        "closed-trade",
         "consolidated-price",
         "cost-estimate",
         "delayed-order-request",
+        "drawdown-episode",
         "execution-schedule",
         "feed-jump",
         "fill",
         "fill-price-estimate",
+        "instrument-restriction",
         "liquidation-price",
         "market-data",
+        "market-session-state",
         "money-mode",
         "order-book-snapshot",
         "order-request",
@@ -70,9 +75,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -90,9 +95,13 @@
         "consolidated-price",
         "cross-segment-signal",
         "implied-vol-surface",
+        "instrument-restriction",
         "liquidity-grade",
         "market-data",
         "market-regime",
+        "market-session-state",
+        "news-impact-forecast",
+        "news-item",
         "opportunity-instruction",
         "options-flow",
         "order-book-snapshot",
@@ -105,7 +114,6 @@
         "symbol-quote-frame",
         "symbol-universe",
         "training-label",
-        "venue-announcement",
         "volatility-forecast",
         "watch-condition"
       ],
@@ -122,15 +130,15 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots — bull, bear and profit tailgating — each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
+      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots \u2014 bull, bear and profit tailgating \u2014 each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -195,6 +203,7 @@
         "model-version",
         "mutated-hypothesis",
         "near-miss-episode",
+        "news-item",
         "opportunity-instruction",
         "order-book-snapshot",
         "outcome-significance",
@@ -209,7 +218,6 @@
         "trade-intent",
         "trade-narrative",
         "validated-llm-output",
-        "venue-announcement",
         "verified-snapshot",
         "web-idea"
       ],
@@ -226,7 +234,6 @@
         "forgetting-report",
         "llm-request",
         "market-anomaly",
-        "market-event",
         "novel-idea",
         "part-health",
         "refutation-verdict",
@@ -239,9 +246,9 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -265,6 +272,7 @@
         "decision-quality-score",
         "directional-opinion",
         "duty-cycle",
+        "entry-candidate",
         "exit-counterfactual",
         "exit-quality",
         "feature-attribution",
@@ -275,6 +283,8 @@
         "market-regime",
         "model-drift-alert",
         "model-version",
+        "news-impact-forecast",
+        "online-model-score",
         "opportunity-instruction",
         "outcome-significance",
         "pair-verdict",
@@ -283,6 +293,7 @@
         "refutation-verdict",
         "retrain-request",
         "shortfall-breakdown",
+        "symbol-price-frame",
         "trade-cluster",
         "trade-episode",
         "trade-intent",
@@ -296,9 +307,11 @@
         "bot-regret",
         "bot-scorecard",
         "champion-choice",
+        "excursion-profile",
         "feature-attribution",
         "feature-reliability",
         "forecast-trust",
+        "horizon-profile",
         "instruction-scorecard",
         "learning-reward",
         "model-version",
@@ -313,9 +326,9 @@
       "scope_origin": "user",
       "shape": "peer",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -348,6 +361,8 @@
         "market-regime",
         "mutated-hypothesis",
         "near-miss-episode",
+        "news-impact-forecast",
+        "news-item",
         "novel-idea",
         "novelty-score",
         "pnl-attribution",
@@ -381,9 +396,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -404,7 +419,9 @@
         "knowledge-link",
         "market-data",
         "market-regime",
+        "news-reaction-label",
         "opportunity-instruction",
+        "order-book-snapshot",
         "playbook-rule",
         "recalled-episode",
         "regime-transition-flag",
@@ -435,9 +452,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -448,7 +465,9 @@
       "approved": true,
       "consumes": [
         "accelerator-slot",
+        "candle",
         "champion-choice",
+        "corporate-action",
         "finetuned-model",
         "flow-entropy",
         "forecast-accuracy",
@@ -465,6 +484,9 @@
         "price-forecast",
         "retrain-request",
         "sample-weight",
+        "symbol-price-frame",
+        "symbol-universe",
+        "venue-premium",
         "vol-feature-set",
         "volatility-forecast"
       ],
@@ -490,9 +512,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -502,7 +524,6 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "broker-instrument-listing",
         "copy-latency",
         "external-position",
         "research-finding",
@@ -526,16 +547,15 @@
         "source-document",
         "strategy-gap",
         "tracked-trader",
-        "venue-announcement",
         "verified-record"
       ],
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -576,7 +596,7 @@
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
-      "planned_extension": "Becomes a thinker in its own right once the rest is running — reasoning about the market rather than only answering other blocks' questions.",
+      "planned_extension": "Becomes a thinker in its own right once the rest is running \u2014 reasoning about the market rather than only answering other blocks' questions.",
       "contract_recomputed": {
         "on": "2026-08-20",
         "from": "its parts",
@@ -710,14 +730,17 @@
         "funding-forecast",
         "human-override",
         "instrument-choice",
+        "instrument-restriction",
         "leverage-ceiling",
         "leverage-choice",
         "liquidation-map",
         "liquidation-price",
         "locked-allocation",
+        "main-account-setting",
         "market-anomaly",
-        "market-data",
         "market-event",
+        "money-mode",
+        "news-impact-forecast",
         "order-book-snapshot",
         "policy-decision",
         "position",
@@ -727,8 +750,10 @@
         "size-hint",
         "sized-order",
         "slippage-profile",
+        "stop-adjustment",
         "stop-audit",
         "stop-target-plan",
+        "symbol-price-frame",
         "symbol-profile",
         "tail-exit-plan",
         "timed-intent",
@@ -737,7 +762,6 @@
         "trade-intent",
         "trading-halt",
         "turbulence-index",
-        "venue-announcement",
         "volatility-forecast"
       ],
       "produces": [
@@ -746,6 +770,7 @@
         "execution-schedule",
         "leverage-ceiling",
         "leverage-choice",
+        "order-request",
         "part-health",
         "risk-limit",
         "sized-order",
@@ -757,9 +782,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -780,14 +805,18 @@
         "knowledge-snapshot",
         "market-data",
         "modification-record",
+        "news-impact-forecast",
+        "news-item",
         "opportunity-instruction",
         "order-request",
         "peak-excursion",
+        "pnl-attribution",
         "policy-decision",
         "position",
         "replay-mismatch",
         "research-finding",
         "skill-usefulness",
+        "stop-adjustment",
         "switch-record",
         "trade-intent"
       ],
@@ -801,9 +830,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -817,6 +846,7 @@
         "bounded-order",
         "capital-allotment",
         "closed-trade",
+        "corporate-action",
         "cost-basis",
         "fill",
         "funding-settlement",
@@ -825,6 +855,8 @@
         "paper-currency-rate",
         "peak-excursion",
         "position",
+        "stamped-order",
+        "symbol-price-frame",
         "venue-position-report"
       ],
       "produces": [
@@ -841,9 +873,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -874,6 +906,7 @@
         "leverage-ceiling",
         "main-account-setting",
         "market-anomaly",
+        "news-source-standing",
         "part-fault",
         "part-health",
         "probe-result",
@@ -899,9 +932,9 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -912,13 +945,16 @@
       "approved": true,
       "consumes": [
         "cancel-decision",
+        "instrument-restriction",
         "key-standing",
         "market-data",
+        "market-session-state",
         "order-book-snapshot",
         "order-reject-reason",
         "order-reprice",
         "order-request",
         "raw-venue-order-status",
+        "symbol-price-frame",
         "venue-rate-budget",
         "venue-standing"
       ],
@@ -938,9 +974,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -958,6 +994,7 @@
         "bot-weight",
         "bull-calibrated-conviction",
         "bull-entry-timing",
+        "closed-trade",
         "competence-map",
         "conflict-ruling",
         "counter-argument",
@@ -969,11 +1006,16 @@
         "forecast-bias",
         "forecast-trust",
         "knowledge-snapshot",
-        "market-data",
+        "market-event",
         "market-regime",
+        "market-session-state",
+        "news-item",
+        "objection-outcome",
         "premortem-note",
         "regime-break-alert",
         "regime-memory",
+        "strategy-review",
+        "symbol-price-frame",
         "tail-calibrated-conviction",
         "trade-episode",
         "trade-intent",
@@ -986,12 +1028,15 @@
         "conflict-ruling",
         "counter-argument",
         "decision-rationale",
+        "directional-opinion",
         "forecast-bias",
         "llm-request",
+        "objection-outcome",
         "part-health",
         "premortem-note",
         "reflection-note",
         "size-hint",
+        "strategy-review",
         "timed-intent",
         "trade-intent"
       ],
@@ -1000,15 +1045,15 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
       "id": "closed-trade-decoding",
       "name": "Closed trade decoding",
-      "summary": "Decodes finished trades — winners and losers both — into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
+      "summary": "Decodes finished trades \u2014 winners and losers both \u2014 into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1027,8 +1072,11 @@
         "funding-settlement",
         "journal-entry",
         "market-data",
+        "market-event",
         "market-regime",
         "near-miss-episode",
+        "news-impact-forecast",
+        "news-item",
         "order-book-snapshot",
         "outcome-significance",
         "peak-excursion",
@@ -1039,6 +1087,7 @@
         "shortfall-breakdown",
         "stop-audit",
         "stop-target-plan",
+        "symbol-price-frame",
         "symbol-profile",
         "tail-exit-plan",
         "trade-cluster",
@@ -1076,9 +1125,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -1149,12 +1198,14 @@
         "feed-gap",
         "folded-circuit-map",
         "human-override",
+        "instrument-restriction",
         "journal-entry",
         "llm-quota-state",
         "llm-spend-state",
         "market-anomaly",
-        "market-data",
+        "market-session-state",
         "modification-record",
+        "money-mode",
         "outage-state",
         "part-fault",
         "part-health",
@@ -1163,6 +1214,7 @@
         "regime-break-alert",
         "research-finding",
         "survival-tier",
+        "symbol-price-frame",
         "trade-intent",
         "upstream-change",
         "validated-llm-output"
@@ -1192,9 +1244,9 @@
       "scope_origin": "user",
       "open": "The user gave four jobs and said more is coming: 'andmore i will explann next'. This block is deliberately unfinished, not complete.",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -1207,10 +1259,12 @@
         "backtest-result",
         "backtest-run",
         "backtest-verdict",
+        "candle",
         "cost-estimate",
         "falsification-criterion",
         "fill-sequence",
         "fillable-size",
+        "historical-news-window",
         "historical-window",
         "market-data",
         "opportunity-instruction",
@@ -1239,9 +1293,9 @@
       "scope": "per-segment",
       "scope_origin": "proposed",
       "contract_recomputed": {
-        "on": "2026-08-20",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       }
     },
     {
@@ -1272,6 +1326,7 @@
         "learning-reward",
         "market-data",
         "market-regime",
+        "news-impact-forecast",
         "order-book-snapshot",
         "playbook-rule",
         "position",
@@ -1279,6 +1334,7 @@
         "regime-break-alert",
         "retrain-request",
         "sample-weight",
+        "sentiment-reading",
         "stop-audit",
         "symbol-price-frame",
         "symbol-profile",
@@ -1311,9 +1367,9 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       },
       "peer_group": "segment-bots"
     },
@@ -1345,6 +1401,7 @@
         "learning-reward",
         "market-data",
         "market-regime",
+        "news-impact-forecast",
         "order-book-snapshot",
         "playbook-rule",
         "position",
@@ -1352,6 +1409,7 @@
         "regime-break-alert",
         "retrain-request",
         "sample-weight",
+        "sentiment-reading",
         "stop-audit",
         "symbol-price-frame",
         "symbol-profile",
@@ -1384,9 +1442,9 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       },
       "peer_group": "segment-bots"
     },
@@ -1412,6 +1470,7 @@
         "learning-reward",
         "market-data",
         "move-remaining",
+        "news-impact-forecast",
         "order-book-snapshot",
         "pair-verdict",
         "peak-excursion",
@@ -1446,16 +1505,16 @@
         "RL-047"
       ],
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
-        "origin": "proposed"
+        "origin": "user"
       },
       "peer_group": "segment-bots"
     },
     {
       "id": "capital-desk",
       "name": "Capital desk",
-      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes — never applies — a rebalance.",
+      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes \u2014 never applies \u2014 a rebalance.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1604,6 +1663,69 @@
         "from": "its parts",
         "origin": "proposed"
       }
+    },
+    {
+      "id": "stock-market-news-data",
+      "name": "Stock market news data",
+      "summary": "Everything the Indian market says about itself, divided by segment. One global block: each source is read once, each item is tagged with the segments it belongs to (index options, stock options, index futures, stock futures, cash equity, commodities), each segment bot filters its own tag. Three channels that never share a wire -- hard facts the executor refuses on (ban, halt, corporate action, session), scheduled events, plus a learned news signal.",
+      "origin": "user",
+      "approved": true,
+      "given": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "consumes": [
+        "broker-instrument-listing",
+        "corporate-action-report",
+        "distinct-news-item",
+        "historical-news-window",
+        "instrument-restriction-report",
+        "market-event",
+        "news-category-tagging",
+        "news-credibility-rating",
+        "news-item",
+        "news-latency-reading",
+        "news-novelty-rating",
+        "news-reaction-label",
+        "news-search-request",
+        "news-source-standing",
+        "news-surprise-reading",
+        "news-symbol-tagging",
+        "raw-news-item",
+        "sentiment-reading",
+        "structured-news-item",
+        "symbol-price-frame",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "corporate-action",
+        "corporate-action-report",
+        "distinct-news-item",
+        "historical-news-window",
+        "instrument-restriction",
+        "instrument-restriction-report",
+        "llm-request",
+        "market-event",
+        "market-session-state",
+        "news-category-tagging",
+        "news-credibility-rating",
+        "news-impact-forecast",
+        "news-item",
+        "news-latency-reading",
+        "news-novelty-rating",
+        "news-reaction-label",
+        "news-search-request",
+        "news-source-standing",
+        "news-surprise-reading",
+        "news-symbol-tagging",
+        "part-health",
+        "raw-news-item",
+        "sentiment-reading",
+        "structured-news-item"
+      ],
+      "contract_recomputed": {
+        "on": "2026-09-02",
+        "from": "its parts",
+        "origin": "user"
+      }
     }
   ],
   "state_vocabulary": [
@@ -1629,7 +1751,7 @@
     {
       "id": "sized-order",
       "name": "sized order",
-      "description": "A trade intent with size, leverage and stops applied — or a refusal, which is also an answer."
+      "description": "A trade intent with size, leverage and stops applied \u2014 or a refusal, which is also an answer."
     },
     {
       "id": "order-request",
@@ -2516,7 +2638,7 @@
     {
       "id": "turbulence-index",
       "name": "turbulence index",
-      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance — is everything moving together abnormally."
+      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance \u2014 is everything moving together abnormally."
     },
     {
       "id": "verified-snapshot",
@@ -2697,11 +2819,6 @@
       "id": "copy-latency",
       "name": "copy latency",
       "description": "How stale an external position is by the time this system sees it, measured."
-    },
-    {
-      "id": "venue-announcement",
-      "name": "venue announcement",
-      "description": "A listing, delisting, maintenance window or rule change a venue published."
     },
     {
       "id": "onchain-flow",
@@ -3284,6 +3401,106 @@
       "id": "broker-price-frame",
       "name": "broker price frame",
       "description": "Every tracked instrument's latest last-traded price on one broker, at one moment, published on a cadence rather than per tick. Direct analogue of symbol-price-frame -- kept as its own type because reusing that id would auto-wire this into every existing crypto consumer of it via R-01 (docs/proposals/broker-price-quote-samplers.md)."
+    },
+    {
+      "id": "raw-news-item",
+      "name": "raw news item",
+      "description": "One item exactly as its source delivered it: source id, url, title, body, published_at_ns as the source stamped it, observed_at_ns as this system first saw it. Both times, always -- replaying on publish time alone hands a backtest information the live bot did not have."
+    },
+    {
+      "id": "distinct-news-item",
+      "name": "distinct news item",
+      "description": "One story, with the same story from every other outlet collapsed into it. Carries the earliest publish time seen, which is the tradable one."
+    },
+    {
+      "id": "structured-news-item",
+      "name": "structured news item",
+      "description": "One news item read into its schema-checked fields by the LLM foundation: what happened, to whom, the figures stated, the claim's tense."
+    },
+    {
+      "id": "news-symbol-tagging",
+      "name": "news symbol tagging",
+      "description": "Which instruments a news item names, resolved against the broker's own instrument listing rather than a hardcoded alias table."
+    },
+    {
+      "id": "news-category-tagging",
+      "name": "news category tagging",
+      "description": "What kind of news an item is: results, corporate action, regulatory, macro, halt, analyst, rumour or block deal. Routing depends on it."
+    },
+    {
+      "id": "news-credibility-rating",
+      "name": "news credibility rating",
+      "description": "How far a source has earned trust, learned from whether its items were later confirmed by an official filing."
+    },
+    {
+      "id": "news-novelty-rating",
+      "name": "news novelty rating",
+      "description": "Whether an item is new information or the same story rewritten and already priced. Distinct from deduplication, which removes exact copies."
+    },
+    {
+      "id": "news-surprise-reading",
+      "name": "news surprise reading",
+      "description": "How far an outcome landed from what was scheduled or expected. A results print on its calendar date is not news; a beat is."
+    },
+    {
+      "id": "news-item",
+      "name": "news item",
+      "description": "The published news fact: the structured item, the instruments it names, the segments it belongs to, its category, its source's credibility. What every consumer outside the news block reads."
+    },
+    {
+      "id": "news-impact-forecast",
+      "name": "news impact forecast",
+      "description": "For one item on one symbol: direction, how far price is expected to move, over what horizon, with what confidence. Learned from realised reaction."
+    },
+    {
+      "id": "news-reaction-label",
+      "name": "news reaction label",
+      "description": "What price actually did after a news item, per horizon. The training label the sentiment model plus the impact forecaster learn from."
+    },
+    {
+      "id": "news-latency-reading",
+      "name": "news latency reading",
+      "description": "Observed time minus published time for one item. Says whether this system is reacting to news or chasing it, and discounts a late item's forecast."
+    },
+    {
+      "id": "instrument-restriction-report",
+      "name": "instrument restriction report",
+      "description": "One source's statement that an instrument is restricted: F&O ban, ASM, GSM, circuit or halt, with the window it claims."
+    },
+    {
+      "id": "instrument-restriction",
+      "name": "instrument restriction",
+      "description": "Whether an instrument may be traded right now, merged from every source that reported one, each claim expiring on its own age bound. A level."
+    },
+    {
+      "id": "corporate-action-report",
+      "name": "corporate action report",
+      "description": "A corporate action as the exchange published it: split, bonus, dividend, rights or merger, with its ratio plus its ex and record dates."
+    },
+    {
+      "id": "corporate-action",
+      "name": "corporate action",
+      "description": "The price adjustment factor a corporate action implies, with the date it takes effect. Unapplied, a 1:1 bonus is a -50% candle every detector fires on."
+    },
+    {
+      "id": "market-session-state",
+      "name": "market session state",
+      "description": "Which trading session the market is in right now: open, closed, holiday, expiry day, special session. A level."
+    },
+    {
+      "id": "news-source-standing",
+      "name": "news source standing",
+      "description": "Whether each news source is still delivering, when it last did, how stale it is. A dead feed reads exactly like a quiet news day unless measured."
+    },
+    {
+      "id": "news-search-request",
+      "name": "news search request",
+      "description": "A question asked of the open web: why did this symbol move when no known item explains it."
+    },
+    {
+      "id": "historical-news-window",
+      "name": "historical news window",
+      "description": "Taped news over a replay window, each item carrying the time this system observed it so a replay cannot read tomorrow's paper today."
     }
   ],
   "features": [
@@ -3293,7 +3510,8 @@
       "role": "shape live market data into the fixed candlestick window the model expects",
       "category": "prediction",
       "consumes": [
-        "candle"
+        "candle",
+        "corporate-action"
       ],
       "produces": [
         "kline-window",
@@ -3308,7 +3526,13 @@
       "origin": "proposed",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "kronos-forecaster",
@@ -3753,29 +3977,30 @@
       "role": "write the opportunity instruction the scanner will watch for",
       "category": "hypothesis",
       "consumes": [
+        "candidate-formula",
+        "cross-segment-lesson",
         "decoded-trade-instruction",
         "expectancy-breakdown",
-        "recalled-episode",
-        "semantic-fact",
-        "loaded-skill-section",
-        "strategy-gap",
-        "feature-reliability",
-        "regime-break-alert",
-        "novel-idea",
-        "cross-segment-lesson",
-        "inverted-hypothesis",
-        "hypothesis-priority",
-        "winner-pattern",
-        "reflection-note",
-        "candidate-formula",
-        "mutated-hypothesis",
         "falsification-criterion",
-        "knowledge-link",
-        "regime-memory",
+        "feature-reliability",
         "horizon-profile",
+        "hypothesis-priority",
+        "hypothesis-regime-tag",
+        "inverted-hypothesis",
+        "knowledge-link",
+        "loaded-skill-section",
+        "mutated-hypothesis",
+        "news-impact-forecast",
+        "novel-idea",
         "novelty-score",
+        "recalled-episode",
+        "reflection-note",
+        "regime-break-alert",
+        "regime-memory",
         "required-sample-size",
-        "hypothesis-regime-tag"
+        "semantic-fact",
+        "strategy-gap",
+        "winner-pattern"
       ],
       "produces": [
         "opportunity-instruction",
@@ -3805,7 +4030,13 @@
       ],
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "ccxt-venue-reader",
@@ -3838,11 +4069,13 @@
       "role": "place each order on its venue through one unified interface",
       "category": "execution-venue-adapter",
       "consumes": [
-        "order-request",
-        "venue-rate-budget",
         "cancel-decision",
+        "instrument-restriction",
+        "key-standing",
+        "market-session-state",
         "order-reprice",
-        "key-standing"
+        "order-request",
+        "venue-rate-budget"
       ],
       "produces": [
         "raw-venue-order-status",
@@ -3869,7 +4102,13 @@
       ],
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "ablation-harness",
@@ -4857,11 +5096,13 @@
       "consumes": [
         "autonomy-envelope",
         "exposure-view",
+        "human-override",
+        "instrument-restriction",
+        "market-anomaly",
+        "market-session-state",
         "outage-state",
         "regime-break-alert",
-        "survival-tier",
-        "human-override",
-        "market-anomaly"
+        "survival-tier"
       ],
       "produces": [
         "trading-halt",
@@ -4889,7 +5130,13 @@
       ],
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "failing-part-detector",
@@ -5344,12 +5591,13 @@
       "role": "replay one opportunity instruction over recorded history",
       "category": "backtesting",
       "consumes": [
-        "opportunity-instruction",
-        "walk-forward-split",
         "cost-estimate",
         "fill-sequence",
         "fillable-size",
-        "historical-window"
+        "historical-news-window",
+        "historical-window",
+        "opportunity-instruction",
+        "walk-forward-split"
       ],
       "produces": [
         "backtest-run",
@@ -5365,7 +5613,13 @@
       "note": "The engine. It takes what hypothesis wrote and runs it against the past, charging every fill. Five of the ten repositories the user was shown are backtesting frameworks -- vectorbt for sweeping thousands of parameter sets, NautilusTrader for an event-driven core built for correctness -- so this part has strong prior art and is a candidate for a dependency rather than a rewrite.",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "lookahead-auditor",
@@ -5473,9 +5727,11 @@
       "category": "paper-live-trading",
       "consumes": [
         "bounded-order",
+        "execution-schedule",
+        "instrument-restriction",
+        "market-session-state",
         "money-mode",
-        "stamped-order",
-        "execution-schedule"
+        "stamped-order"
       ],
       "produces": [
         "order-request",
@@ -5491,7 +5747,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "stop-order-manager",
@@ -5525,14 +5787,15 @@
       "role": "fill a paper order at the live price with the measured cost applied",
       "category": "paper-live-trading",
       "consumes": [
-        "order-request",
-        "market-data",
+        "consolidated-price",
         "cost-estimate",
-        "money-mode",
         "delayed-order-request",
-        "fill-price-estimate",
         "feed-jump",
-        "consolidated-price"
+        "fill-price-estimate",
+        "market-data",
+        "market-session-state",
+        "money-mode",
+        "order-request"
       ],
       "produces": [
         "fill",
@@ -5548,7 +5811,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "paper-account-keeper",
@@ -5637,15 +5906,17 @@
       "role": "test every symbol in the universe against every watch condition on every tick",
       "category": "opportunity-scanner",
       "consumes": [
+        "consolidated-price",
+        "cross-segment-signal",
+        "liquidity-grade",
+        "market-session-state",
+        "news-impact-forecast",
+        "news-item",
+        "position",
         "symbol-price-frame",
         "symbol-universe",
-        "watch-condition",
-        "liquidity-grade",
-        "position",
-        "cross-segment-signal",
-        "venue-announcement",
-        "consolidated-price",
-        "training-label"
+        "training-label",
+        "watch-condition"
       ],
       "produces": [
         "entry-candidate",
@@ -5661,7 +5932,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "liquidity-grader",
@@ -5669,8 +5946,9 @@
       "role": "grade how tradeable each symbol is at the bot's size, refreshed on a fixed interval rather than every tick",
       "category": "opportunity-scanner",
       "consumes": [
-        "order-book-snapshot",
-        "market-data"
+        "instrument-restriction",
+        "market-data",
+        "order-book-snapshot"
       ],
       "produces": [
         "liquidity-grade",
@@ -5690,7 +5968,13 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "momentum-burst-detector",
@@ -5802,39 +6086,16 @@
       "skipped_tick_effect": "corrupts"
     },
     {
-      "id": "market-event-reader",
-      "name": "Market event reader",
-      "role": "read scheduled or breaking events that move markets",
-      "category": "intelligence",
-      "consumes": [
-        "venue-announcement"
-      ],
-      "produces": [
-        "market-event",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "io-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
       "id": "market-anomaly-detector",
       "name": "Market anomaly detector",
       "role": "flag a print or feed that does not look like a market",
       "category": "intelligence",
       "consumes": [
-        "market-data",
-        "feed-gap",
         "consolidated-price",
         "feed-coverage",
+        "feed-gap",
+        "market-data",
+        "news-item",
         "order-book-snapshot"
       ],
       "produces": [
@@ -5851,7 +6112,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "instruction-performance-tracker",
@@ -5966,7 +6233,8 @@
       "category": "hypothesis",
       "consumes": [
         "decoded-trade-instruction",
-        "loss-cause"
+        "loss-cause",
+        "news-item"
       ],
       "produces": [
         "inverted-hypothesis",
@@ -5982,7 +6250,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "hypothesis-ranker",
@@ -6050,8 +6324,9 @@
       "category": "knowledge",
       "consumes": [
         "market-data",
-        "semantic-fact",
-        "order-book-snapshot"
+        "news-reaction-label",
+        "order-book-snapshot",
+        "semantic-fact"
       ],
       "produces": [
         "symbol-profile",
@@ -6067,7 +6342,13 @@
       "proposed": "2026-08-20",
       "resource_class": "io-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "instruction-archive",
@@ -6749,10 +7030,11 @@
       "role": "turn a trading halt, a refused policy or a human override into a zero limit",
       "category": "risk-capital-allocation",
       "consumes": [
-        "trading-halt",
-        "policy-decision",
+        "capital-settings-verdict",
         "human-override",
-        "capital-settings-verdict"
+        "instrument-restriction",
+        "policy-decision",
+        "trading-halt"
       ],
       "produces": [
         "risk-limit",
@@ -6768,7 +7050,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "position-flattener",
@@ -6802,11 +7090,11 @@
       "role": "shrink the limit around events plus anomalies",
       "category": "risk-capital-allocation",
       "consumes": [
-        "market-event",
         "market-anomaly",
-        "turbulence-index",
-        "venue-announcement",
-        "sequence-pattern"
+        "market-event",
+        "news-impact-forecast",
+        "sequence-pattern",
+        "turbulence-index"
       ],
       "produces": [
         "risk-limit",
@@ -6822,7 +7110,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "position-sizer",
@@ -6934,13 +7228,15 @@
       "role": "journal what was learned, researched, forecast, scored",
       "category": "ledger",
       "consumes": [
-        "research-finding",
-        "forecast-accuracy",
         "ablation-scorecard",
-        "skill-usefulness",
-        "opportunity-instruction",
         "decision-rationale",
-        "pnl-attribution"
+        "forecast-accuracy",
+        "news-impact-forecast",
+        "news-item",
+        "opportunity-instruction",
+        "pnl-attribution",
+        "research-finding",
+        "skill-usefulness"
       ],
       "produces": [
         "journal-entry",
@@ -6956,7 +7252,13 @@
       "proposed": "2026-08-20",
       "resource_class": "io-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "control-recorder",
@@ -7016,6 +7318,7 @@
       "role": "build the held position from fills, checked against what the venue reports",
       "category": "portfolio-state",
       "consumes": [
+        "corporate-action",
         "fill",
         "venue-position-report"
       ],
@@ -7033,7 +7336,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "position-close-detector",
@@ -7176,13 +7485,14 @@
       "role": "raise what a human should look at now, proof attached",
       "category": "observability",
       "consumes": [
-        "part-fault",
-        "trading-halt",
+        "feed-coverage",
+        "hog-report",
         "journal-gap",
         "market-anomaly",
-        "hog-report",
-        "feed-coverage",
-        "replay-mismatch"
+        "news-source-standing",
+        "part-fault",
+        "replay-mismatch",
+        "trading-halt"
       ],
       "produces": [
         "alert",
@@ -7198,7 +7508,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "board-snapshot-builder",
@@ -7369,6 +7685,7 @@
       "role": "classify why the venue refused an order",
       "category": "execution-venue-adapter",
       "consumes": [
+        "instrument-restriction",
         "raw-venue-order-status"
       ],
       "produces": [
@@ -7385,7 +7702,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "order-resubmitter",
@@ -7571,12 +7894,14 @@
       "role": "classify why a trade lost: entry, exit, size, regime or execution",
       "category": "closed-trade-decoding",
       "consumes": [
-        "trade-episode",
+        "market-event",
+        "news-impact-forecast",
         "peak-excursion",
         "pnl-attribution",
         "regime-transition-flag",
+        "shortfall-breakdown",
         "stop-audit",
-        "shortfall-breakdown"
+        "trade-episode"
       ],
       "produces": [
         "loss-cause",
@@ -7592,7 +7917,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "winner-pattern-miner",
@@ -7959,6 +8290,7 @@
       "role": "keep the average price each position was actually built at",
       "category": "portfolio-state",
       "consumes": [
+        "corporate-action",
         "fill"
       ],
       "produces": [
@@ -7975,7 +8307,13 @@
       "evidence": "docs/research/repo-harvest/FinRL.md avg_buy_price incremental update",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "margin-liquidation-watch",
@@ -8486,10 +8824,12 @@
       "role": "compute this side's own features for a candidate: distance from support or resistance, flow imbalance, VWAP gap, funding sign, burst age, volume against the symbol's hour-norm",
       "category": "bull-bot",
       "consumes": [
-        "bull-side-candidate",
         "broker-instrument-listing",
         "broker-open-interest",
+        "bull-side-candidate",
+        "news-impact-forecast",
         "order-book-snapshot",
+        "sentiment-reading",
         "symbol-price-frame",
         "symbol-profile",
         "symbol-universe"
@@ -8512,7 +8852,13 @@
       },
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "bull-outlier-rejector",
@@ -8778,9 +9124,10 @@
       "role": "say flat when the reason a long position was opened has gone",
       "category": "bull-bot",
       "consumes": [
-        "position",
-        "market-data",
         "bull-feature-vector",
+        "market-data",
+        "news-impact-forecast",
+        "position",
         "regime-break-alert"
       ],
       "produces": [
@@ -8801,7 +9148,13 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "bear-setup-filter",
@@ -8841,7 +9194,9 @@
         "bear-side-candidate",
         "broker-instrument-listing",
         "broker-open-interest",
+        "news-impact-forecast",
         "order-book-snapshot",
+        "sentiment-reading",
         "symbol-price-frame",
         "symbol-profile",
         "symbol-universe"
@@ -8864,7 +9219,13 @@
       },
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "bear-outlier-rejector",
@@ -9130,9 +9491,10 @@
       "role": "say flat when the reason a short position was opened has gone",
       "category": "bear-bot",
       "consumes": [
-        "position",
-        "market-data",
         "bear-feature-vector",
+        "market-data",
+        "news-impact-forecast",
+        "position",
         "regime-break-alert"
       ],
       "produces": [
@@ -9153,7 +9515,13 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "tail-mover-qualifier",
@@ -9162,6 +9530,7 @@
       "category": "profit-tailgating-bot",
       "consumes": [
         "entry-candidate",
+        "news-impact-forecast",
         "symbol-price-frame",
         "symbol-profile",
         "tail-setup-weight"
@@ -9184,7 +9553,13 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "tail-winner-selector",
@@ -10262,30 +10637,6 @@
       "skipped_tick_effect": "delays"
     },
     {
-      "id": "exchange-announcement-reader",
-      "name": "Exchange announcement reader",
-      "role": "read listings, delistings, maintenance windows plus rule changes each venue publishes",
-      "category": "online-research",
-      "consumes": [
-        "broker-instrument-listing"
-      ],
-      "produces": [
-        "venue-announcement",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
-      "resource_class": "io-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
-    },
-    {
       "id": "options-flow-reader",
       "name": "Options flow reader",
       "role": "read large option block trades: strike, expiry, side, size",
@@ -10765,8 +11116,9 @@
       "role": "write, before the intent leaves, how this trade most plausibly fails",
       "category": "ai-brain",
       "consumes": [
-        "trade-intent",
         "directional-opinion",
+        "market-event",
+        "trade-intent",
         "validated-llm-output",
         "verified-snapshot"
       ],
@@ -10785,7 +11137,13 @@
       "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "devils-advocate",
@@ -10834,10 +11192,12 @@
       "role": "release an intent at the moment its entry timing named, or drop it at the give-up time",
       "category": "ai-brain",
       "consumes": [
-        "trade-intent",
-        "symbol-price-frame",
+        "bear-entry-timing",
         "bull-entry-timing",
-        "bear-entry-timing"
+        "market-event",
+        "market-session-state",
+        "symbol-price-frame",
+        "trade-intent"
       ],
       "produces": [
         "timed-intent",
@@ -10853,7 +11213,13 @@
       "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "ban-signal-detector",
@@ -11257,9 +11623,10 @@
       "role": "tell the trade in plain words from its journal",
       "category": "closed-trade-decoding",
       "consumes": [
-        "trade-episode",
-        "journal-entry",
         "decision-rationale",
+        "journal-entry",
+        "news-item",
+        "trade-episode",
         "validated-llm-output"
       ],
       "produces": [
@@ -11277,7 +11644,13 @@
       "evidence": "docs/proposals/closed-trade-decoding-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "sequence-pattern-miner",
@@ -12032,8 +12405,9 @@
       "category": "learning-loop",
       "consumes": [
         "entry-candidate",
-        "symbol-price-frame",
-        "market-regime"
+        "market-regime",
+        "news-impact-forecast",
+        "symbol-price-frame"
       ],
       "produces": [
         "training-label",
@@ -12049,7 +12423,13 @@
       "evidence": "docs/proposals/signal-outcome-labelling.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "signal-excursion-profiler",
@@ -12259,8 +12639,9 @@
       "category": "ai-brain",
       "consumes": [
         "market-regime",
-        "verified-snapshot",
-        "validated-llm-output"
+        "news-item",
+        "validated-llm-output",
+        "verified-snapshot"
       ],
       "produces": [
         "directional-opinion",
@@ -12277,7 +12658,13 @@
       "evidence": "docs/proposals/llm-reasoning-gets-a-vote.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "broker-token-refresh-scheduler",
@@ -12418,6 +12805,7 @@
         "broker-market-data",
         "broker-option-greeks",
         "broker-price-frame",
+        "market-session-state",
         "training-label"
       ],
       "produces": [
@@ -12435,7 +12823,13 @@
       "evidence": "docs/superpowers/specs/2026-09-01-options-segment-bots-design.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-02",
+          "why": "docs/proposals/stock-market-news-data.md"
+        }
+      ]
     },
     {
       "id": "broker-price-level-sampler",
@@ -12565,11 +12959,767 @@
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "exchange-filing-reader",
+      "name": "Exchange filing reader",
+      "role": "read NSE plus BSE corporate filings as they publish",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "corporate-action-reader",
+      "name": "Corporate action reader",
+      "role": "read the exchange's own corporate action file",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "corporate-action-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "results-calendar-reader",
+      "name": "Results calendar reader",
+      "role": "read board meeting plus results dates before they arrive",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "market-event",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "trading-restriction-reader",
+      "name": "Trading restriction reader",
+      "role": "read the exchange's F&O ban, ASM, GSM, halt lists",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "instrument-restriction-report",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "regulator-circular-reader",
+      "name": "Regulator circular reader",
+      "role": "read SEBI, RBI, exchange circulars as they publish",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "macro-event-calendar-reader",
+      "name": "Macro event calendar reader",
+      "role": "read the scheduled macro calendar that moves the index",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "market-event",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "financial-press-feed-reader",
+      "name": "Financial press feed reader",
+      "role": "read the financial press feeds",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "social-chatter-reader",
+      "name": "Social chatter reader",
+      "role": "read public retail chatter about a symbol",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-news-reader",
+      "name": "Broker news reader",
+      "role": "read whatever news a broker's own API carries",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "broker-instrument-listing"
+      ],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "web-news-searcher",
+      "name": "Web news searcher",
+      "role": "search the open web for the answer to a news question",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-search-request",
+        "news-source-standing"
+      ],
+      "produces": [
+        "raw-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "unexplained-move-investigator",
+      "name": "Unexplained move investigator",
+      "role": "ask why a price move has no known cause",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "symbol-price-frame",
+        "news-item"
+      ],
+      "produces": [
+        "news-search-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-item-deduplicator",
+      "name": "News item deduplicator",
+      "role": "collapse one story arriving from many outlets",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "raw-news-item"
+      ],
+      "produces": [
+        "distinct-news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-text-structurer",
+      "name": "News text structurer",
+      "role": "read one item's text into its schema-checked fields",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "distinct-news-item",
+        "validated-llm-output"
+      ],
+      "produces": [
+        "structured-news-item",
+        "llm-request",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-symbol-resolver",
+      "name": "News symbol resolver",
+      "role": "resolve the instruments a news item names",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "structured-news-item",
+        "broker-instrument-listing"
+      ],
+      "produces": [
+        "news-symbol-tagging",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-category-classifier",
+      "name": "News category classifier",
+      "role": "classify what kind of news an item is",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "structured-news-item"
+      ],
+      "produces": [
+        "news-category-tagging",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-credibility-scorer",
+      "name": "News credibility scorer",
+      "role": "score how far a source has earned trust",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "structured-news-item",
+        "news-item"
+      ],
+      "produces": [
+        "news-credibility-rating",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-segment-classifier",
+      "name": "News segment classifier",
+      "role": "tag which segments a news item belongs to",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "structured-news-item",
+        "news-symbol-tagging",
+        "news-category-tagging",
+        "news-credibility-rating"
+      ],
+      "produces": [
+        "news-item",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-tape-writer",
+      "name": "News tape writer",
+      "role": "append every news item to the tape",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "raw-news-item",
+        "news-item"
+      ],
+      "produces": [
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-sentiment-model",
+      "name": "News sentiment model",
+      "role": "score which way a news item points for its symbol",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item",
+        "news-reaction-label"
+      ],
+      "produces": [
+        "sentiment-reading",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-surprise-scorer",
+      "name": "News surprise scorer",
+      "role": "score an outcome against what was scheduled",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item",
+        "market-event"
+      ],
+      "produces": [
+        "news-surprise-reading",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-novelty-scorer",
+      "name": "News novelty scorer",
+      "role": "score whether an item carries new information",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item",
+        "historical-news-window"
+      ],
+      "produces": [
+        "news-novelty-rating",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-impact-forecaster",
+      "name": "News impact forecaster",
+      "role": "forecast how far price moves on a news item",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item",
+        "sentiment-reading",
+        "news-surprise-reading",
+        "news-novelty-rating",
+        "news-credibility-rating",
+        "news-latency-reading",
+        "news-reaction-label"
+      ],
+      "produces": [
+        "news-impact-forecast",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-reaction-labeller",
+      "name": "News reaction labeller",
+      "role": "measure what price actually did after a news item",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item",
+        "symbol-price-frame"
+      ],
+      "produces": [
+        "news-reaction-label",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "instrument-restriction-state",
+      "name": "Instrument restriction state",
+      "role": "state whether an instrument may be traded right now",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "instrument-restriction-report"
+      ],
+      "produces": [
+        "instrument-restriction",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "corporate-action-adjuster",
+      "name": "Corporate action adjuster",
+      "role": "state the price adjustment a corporate action implies",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "corporate-action-report",
+        "broker-instrument-listing"
+      ],
+      "produces": [
+        "corporate-action",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "market-session-calendar",
+      "name": "Market session calendar",
+      "role": "state which trading session the market is in right now",
+      "category": "stock-market-news-data",
+      "consumes": [],
+      "produces": [
+        "market-session-state",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "news-source-health-monitor",
+      "name": "News source health monitor",
+      "role": "state whether each news source is still delivering",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "raw-news-item",
+        "corporate-action-report",
+        "instrument-restriction-report"
+      ],
+      "produces": [
+        "news-source-standing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-latency-meter",
+      "name": "News latency meter",
+      "role": "measure how late this system sees a news item",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "raw-news-item"
+      ],
+      "produces": [
+        "news-latency-reading",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-history-reader",
+      "name": "News history reader",
+      "role": "serve taped news over a replay window",
+      "category": "stock-market-news-data",
+      "consumes": [
+        "news-item"
+      ],
+      "produces": [
+        "historical-news-window",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "io-bound",
+      "rate_risk": "latency-only",
+      "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "news-catalyst-detector",
+      "name": "News catalyst detector",
+      "role": "raise a candidate whose news impact clears the bar",
+      "category": "opportunity-scanner",
+      "consumes": [
+        "news-impact-forecast",
+        "news-item",
+        "liquidity-grade"
+      ],
+      "produces": [
+        "entry-candidate",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "user",
+      "proposed": "2026-09-02",
+      "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+      "resource_class": "compute-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "corrupts"
     }
   ],
   "control_plane": {
     "driver": "resource-governor",
-    "note": "T-2 — the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+    "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
   },
   "segments": {
     "note": "Every segment is a bot with all of this inside it. The user's words (docs/goal.md). The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a long call in index-options is a long in index-futures.",
@@ -12781,7 +13931,7 @@
       "used_by": [
         "skills"
       ],
-      "verified": "2026-08-20 via gh — the post said 16.3k stars, the repo has 23,262",
+      "verified": "2026-08-20 via gh \u2014 the post said 16.3k stars, the repo has 23,262",
       "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     },
     {
@@ -12870,7 +14020,7 @@
       "note": "Official SDK for Polymarket's CLOB. Read 2026-08-20 (repo-harvest/polymarket-py-sdk.md, commit c8fb84b). Prediction markets are not in this project's scope; recorded so the question is answered rather than reopened. Supersedes the earlier py-clob-client entry, which is archived."
     }
   ],
-  "_dependency_note": "Licence is recorded as a fact, not a constraint — see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
+  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
   "opposing_positions": {
     "given": "2026-08-20",
     "exploration": "While a bot is still in exploration, bull and bear may both open on the same symbol. It is a live test of which one is right on this kind of setup, and the paired outcome is what the scorekeeper learns from.",
@@ -13243,5 +14393,28 @@
     "origin": "designed by Claude, user asked to cut the live spine over to Indian data 2026-09-02",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-02_broker_candle_bridge.py",
     "proposal": "docs/proposals/broker-candle-bridge.md"
+  },
+  "_proposal_2026-09-02_stock_market_news_data": {
+    "what": "stock-market-news-data -- a foundational block beside market-data-feed holding the news the Indian market runs on, divided by segment. 29 parts, 20 new data types, 3 channels: hard facts the executor refuses on (F&O ban, halt, corporate action, session state), scheduled events, plus a learned news signal every segment bot weighs its own way.",
+    "why": "The blueprint carried no news at all: market-event had no real producer, exchange-announcement-reader read crypto venue listings, and sentiment-reading was declared with zero producers and zero consumers. For Indian markets three of these are not sentiment but conditions the executor cannot trade through -- a banned name rejects every order, an unadjusted 1:1 bonus is a -50% candle every detector fires on, and a paper fill on a holiday journals a trade that could not happen.",
+    "decisions": {
+      "D-N1": "one global block, segment-tagged output, not six copies",
+      "D-N2": "official, press, social, broker, plus an autonomous web searcher",
+      "D-N3": "the block judges as well as delivers (RL-060); the LLM reads a headline once here rather than six times in six bots",
+      "D-N4": "three channels never share a wire; a halt is never a sentiment score"
+    },
+    "reused": [
+      "sentiment-reading (declared, zero producers since the crypto era)",
+      "market-event (already consumed by regime-break-detector plus event-risk-limiter)"
+    ],
+    "retired": [
+      "exchange-announcement-reader",
+      "market-event-reader",
+      "type venue-announcement"
+    ],
+    "given": "2026-09-02",
+    "origin": "user",
+    "evidence": "docs/superpowers/specs/2026-09-02-stock-market-news-data-design.md",
+    "proposal": "docs/proposals/stock-market-news-data.md"
   }
 }
