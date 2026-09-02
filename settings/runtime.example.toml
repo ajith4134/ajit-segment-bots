@@ -3840,6 +3840,36 @@ value = 5
 unit  = "parts restarting at once"
 note  = "operator, 2026-08-24: more than this many parts failing together is one cause, not many faults, and restarting into it hides the cause."
 
+[broker_history_interval_unit]
+value = "minutes"
+unit  = "Upstox historical-candle unit"
+note  = "Claude, 2026-09-02: which unit broker-history-reader asks Upstox for. Minutes because Phase A's paper trading decides intraday and a daily bar cannot express an entry and an exit in the same session. Upstox serves minute data from January 2022, one month per request for 1-15 minute intervals (upstox.com/developer/api-documentation/v3/get-historical-candle-data, fetched 2026-09-02)."
+
+[broker_history_interval]
+value = 1
+unit  = "units per bar"
+note  = "Claude, 2026-09-02: one minute per bar, matching upstox_candle_interval (I1) so a bar replayed from history is the same shape as a bar off the live feed -- kline-window-builder holds one window per symbol and does not know which source filled it."
+
+[broker_history_most_instruments]
+value = 8
+unit  = "instrument keys per sweep"
+note  = "Claude, 2026-09-02: how many contracts history is fetched for. Measured the same day: one instrument-day of 1-minute option bars is 385 rows and 42,593 bytes of JSON, so eight is a few hundred KB per sweep rather than a burst against a rate limit nobody has measured yet. The nearest-expiry NIFTY chain listed 166 contracts at that expiry -- this is deliberately a small slice of it, raised once the fetch has been watched against the real quota rather than guessed at."
+
+[broker_history_most_days_back]
+value = 1
+unit  = "days"
+note  = "Claude, 2026-09-02: how far back one window reaches. One day to begin with, because the win condition is a paper trade opened and closed on a session that really happened, and one full session (385 one-minute bars, 09:15-15:39 IST) is that. Upstox allows a month per request for this interval, so this is a starting depth and not the API's bound."
+
+[broker_history_instrument_types]
+value = ["CE", "PE"]
+unit  = "Upstox instrument_type codes"
+note  = "Claude, 2026-09-02: which contracts history is read for. CE and PE are the option types in Upstox's own master; segment_id is index-options, and the master carries 75,278 instruments of which only these two types are what this segment trades. Widened when Phase B's segments are built, not before."
+
+[broker_history_fetch_interval_seconds]
+value = 30.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how often broker-history-reader fetches one window. One window per due tick rather than a burst: the month-per-request window and the broker's own rate limit are both real, and a burst buys nothing the next tick would not. Thirty seconds keeps a sweep of broker_history_most_instruments (8) inside four minutes while leaving the quota to the live feed's own calls."
+
 [warden_escalation_repeat_seconds]
 value = 3600.0
 unit  = "seconds"

@@ -1619,7 +1619,8 @@
         "broker-open-interest",
         "broker-option-greeks",
         "broker-order-book-snapshot",
-        "broker-token-standing"
+        "broker-token-standing",
+        "market-session-state"
       ],
       "produces": [
         "broker-account-funds",
@@ -1631,6 +1632,7 @@
         "broker-order-book-snapshot",
         "broker-price-frame",
         "broker-token-standing",
+        "candle",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
@@ -1639,7 +1641,7 @@
       "contract_recomputed": {
         "on": "2026-09-02",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -13542,6 +13544,33 @@
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "corrupts"
+    },
+    {
+      "id": "broker-history-reader",
+      "name": "Broker history reader",
+      "role": "fetch a broker's historical candles for the hours the market is shut",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-token-standing",
+        "market-session-state"
+      ],
+      "produces": [
+        "candle",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-02",
+      "evidence": "docs/proposals/broker-history-reader.md",
+      "resource_class": "io-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -14255,5 +14284,12 @@
     "given": "2026-09-02",
     "origin": "user",
     "evidence": "docs/superpowers/plans/2026-09-02-news-hard-channel.md"
+  },
+  "_proposal_2026-09-02_broker_history_reader": {
+    "what": "broker-history-reader -- fetches Upstox v3 historical candles for currently listed contracts and publishes them as `candle`, so the same bots decide on the same wire whether the prices came from the live feed or from history. Reads market-session-state and fetches only while the session is not open.",
+    "why": "Phase A paper-trades on live prices when the market is open and on history when it is shut (goal.md; user 2026-09-02). RL-071 is not crossed: a replay that runs only when there is no live market to read is not standing in for one, and market-session-state is the fact that tells the two apart.",
+    "produces_candle_not_broker_candle": "broker-candle is what broker-market-tape-writer records as live capture. History published there would mix replayed bars into the tape and every measurement taken over it afterwards would be wrong with nothing saying so. `candle` reaches kline-window-builder, historical-bar-store and feed-jump-detector and no recorder of live capture -- history joins the circuit after the tape.",
+    "verified_against_the_live_api": "2026-09-02: 385 one-minute bars for NSE_FO|42654 (NIFTY 24350 PE 08 SEP 26) across 2026-09-01, 09:15-15:39 IST, ascending after the reader's sort, every one closed. Minute data begins January 2022, one month per request. Expired contracts are absent from the instrument master, so history is read for currently listed contracts over the days they have already traded.",
+    "evidence": "docs/proposals/broker-history-reader.md"
   }
 }
