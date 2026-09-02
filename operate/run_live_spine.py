@@ -54,6 +54,7 @@ apply_blas_thread_caps()
 
 from runtime.part_launcher import PartLauncher  # noqa: E402
 from runtime.scope_placer import ScopeLimits  # noqa: E402
+from runtime.secrets_reader import read_upstox_env  # noqa: E402
 from runtime.settings_reader import load_settings_document, settings_directory  # noqa: E402
 from runtime.switch_service import ACTION_TURN_OFF, OUTCOME_FLIPPED  # noqa: E402
 from runtime.wiring_plan import derive_wiring  # noqa: E402
@@ -780,40 +781,53 @@ LIVE_SPINE = (
     "self-modification-journal",
 )
 
-# The segment this spine trades, and the only money mode it may run in. Checked
-# before a part is started rather than trusted: `order-destination-router` refuses
-# to address a live order and `paper-fill-simulator` refuses to simulate one, and
-# this is the third check, at the one moment where refusing costs nothing. A run
-# that reached a live venue is the failure this phase cannot recover from (RL-005).
-TRADED_SEGMENT = "futures"
+# The only money mode this spine may run in, whatever segment runtime.toml's
+# own segment_id names. Checked before a part is started rather than trusted:
+# `order-destination-router` refuses to address a live order and
+# `paper-fill-simulator` refuses to simulate one, and this is the third check,
+# at the one moment where refusing costs nothing. A run that reached a live
+# venue is the failure this phase cannot recover from (RL-005).
 PAPER = "paper"
 MONEY_MODE_SETTING = "money_mode"
+SEGMENT_ID_SETTING = "segment_id"
 
 
 def read_runtime_settings():
     return load_settings_document(settings_directory() / "runtime.toml", "runtime")
 
 
-def refuse_unless_the_segment_is_on_paper() -> str:
-    """The money mode this spine may run in, read from the operator's own file.
+def refuse_unless_the_segment_is_on_paper(settings) -> tuple[str, str]:
+    """The segment this spine trades and the money mode it may run in, both
+    read from the operator's own files -- never a name fixed in this script.
+
+    Fixed as `TRADED_SEGMENT = "futures"` until 2026-09-02: runtime.toml's own
+    segment_id had already been changed to "index-options" for the crypto-to-
+    Indian cutover, so every part correctly read the new segment's settings
+    while this check kept validating the old one -- the exact "operator sets
+    this segment live and this spine refuses" guarantee the docstring below
+    promises, silently pointed at a file nobody was trading under any more.
+    Caught by reading the live spine's own startup log, not by a test: this
+    script's segment string had drifted from every part's, and nothing here
+    could have noticed on its own.
 
     Read here rather than assumed, and read before any part is forked. The parts
     that place and fill orders each refuse a live order on their own, and this is
-    the check that costs nothing: an operator who set this segment live and then
-    started this spine gets a refusal instead of fourteen processes discovering it
-    one at a time.
+    the third check, at the one moment where refusing costs nothing. An operator
+    who set this segment live and then started this spine gets a refusal instead
+    of fourteen processes discovering it one at a time.
     """
+    segment = str(settings.read_value(SEGMENT_ID_SETTING))
     document = load_settings_document(
-        settings_directory() / "segments" / f"{TRADED_SEGMENT}.toml", TRADED_SEGMENT
+        settings_directory() / "segments" / f"{segment}.toml", segment
     )
     mode = str(document.read_value(MONEY_MODE_SETTING))
     if mode != PAPER:
         raise SystemExit(
-            f"{TRADED_SEGMENT} says {MONEY_MODE_SETTING} = {mode!r}, and this spine starts the "
+            f"{segment} says {MONEY_MODE_SETTING} = {mode!r}, and this spine starts the "
             f"parts that place orders. Only {PAPER!r} may run here: RL-005 is paper first, with "
             f"full experimentation and no restriction, and live only for what paper proved."
         )
-    return mode
+    return segment, mode
 
 
 def is_capture_script_running() -> list[str]:
@@ -902,8 +916,18 @@ def main(argv: list[str]) -> int:
             print(part_id)
         return 0
 
+    # Decrypted here, once, into this process's own environment -- child
+    # processes (every part, forked below) inherit it, which is what lets
+    # broker-token-refresh-scheduler's upstox-totp call auto-load UPSTOX_*
+    # with no further wiring. setdefault so an operator's own explicit env
+    # var is never overwritten. Missing/placeholder credentials leave the
+    # environment untouched -- broker-token-refresh-scheduler already
+    # tolerates that indefinitely (its own docstring: "never raises").
+    for name, value in read_upstox_env().items():
+        os.environ.setdefault(name, value)
+
     settings = read_runtime_settings()
-    money_mode = refuse_unless_the_segment_is_on_paper()
+    segment, money_mode = refuse_unless_the_segment_is_on_paper(settings)
     wiring = derive_wiring()
     unknown = [part_id for part_id in spine if part_id not in wiring]
     if unknown:
@@ -988,7 +1012,7 @@ def main(argv: list[str]) -> int:
             # Written into the record of the run, not only checked: what the
             # orders this spine places were addressed at is the first thing anyone
             # reading the journal afterwards needs to know.
-            "segment": TRADED_SEGMENT,
+            "segment": segment,
             "money_mode": money_mode,
             # True since 2026-08-24: every part is placed in its own scope with
             # the bounds the settings state, and a part a placement failed for

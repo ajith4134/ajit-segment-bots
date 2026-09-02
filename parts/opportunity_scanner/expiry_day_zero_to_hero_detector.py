@@ -52,6 +52,7 @@ NOT_EXPIRY_DAY = "not-expiry-day"
 PREMIUM_TOO_HIGH = "premium-too-high"
 NOT_FAR_ENOUGH_OTM = "not-far-enough-otm"
 NO_LISTING = "no-listing-known"
+NOT_AN_OPTION = "not-an-option-instrument"
 NO_PREMIUM = "no-premium-observed"
 NO_DELTA = "no-delta-observed"
 
@@ -70,6 +71,7 @@ class DetectorStanding:
     premium_too_high: int = 0
     not_far_enough_otm: int = 0
     no_listing: int = 0
+    not_an_option: int = 0
     no_premium: int = 0
     no_delta: int = 0
 
@@ -132,6 +134,13 @@ class ZeroToHeroDetector:
         if listing is None:
             self.standing.no_listing += 1
             return None, NO_LISTING
+        # broker-instrument-listing carries every tracked instrument, the
+        # underlying index/stock included -- an INDEX listing's expiry_ms is
+        # None (it is not an option contract), which crashed the live spine
+        # 2026-09-02 the moment a real NIFTY 50 index listing reached here.
+        if listing.expiry_ms is None:
+            self.standing.not_an_option += 1
+            return None, NOT_AN_OPTION
         if not self._is_expiry_today(listing.expiry_ms, at):
             self.standing.not_expiry_day += 1
             return None, NOT_EXPIRY_DAY
@@ -210,6 +219,7 @@ def describe_detector(detector: ZeroToHeroDetector) -> dict:
         "premium_too_high": s.premium_too_high,
         "not_far_enough_otm": s.not_far_enough_otm,
         "no_listing": s.no_listing,
+        "not_an_option": s.not_an_option,
         "no_premium": s.no_premium,
         "no_delta": s.no_delta,
     }

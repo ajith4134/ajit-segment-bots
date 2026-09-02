@@ -29,6 +29,13 @@ keys.txt
 
 # The inventory doc carries no values and must stay tracked.
 !docs/secrets.md
+# Code that bridges the encrypted store into the process environment -- no
+# value in either file, only the sops call and the env-var names (docs/
+# secrets.md's own "the repo carries the inventory" principle, applied to
+# code rather than docs). Named for what it does, which collides with the
+# pattern above by design; verified before allowing.
+!runtime/secrets_reader.py
+!tests/runtime/test_secrets_reader.py
 dashboard/wiring-explorer.html
 
 # Rendered spec and plan pages: generated from the .md by dashboard/render_spec.py

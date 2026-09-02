@@ -12,6 +12,7 @@ import dataclasses
 import datetime
 import json
 import os
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -166,6 +167,32 @@ def refresh_if_needed(
     return fresh
 
 
+def is_refresh_due(
+    current: TokenStanding | None, last_attempt_at: float | None,
+    now_monotonic: float, check_interval_seconds: float,
+) -> bool:
+    """Whether refresh_if_needed should actually be called this tick.
+
+    A valid current token is never throttled -- refresh_if_needed's own
+    `is_still_valid` check already makes re-checking it free, so this stays
+    true regardless of last_attempt_at. No token yet, or an expired one, is
+    throttled to at most one real login attempt per check_interval_seconds.
+
+    Real regression, 2026-09-02: this part checked on every tick with no
+    throttle at all, which was harmless once a token existed (the cheap path
+    above) but not before one did -- 193 login attempts inside 15 minutes on
+    the live spine hit Upstox's own OTP-generation rate limit (UDAPI100500,
+    "You have exceeded the maximum number of times you can generate an
+    OTP"), long before the box ever saw a real token. The credentials were
+    valid; the retry rate was the actual fault.
+    """
+    if current is not None and current.is_still_valid():
+        return True
+    if last_attempt_at is None:
+        return True
+    return now_monotonic - last_attempt_at >= check_interval_seconds
+
+
 def describe_standing(standing: TokenStanding | None, refresh_standing: RefreshStanding) -> dict:
     if standing is None:
         return {
@@ -211,9 +238,17 @@ def start_part(context) -> int:
     # more than one broker.
     daily_expiry_time_ist = datetime.time(3, 30)
     current: list[TokenStanding | None] = [None]
+    last_attempt_at: list[float | None] = [None]
     refresh_standing = RefreshStanding()
+    check_interval_seconds = context.number("broker_token_refresh_check_interval")
 
     def refresh_if_due() -> None:
+        now_monotonic = time.monotonic()
+        if not is_refresh_due(current[0], last_attempt_at[0], now_monotonic, check_interval_seconds):
+            return
+        needs_a_fresh_attempt = current[0] is None or not current[0].is_still_valid()
+        if needs_a_fresh_attempt:
+            last_attempt_at[0] = now_monotonic
         current[0] = refresh_if_needed(
             store=store, daily_expiry_time_ist=daily_expiry_time_ist,
             generate_token=generate_token, standing=refresh_standing,
@@ -240,6 +275,7 @@ __all__ = [
     "TokenFileStore",
     "TokenStanding",
     "describe_standing",
+    "is_refresh_due",
     "refresh_if_needed",
     "start_part",
 ]

@@ -8,8 +8,8 @@ import datetime
 import pytest
 
 from parts.opportunity_scanner.expiry_day_zero_to_hero_detector import (
-    NOT_EXPIRY_DAY, NOT_FAR_ENOUGH_OTM, NO_DELTA, NO_LISTING, NO_PREMIUM,
-    PREMIUM_TOO_HIGH, ZeroToHeroDetector,
+    NOT_AN_OPTION, NOT_EXPIRY_DAY, NOT_FAR_ENOUGH_OTM, NO_DELTA, NO_LISTING,
+    NO_PREMIUM, PREMIUM_TOO_HIGH, ZeroToHeroDetector,
 )
 from runtime.brokers.broker_adapter import (
     BrokerOptionGreeks, InstrumentListing, LtpUpdate,
@@ -97,6 +97,26 @@ def test_not_expiring_today_refuses():
     candidate, outcome = subject.detect(CALL_KEY)
     assert candidate is None
     assert outcome == NOT_EXPIRY_DAY
+
+
+def test_an_underlying_index_listing_refuses_by_name_not_a_crash():
+    """The live spine crashed on this 2026-09-02: broker-instrument-listing
+    carries every tracked instrument, underlyings included, and an INDEX
+    listing's expiry_ms is None (it is not an option contract at all) --
+    _is_expiry_today crashed trying to divide None by 1000 the moment a real
+    NIFTY 50 index listing reached this detector."""
+    subject = a_detector()
+    subject.observe_listing(
+        InstrumentListing(
+            instrument_key="NSE_INDEX|Nifty 50", exchange="NSE", segment="NSE_INDEX",
+            instrument_type="INDEX", trading_symbol="NIFTY", lot_size=None, tick_size=None,
+            freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+            intraday_margin_percent=None, intraday_leverage=None,
+        )
+    )
+    candidate, outcome = subject.detect("NSE_INDEX|Nifty 50")
+    assert candidate is None
+    assert outcome == NOT_AN_OPTION
 
 
 def test_a_premium_above_the_cutoff_refuses():

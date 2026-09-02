@@ -169,3 +169,71 @@ def test_refresh_if_needed_never_raises_on_first_ever_failure(tmp_path):
     assert refresh_standing.refresh_attempts == 1
     assert "UPSTOX_USERNAME" in refresh_standing.last_failure
     assert store.load() is None  # never had anything to save
+
+
+def test_is_refresh_due_true_with_no_attempt_yet():
+    """The very first tick always gets to try."""
+    from parts.broker_adapter.broker_token_refresh_scheduler import is_refresh_due
+
+    assert is_refresh_due(
+        current=None, last_attempt_at=None,
+        now_monotonic=1000.0, check_interval_seconds=300.0,
+    )
+
+
+def test_is_refresh_due_false_before_the_check_interval_elapses():
+    """Real regression, 2026-09-02: checking on every tick with no token yet
+    hit Upstox's own OTP-generation rate limit (UDAPI100500) within minutes,
+    long before this box ever saw a real token. 193 attempts in under 15
+    minutes on the live spine."""
+    from parts.broker_adapter.broker_token_refresh_scheduler import is_refresh_due
+
+    assert not is_refresh_due(
+        current=None, last_attempt_at=1000.0,
+        now_monotonic=1010.0, check_interval_seconds=300.0,
+    )
+
+
+def test_is_refresh_due_true_once_the_check_interval_has_elapsed():
+    from parts.broker_adapter.broker_token_refresh_scheduler import is_refresh_due
+
+    assert is_refresh_due(
+        current=None, last_attempt_at=1000.0,
+        now_monotonic=1301.0, check_interval_seconds=300.0,
+    )
+
+
+def test_is_refresh_due_true_and_free_when_the_current_token_is_still_valid():
+    """A valid token is never throttled -- refresh_if_needed's own
+    is_still_valid check already makes re-checking it free, so this must
+    stay true regardless of last_attempt_at (over-checking a valid token
+    was never the problem; over-checking with none was)."""
+    from parts.broker_adapter.broker_token_refresh_scheduler import (
+        TokenStanding, is_refresh_due,
+    )
+
+    valid = TokenStanding(
+        broker_id="upstox", access_token="tok",
+        generated_at=datetime.datetime.now(IST),
+        daily_expiry_time_ist=datetime.time(3, 30),
+    )
+    assert is_refresh_due(
+        current=valid, last_attempt_at=1000.0,
+        now_monotonic=1000.5, check_interval_seconds=300.0,
+    )
+
+
+def test_is_refresh_due_false_when_the_current_token_has_expired():
+    from parts.broker_adapter.broker_token_refresh_scheduler import (
+        TokenStanding, is_refresh_due,
+    )
+
+    expired = TokenStanding(
+        broker_id="upstox", access_token="tok",
+        generated_at=datetime.datetime(2020, 1, 1, tzinfo=IST),
+        daily_expiry_time_ist=datetime.time(3, 30),
+    )
+    assert not is_refresh_due(
+        current=expired, last_attempt_at=1000.0,
+        now_monotonic=1010.0, check_interval_seconds=300.0,
+    )

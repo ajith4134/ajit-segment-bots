@@ -276,20 +276,25 @@ def test_a_segment_that_is_not_on_paper_refuses_to_start(spine, durable_tmp_path
     config_home = durable_tmp_path / "config"
     settings_root = config_home / "ajit-segment-bots" / "settings"
     shutil.copytree(settings_directory(), settings_root)
-    segment_file = settings_root / "segments" / f"{spine.TRADED_SEGMENT}.toml"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    settings = spine.read_runtime_settings()
+    segment = str(settings.read_value(spine.SEGMENT_ID_SETTING))
+    segment_file = settings_root / "segments" / f"{segment}.toml"
     segment_file.write_text(
         segment_file.read_text().replace('value = "paper"', 'value = "live"', 1)
     )
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
     with pytest.raises(SystemExit) as refusal:
-        spine.refuse_unless_the_segment_is_on_paper()
+        spine.refuse_unless_the_segment_is_on_paper(settings)
     assert "paper first" in str(refusal.value)
 
 
 def test_the_operator_s_own_settings_are_on_paper_right_now(spine):
     """Not a test of the code -- a test of the machine this is running on."""
-    assert spine.refuse_unless_the_segment_is_on_paper() == spine.PAPER
+    settings = spine.read_runtime_settings()
+    assert spine.refuse_unless_the_segment_is_on_paper(settings) == (
+        str(settings.read_value(spine.SEGMENT_ID_SETTING)), spine.PAPER
+    )
 
 
 def test_every_input_a_running_part_declares_has_a_producer_on_the_spine(spine):

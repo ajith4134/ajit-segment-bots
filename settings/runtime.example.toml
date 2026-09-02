@@ -513,6 +513,21 @@ value = 0.18
 unit  = "fraction of (brokerage + exchange transaction charge + IPFT charge)"
 note  = "operator, 2026-09-01: upstox.com/brokerage-charges/. Quoted: GST '18% (on brokerage + transaction charges + IPFT charges)' -- explicitly not on STT or stamp duty, which are themselves statutory levies."
 
+[broker_token_refresh_check_interval]
+value = 300
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how often broker-token-refresh-scheduler checks whether today's Upstox token has expired, and how long it waits between real login attempts once it has none. Five minutes -- far shorter than the 24-hour token lifetime, so a token that expires at 3:30 AM IST is refreshed within minutes rather than waiting for the next tick's health interval to happen to fall after the boundary. Also the throttle on real login attempts when there is no valid token yet -- checking on every tick with no throttle hit Upstox's own OTP-generation rate limit (UDAPI100500) within minutes on 2026-09-02, 193 attempts before the credentials ever got a chance to be tried at a sane rate."
+
+[broker_catalogue_refresh_interval]
+value = 3600
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how often broker-instrument-catalogue-reader re-fetches Upstox's instrument master. Upstox states the files refresh once daily around 6 AM IST and only rarely intraday (spec section 4) -- hourly is generous headroom against that without hammering a static-asset URL 24 times more than the file ever actually changes."
+
+[broker_token_standing_maximum_age]
+value = 600
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how old a broker-token-standing reading may be before broker-market-feed-reader stops trusting it. Every LatestByKey needs its keys to expire (2026-08-26 finding: a level with no age bound never lets a stopped producer be noticed) -- ten minutes is twice broker_token_refresh_check_interval (300s), so two missed refresh cycles must pass before this part treats the token as gone rather than merely due."
+
 [entry_slippage_fraction]
 value = 0.0005
 unit  = "fraction of price"
