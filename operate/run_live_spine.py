@@ -154,6 +154,22 @@ LIVE_SPINE = (
     "broker-order-book-bridge",
     "broker-underlying-price-frame-bridge",
     "broker-candle-bridge",
+    # The hard channel of stock-market-news-data (2026-09-02): the facts a part
+    # refuses on rather than weighs, read from NSE's own public files. The two
+    # readers come before the parts that hold their levels, so the first level
+    # is published from a real fetch rather than from nothing.
+    #
+    # Each closes a failure that had no other guard: an order on an F&O-banned
+    # name is rejected by the exchange and order-resubmitter would retry a
+    # rejection that is not transient; paper-fill-simulator filled overnight
+    # orders at the 15:29 price and journalled them as trades; and an
+    # unadjusted 1:1 bonus reaches kline-window-builder as a -50% candle that
+    # every detector fires on.
+    "trading-restriction-reader",
+    "instrument-restriction-state",
+    "corporate-action-reader",
+    "corporate-action-adjuster",
+    "market-session-calendar",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and
