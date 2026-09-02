@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from runtime.indian_options_fee_model import upstox_options_order_cost
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.tape import TradeFidelity
 from runtime.trading_types import (
     BUY,
     LIMIT,
@@ -247,13 +248,32 @@ class PaperFillSimulator:
 
     @property
     def may_fill(self) -> bool:
-        """Whether a fill may happen at all right now.
+        """Whether a fill may happen at all right now, against a live price.
 
         `None` -- no session measured yet -- is False, not True (Rule 8).
         Absence of evidence is its own state, and filling off an unmeasured
         session is how a paper account trades on a holiday.
         """
         return self._session is not None and self._session.is_tradeable
+
+    def may_fill_against(self, price_fidelity) -> bool:
+        """Whether a fill may happen against a price of this kind.
+
+        A historical bar close is its own evidence. Upstox serves a one-minute
+        bar for 09:15 IST only because the market traded that minute, so the
+        bar's existence proves the session it printed in -- no calendar lookup
+        is needed, and none is done. Phase A replays history for exactly the
+        hours the wall clock says the market is shut, which is why this cannot
+        be answered by `may_fill` alone.
+
+        Every other fidelity is a live price and stays gated. That includes
+        LAST_TRADED_PRICE_ONLY, which is Upstox's live ticker rather than
+        history: a coarse live price is still a live price, and filling one at
+        18:00 against the 15:29 print is the defect this guard exists for.
+        """
+        if price_fidelity == TradeFidelity.HISTORICAL_BAR_CLOSE:
+            return True
+        return self.may_fill
 
     def _why_the_market_is_shut(self) -> str:
         if self._session is None:
@@ -320,7 +340,7 @@ class PaperFillSimulator:
             0.0, order.quantity, None, 0.0, None, reason,
         )
 
-    def evaluate_resting(self, price_by_symbol: dict) -> tuple:
+    def evaluate_resting(self, price_by_symbol: dict, price_fidelity=None) -> tuple:
         """Test every order on the book against the price that just arrived.
 
         This is what makes a paper stop a stop. Called on every tick with the
@@ -331,10 +351,15 @@ class PaperFillSimulator:
         Orders whose symbol has no new price are left alone rather than refused: a
         quiet symbol is not a reason to withdraw protection.
         """
-        if not self.may_fill:
+        if not self.may_fill_against(price_fidelity):
             # Every resting order stays exactly where it is. A stop is not
             # withdrawn because the market closed -- it waits for the open, the
             # same as it would at a venue.
+            #
+            # A historical bar passes this, and must: an exit is a resting stop,
+            # and a stop that could only trigger against a live price would open
+            # a position on a replay and never close it -- a paper account that
+            # only ever loses its exits.
             self.standing.orders_on_the_book = len(self._resting)
             return ()
         results = []
@@ -436,6 +461,7 @@ class PaperFillSimulator:
         decided_at_price: float | None = None,
         maximum_decision_drift: float | None = None,
         leverage: float = UNLEVERED,
+        price_fidelity=None,
     ) -> PaperFillResult:
         self.standing.orders_seen += 1
 
@@ -526,7 +552,7 @@ class PaperFillSimulator:
         # block so a stop still reaches the book by its own path with its own
         # validation, and so a stop already through its trigger rests rather
         # than filling at a price from before the close.
-        if not self.may_fill:
+        if not self.may_fill_against(price_fidelity):
             self.standing.rested_market_closed += 1
             return self._rest(
                 RestingOrder(
@@ -806,7 +832,8 @@ def run_paper_fill_simulator(
         orders = read_orders(simulator)
         results = [simulator.simulate(**order) for order in orders]
         if read_prices is not None:
-            results.extend(simulator.evaluate_resting(read_prices()))
+            prices, fidelity = read_prices()
+            results.extend(simulator.evaluate_resting(prices, price_fidelity=fidelity))
         publish_fills(tuple(result.fill for result in results if result.did_fill))
 
     return run_part(
@@ -867,6 +894,11 @@ def start_part(context) -> int:
     publish_fills = context.bus.publisher_for("fill")
 
     last_price: dict[tuple[str, str], float] = {}
+    # The kind of price each of those is. A historical bar close is evidence of
+    # the session it printed in; every other kind is a live price and stays
+    # gated by the calendar. Kept beside the price rather than inferred later:
+    # by the time a stop is being tested, the message that carried it is gone.
+    last_price_fidelity: dict[tuple[str, str], object] = {}
     maximum_decision_drift = context.number("maximum_decision_price_drift")
     # Orders waiting for order-latency-simulator to say the simulated round trip
     # has elapsed, by client order id, with the moment each began waiting.
@@ -887,6 +919,9 @@ def start_part(context) -> int:
         simulator.observe_session(standing_sessions[0] if standing_sessions else None)
         for trade in trades_in(trades.payloads()):
             last_price[(trade.venue_id, trade.symbol)] = trade.price
+            last_price_fidelity[(trade.venue_id, trade.symbol)] = getattr(
+                trade, "fidelity", None
+            )
         for jump in jumps.payloads():
             simulator.observe_feed_jump(jump.venue_id, jump.symbol)
         costs.payloads()
@@ -974,6 +1009,7 @@ def start_part(context) -> int:
         released["is_in_flight"] = False
         key = (released["venue_id"], released["symbol"])
         released["market_price"] = last_price.get(key)
+        released["price_fidelity"] = last_price_fidelity.get(key)
         released["fill_price_estimate"] = prices.mapping().get(key)
         return released
 
@@ -995,6 +1031,7 @@ def start_part(context) -> int:
             "is_in_flight": False,
             "fill_price_estimate": estimate_by_symbol.get(key),
             "market_price": last_price.get(key),
+            "price_fidelity": last_price_fidelity.get(key),
             # A stop rests until a live price crosses it. This is the field that
             # lets a position close: without it every exit order sent by
             # stop-order-manager would fill immediately at the market, which is
@@ -1016,13 +1053,20 @@ def start_part(context) -> int:
             "maximum_decision_drift": maximum_decision_drift,
         }
 
-    def read_prices() -> dict:
-        """The latest live price per symbol, for the orders already on the book.
+    def read_prices() -> tuple[dict, object]:
+        """The latest price per symbol, and what kind of price those are.
 
         The same dictionary the new orders are filled against, so a stop and a
         market order arriving in the same tick see the same market.
+
+        One fidelity for the sweep: it is the kind every symbol's newest price
+        shares, or None when they do not agree. A mixed sweep is gated as live,
+        which is the safe direction -- a replayed price failing to trigger a
+        stop delays an exit, while a live price triggering one outside a session
+        invents a trade.
         """
-        return dict(last_price)
+        kinds = set(last_price_fidelity.values())
+        return dict(last_price), (kinds.pop() if len(kinds) == 1 else None)
 
     return run_paper_fill_simulator(
         simulator=PaperFillSimulator(

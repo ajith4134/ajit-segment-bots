@@ -10,6 +10,7 @@ states are what market-session-calendar publishes from NSE's own holiday list.
 import datetime
 
 from runtime.market_conditions import MarketSessionState, SessionKind
+from runtime.tape import TradeFidelity
 from parts.paper_live_trading.paper_fill_simulator import (
     FILLED,
     RESTING_MARKET_CLOSED,
@@ -137,3 +138,97 @@ def test_a_stop_already_through_its_trigger_rests_rather_than_filling_after_hour
         money_mode="paper", is_in_flight=False, stop_price=200.0, market_price=190.0,
     )
     assert result.did_fill is False
+
+
+# ---- filling against history, while the wall clock says the market is shut ----
+
+def test_a_historical_bar_close_fills_while_the_wall_clock_says_closed():
+    """Phase A paper-trades on history for the hours the market is shut.
+
+    The evidence that this fill was possible is the bar itself: Upstox serves a
+    one-minute bar for 09:15 IST on 2026-09-01 only because the market traded
+    that minute. A bar's existence proves its own session, so no calendar lookup
+    is needed and none is done -- what would be wrong is filling a *live* price
+    at a moment nobody was trading, which is what the guard above still stops.
+    """
+    result = _market_order_at(
+        _simulator(CLOSED), fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE
+    )
+    assert result.outcome == FILLED
+    assert result.did_fill is True
+
+
+def test_a_live_price_still_does_not_fill_while_the_market_is_closed():
+    """The regression this must not undo. Everything above about an 18:00 order
+    filling at the 15:29 price stays true for a live price."""
+    result = _market_order_at(_simulator(CLOSED), fidelity=TradeFidelity.EVERY_PRINT)
+    assert result.outcome == RESTING_MARKET_CLOSED
+
+
+def test_a_historical_bar_fills_even_before_any_session_has_been_measured():
+    """A replay runs when nothing is publishing a session at all. The bar is its
+    own evidence, so it does not need one."""
+    result = _market_order_at(
+        _simulator(), fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE
+    )
+    assert result.outcome == FILLED
+
+
+def test_a_last_traded_price_is_a_live_price_and_is_still_gated():
+    """LAST_TRADED_PRICE_ONLY is Upstox's live ticker, not history. Only the
+    historical value is evidence of its own session -- a coarse live price is
+    still a live price."""
+    result = _market_order_at(
+        _simulator(CLOSED), fidelity=TradeFidelity.LAST_TRADED_PRICE_ONLY
+    )
+    assert result.outcome == RESTING_MARKET_CLOSED
+
+
+def _market_order_at(simulator, fidelity, client_order_id="order-h", price=222.0):
+    return simulator.simulate(
+        client_order_id=client_order_id, venue_id="upstox",
+        symbol="NIFTY 24500 CE", side="buy", quantity=75.0, order_type="market",
+        limit_price=None, money_mode="paper", is_in_flight=False,
+        market_price=price, price_fidelity=fidelity,
+    )
+
+
+def test_a_resting_stop_triggers_on_a_historical_bar_while_the_clock_says_shut():
+    """The other half of the win condition: a position has to be able to close.
+
+    An exit is a resting stop, and it fills when the market reaches it. On a
+    replay the market reaching it is a historical bar -- so a stop that could
+    only trigger against a live price could open a position on history and never
+    close it, which is a paper account that only ever loses its exits.
+    """
+    simulator = _simulator(CLOSED)
+    _market_order_at(simulator, fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE)
+    simulator.simulate(
+        client_order_id="stop-1", venue_id="upstox", symbol="NIFTY 24500 CE",
+        side="sell", quantity=75.0, order_type="stop-market", limit_price=None,
+        money_mode="paper", is_in_flight=False, stop_price=200.0, market_price=222.0,
+        price_fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE,
+    )
+
+    fills = simulator.evaluate_resting(
+        {("upstox", "NIFTY 24500 CE"): 195.0},
+        price_fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE,
+    )
+
+    assert [fill.client_order_id for fill in fills] == ["stop-1"]
+
+
+def test_a_resting_stop_still_does_not_trigger_on_a_live_price_while_shut():
+    """The regression guard, on the resting path too."""
+    simulator = _simulator(CLOSED)
+    simulator.simulate(
+        client_order_id="stop-2", venue_id="upstox", symbol="NIFTY 24500 CE",
+        side="sell", quantity=75.0, order_type="stop-market", limit_price=None,
+        money_mode="paper", is_in_flight=False, stop_price=200.0, market_price=222.0,
+        price_fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE,
+    )
+
+    assert simulator.evaluate_resting(
+        {("upstox", "NIFTY 24500 CE"): 195.0},
+        price_fidelity=TradeFidelity.EVERY_PRINT,
+    ) == ()

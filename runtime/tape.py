@@ -125,6 +125,19 @@ class TradeFidelity(enum.StrEnum):
     # update as EVERY_PRINT or VENUE_AGGREGATED would claim a resolution this
     # feed does not have, the same reasoning the other two values exist for.
     LAST_TRADED_PRICE_ONLY = "last-traded-price-only"
+    # The close of one historical bar, replayed for the hours the market is
+    # shut (2026-09-02, Phase A). One print per bar, not a tick stream: a
+    # consumer counting prints per second over a replay is counting minutes,
+    # and this is what lets it know that -- the same reason the three values
+    # above exist.
+    #
+    # It carries a second meaning that only the fill path uses, and the meaning
+    # is sound because of where the data comes from: **a historical bar exists
+    # only because the market traded that minute**, so the bar is evidence of
+    # its own session. That is what lets paper-fill-simulator fill against it
+    # while the wall clock says the market is shut, without weakening the guard
+    # that stops a *live* price filling at a moment nobody was trading.
+    HISTORICAL_BAR_CLOSE = "historical-bar-close"
 
 
 # One index record. Packed rather than aligned so the layout is exactly these
