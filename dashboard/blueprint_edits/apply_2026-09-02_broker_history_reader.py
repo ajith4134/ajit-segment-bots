@@ -34,7 +34,7 @@ f = {
         "broker-token-standing",
         "market-session-state",
     ],
-    "produces": ["candle", "part-health"],
+    "produces": ["candle", "market-data", "part-health"],
     "switchable": True, "off_releases_resources": True,
     "states": ["off", "on"], "origin": "proposed", "proposed": TODAY,
     "evidence": PROPOSAL,
@@ -70,6 +70,15 @@ d["_proposal_2026-09-02_broker_history_reader"] = {
         "crossed: a replay that runs only when there is no live market to "
         "read is not standing in for one, and market-session-state is the "
         "fact that tells the two apart."
+    ),
+    "also_produces_market_data": (
+        "paper-fill-simulator prices fills from market-data, not candle, so "
+        "history that reached only `candle` would feed the thinking half and "
+        "never the filling half. One print per bar, at the bar's close, "
+        "carrying TradeFidelity.HISTORICAL_BAR_CLOSE so every consumer can "
+        "tell a replayed minute from a live tick. market-data is read by 27 "
+        "parts and by no recorder of live capture, so the tape stays clean "
+        "here too."
     ),
     "produces_candle_not_broker_candle": (
         "broker-candle is what broker-market-tape-writer records as live "

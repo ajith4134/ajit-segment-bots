@@ -154,6 +154,12 @@ LIVE_SPINE = (
     "broker-order-book-bridge",
     "broker-underlying-price-frame-bridge",
     "broker-candle-bridge",
+    # Prices for the hours the market is shut (2026-09-02). It fetches only
+    # while market-session-state says the session is not open, so it never
+    # stands in for a market it could be reading; it publishes `candle` and
+    # `market-data` and deliberately not `broker-candle`, so the tape stays a
+    # record of live capture only.
+    "broker-history-reader",
     # The hard channel of stock-market-news-data (2026-09-02): the facts a part
     # refuses on rather than weighs, read from NSE's own public files. The two
     # readers come before the parts that hold their levels, so the first level

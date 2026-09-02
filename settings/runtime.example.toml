@@ -3840,6 +3840,11 @@ value = 5
 unit  = "parts restarting at once"
 note  = "operator, 2026-08-24: more than this many parts failing together is one cause, not many faults, and restarting into it hides the cause."
 
+[broker_history_underlying]
+value = "NIFTY"
+unit  = "underlying symbol prefix"
+note  = "Claude, 2026-09-02: which option chain broker-history-reader replays. Measured live the same day: without this the part knew 76,036 CE/PE contracts across every underlying on the exchange, sorted them by instrument key and asked about the first eight -- arbitrary strikes nothing had ever traded, so every fetch returned an empty series and nothing was published. NIFTY because segment_id is index-options and it is the index option chain with the most volume; contracts are matched on the trading_symbol prefix Upstox's own master uses (\"NIFTY 24350 PE 08 SEP 26\"), and asked for nearest expiry first because that is where the volume is."
+
 [broker_history_interval_unit]
 value = "minutes"
 unit  = "Upstox historical-candle unit"

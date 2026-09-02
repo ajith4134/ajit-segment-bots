@@ -29,14 +29,15 @@ from runtime.brokers.upstox import UPSTOX_BROKER_ID
 from runtime.market_conditions import SessionKind
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.venues.venue_adapter import NormalisedCandle
+from runtime.tape import TradeFidelity
+from runtime.venues.venue_adapter import NormalisedCandle, NormalisedTrade
 
 PART_ID = "broker-history-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-history-reader",
     consumes=("broker-instrument-listing", "broker-token-standing", "market-session-state"),
-    produces=("candle", "part-health"),
+    produces=("candle", "market-data", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="delays",
@@ -80,6 +81,7 @@ class HistoryReaderStanding:
     requests_planned: int = 0
     requests_refused: int = 0
     candles_published: int = 0
+    prints_published: int = 0
     windows_already_read: int = 0
     skipped_because_the_market_is_open: int = 0
     skipped_because_the_session_is_unknown: int = 0
@@ -95,6 +97,7 @@ class HistoryReader:
         most_instruments: int,
         most_days_back: int,
         wanted_instrument_types: tuple[str, ...],
+        underlying: str,
     ) -> None:
         if interval_unit not in UNIT_DURATION_SECONDS:
             raise ValueError(
@@ -111,14 +114,27 @@ class HistoryReader:
             )
         if most_days_back < 1:
             raise ValueError(f"history is at least one day deep; got {most_days_back!r}")
+        if not underlying:
+            raise ValueError(
+                "an underlying names which chain to replay. Without one this part "
+                "sorted 76,036 contracts by key string and asked about the first "
+                "eight, which were strikes nothing had ever traded -- every fetch "
+                "returned an empty series and nothing was published (measured live "
+                "2026-09-02)"
+            )
         self._unit = interval_unit
         self._interval = interval
         self._most_instruments = most_instruments
         self._most_days_back = most_days_back
         self._wanted_types = tuple(wanted_instrument_types)
+        self._underlying = underlying
         self._symbol_by_key: dict[str, str] = {}
+        self._expiry_ms_by_key: dict[str, int] = {}
         self._session: object | None = None
         self._windows_read: set[tuple] = set()
+        # One counter across the replay, so a gap detector reading `sequence`
+        # sees a feed that advances rather than one stalled at zero.
+        self._next_sequence = 0
         self.standing = HistoryReaderStanding()
 
     def observe_listings(self, listings) -> None:
@@ -126,9 +142,16 @@ class HistoryReader:
         for listing in listings:
             if getattr(listing, "instrument_type", None) not in self._wanted_types:
                 continue
-            self._symbol_by_key[listing.instrument_key] = getattr(
-                listing, "trading_symbol", ""
-            )
+            symbol = getattr(listing, "trading_symbol", "") or ""
+            # One chain, named in settings. The master carries every underlying
+            # on the exchange and replaying an arbitrary slice of it fetches
+            # strikes nothing ever traded.
+            if not symbol.startswith(self._underlying):
+                continue
+            self._symbol_by_key[listing.instrument_key] = symbol
+            expiry = getattr(listing, "expiry_ms", None)
+            if expiry is not None:
+                self._expiry_ms_by_key[listing.instrument_key] = int(expiry)
         self.standing.instruments_known = len(self._symbol_by_key)
 
     def observe_session(self, session) -> None:
@@ -156,8 +179,16 @@ class HistoryReader:
             self.standing.skipped_because_the_market_is_open += 1
             return ()
 
+        # Nearest expiry first: that is where the volume is, and a contract
+        # with no volume has no bars to replay. Contracts whose expiry the
+        # master did not state sort last rather than being dropped -- an
+        # unstated expiry is not a reason to refuse a contract that trades.
+        by_nearest_expiry = sorted(
+            self._symbol_by_key,
+            key=lambda key: (self._expiry_ms_by_key.get(key, float("inf")), key),
+        )
         requests = []
-        for key in sorted(self._symbol_by_key)[: self._most_instruments]:
+        for key in by_nearest_expiry[: self._most_instruments]:
             request = HistoryRequest(
                 instrument_key=key,
                 unit=self._unit,
@@ -220,6 +251,44 @@ class HistoryReader:
         return tuple(candles)
 
 
+    def trades_from(self, candles) -> tuple[NormalisedTrade, ...]:
+        """One print per bar, at the bar's close, for the parts that price from
+        `market-data` rather than from `candle`.
+
+        paper-fill-simulator is the one that matters: it prices fills from
+        market-data, so history reaching only `candle` would feed the thinking
+        half and never the filling half -- a replay that forms an opinion and
+        can never act on it.
+
+        The price is the **close** and the moment is the bar's **close time**.
+        A bar's close is the last price that really traded in that minute, and
+        it is the price at the end of it; using the open, or "now", would be
+        stating a trade at a moment it did not happen.
+
+        `side` is None because a bar has no aggressor to report -- the same
+        honest gap a broker's last-traded-price ticker already carries. The
+        fidelity says what this really is, so a consumer counting prints per
+        second over a replay knows it is counting minutes.
+        """
+        trades = []
+        for candle in candles:
+            trades.append(
+                NormalisedTrade(
+                    venue_id=candle.venue_id,
+                    symbol=candle.symbol,
+                    price=candle.close,
+                    quantity=candle.volume,
+                    side=None,
+                    venue_time_ns=candle.close_time_ns,
+                    sequence=self._next_sequence,
+                    fidelity=TradeFidelity.HISTORICAL_BAR_CLOSE,
+                )
+            )
+            self._next_sequence += 1
+        self.standing.prints_published += len(trades)
+        return tuple(trades)
+
+
 def describe_history_reading(reader: HistoryReader) -> dict:
     return {
         "part_id": PART_ID,
@@ -227,6 +296,7 @@ def describe_history_reading(reader: HistoryReader) -> dict:
         "requests_planned": reader.standing.requests_planned,
         "requests_refused": reader.standing.requests_refused,
         "candles_published": reader.standing.candles_published,
+        "prints_published": reader.standing.prints_published,
         "windows_already_read": reader.standing.windows_already_read,
         "skipped_because_the_market_is_open": reader.standing.skipped_because_the_market_is_open,
         "skipped_because_the_session_is_unknown": (
@@ -257,6 +327,7 @@ def start_part(context) -> int:
         maximum_age_seconds=context.number("market_condition_level_maximum_age_seconds"),
     )
     publish_candles = context.bus.publisher_for("candle")
+    publish_prints = context.bus.publisher_for("market-data")
 
     reader = HistoryReader(
         interval_unit=str(context.setting("broker_history_interval_unit").value),
@@ -266,6 +337,7 @@ def start_part(context) -> int:
         wanted_instrument_types=tuple(
             str(kind) for kind in context.setting("broker_history_instrument_types").value
         ),
+        underlying=str(context.setting("broker_history_underlying").value),
     )
     adapter = UpstoxAdapter()
     fetch_interval = context.number("broker_history_fetch_interval_seconds")
@@ -297,6 +369,8 @@ def start_part(context) -> int:
         candles = reader.observe_history(request, _fetch_json(url, held[0].access_token))
         if candles:
             publish_candles(candles)
+            # The same bars as prints, so the fill path sees the market too.
+            publish_prints(reader.trades_from(candles))
 
     return run_part(
         declaration=PART_DECLARATION,

@@ -1633,6 +1633,7 @@
         "broker-price-frame",
         "broker-token-standing",
         "candle",
+        "market-data",
         "part-health"
       ],
       "flow_origin": "agreed-provisional",
@@ -13557,6 +13558,7 @@
       ],
       "produces": [
         "candle",
+        "market-data",
         "part-health"
       ],
       "switchable": true,
@@ -14288,6 +14290,7 @@
   "_proposal_2026-09-02_broker_history_reader": {
     "what": "broker-history-reader -- fetches Upstox v3 historical candles for currently listed contracts and publishes them as `candle`, so the same bots decide on the same wire whether the prices came from the live feed or from history. Reads market-session-state and fetches only while the session is not open.",
     "why": "Phase A paper-trades on live prices when the market is open and on history when it is shut (goal.md; user 2026-09-02). RL-071 is not crossed: a replay that runs only when there is no live market to read is not standing in for one, and market-session-state is the fact that tells the two apart.",
+    "also_produces_market_data": "paper-fill-simulator prices fills from market-data, not candle, so history that reached only `candle` would feed the thinking half and never the filling half. One print per bar, at the bar's close, carrying TradeFidelity.HISTORICAL_BAR_CLOSE so every consumer can tell a replayed minute from a live tick. market-data is read by 27 parts and by no recorder of live capture, so the tape stays clean here too.",
     "produces_candle_not_broker_candle": "broker-candle is what broker-market-tape-writer records as live capture. History published there would mix replayed bars into the tape and every measurement taken over it afterwards would be wrong with nothing saying so. `candle` reaches kline-window-builder, historical-bar-store and feed-jump-detector and no recorder of live capture -- history joins the circuit after the tape.",
     "verified_against_the_live_api": "2026-09-02: 385 one-minute bars for NSE_FO|42654 (NIFTY 24350 PE 08 SEP 26) across 2026-09-01, 09:15-15:39 IST, ascending after the reader's sort, every one closed. Minute data begins January 2022, one month per request. Expired contracts are absent from the instrument master, so history is read for currently listed contracts over the days they have already traded.",
     "evidence": "docs/proposals/broker-history-reader.md"
