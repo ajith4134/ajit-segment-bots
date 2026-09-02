@@ -83,6 +83,25 @@ def test_the_whole_trading_half_is_on(spine):
 # part that collects it.
 HEALTH = "part-health"
 
+# Levels (RL-072: a level is true until it changes, never replayed once missed
+# the way an event is) whose one consumer already treats "has not arrived yet"
+# as its own safe state, not as an unsafe default -- so the ordering this rule
+# exists to protect against literally cannot bite. autonomy-envelope: added
+# 2026-09-02 when cutting the crypto venue-adapter cluster removed a spurious
+# cycle that had coincidentally kept trading-halt-decider and autonomy-boundary
+# in the same component, masking that no single position satisfies both
+# trading-halt-decider's own input (autonomy-envelope, produced late by the
+# autonomous block's own LLM-foundation prerequisites) and its consumers
+# (halt-enforcer, alert-raiser, both early). Verified against
+# parts/autonomous/trading_halt_decider.py's own decide(): it only appends
+# ENVELOPE_FORBIDS_TRADING when `_envelope_permits_trading is False`, never on
+# `None` -- unlike exposure-view, tier or override, an envelope that has not
+# arrived yet does not halt, it is silently not yet one of the causes checked,
+# and self-heals on trading-halt-decider's very next tick once autonomy-
+# boundary starts. A genuinely new exception needs the same proof: read the
+# consumer's own code, not just add a name here.
+LEVELS_SAFE_TO_START_LATE = {"autonomy-envelope"}
+
 
 def strongly_connected_components(edges: dict, nodes) -> dict:
     """Which parts sit in a cycle together, computed rather than listed.
@@ -178,6 +197,8 @@ def test_a_part_is_started_after_the_parts_in_the_spine_that_feed_it(spine):
 
     for part_id, inputs in consumes.items():
         for data_type in inputs:
+            if data_type in LEVELS_SAFE_TO_START_LATE:
+                continue
             if data_type == HEALTH:
                 # Every part produces it, so ordering by it would mean the
                 # collector starts after all 327 -- and the collector exists to

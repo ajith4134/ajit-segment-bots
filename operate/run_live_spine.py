@@ -104,41 +104,55 @@ LIVE_SPINE = (
     "switch-oscillation-damper",
     "resource-reservation-ledger",
     "accelerator-scheduler",
-    # The feed. These three replace operate/start_trade_capture.py entirely: the
-    # catalogue picks the symbols, the planner packs them onto connections, and the
-    # reader writes the tape and publishes market-data.
-    "symbol-catalogue-reader",
-    "stream-budget-planner",
-    # Which venues are refusing us, before the readers that ask a venue's standing
-    # before opening a stream to it.
-    "ban-signal-detector",
-    "venue-trade-stream-reader",
-    # The quote half of the feed, added 2026-08-24. A trade is what the venue
-    # printed and is what the tape keeps; a quote is what a symbol is worth right
-    # now, and a symbol nobody has traded has only the second. Measured that day,
-    # instrument-selector refused 525 of 9,945 intents for a price too old and
-    # zero for never having seen a price -- so the refusals were symbols already
-    # captured whose last trade was simply old.
+    # The feed, cut over from crypto to Indian 2026-09-02 (goal.md: crypto is
+    # retired, not a parallel track). The old three -- symbol-catalogue-reader,
+    # stream-budget-planner, venue-trade-stream-reader -- and the rest of the
+    # Binance/Bybit venue-adapter cluster (ban-signal-detector, venue-quote/
+    # premium-stream-reader, ccxt-venue-reader, cross-venue-price-consolidator,
+    # venue-pool-rotator, ccxt-order-router, venue-rate-budgeter, venue-order-
+    # status-translator, venue-balance-reader, venue-position-reader, venue-
+    # outage-rider, order-book-reader, api-key-pool-rotator, order-state-poller,
+    # order-reject-classifier, order-not-found-debouncer, order-resubmitter,
+    # clock-skew-monitor) are off this spine now, not deleted -- still declared
+    # in docs/features.json, same standing as leverage-selector, for the crypto
+    # goal in git history rather than a live one. Their crypto-margin-only
+    # downstream (funding-rate-forecaster, liquidation-cluster-mapper, paper-
+    # liquidation-simulator, funding-settlement-recorder, leverage-selector,
+    # liquidation-price-tracker, margin-liquidation-watch) is off too, for the
+    # same reason the CLOSED findings in the crypto-retirement audit gave: a
+    # bought option has no leverage dial and cannot be liquidated.
     #
-    # It writes no tape: this stream is priced against rather than learned from,
-    # and on Bybit alone it carries 1,190 updates a second, more than every trade
-    # this system records
-    # (docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md).
-    "venue-quote-stream-reader",
-    # The premium half of the feed, added 2026-08-28. Mark price against index
-    # price, which is neither what printed nor what is resting, and which nothing
-    # carried: funding-rate-forecaster had received 5,017,806 messages and made
-    # zero forecasts, with zero premium observations and not one refusal -- it
-    # never reached the code that would refuse. Six parts consume funding-forecast
-    # and none had ever seen one, which is why tail-crowding-detector reported
-    # NOT_MEASURED for all 37 candidates it was handed and the tailgating bot has
-    # never formed a conviction
-    # (docs/proposals/the-premium-both-venues-send-and-nobody-reads.md).
-    #
-    # It writes no tape, for the reason the quote reader writes none: a premium is
-    # priced against rather than learned from, and the venue restates it every
-    # second whether or not it moved.
-    "venue-premium-stream-reader",
+    # broker-token-refresh-scheduler auto-refreshes today's Upstox token
+    # (upstox-totp, no human in the loop); broker-instrument-catalogue-reader
+    # needs no token (Upstox's instrument files are public). Both start with
+    # nothing else running, same as the crypto readers they replace.
+    "broker-token-refresh-scheduler",
+    "broker-instrument-catalogue-reader",
+    # The live feed itself, needing the token and the catalogue above. Writes
+    # broker-market-data, broker-candle, broker-order-book-snapshot, broker-
+    # open-interest and broker-option-greeks -- the tape writer and every
+    # bridge below read from this one part, the same shape as venue-trade-
+    # stream-reader writing market-data for every crypto reader that followed.
+    "broker-market-feed-reader",
+    "broker-market-tape-writer",
+    "broker-price-level-sampler",
+    "broker-account-funds-reader",
+    # The bridges: republish the broker's own types under the crypto-era
+    # names ~40 detector/execution/prediction parts already read, so nothing
+    # downstream had to be rewritten to trade a real Indian instrument.
+    # broker-market-data-bridge -> market-data (paper-fill-simulator and
+    # ~30 others), broker-order-book-bridge -> order-book-snapshot (book-walk
+    # pricing, tick-size-resolver, the feature builders), broker-underlying-
+    # price-frame-bridge -> symbol-price-frame (regime-classifier, mean-
+    # reversion-detector, cointegration-pair-finder and the rest, unblocked
+    # with zero code changes to any of them 2026-09-01), broker-candle-bridge
+    # -> candle (kline-window-builder and the real conviction-model chain --
+    # kronos-forecaster, bull/bear-conviction-model -- built 2026-09-02
+    # specifically so this cutover would not take them to zero input).
+    "broker-market-data-bridge",
+    "broker-order-book-bridge",
+    "broker-underlying-price-frame-bridge",
+    "broker-candle-bridge",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and
@@ -170,6 +184,20 @@ LIVE_SPINE = (
     # cadence -- a reader comparing a price against a quote must not be handed one
     # of them sampled more often than the other.
     "quote-level-sampler",
+    # Three parts moved up here 2026-09-02, cutting the crypto venue-adapter
+    # cluster: each needs only market-data/order-book-snapshot/symbol-price-
+    # frame, satisfied as of the bridges above, and each was declared far
+    # later in the file with a consumer sitting earlier than it -- a real,
+    # pre-existing ordering gap the crypto cluster's spurious cycle (an
+    # accidental cycle through unrelated crypto-only types) had been masking,
+    # not something this cutover introduced. liquidity-grader feeds
+    # instrument-selector; correlation-cluster-mapper feeds exposure-limiter
+    # and trade-cluster-detector; ground-truth-snapshot-builder feeds
+    # decision-quality-critic, devils-advocate, premortem-writer, intent-
+    # explainer, setup-second-opinion-reasoner and market-thesis-reasoner.
+    "liquidity-grader",
+    "correlation-cluster-mapper",
+    "ground-truth-snapshot-builder",
     # ---- phase 6a: what the forecasts are built from, 2026-08-25 -----------
     # Placed here, with the samplers, because everything downstream reads them:
     # bull-feature-builder wants the funding forecast, instrument-selector wants
@@ -185,40 +213,25 @@ LIVE_SPINE = (
     # publishes trades -- so the whole prediction chain sat running and idle on
     # 2026-08-25 with nothing to build a window from.
     #
-    # The closed flag is why this is its own reader rather than candles derived
-    # from the trade stream: both venues push updates to the *current* candle
-    # continuously, and only `k.x` on Binance and `confirm` on Bybit say which
-    # update is the terminal one for that minute. A window built from partial
-    # minutes is wrong in a way nothing downstream detects.
-    # Held off the spine for 40 minutes on 2026-08-25 while the tape it had been
-    # corrupting was repaired: this part and venue-trade-stream-reader both
-    # appended to {venue}/{symbol}/{day}.blob, each counting its own blob
-    # position, so from 12:45 every index offset for 108 symbols pointed into the
-    # other writer's payloads. The tape is per stream kind now and a second writer
-    # on one file is refused by an flock, so candles land in {day}.candle.blob.
-    "ccxt-venue-reader",
-    # The rest of the feed, started 2026-08-25. The book reader records the
-    # shallow book on its own per-kind tape and is what finally gives the bots'
-    # feature builders the order-book-snapshot they have been counting as absent
-    # since they were written. The three watchers read the feed rather than add
-    # to it; the rotator and the key pool publish nothing until a REST fetch path
-    # exists and say so on their standing (RL-062).
-    "order-book-reader",
+    # Candles now come from broker-candle-bridge above, cut over 2026-09-02 --
+    # ccxt-venue-reader (and the crypto book/venue-pool/api-key parts beside
+    # it) are off, not deleted, same standing as the rest of the crypto
+    # venue-adapter cluster. broker-order-book-bridge (also above) plays
+    # order-book-reader's old role.
     "feed-gap-detector",
     "feed-jump-detector",
     "feed-coverage-auditor",
-    "cross-venue-price-consolidator",
-    "venue-pool-rotator",
-    "api-key-pool-rotator",
     "kline-window-builder",
     "implied-vol-reader",
-    "funding-rate-forecaster",
     "order-flow-state-encoder",
     "flow-entropy-meter",
     "volatility-feature-builder",
     "realised-vol-regressor",
     "entropy-magnitude-forecaster",
-    "liquidation-cluster-mapper",
+    # liquidation-cluster-mapper is off too: liquidation-map is a crypto-
+    # margin concept (a pool of forced-exit orders at a leverage level), and
+    # stop-target-placer already degrades gracefully without one -- verified
+    # 2026-09-01, same CLOSED shape as leverage-selector below.
     # Noticing. The only path in the blueprint from market-data to an
     # entry-candidate without a playbook-rule, which the learning loop cannot build
     # until trades have happened.
@@ -277,6 +290,7 @@ LIVE_SPINE = (
     "tail-winner-selector",
     "leaderboard-reader",
     "onchain-position-reader",
+    "copy-latency-estimator",
     "tail-copy-selector",
     "tail-move-remaining-estimator",
     "tail-crowding-detector",
@@ -337,7 +351,11 @@ LIVE_SPINE = (
     # predict live ones, and each of these is one way that prediction breaks.
     "book-walk-fill-pricer",
     "order-latency-simulator",
-    "paper-liquidation-simulator",
+    # paper-liquidation-simulator is off: it only ever fires on a
+    # liquidation-price, which liquidation-price-tracker never produces
+    # without a leverage-choice -- verified 2026-09-01, a bought option's
+    # max loss is the premium paid, it cannot be liquidated the way a
+    # leveraged futures position can.
     "paper-fill-simulator",
     # Closing the position. A fill becomes a held position, the exits are chained
     # to it the instant it fills, and both rest in the paper book until a live
@@ -348,12 +366,9 @@ LIVE_SPINE = (
     "exit-order-chainer",
     "stop-order-manager",
     "position-close-detector",
-    # Funding, booked as its own idempotent event rather than folded into a fill.
-    # Added for phase 5: pnl-attributor splits a closed trade into direction,
-    # timing, size, fees, slippage and funding, and without this it is a splitter
-    # missing one of its terms -- which on a perpetual is not a rounding error.
-    # Before the accountant, which reads the funding-settlement it produces.
-    "funding-settlement-recorder",
+    # funding-settlement-recorder is off: funding rate is a crypto perpetual
+    # concept and an option has none to book. usdt-pnl-accountant's own
+    # funding_usdt term simply stays at its default without one.
     "usdt-pnl-accountant",
     # The record. Without it a fill happened and nothing can say what decided it,
     # and a position closed with nothing to say what it was worth.
@@ -425,15 +440,13 @@ LIVE_SPINE = (
     # The block that decides how much money a decision may use, and the desk that
     # holds the numbers the operator sets. Every capital ruling lands here.
     #
-    # Three enablers first, because each unblocks a limiter that has nothing to
-    # limit without it: what a position would be liquidated at, what capital an
-    # order has already reserved, and how far equity has fallen from its peak.
-    # leverage-selector is RL-041 and RL-053 made mechanical: the operator sets a
-    # ceiling and the bot chooses under it per trade from volatility and funding.
-    # A ceiling nothing chooses under is a setting, not a decision. First here,
-    # because liquidation-price-tracker computes against the leverage it chose.
-    "leverage-selector",
-    "liquidation-price-tracker",
+    # leverage-selector, liquidation-price-tracker and margin-liquidation-
+    # watch are off: all three are margin/leverage-specific (RL-041/RL-053's
+    # ceiling-and-choice mechanism, a liquidation price, a margin-call risk
+    # limit), and Phase A is buy-only options -- no leverage dial, no
+    # liquidation price. position-sizer already defaults leverage to 1.0x
+    # without a leverage-choice; verified 2026-09-01, not a gap. Kept
+    # declared for Phase B's margin/leverage bot.
     "fund-lock-ledger",
     "drawdown-episode-tracker",
     # The brakes. Each emits its own risk-limit and the sizer takes the smallest,
@@ -441,7 +454,6 @@ LIVE_SPINE = (
     # one of the votes.
     "drawdown-breaker",
     "stop-frequency-breaker",
-    "margin-liquidation-watch",
     "profit-lock",
     # The desk. capital-settings-change-recorder matters beyond its own block:
     # RL-055 makes its journal the ONLY place the board's "when did this last
@@ -495,11 +507,18 @@ LIVE_SPINE = (
     # outside this repository and stays a person's action.
     "probe-runner",
     "human-override-reader",
-    "trading-halt-decider",
+    # Moved ahead of trading-halt-decider 2026-09-02, same reason as
+    # ground-truth-snapshot-builder above: the crypto cutover removed a
+    # spurious cycle that had been masking this real ordering gap.
+    "venue-outage-rider",
     "market-anomaly-detector",
+    "trading-halt-decider",
     "alert-raiser",
-    "ccxt-order-router",
-    "clock-skew-monitor",
+    # ccxt-order-router and clock-skew-monitor are off: real Upstox order
+    # placement is a separate, not-yet-built body of work (a broker-order-
+    # router part does not exist yet -- runtime/brokers/upstox.py's own
+    # build_order_request_payload/read_order_result are proven but
+    # deliberately not wired to a part, per that commit's own reasoning).
     "fund-conservation-auditor",
     "self-model-reporter",
     "decision-cost-accountant",
@@ -518,7 +537,10 @@ LIVE_SPINE = (
     "edge-comparator",
     "strategy-decoder",
     "trader-record-verifier",
-    "copy-latency-estimator",
+    # copy-latency-estimator moved beside onchain-position-reader 2026-09-02
+    # -- it needs external-position, which only that part produces, and
+    # sat far later than tail-copy-selector (its consumer). Same shape as
+    # this cutover's other unmasked ordering gaps.
     "copy-worthiness-scorer",
     # The procedural tier of memory, before the detectors that read its rules:
     # a rule applied by rule is the one thing a detector must not have to wait
@@ -528,10 +550,17 @@ LIVE_SPINE = (
     # The scanner's detectors, started 2026-08-25 (the rest of phase 3's block).
     # Each is one way a symbol becomes interesting, and every one of them has
     # been written and tested and never once run against the live feed.
-    "liquidity-grader",
+    # liquidity-grader moved up beside the samplers 2026-09-02 -- see that
+    # block's own comment.
     "momentum-burst-detector",
     "mean-reversion-detector",
     "volatility-gap-detector",
+    # Index options only, added 2026-09-01 (options-scanner-first-slice.md):
+    # a deep out-of-the-money option cheap enough for a late move toward its
+    # strike to multiply its price before the session closes. The last of
+    # the four crypto-only detectors this slice retired had no honest Indian
+    # equivalent; this is what replaced them, not what was renamed from them.
+    "expiry-day-zero-to-hero-detector",
     "universal-symbol-sweeper",
     "watch-condition-compiler",
     # The brain's remaining parts. opinion-conflict-resolver is the one that has
@@ -563,22 +592,15 @@ LIVE_SPINE = (
     "bull-position-invalidation-watcher",
     # The execution path, started 2026-08-25 (phase 11). **Nothing here places a
     # live order.** money-mode says paper, so order-destination-router sends every
-    # order to the paper book and the router only ever sees one destined for a
-    # venue; and no key exists, so a live order would be refused by name with
-    # REFUSED_NO_KEY, which is the state this part was built to report. What the
-    # phase buys is that the path exists and is observed rather than assumed.
-    "venue-rate-budgeter",
+    # order to the paper book. venue-rate-budgeter, order-state-poller, venue-
+    # order-status-translator, order-reject-classifier, order-not-found-
+    # debouncer, order-resubmitter, venue-balance-reader and venue-position-
+    # reader are all off with ccxt-order-router above -- the crypto live-order
+    # path, not this segment's yet.
     # The parts that decide what an order should be, before the router that sends
-    # it: a cancel, a reprice and a poll are all things the router reads.
+    # it: a cancel and a reprice are things the router reads.
     "resting-order-cancel-policy",
     "limit-price-walker",
-    "order-state-poller",
-    "venue-order-status-translator",
-    "order-reject-classifier",
-    "order-not-found-debouncer",
-    "order-resubmitter",
-    "venue-balance-reader",
-    "venue-position-reader",
     # The last risk part: it turns a bounded order into an execution schedule, a
     # plan rather than orders, so it adds nothing to the order path it reads.
     "participation-capped-order-splitter",
@@ -588,10 +610,13 @@ LIVE_SPINE = (
     # first started at the moment it must refuse is a guard nobody has watched.
     "live-switch-guard",
     # Intelligence, started 2026-08-25 (phase 12's first half). Nothing here
-    # trades: they read what happened and say what it means -- the clusters the
-    # exposure limiter needs, the refutation battery an edge has to survive, and
-    # the critics that judge decisions after the fact.
-    "correlation-cluster-mapper",
+    # trades: they read what happened and say what it means -- the refutation
+    # battery an edge has to survive, and the critics that judge decisions
+    # after the fact. correlation-cluster-mapper (the clusters exposure-
+    # limiter needs) moved up beside the samplers 2026-09-02 -- exposure-
+    # limiter reads it and sits far earlier than this, a real pre-existing
+    # ordering gap the crypto cutover's spurious-cycle removal unmasked, not
+    # something this cutover introduced.
     "cross-segment-exposure-watch",
     "cross-segment-signal-bridge",
     "cross-segment-lesson-bridge",
@@ -692,7 +717,6 @@ LIVE_SPINE = (
     "subscription-session-caller",
     "subscription-quota-watch",
     "paid-spend-ledger",
-    "ground-truth-snapshot-builder",
     # Skills, phase 13's third quarter: the procedural tier of memory that is
     # applied by rule and never searched. The distillers and readers need a source
     # to distil, and no fetcher is installed on this box, so they idle honestly.
@@ -744,7 +768,6 @@ LIVE_SPINE = (
     "folded-circuit-view",
     "no-progress-detector",
     "unattended-run-warden",
-    "venue-outage-rider",
     "survival-tier-monitor",
     "conservation-planner",
     "autonomy-boundary",
