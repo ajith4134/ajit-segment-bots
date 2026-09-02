@@ -643,6 +643,7 @@
       "origin": "proposed",
       "approved": true,
       "consumes": [
+        "broker-candle",
         "broker-instrument-listing",
         "broker-market-data",
         "broker-order-book-snapshot",
@@ -683,7 +684,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-01",
+        "on": "2026-09-02",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -12538,6 +12539,32 @@
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-candle-bridge",
+      "name": "Broker candle bridge",
+      "role": "republish a broker's own OHLC bars as candle",
+      "category": "market-data-feed",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-candle"
+      ],
+      "produces": [
+        "candle",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-02",
+      "evidence": "docs/proposals/broker-candle-bridge.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -13210,5 +13237,11 @@
     "origin": "designed by Claude against the user's 2026-09-01 audit request",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-01_broker_order_book_bridge.py",
     "proposal": "docs/proposals/broker-order-book-bridge.md"
+  },
+  "_proposal_2026-09-02_broker_candle_bridge": {
+    "what": "broker-candle-bridge -- republishes Upstox's OHLC bars as candle, unblocking kline-window-builder and the real conviction-model chain (kronos-forecaster, bull/bear-conviction-model) for the options segment. is_closed inferred from wall-clock elapsed since the bar's open (Upstox states no closed flag); quote_volume is a documented close*volume approximation (Upstox states no turnover figure); trades is None, not a fabricated 0 (Upstox states no count -- same shape NormalisedCandle.trades already carries for Bybit).",
+    "origin": "designed by Claude, user asked to cut the live spine over to Indian data 2026-09-02",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-02_broker_candle_bridge.py",
+    "proposal": "docs/proposals/broker-candle-bridge.md"
   }
 }
