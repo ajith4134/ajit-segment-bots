@@ -82,6 +82,68 @@ def listing_key_of(listing: InstrumentListing) -> str:
     return listing.instrument_key
 
 
+def prioritize_index_option_chain(
+    listings: Sequence[InstrumentListing],
+    tracked_trading_symbols: Sequence[str],
+    now_ms: int,
+) -> tuple[InstrumentListing, ...]:
+    """Reorders listings so the tracked index underlyings and their
+    nearest-expiry option chain come first -- plan_subscriptions and
+    plan_additional_subscriptions both take whatever fits the cap "in
+    listing order" (their own docstrings), and broker-instrument-catalogue-
+    reader's raw listing order has no relationship to what this project
+    trades: of 101,393 real Upstox listings, the first 2000 in catalogue
+    order essentially never include the NIFTY/BANKNIFTY/SENSEX option chain
+    instrument-selector needs a delta for.
+
+    Confirmed live, 2026-09-02: with this project's real subscribed set,
+    instrument-selector refused 14/14 trade-intents
+    no-instrument-is-listed-for-this-symbol and symbols_with_listed_
+    instruments stayed at 0 -- no option contract for any tracked underlying
+    was ever subscribed, so broker-option-greeks never carried a delta and
+    AtmStrikeTracker.atm_call_for/atm_put_for could never resolve, no matter
+    how long the connection stayed open.
+
+    Nearest expiry only (spec section 2), computed here rather than assumed
+    from listing order, since Upstox's own catalogue is not expiry-sorted.
+    An expiry that has already passed is dropped, not just deprioritized --
+    a same-day-expired contract is real, current data and would otherwise
+    still win a nearest-expiry comparison against tomorrow's real chain.
+    """
+    tracked = set(tracked_trading_symbols)
+    underlying_keys: dict[str, str] = {
+        listing.trading_symbol: listing.instrument_key
+        for listing in listings
+        if listing.instrument_type == "INDEX" and listing.trading_symbol in tracked
+    }
+    tracked_underlying_keys = set(underlying_keys.values())
+
+    nearest_expiry_by_underlying: dict[str, int] = {}
+    for listing in listings:
+        if (
+            listing.underlying_key in tracked_underlying_keys
+            and listing.expiry_ms is not None
+            and listing.expiry_ms > now_ms
+        ):
+            current = nearest_expiry_by_underlying.get(listing.underlying_key)
+            if current is None or listing.expiry_ms < current:
+                nearest_expiry_by_underlying[listing.underlying_key] = listing.expiry_ms
+
+    priority: list[InstrumentListing] = []
+    priority_keys: set[str] = set()
+    for listing in listings:
+        is_tracked_underlying = listing.instrument_key in tracked_underlying_keys
+        is_nearest_expiry_option = listing.expiry_ms is not None and listing.expiry_ms == (
+            nearest_expiry_by_underlying.get(listing.underlying_key)
+        )
+        if is_tracked_underlying or is_nearest_expiry_option:
+            priority.append(listing)
+            priority_keys.add(listing.instrument_key)
+
+    rest = (listing for listing in listings if listing.instrument_key not in priority_keys)
+    return tuple(priority) + tuple(rest)
+
+
 def plan_subscriptions(
     adapter: BrokerAdapter,
     listings: Sequence[InstrumentListing],
@@ -191,6 +253,10 @@ def start_part(context) -> int:
         key_of=listing_key_of,
         maximum_age_seconds=context.number("broker_instrument_listing_maximum_age"),
     )
+    tracked_index_trading_symbols = tuple(
+        str(symbol)
+        for symbol in context.setting("underlying_price_bridge_index_trading_symbols").value
+    )
 
     publish_ltp = context.bus.publisher_for("broker-market-data")
     publish_candle = context.bus.publisher_for("broker-candle")
@@ -240,6 +306,9 @@ def start_part(context) -> int:
             # spoken, or after the token has expired and refresh is still
             # in flight. Reported on the standing, never raised.
             return False
+        listings = prioritize_index_option_chain(
+            listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
+        )
         plan = plan_subscriptions(adapter, listings, mode=SubscriptionMode.FULL)
         if not plan:
             return False
@@ -279,6 +348,9 @@ def start_part(context) -> int:
             "broker_subscription_growth_check_interval"
         )
         listings = instrument_listings.values()
+        listings = prioritize_index_option_chain(
+            listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
+        )
         additional = plan_additional_subscriptions(
             adapter, state["subscribed"], listings, mode=SubscriptionMode.FULL,
         )
@@ -348,5 +420,6 @@ __all__ = [
     "listing_key_of",
     "plan_additional_subscriptions",
     "plan_subscriptions",
+    "prioritize_index_option_chain",
     "start_part",
 ]

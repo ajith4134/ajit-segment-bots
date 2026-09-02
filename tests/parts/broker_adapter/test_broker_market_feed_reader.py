@@ -2,7 +2,7 @@ import json
 
 from parts.broker_adapter.broker_market_feed_reader import (
     fetch_authorized_stream_url, listing_key_of, plan_additional_subscriptions,
-    plan_subscriptions,
+    plan_subscriptions, prioritize_index_option_chain,
 )
 from runtime.brokers.broker_adapter import (
     InstrumentListing, SubscriptionMode, SubscriptionRequest,
@@ -21,6 +21,26 @@ def _listing(key: str) -> InstrumentListing:
     )
 
 
+def _index_listing(key: str, trading_symbol: str) -> InstrumentListing:
+    return InstrumentListing(
+        instrument_key=key, exchange="NSE", segment="NSE_INDEX", instrument_type="INDEX",
+        trading_symbol=trading_symbol, lot_size=None, tick_size=None, freeze_quantity=None,
+        expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+
+
+def _option_listing(
+    key: str, underlying_key: str, expiry_ms: int, strike: float = 20000.0,
+) -> InstrumentListing:
+    return InstrumentListing(
+        instrument_key=key, exchange="NSE", segment="NSE_FO", instrument_type="CE",
+        trading_symbol=key, lot_size=50, tick_size=0.05, freeze_quantity=None,
+        expiry_ms=expiry_ms, strike_price=strike, underlying_key=underlying_key,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+
+
 def test_plan_subscriptions_stops_at_the_full_mode_individual_limit():
     adapter = UpstoxAdapter()
     listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(2500))  # over the 2000 individual cap
@@ -33,6 +53,66 @@ def test_plan_subscriptions_covers_every_listing_when_under_the_cap():
     listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(180))
     plan = plan_subscriptions(adapter, listings, mode=SubscriptionMode.FULL)
     assert len(plan) == 180
+
+
+def test_prioritize_index_option_chain_puts_tracked_underlyings_and_their_nearest_expiry_chain_first():
+    """Real, confirmed 2026-09-02: plan_subscriptions/plan_additional_subscriptions
+    accept whatever fits the cap 'in listing order' (this file's own docstrings),
+    and broker-instrument-catalogue-reader's raw listing order has no relationship
+    to what this project actually trades -- of 101,393 real Upstox listings, the
+    first 2000 in catalogue order essentially never include the NIFTY/BANKNIFTY/
+    SENSEX option chain instrument-selector needs a delta for. Confirmed live:
+    instrument-selector refused 14/14 trade-intents no-instrument-is-listed-for-
+    this-symbol, symbols_with_listed_instruments stuck at 0, because no option
+    contract for any tracked underlying was ever subscribed at all -- so
+    broker-option-greeks never carried a delta and AtmStrikeTracker.atm_call_for
+    could never resolve. This reorders listings so the tracked underlyings and
+    their nearest-expiry chain come first, before the cap is ever reached."""
+    nifty = _index_listing("NSE_INDEX|Nifty 50", "NIFTY")
+    other_index = _index_listing("NSE_INDEX|Nifty Fin Service", "FINNIFTY")  # untracked
+    near_call = _option_listing("NSE_FO|NIFTY|near|CE", "NSE_INDEX|Nifty 50", expiry_ms=2000)
+    near_put = _option_listing("NSE_FO|NIFTY|near|PE", "NSE_INDEX|Nifty 50", expiry_ms=2000)
+    far_call = _option_listing("NSE_FO|NIFTY|far|CE", "NSE_INDEX|Nifty 50", expiry_ms=9000)
+    unrelated = _listing("NSE_EQ|RANDOM")
+
+    listings = (unrelated, far_call, near_put, other_index, nifty, near_call)
+    ordered = prioritize_index_option_chain(
+        listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
+    )
+
+    priority_keys = {listing.instrument_key for listing in ordered[:3]}
+    assert priority_keys == {nifty.instrument_key, near_call.instrument_key, near_put.instrument_key}
+    # far expiry, the untracked index, and the unrelated equity all land after the priority set
+    remaining_keys = [listing.instrument_key for listing in ordered[3:]]
+    assert set(remaining_keys) == {far_call.instrument_key, other_index.instrument_key, unrelated.instrument_key}
+    # nothing lost, nothing duplicated
+    assert len(ordered) == len(listings)
+    assert len(set(listing.instrument_key for listing in ordered)) == len(listings)
+
+
+def test_prioritize_index_option_chain_excludes_expired_contracts():
+    nifty = _index_listing("NSE_INDEX|Nifty 50", "NIFTY")
+    expired_call = _option_listing("NSE_FO|NIFTY|expired|CE", "NSE_INDEX|Nifty 50", expiry_ms=500)
+    live_call = _option_listing("NSE_FO|NIFTY|live|CE", "NSE_INDEX|Nifty 50", expiry_ms=5000)
+
+    ordered = prioritize_index_option_chain(
+        (expired_call, nifty, live_call),
+        tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
+    )
+    priority_keys = {listing.instrument_key for listing in ordered[:2]}
+    assert priority_keys == {nifty.instrument_key, live_call.instrument_key}
+    assert ordered[2].instrument_key == expired_call.instrument_key
+
+
+def test_prioritize_index_option_chain_is_a_noop_when_nothing_is_tracked_yet():
+    """Before any broker-instrument-listing has arrived for a tracked index
+    (real state on first connect), the function must not crash or drop
+    listings -- everything just passes through in its original order."""
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(5))
+    ordered = prioritize_index_option_chain(
+        listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
+    )
+    assert ordered == listings
 
 
 def test_plan_additional_subscriptions_skips_what_is_already_subscribed():
