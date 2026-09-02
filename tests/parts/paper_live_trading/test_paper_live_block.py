@@ -7,10 +7,12 @@ account does not have -- because a simulator with any one of them produces a
 strategy that works on paper and loses money live.
 """
 
+import datetime
 import importlib
 
 import pytest
 
+from runtime.market_conditions import MarketSessionState, SessionKind
 from parts.paper_live_trading.book_walk_fill_pricer import (
     EMPTY_SIDE, FILLED as BOOK_FILLED, NO_BOOK, PARTIAL, BookWalkFillPricer,
 )
@@ -366,8 +368,21 @@ OPTIONS_STAMP_DUTY_BUY_RATE = 0.00003
 OPTIONS_GST_RATE = 0.18
 
 
-def fill_simulator(taker=0.0004, maker=0.0002):
-    return PaperFillSimulator(
+OPEN_SESSION = MarketSessionState(
+    segment="FO", kind=SessionKind.OPEN, as_of_date=datetime.date(2026, 9, 2),
+    reason="within stated session hours", observed_at_ns=1_756_800_000_000_000_000,
+)
+
+
+def fill_simulator(taker=0.0004, maker=0.0002, session=OPEN_SESSION):
+    """A simulator that has been told the market is open.
+
+    The session is explicit because a simulator that has never seen one does
+    not fill at all (2026-09-02): an unmeasured session is not an open one, and
+    filling off it is how a paper account trades on a holiday. Tests about a
+    closed market pass their own session, or None.
+    """
+    simulator = PaperFillSimulator(
         taker_fee_rate=taker, maker_fee_rate=maker,
         options_flat_brokerage=OPTIONS_FLAT_BROKERAGE,
         options_stt_sell_rate=OPTIONS_STT_SELL_RATE,
@@ -376,6 +391,9 @@ def fill_simulator(taker=0.0004, maker=0.0002):
         options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
         options_gst_rate=OPTIONS_GST_RATE,
     )
+    if session is not None:
+        simulator.observe_session(session)
+    return simulator
 
 
 class Estimate:

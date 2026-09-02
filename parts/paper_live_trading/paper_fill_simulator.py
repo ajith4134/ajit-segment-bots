@@ -60,8 +60,9 @@ UPSTOX_VENUE_ID = "upstox"
 PART_DECLARATION = PartDeclaration(
     part_id="paper-fill-simulator",
     consumes=(
-        "order-request", "market-data", "cost-estimate", "money-mode",
-        "delayed-order-request", "fill-price-estimate", "feed-jump", "consolidated-price",
+        "consolidated-price", "cost-estimate", "delayed-order-request", "feed-jump",
+        "fill-price-estimate", "market-data", "market-session-state", "money-mode",
+        "order-request",
     ),
     produces=("fill", "part-health"),
     resource_class="compute-bound",
@@ -81,6 +82,11 @@ RESTING_STOP = "resting-stop-not-triggered"
 # at whatever arrives, so an operator reading the book must not take it for an
 # order that is choosing to wait.
 RESTING_UNPRICED = "resting-no-price-has-arrived-yet"
+# The market is not in a session that trades, or no session has been measured
+# at all. The order goes on the book and waits for the open rather than filling
+# at whatever price was last seen -- which for an order placed at 18:00 is the
+# 15:29 price, journalled as a trade that could not have happened.
+RESTING_MARKET_CLOSED = "resting-the-market-is-not-open"
 STOP_TRIGGERED = "stop-triggered"
 CANCELLED = "cancelled"
 HELD_IN_FLIGHT = "held-until-the-round-trip-elapses"
@@ -170,6 +176,11 @@ class SimulatorStanding:
     # too is a symbol nothing is trading, which is a fact about the symbol.
     market_orders_waiting_for_a_first_price: int = 0
     refused_already_filled: int = 0
+    # Orders put on the book because the market is not in a trading session, or
+    # because no session has been measured at all. Not a refusal: the order is
+    # still there and fills at the open. A count that climbs during Indian
+    # market hours is a session reading that is wrong, not a quiet market.
+    rested_market_closed: int = 0
     fees_charged: float = 0.0
     worst_slippage_fraction: float = 0.0
     # The paper book itself: how many orders are on it now, how many stops it has
@@ -218,6 +229,9 @@ class PaperFillSimulator:
         self._options_stamp_duty_buy_rate = options_stamp_duty_buy_rate
         self._options_gst_rate = options_gst_rate
         self._now_ns = now_ns
+        # None until market-session-calendar says otherwise, and None does not
+        # fill: see `may_fill`.
+        self._session = None
         self._jumped_symbols: set[tuple[str, str]] = set()
         self._filled_so_far: dict[str, float] = {}
         self._fill_sequence = 0
@@ -225,6 +239,33 @@ class PaperFillSimulator:
         # holds an order under, and it is what a cancel names.
         self._resting: dict[str, RestingOrder] = {}
         self.standing = SimulatorStanding()
+
+    def observe_session(self, session) -> None:
+        """Which session the market is in. Never inferred from a price arriving:
+        a stale price arrives at midnight exactly as a live one does."""
+        self._session = session
+
+    @property
+    def may_fill(self) -> bool:
+        """Whether a fill may happen at all right now.
+
+        `None` -- no session measured yet -- is False, not True (Rule 8).
+        Absence of evidence is its own state, and filling off an unmeasured
+        session is how a paper account trades on a holiday.
+        """
+        return self._session is not None and self._session.is_tradeable
+
+    def _why_the_market_is_shut(self) -> str:
+        if self._session is None:
+            return (
+                "no trading session has been measured yet; an unmeasured session is "
+                "not an open one, and filling here is how a paper account trades on "
+                "a holiday"
+            )
+        return (
+            f"the {self._session.segment} market is {self._session.kind} "
+            f"({self._session.reason}); this order waits for the open"
+        )
 
     def observe_feed_jump(self, venue_id: str, symbol: str) -> None:
         """A discontinuity in this symbol's prices; nothing may fill across it."""
@@ -290,6 +331,12 @@ class PaperFillSimulator:
         Orders whose symbol has no new price are left alone rather than refused: a
         quiet symbol is not a reason to withdraw protection.
         """
+        if not self.may_fill:
+            # Every resting order stays exactly where it is. A stop is not
+            # withdrawn because the market closed -- it waits for the open, the
+            # same as it would at a venue.
+            self.standing.orders_on_the_book = len(self._resting)
+            return ()
         results = []
         for order in list(self._resting.values()):
             price = price_by_symbol.get(order.key)
@@ -456,7 +503,7 @@ class PaperFillSimulator:
                 quantity=quantity, order_type=order_type, limit_price=limit_price or None,
                 stop_price=stop_price, rested_at_ns=self._now_ns(), leverage=leverage,
             )
-            if market_price is not None and self.is_triggered(
+            if self.may_fill and market_price is not None and self.is_triggered(
                 order_type, side, stop_price, market_price
             ):
                 # Already through the trigger when it arrived. A venue fills this
@@ -473,6 +520,23 @@ class PaperFillSimulator:
                 order, RESTING_STOP,
                 f"a {side} {what} at {stop_price:g} is on the book"
                 + (f"; the market is at {market_price:g}" if market_price is not None else ""),
+            )
+
+        # Nothing fills outside a trading session. Placed after the triggered
+        # block so a stop still reaches the book by its own path with its own
+        # validation, and so a stop already through its trigger rests rather
+        # than filling at a price from before the close.
+        if not self.may_fill:
+            self.standing.rested_market_closed += 1
+            return self._rest(
+                RestingOrder(
+                    client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
+                    side=side, quantity=quantity, order_type=order_type,
+                    limit_price=limit_price or None, stop_price=stop_price,
+                    rested_at_ns=self._now_ns(), leverage=leverage,
+                ),
+                RESTING_MARKET_CLOSED,
+                self._why_the_market_is_shut(),
             )
 
         # The decision's own price against the price this would fill at. Checked
@@ -781,6 +845,11 @@ def start_part(context) -> int:
     requests = Batch(read=context.bus.reader("order-request"))
     trades = Batch(read=context.bus.reader("market-data"))
     modes = LatestValue(read=context.bus.reader("money-mode"))
+    # A level: market-session-calendar publishes a one-item tuple, true until
+    # it changes. Unbounded here on purpose -- the calendar recomputes it from
+    # the clock every tick, so an age bound would only expire a fact that is
+    # still true while nothing else could restate it.
+    sessions = LatestValue(read=context.bus.reader("market-session-state"))
     costs = Batch(read=context.bus.reader("cost-estimate"))
     delayed = Batch(read=context.bus.reader("delayed-order-request"))
     jumps = Batch(read=context.bus.reader("feed-jump"))
@@ -804,6 +873,10 @@ def start_part(context) -> int:
     monotonic = time.monotonic
 
     def read_orders(simulator):
+        standing_session = sessions.value()
+        if standing_session is not None:
+            for session in standing_session:
+                simulator.observe_session(session)
         for trade in trades_in(trades.payloads()):
             last_price[(trade.venue_id, trade.symbol)] = trade.price
         for jump in jumps.payloads():

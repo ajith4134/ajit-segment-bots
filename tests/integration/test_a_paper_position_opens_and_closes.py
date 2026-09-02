@@ -25,6 +25,8 @@ what is under test here is the chain of decisions that closes a position.
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from parts.paper_live_trading.paper_fill_simulator import (
@@ -45,6 +47,7 @@ from parts.portfolio_state.peak_excursion_tracker import PeakExcursionTracker
 from parts.portfolio_state.position_close_detector import PositionCloseDetector
 from parts.portfolio_state.usdt_pnl_accountant import UsdtPnlAccountant
 from parts.risk_capital_allocation.exit_order_chainer import CHAINED, ExitOrderChainer
+from runtime.market_conditions import MarketSessionState, SessionKind
 from runtime.trading_types import (
     BUY,
     LONG,
@@ -77,6 +80,14 @@ OPTIONS_EXCHANGE_TRANSACTION_CHARGE_RATE = 0.0003503
 OPTIONS_IPFT_CHARGE_RATE = 0.000005
 OPTIONS_STAMP_DUTY_BUY_RATE = 0.00003
 OPTIONS_GST_RATE = 0.18
+
+# The paper book does not fill outside a trading session (2026-09-02). These
+# integration runs are a trading day by construction, so they say so once here
+# rather than threading a session through every step.
+OPEN_SESSION = MarketSessionState(
+    segment="FO", kind=SessionKind.OPEN, as_of_date=datetime.date(2026, 9, 2),
+    reason="within stated session hours", observed_at_ns=1_756_800_000_000_000_000,
+)
 
 # The venue quantity step, matching the shipped `order_quantity_increment`. It is
 # what `fill-reconciler` already reconciles against below, and what decides when
@@ -134,6 +145,7 @@ class TheClosingChain:
             options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
             options_gst_rate=OPTIONS_GST_RATE,
         )
+        self.book.observe_session(OPEN_SESSION)
         self.reconciler = FillReconciler(quantity_tolerance=QUANTITY_INCREMENT)
         self.cost_basis = CostBasisTracker(QUANTITY_INCREMENT)
         self.excursions = PeakExcursionTracker()
@@ -473,6 +485,7 @@ def test_a_standing_intent_republished_as_the_market_moves_is_one_order(real_tra
         options_stamp_duty_buy_rate=OPTIONS_STAMP_DUTY_BUY_RATE,
         options_gst_rate=OPTIONS_GST_RATE,
     )
+    book.observe_session(OPEN_SESSION)
 
     class BoundedForThisTick:
         """What the gate publishes: the same decision, priced at this tick."""
