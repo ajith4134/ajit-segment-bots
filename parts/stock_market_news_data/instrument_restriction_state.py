@@ -26,7 +26,11 @@ from runtime.part_process import run_part
 PART_ID = "instrument-restriction-state"
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    # Written out rather than PART_ID: the part monitor reads this declaration
+    # statically, without importing the module, and refuses a computed value --
+    # so a part naming itself by reference reads as having no verifiable wiring
+    # and its whole block paints red while the part runs (2026-09-02).
+    part_id="instrument-restriction-state",
     consumes=("instrument-restriction-report",),
     produces=("instrument-restriction", "part-health"),
     resource_class="compute-bound",

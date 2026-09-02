@@ -33,7 +33,11 @@ from runtime.part_process import run_part
 PART_ID = "market-session-calendar"
 
 PART_DECLARATION = PartDeclaration(
-    part_id=PART_ID,
+    # Written out rather than PART_ID: the part monitor reads this declaration
+    # statically, without importing the module, and refuses a computed value --
+    # so a part naming itself by reference reads as having no verifiable wiring
+    # and its whole block paints red while the part runs (2026-09-02).
+    part_id="market-session-calendar",
     consumes=(),
     produces=("market-session-state", "part-health"),
     resource_class="io-bound",
