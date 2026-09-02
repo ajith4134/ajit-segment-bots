@@ -23,6 +23,8 @@ import dataclasses
 import json
 import pathlib
 
+MILLISECONDS_TO_NANOSECONDS = 1_000_000
+
 from runtime.part_context import RUNTIME_SCOPE as RUNTIME_SCOPE_NAME
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -67,6 +69,24 @@ def stream_kind_for(record_type: type) -> StreamKind:
     return _KIND_BY_TYPE[record_type]
 
 
+def venue_time_ns_of(record) -> int:
+    """Every decomposed record kind carries its own broker timestamp, but not
+    the same field: `BrokerCandle` is the one kind Upstox's own OHLC entry
+    states in milliseconds (`bar_time_ms`, the .proto's own `ts`) rather than
+    the `broker_time_ns` every other kind carries -- real bug, 2026-09-02:
+    write_one() read `record.broker_time_ns` unconditionally and crashed the
+    instant a real candle reached the tape writer, the first time the feed
+    ever decoded one (the mode="full_d5" subscribe bug meant it never had
+    before). broker_candle_bridge.py already does this same ms->ns
+    conversion for the same reason.
+    """
+    from runtime.brokers.broker_adapter import BrokerCandle
+
+    if isinstance(record, BrokerCandle):
+        return record.bar_time_ms * MILLISECONDS_TO_NANOSECONDS
+    return record.broker_time_ns
+
+
 def _payload_for(record) -> bytes:
     """JSON encoding of this project's own normalised record -- not the
     broker's raw bytes (module docstring explains why that differs from the
@@ -106,7 +126,7 @@ def start_part(context) -> int:
         writer_for(record.instrument_key, kind).append(
             stream_kind=kind,
             payload=_payload_for(record),
-            venue_time_ns=record.broker_time_ns,
+            venue_time_ns=venue_time_ns_of(record),
         )
         counts["records_written"] += 1
 
@@ -151,4 +171,5 @@ __all__ = [
     "PART_ID",
     "start_part",
     "stream_kind_for",
+    "venue_time_ns_of",
 ]

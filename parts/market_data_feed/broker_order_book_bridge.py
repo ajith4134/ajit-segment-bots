@@ -9,6 +9,17 @@ Bids and asks are sorted best-first rather than trusted from input order:
 best level, and Upstox's own depth levels arriving best-first is an
 assumption worth verifying in code, not just believing from the schema.
 
+**A zero-price level is dropped, never sorted.** Real bug, 2026-09-02: a
+thin option's real book can carry a level with no quote on one side --
+Upstox pairs bid and ask at the same depth index, and a side with fewer
+real levels than the other pads the rest at price=0, quantity=0. Sorting
+that in ascending order for asks put the pad *first* (0 sorts below any
+real ask), so `best_ask` read 0 -- a false "the book is nearly free" price
+-- on a book that in fact had a perfectly normal best ask, poisoning every
+consumer of `order-book-snapshot`, not only this one. A zero-price level
+carries no real quote, so it is excluded before the sort rather than sorted
+into first place.
+
 `sequence` uses `NOT_SENT`, the project's own existing sentinel for a
 source with no per-update sequence number (runtime/tape.py, already used
 by runtime/venues/binance_usdm.py for the same situation) -- not a new
@@ -52,13 +63,19 @@ class BrokerOrderBookBridge:
             return None
         bids = tuple(
             sorted(
-                ((level.bid_price, level.bid_quantity) for level in update.levels),
+                (
+                    (level.bid_price, level.bid_quantity) for level in update.levels
+                    if level.bid_price > 0
+                ),
                 key=lambda level: level[0], reverse=True,
             )
         )
         asks = tuple(
             sorted(
-                ((level.ask_price, level.ask_quantity) for level in update.levels),
+                (
+                    (level.ask_price, level.ask_quantity) for level in update.levels
+                    if level.ask_price > 0
+                ),
                 key=lambda level: level[0],
             )
         )

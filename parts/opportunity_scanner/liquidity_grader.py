@@ -109,9 +109,20 @@ class LiquidityGrader:
         self.standing = GraderStanding()
 
     def observe_book(self, venue_id: str, symbol: str, bids, asks) -> None:
+        """Sorted best-first, with any zero-price level dropped first.
+
+        Real bug, 2026-09-02: a thin option's real book can carry a level
+        with no quote on one side (a broker pads unused depth slots at
+        price=0), and sorting asks ascending put that pad *first* -- 0
+        sorts below any real ask -- so best_ask read 0 instead of the real
+        price. A zero-price level carries no real quote, so it is excluded
+        before the sort rather than sorted into first place; a side left
+        with nothing real becomes an empty tuple, which grade()'s own
+        two-sided-book check already treats as ungradeable.
+        """
         self._books[(venue_id, symbol)] = (
-            tuple(sorted(bids, key=lambda level: -level[0])),
-            tuple(sorted(asks, key=lambda level: level[0])),
+            tuple(sorted((level for level in bids if level[0] > 0), key=lambda level: -level[0])),
+            tuple(sorted((level for level in asks if level[0] > 0), key=lambda level: level[0])),
         )
 
     def observe_turnover(self, venue_id: str, symbol: str, quote_volume: float) -> None:
@@ -184,7 +195,10 @@ class LiquidityGrader:
         )
 
     def _walk_cost(self, levels, order_size_quote: float, touch: float) -> float | None:
-        """How far past the touch an order of this size would fill, as a fraction."""
+        """How far past the touch an order of this size would fill, as a fraction.
+
+        `levels` never carries a zero-price entry -- observe_book's own
+        filter is what guarantees that, not a check here."""
         remaining = order_size_quote
         cost = 0.0
         filled = 0.0

@@ -31,6 +31,16 @@ give -- how much wall-clock time has actually passed:
   daily -- generalised to `I<n>` = n minutes, `<n>d` = n days, matching the
   doc's own phrasing ("1d for daily, I1 for 1minute"). An interval outside
   that pattern is refused, never guessed.
+
+**Only `upstox_candle_interval` is republished.** Real bug, 2026-09-02:
+`market.marketOHLC.ohlc` is a repeated field -- one real feed message bundles
+several granularities together (a 1-minute bar and a daily bar arrived side by
+side), and this bridge used to republish every one of them onto the shared
+`candle` wire. kline-window-builder keys its per-symbol candle list by
+(venue_id, symbol) alone, with no interval check, so a daily bar landed inside
+a window of 1-minute bars and corrupted its own spacing math the instant a
+real feed carried more than one granularity -- invisible before this date
+because no OHLC had ever reached this bridge with real data.
 """
 
 from __future__ import annotations
@@ -74,17 +84,24 @@ def interval_duration_ns(interval: str) -> int | None:
 
 
 class BrokerCandleBridge:
-    """Resolves an instrument's own trading_symbol and republishes its OHLC bar."""
+    """Resolves an instrument's own trading_symbol and republishes its OHLC bar
+    at one interval only (module docstring: a real feed message bundles
+    several granularities together, and this is what stops them mixing on
+    the shared `candle` wire)."""
 
-    def __init__(self) -> None:
+    def __init__(self, wanted_interval: str) -> None:
         self._trading_symbol_by_key: dict[str, str] = {}
+        self._wanted_interval = wanted_interval
 
     def observe_listing(self, listing) -> None:
         self._trading_symbol_by_key[listing.instrument_key] = listing.trading_symbol
 
     def candle_for(self, bar, now_ns: int) -> NormalisedCandle | None:
-        """One OHLC bar, as candle -- or None if unresolved or the interval
-        code is not one of Upstox's documented shapes."""
+        """One OHLC bar, as candle -- or None if unresolved, the interval code
+        is not one of Upstox's documented shapes, or it is not the interval
+        this bridge is configured to republish."""
+        if bar.interval != self._wanted_interval:
+            return None
         symbol = self._trading_symbol_by_key.get(bar.instrument_key)
         if symbol is None:
             return None
@@ -123,7 +140,9 @@ def start_part(context) -> int:
     listings = Batch(read=context.bus.reader("broker-instrument-listing"))
     bars = Batch(read=context.bus.reader("broker-candle"))
     publish_candles = context.bus.publisher_for("candle")
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(
+        wanted_interval=str(context.setting("upstox_candle_interval").value),
+    )
 
     def tick() -> None:
         for listing in listings.payloads():

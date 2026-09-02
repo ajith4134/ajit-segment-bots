@@ -339,11 +339,20 @@ def start_part(context) -> int:
     """
     import pathlib
 
-    from runtime.candle_history import closed_candles_on_the_tape
+    from runtime.candle_history import (
+        closed_broker_candles_on_the_tape, closed_candles_on_the_tape,
+    )
     from runtime.forecast_types import Candle
     from runtime.input_assembly import Batch
     from runtime.venues.adapter_registry import load_venue_adapter
     from runtime.venues.venue_adapter import NormalisedCandle
+
+    # A data value carried on the wire, not a reference to another part
+    # (T-4): the broker path's tape is shaped differently from a crypto
+    # venue's own (runtime/candle_history.py's closed_broker_candles_on_the_
+    # tape docstring), so this is the one venue id this part branches on
+    # rather than resolving through the crypto-only venue-adapter registry.
+    UPSTOX_VENUE_ID = "upstox"
 
     updates = Batch(read=context.bus.reader("candle"))
     publish_windows = context.bus.publisher_for("kline-window")
@@ -363,6 +372,17 @@ def start_part(context) -> int:
         if key in seeded:
             return
         seeded.add(key)
+        if venue_id == UPSTOX_VENUE_ID:
+            history = closed_broker_candles_on_the_tape(
+                tape_root=tape_root,
+                venue_id=venue_id,
+                symbol=symbol,
+                wanted_interval=str(context.setting("upstox_candle_interval").value),
+                interval_ns=builder.interval_ns,
+                wanted=int(context.number("kline_maximum_window")),
+            )
+            builder.seed_history(venue_id, symbol, history)
+            return
         adapter = adapters.get(venue_id)
         if adapter is None:
             adapter = load_venue_adapter(venue_id)

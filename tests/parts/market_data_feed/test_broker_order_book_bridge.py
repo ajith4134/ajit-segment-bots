@@ -60,6 +60,38 @@ def test_bids_and_asks_are_sorted_best_first_regardless_of_input_order():
     assert snapshot.asks == ((225.7, 150.0), (225.75, 45.0))
 
 
+def test_a_zero_price_padding_level_is_dropped_not_sorted_as_best():
+    """Real bug, 2026-09-02: Upstox pairs bid and ask at the same depth
+    index, and a side with fewer real levels than the other pads the rest
+    at price=0, quantity=0. Sorting asks ascending put that pad *first* (0
+    sorts below any real ask), so best_ask read 0 instead of the real
+    225.7 -- a false 'the book is nearly free' price that poisoned every
+    consumer of order-book-snapshot, not only the liquidity grader that
+    first surfaced it as a crash."""
+    bridge = BrokerOrderBookBridge()
+    bridge.observe_listing(NIFTY_CALL)
+    book = _book("NSE_FO|1001", [
+        (225.4, 75.0, 225.7, 150.0),
+        (225.35, 30.0, 0.0, 0.0),
+    ])
+    snapshot = bridge.book_for(book)
+    assert snapshot.best_bid == 225.4
+    assert snapshot.best_ask == 225.7
+    assert snapshot.asks == ((225.7, 150.0),)
+
+
+def test_a_side_padded_entirely_to_zero_reads_as_no_quote_not_zero():
+    """The honest state for a side with no real quote at all is an empty
+    tuple (OrderBookSnapshot.best_ask already returns None for that), never
+    a fabricated 0 that reads as a free-to-buy market."""
+    bridge = BrokerOrderBookBridge()
+    bridge.observe_listing(NIFTY_CALL)
+    book = _book("NSE_FO|1001", [(225.4, 75.0, 0.0, 0.0), (225.35, 30.0, 0.0, 0.0)])
+    snapshot = bridge.book_for(book)
+    assert snapshot.asks == ()
+    assert snapshot.best_ask is None
+
+
 def test_an_unresolved_instrument_is_ignored_not_raised():
     bridge = BrokerOrderBookBridge()
     bridge.observe_listing(NIFTY_CALL)

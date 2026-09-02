@@ -28,18 +28,31 @@ def _bar(instrument_key="NSE_FO|1001", interval="I1", bar_time_ms=1_740_000_000_
 
 
 def test_candle_for_is_none_before_the_listing_resolves():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     assert bridge.candle_for(_bar(), now_ns=1_740_000_000_000 * 1_000_000) is None
 
 
 def test_an_unresolved_instrument_is_ignored_not_raised():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     assert bridge.candle_for(_bar(instrument_key="NSE_FO|9999"), now_ns=0) is None
 
 
+def test_a_bar_at_a_different_interval_than_configured_is_ignored_not_mixed_in():
+    """Real bug, 2026-09-02: market.marketOHLC.ohlc is a repeated field -- one
+    real feed message bundles a 1-minute bar and a daily bar together, and
+    this bridge used to republish both onto the shared `candle` wire.
+    kline-window-builder keys its per-symbol candle list by (venue_id,
+    symbol) alone with no interval check, so the daily bar corrupted a
+    window built from 1-minute bars. Configuring the bridge for one interval
+    and filtering the rest is what stops that."""
+    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge.observe_listing(NIFTY_CALL)
+    assert bridge.candle_for(_bar(interval="1d"), now_ns=0) is None
+
+
 def test_builds_a_real_normalised_candle_readable_by_kline_window_builder():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     now_ns = 1_740_000_000_000 * 1_000_000 + ONE_MINUTE_NS
     candle = bridge.candle_for(_bar(), now_ns=now_ns)
@@ -56,14 +69,14 @@ def test_builds_a_real_normalised_candle_readable_by_kline_window_builder():
 
 
 def test_i1_parses_as_one_minute_for_closure_timing():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     assert bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns).close_time_ns == open_ns + ONE_MINUTE_NS
 
 
 def test_1d_parses_as_one_day_for_closure_timing():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="1d")
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     candle = bridge.candle_for(_bar(interval="1d", bar_time_ms=1_740_000_000_000), now_ns=open_ns)
@@ -71,7 +84,7 @@ def test_1d_parses_as_one_day_for_closure_timing():
 
 
 def test_an_unrecognised_interval_is_refused_not_guessed():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="1w")
     bridge.observe_listing(NIFTY_CALL)
     assert bridge.candle_for(_bar(interval="1w"), now_ns=0) is None
 
@@ -80,7 +93,7 @@ def test_is_closed_is_false_while_wall_clock_has_not_reached_the_bar_s_close():
     """Upstox restates the forming bar on every tick and carries no closed
     flag (unlike Binance's k.x / Bybit's confirm) -- inferred from elapsed
     wall time instead, the only fact this venue actually gives."""
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     still_forming = bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns + 30_000_000_000)
@@ -88,7 +101,7 @@ def test_is_closed_is_false_while_wall_clock_has_not_reached_the_bar_s_close():
 
 
 def test_is_closed_is_true_once_wall_clock_passes_the_bar_s_close():
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     finished = bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns + ONE_MINUTE_NS + 1)
@@ -99,7 +112,7 @@ def test_quote_volume_is_the_documented_close_times_volume_approximation():
     """Upstox's OHLC entry carries no per-bar turnover figure at all -- close
     * volume is a stated approximation (RL-061), never treated as the real
     sum of price*quantity a venue that does report turnover would give."""
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     candle = bridge.candle_for(_bar(), now_ns=0)
     assert candle.quote_volume == 222.0 * 1500.0
@@ -109,7 +122,7 @@ def test_trades_is_none_not_fabricated_zero():
     """Same shape as Bybit's own kline stream (runtime/venues/venue_adapter.py's
     NormalisedCandle.trades docstring): a venue that sends no count gets None,
     never a 0 that would read as 'nothing traded'."""
-    bridge = BrokerCandleBridge()
+    bridge = BrokerCandleBridge(wanted_interval="I1")
     bridge.observe_listing(NIFTY_CALL)
     candle = bridge.candle_for(_bar(), now_ns=0)
     assert candle.trades is None

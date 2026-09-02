@@ -32,9 +32,13 @@ reads instead of eleven thousand.
 from __future__ import annotations
 
 import datetime
+import json
 import pathlib
 
+from runtime.forecast_types import Candle
 from runtime.tape import StreamKind, read_payload, read_tape_index, tape_paths_for
+
+MILLISECONDS_TO_NANOSECONDS = 1_000_000
 
 # How many records at the *start* of a minute's bucket to read before giving that
 # minute up. The buckets are cut on event time, and a venue sends the closing
@@ -115,6 +119,103 @@ def closed_candles_on_the_tape(
     # Backwards from the newest, stopping at the first hole: a seeded window with
     # a gap in it is a series the model was never shown.
     ordered = [by_open[key] for key in sorted(by_open)]
+    contiguous = [ordered[-1]]
+    for candle in reversed(ordered[:-1]):
+        if contiguous[0].open_time_ns - candle.open_time_ns != interval_ns:
+            break
+        contiguous.insert(0, candle)
+        if len(contiguous) >= wanted:
+            break
+    return tuple(contiguous)
+
+
+def _candle_from_broker_payload(open_time_ns: int, payload: dict) -> Candle:
+    return Candle(
+        open_time_ns=open_time_ns,
+        open=payload["open"], high=payload["high"], low=payload["low"],
+        close=payload["close"], volume=payload["volume"],
+        # Same close*volume approximation broker-candle-bridge states for the
+        # live path (RL-061) -- Upstox's OHLC entry carries no per-bar
+        # turnover figure to read instead.
+        quote_volume=payload["close"] * payload["volume"], trades=0,
+        is_closed=True,
+    )
+
+
+def closed_broker_candles_on_the_tape(
+    tape_root: pathlib.Path,
+    venue_id: str,
+    symbol: str,
+    wanted_interval: str,
+    interval_ns: int,
+    wanted: int,
+    now: datetime.datetime | None = None,
+) -> tuple[Candle, ...]:
+    """The most recent `wanted` closed broker candles for one symbol, oldest
+    first -- `closed_candles_on_the_tape`'s counterpart for a broker tape,
+    never reused directly against one, because the two tapes are shaped
+    differently in a way that would silently mispick candles if they shared
+    one heuristic.
+
+    A crypto venue states a closed flag directly and stamps a candle
+    record's own event time as its *arrival*, so a bar's closing update
+    lands in the *next* minute's bucket -- `closed_candles_on_the_tape`'s
+    "read the first few records of bucket M+1" is built on that fact.
+    Upstox states no closed flag at all (runtime/brokers/upstox.py's
+    `_read_ohlc`) and `broker-market-tape-writer` stamps a candle record's
+    venue_time_ns as the bar's own *open* time (`venue_time_ns_of`), so
+    every restatement of one forming bar shares one bucket with each other,
+    not with the next bar. Reusing the crypto heuristic here would read an
+    early, incomplete restatement as if it were the close.
+
+    So this earns its own rule instead: a bucket's last-seen record, kept
+    only once a later record proves a *different* bucket has started, is
+    that bar's close -- the same fact broker-candle-bridge uses for the
+    live path (wall time passing the bar's own interval), expressed here as
+    "the tape moved on to the next bar" because every record already on the
+    tape is, by definition, in the past. The bucket still open at the end of
+    the scan is excluded: nothing on the tape yet proves it closed.
+    """
+    if wanted < 1 or interval_ns < 1:
+        return ()
+    stamp = now or datetime.datetime.now(datetime.UTC)
+    days_oldest_first = tuple(reversed(_days_to_read(stamp)))
+
+    last_in_bucket: dict[int, tuple[int, dict]] = {}
+    current_bucket: int | None = None
+    closed: dict[int, Candle] = {}
+
+    def close_bucket(bucket: int) -> None:
+        held = last_in_bucket.pop(bucket, None)
+        if held is not None:
+            open_time_ns, payload = held
+            closed[open_time_ns] = _candle_from_broker_payload(open_time_ns, payload)
+
+    for day in days_oldest_first:
+        index_path, blob_path = tape_paths_for(
+            tape_root, venue_id, symbol, day, StreamKind.CANDLE
+        )
+        if not index_path.exists() or not blob_path.exists():
+            continue
+        records = read_tape_index(index_path)
+        for position in range(len(records)):
+            record = records[position]
+            payload = json.loads(read_payload(blob_path, record))
+            if payload.get("interval") != wanted_interval:
+                continue
+            open_time_ns = int(payload["bar_time_ms"]) * MILLISECONDS_TO_NANOSECONDS
+            bucket = open_time_ns // interval_ns
+            if current_bucket is not None and bucket != current_bucket:
+                close_bucket(current_bucket)
+            last_in_bucket[bucket] = (open_time_ns, payload)
+            current_bucket = bucket
+
+    if not closed:
+        return ()
+
+    # Backwards from the newest, stopping at the first hole -- same rule
+    # closed_candles_on_the_tape applies, for the same reason.
+    ordered = [closed[key] for key in sorted(closed)]
     contiguous = [ordered[-1]]
     for candle in reversed(ordered[:-1]):
         if contiguous[0].open_time_ns - candle.open_time_ns != interval_ns:
