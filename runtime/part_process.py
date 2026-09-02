@@ -83,6 +83,10 @@ class PartHealth:
     # last block starting, which is a claim nobody had measured.
     messages_received: tuple[tuple[str, int], ...] = ()
     messages_published: tuple[tuple[str, int], ...] = ()
+    # Per produced type, how many sends did not reach a consumer. The other half of
+    # `messages_published`, which until 2026-09-02 counted these as publishes and so
+    # showed a part sending into the void as one doing its job.
+    messages_not_delivered: tuple[tuple[str, int], ...] = ()
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:

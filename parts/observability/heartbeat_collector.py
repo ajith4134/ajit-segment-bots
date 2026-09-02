@@ -74,6 +74,7 @@ class Heartbeat:
     # thing measurable before this was whether both ends were alive.
     messages_received: tuple[tuple[str, int], ...] = ()
     messages_published: tuple[tuple[str, int], ...] = ()
+    messages_not_delivered: tuple[tuple[str, int], ...] = ()
 
     @property
     def is_healthy(self) -> bool:
@@ -227,6 +228,10 @@ class HeartbeatCollector:
                         (str(data_type), int(count))
                         for data_type, count in getattr(health, "messages_published", ()) or ()
                     ),
+                    messages_not_delivered=tuple(
+                        (str(data_type), int(count))
+                        for data_type, count in getattr(health, "messages_not_delivered", ()) or ()
+                    ),
                     reason=reason,
                 )
             )
@@ -337,6 +342,7 @@ def heartbeat_table_as_document(table: HeartbeatTable, standing: CollectorStandi
                 "standing": dict(beat.standing),
                 "messages_received": dict(beat.messages_received),
                 "messages_published": dict(beat.messages_published),
+                "messages_not_delivered": dict(beat.messages_not_delivered),
                 "reason": beat.reason,
             }
             for beat in table.heartbeats

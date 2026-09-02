@@ -122,6 +122,7 @@ class PartContext:
             standing=health.standing,
             messages_received=self.bus.messages_received(),
             messages_published=self.bus.messages_published(),
+            messages_not_delivered=self.bus.messages_not_delivered(),
         )
         self.bus.publish(HEALTH_TYPE, [reported])
         # Returned as well as published, because one part observes its own report:
