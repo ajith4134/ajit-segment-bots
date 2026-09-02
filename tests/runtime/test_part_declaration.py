@@ -78,7 +78,10 @@ def test_a_declaration_loaded_from_the_blueprint_matches_what_the_blueprint_says
     declaration = load_declaration_from_blueprint("kline-window-builder")
     # `candle` since 2026-08-25: market-data carried trades, candles and books at
     # once, and the first candle crashed a part that reads a trade's sequence.
-    assert declaration.consumes == ("candle",)
+    # `corporate-action` since 2026-09-02: an unadjusted 1:1 bonus reaches this
+    # part as a -50% candle that every detector fires on, so it rescales the
+    # window rather than believing the print.
+    assert declaration.consumes == ("candle", "corporate-action")
     assert "part-health" in declaration.produces
 
 
