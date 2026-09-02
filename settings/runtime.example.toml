@@ -4053,3 +4053,12 @@ note  = "Claude, 2026-09-02: how often trading-restriction-reader re-reads the F
 value = true
 unit  = "whether an ASM stage blocks a fresh position"
 note  = "Claude, 2026-09-02: NSE's ASM raises margin and tightens surveillance; it does not itself forbid trading. Set true because Phase A is paper trading with bots that have no margin model yet -- entering an ASM name would size against a margin requirement the system does not know. A deliberate conservatism, not an exchange rule; revisit when the margin model reads real broker margin per instrument."
+[instrument_restriction_maximum_age_seconds]
+value = 5400.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long one source's restriction claim stands after it was last seen. NSE does not publish an un-ban -- a lifted name simply stops appearing in fo_secban.csv -- so a claim that never expired would ban a symbol permanently and nothing would report it. 5400s is 1.5x trading_restriction_poll_seconds' 900s plus room for two consecutive failed polls: short enough that a lifted ban clears in about the time it takes to notice, long enough that one refused fetch never un-bans a name that is still banned. NOT measured against real ban-lift timing; re-derive once a full ban lift has been observed end to end."
+
+[instrument_restriction_refresh_interval_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long the unchanged restriction level may go unsaid before it is restated. Most days it does not change at all, so this is the heartbeat that tells a consumer starting mid-session what is banned without waiting for the next 15-minute poll. 60s matches the health interval already used across the spine -- a consumer that has been up a minute has the level."
