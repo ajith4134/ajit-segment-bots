@@ -139,14 +139,26 @@ class InstrumentListing:
 class SubscriptionMode(enum.StrEnum):
     """The four ways to ask Upstox's v3 feed for one instrument's data.
 
-    Values match the .proto's own RequestMode enum names exactly (the spec's
-    docs-page reading of "full" was corrected to the real "full_d5" against
-    the actual wire schema).
+    Real bug, 2026-09-02: FULL was "full_d5" here from 2026-09-01, "corrected"
+    from the docs page's "full" against the .proto's RequestMode enum -- but
+    that enum names the mode Upstox's own reply carries (decoding direction,
+    `response.marketInfo`/`feed.fullFeed`'s own metadata), not the string the
+    *request* JSON's own "mode" field takes. Upstox's real subscribe-request
+    docs (upstox.com/developer/api-documentation/v3/get-market-data-feed,
+    re-fetched raw 2026-09-02) show `"mode": "full"` in the request sample,
+    and empirically: with "full_d5" the connection opened, the initial
+    market_info packet decoded, and then nothing else ever arrived --
+    Upstox's server silently ignored a subscribe request it didn't recognise.
+    With "full" the very next message was a real `initial_feed` carrying real
+    ltp/depth/OI/greeks data for every subscribed instrument. This is what
+    kept `decoded_messages` stuck at 1 through every session since the feed
+    first connected on 2026-09-02, mistaken at the time for a subscription-
+    count problem.
     """
 
     LTPC = "ltpc"
     OPTION_GREEKS = "option_greeks"
-    FULL = "full_d5"
+    FULL = "full"
     FULL_D30 = "full_d30"
 
 

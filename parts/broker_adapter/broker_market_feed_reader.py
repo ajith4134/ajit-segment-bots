@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 from runtime.brokers.broker_adapter import (
-    BrokerAdapter, InstrumentListing, SubscriptionMode, SubscriptionRequest,
+    BrokerAdapter, DecodedFeedMessage, InstrumentListing, SubscriptionMode,
+    SubscriptionRequest,
 )
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -137,6 +138,34 @@ def plan_additional_subscriptions(
     return tuple(added)
 
 
+def dispatch_decoded_message(
+    decoded: DecodedFeedMessage,
+    publish_ltp: Callable[[Sequence], None],
+    publish_candle: Callable[[Sequence], None],
+    publish_book: Callable[[Sequence], None],
+    publish_oi: Callable[[Sequence], None],
+    publish_greeks: Callable[[Sequence], None],
+) -> None:
+    """One call per record kind, each carrying the whole batch -- never one
+    call per item.
+
+    Real bug, 2026-09-02: this used to loop and call e.g. publish_ltp(update)
+    once per item in decoded.ltp_updates. bus.publish() takes the whole
+    iterable in one call (`for item in items` is its own internal loop), so
+    a single LtpUpdate handed to it raised `TypeError: 'LtpUpdate' object is
+    not iterable` the instant a real message ever had a non-empty
+    ltp_updates. Invisible until this date because decoding never produced
+    real feed data before then -- the "full_d5" subscribe-mode bug
+    (SubscriptionMode.FULL) meant Upstox silently never sent anything past
+    the initial market_info packet, so this path had never actually run.
+    """
+    publish_ltp(decoded.ltp_updates)
+    publish_candle(decoded.candles)
+    publish_book(decoded.book_updates)
+    publish_oi(decoded.open_interest)
+    publish_greeks(decoded.option_greeks)
+
+
 def describe_standing(counts: dict, last_failure: str | None) -> dict:
     return {"part_id": PART_ID, **counts, "last_failure": last_failure}
 
@@ -178,16 +207,10 @@ def start_part(context) -> int:
             counts["last_failure"] = f"{type(failure).__name__}: {failure}"
             return
         counts["decoded_messages"] += 1
-        for update in decoded.ltp_updates:
-            publish_ltp(update)
-        for candle in decoded.candles:
-            publish_candle(candle)
-        for book in decoded.book_updates:
-            publish_book(book)
-        for oi in decoded.open_interest:
-            publish_oi(oi)
-        for greeks in decoded.option_greeks:
-            publish_greeks(greeks)
+        dispatch_decoded_message(
+            decoded, publish_ltp, publish_candle, publish_book,
+            publish_oi, publish_greeks,
+        )
 
     state = {
         "connection": None,
@@ -320,6 +343,7 @@ __all__ = [
     "PART_DECLARATION",
     "PART_ID",
     "describe_standing",
+    "dispatch_decoded_message",
     "fetch_authorized_stream_url",
     "listing_key_of",
     "plan_additional_subscriptions",

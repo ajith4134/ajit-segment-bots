@@ -164,7 +164,7 @@ def test_encode_subscribe_frame_is_json_bytes_with_one_mode():
     ])
     decoded = json.loads(frame.decode("utf-8"))
     assert decoded["method"] == "sub"
-    assert decoded["data"]["mode"] == "full_d5"
+    assert decoded["data"]["mode"] == "full"
     assert decoded["data"]["instrumentKeys"] == ["NSE_EQ|INE002A01018"]
     assert "guid" in decoded
 
