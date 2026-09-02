@@ -32,10 +32,14 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "kline-window-builder"
+# The exchange's own day boundary, for deciding which bars sit before a
+# corporate action's ex-date. This box runs on UTC, and a UTC midnight would put
+# every bar between 00:00 and 05:30 IST on the wrong side of the adjustment.
+EXCHANGE_TIMEZONE = "Asia/Kolkata"
 
 PART_DECLARATION = PartDeclaration(
     part_id="kline-window-builder",
-    consumes=("candle",),
+    consumes=("candle", "corporate-action"),
     produces=("kline-window", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -79,6 +83,10 @@ class BuilderStanding:
     windows_still_filling: int = 0
     aggregations_refused: int = 0
     symbols_tracked: int = 0
+    # Corporate actions this builder has rescaled its own history for. A count
+    # that stays at zero through an Indian ex-date is a series with a synthetic
+    # gap in it, not a quiet calendar.
+    corporate_actions_applied: int = 0
     # Candles taken from the tape to fill a window that started empty, and the
     # symbols whose history was refused for having a hole in it. Counted apart
     # from candles_observed because one arrived live and the other was recorded
@@ -87,6 +95,36 @@ class BuilderStanding:
     symbols_seeded: int = 0
     seeds_refused_for_a_gap: int = 0
     by_interval: dict = field(default_factory=dict)
+
+
+def _ex_date_boundary_ns(ex_date) -> int:
+    """Midnight IST on the ex-date, as epoch nanoseconds.
+
+    The exchange's own day boundary, not the machine's: this box runs on UTC,
+    and a UTC midnight would put every bar from 05:30 IST on the wrong side.
+    """
+    import datetime
+    import zoneinfo
+
+    midnight = datetime.datetime.combine(
+        ex_date, datetime.time(0, 0), tzinfo=zoneinfo.ZoneInfo(EXCHANGE_TIMEZONE)
+    )
+    return int(midnight.timestamp() * 1_000_000_000)
+
+
+def _rescaled(candle: Candle, action) -> Candle:
+    """One pre-ex bar, restated in post-ex terms. quote_volume is untouched."""
+    return Candle(
+        open_time_ns=candle.open_time_ns,
+        open=candle.open * action.price_factor,
+        high=candle.high * action.price_factor,
+        low=candle.low * action.price_factor,
+        close=candle.close * action.price_factor,
+        volume=candle.volume * action.quantity_factor,
+        quote_volume=candle.quote_volume,
+        trades=candle.trades,
+        is_closed=candle.is_closed,
+    )
 
 
 class KlineWindowBuilder:
@@ -112,6 +150,11 @@ class KlineWindowBuilder:
         self._include_open = include_open_candle
         self._now_ns = now_ns
         self._candles: dict[tuple[str, str], list] = {}
+        # Actions already applied, by (venue, symbol, ex-date, the wording it
+        # was read from). Reports are republished on every poll of NSE's file,
+        # and applying a 1:1 bonus twice quarters the history -- a worse answer
+        # than never applying it, because it looks adjusted.
+        self._actions_applied: set[tuple[str, str, object, str]] = set()
         self.standing = BuilderStanding()
 
     @property
@@ -122,6 +165,52 @@ class KlineWindowBuilder:
     def interval_ns(self) -> int:
         """The interval in nanoseconds, for a caller reading history off the tape."""
         return self._interval_ns
+
+    def candles_for(self, venue_id: str, symbol: str) -> tuple:
+        """This symbol's stored run, oldest first."""
+        return tuple(self._candles.get((venue_id, symbol), ()))
+
+    def symbols_tracked_keys(self) -> tuple:
+        """Every (venue, symbol) this builder holds candles for.
+
+        A corporate action names a symbol and no venue -- NSE publishes one, and
+        which venue's feed carried the bars is this part's own bookkeeping.
+        """
+        return tuple(self._candles)
+
+    def observe_corporate_action(self, venue_id: str, action) -> None:
+        """Rescale this symbol's stored candles from before the action's ex-date.
+
+        A 1:1 bonus halves the price. Unadjusted, the ex-date open sits beside
+        the previous close at half the value: a -50% bar, the largest move this
+        window has ever carried, and every detector downstream fires on an event
+        that did not happen.
+
+        Prices are multiplied by `price_factor` and quantities by
+        `quantity_factor`. Turnover is left exactly as it was, because the same
+        rupees changed hands either side of a bonus -- price falls by the same
+        factor the share count rises by, and rescaling it would invent money.
+
+        The boundary is midnight IST on the ex-date: a bar opened before it is
+        pre-ex, one opened on or after it is already adjusted by the exchange.
+        Applied once per (venue, symbol, ex-date, wording).
+        """
+        if action.price_factor == 1.0 and action.quantity_factor == 1.0:
+            return
+        seen = (venue_id, action.symbol, action.ex_date, action.stated_from)
+        if seen in self._actions_applied:
+            return
+        candles = self._candles.get((venue_id, action.symbol))
+        if candles is None:
+            self._actions_applied.add(seen)
+            return
+        boundary_ns = _ex_date_boundary_ns(action.ex_date)
+        self._candles[(venue_id, action.symbol)] = [
+            _rescaled(candle, action) if candle.open_time_ns < boundary_ns else candle
+            for candle in candles
+        ]
+        self._actions_applied.add(seen)
+        self.standing.corporate_actions_applied += 1
 
     def observe_candle(self, venue_id: str, symbol: str, candle: Candle) -> None:
         """One candle. A repeat of the same open time replaces it -- streams revise."""
@@ -355,6 +444,10 @@ def start_part(context) -> int:
     UPSTOX_VENUE_ID = "upstox"
 
     updates = Batch(read=context.bus.reader("candle"))
+    # An event, not a level: an action happens once and is applied once. The
+    # builder itself refuses a repeat, because NSE's file republishes the same
+    # action on every poll.
+    actions = Batch(read=context.bus.reader("corporate-action"))
     publish_windows = context.bus.publisher_for("kline-window")
     builder = KlineWindowBuilder(
         interval=str(context.setting("candle_interval").value),
@@ -411,6 +504,12 @@ def start_part(context) -> int:
 
     def read_candles(_builder):
         touched = set()
+        # Before the candles, so a bar arriving in the same tick as the action
+        # is not rescaled by an adjustment the exchange already made to it.
+        for action in actions.payloads():
+            for venue_id, symbol in list(builder.symbols_tracked_keys()):
+                if symbol == action.symbol:
+                    builder.observe_corporate_action(venue_id, action)
         for update in updates.payloads():
             if not isinstance(update, NormalisedCandle):
                 continue
