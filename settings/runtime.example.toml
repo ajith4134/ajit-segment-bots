@@ -4039,3 +4039,17 @@ note  = "operator, 2026-08-30: below this many prices in the window, the measure
 value = 900.0
 unit  = "seconds"
 note  = "operator, 2026-08-30: the least time between two reviews of the same bellwether symbol -- fifteen minutes, the same order as symbol_catalogue_refresh_interval (900 s), so a market thesis is refreshed on the same cadence the rest of the system already treats as 'the world may have changed' rather than on every verified-snapshot tick."
+[nse_public_data_timeout_seconds]
+value = 20.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long a request to one of NSE's own public endpoints may take before it is abandoned. 20s follows broker_instrument_catalogue_timeout_seconds' own reasoning -- these are CDN-served archive files and JSON endpoints, and a warmed session's first homepage call is the slow one. NOT measured against a p99 of NSE's own latency; re-derive if refusals start clustering at the timeout rather than at a status code."
+
+[trading_restriction_poll_seconds]
+value = 900.0
+unit  = "seconds between fetches"
+note  = "Claude, 2026-09-02: how often trading-restriction-reader re-reads the F&O ban list plus the ASM lists. NSE republishes fo_secban.csv once per trading day (its own body names a single Trade Date, verified live 2026-09-02) and the ASM lists daily after market close, so a 15-minute poll is far finer than the data changes -- chosen for the intraday-revision case NSE occasionally publishes rather than for the daily one, and deliberately not finer, because a per-minute poll of a once-daily file is load on a public endpoint with no answer to show for it."
+
+[asm_restricts_new_positions]
+value = true
+unit  = "whether an ASM stage blocks a fresh position"
+note  = "Claude, 2026-09-02: NSE's ASM raises margin and tightens surveillance; it does not itself forbid trading. Set true because Phase A is paper trading with bots that have no margin model yet -- entering an ASM name would size against a margin requirement the system does not know. A deliberate conservatism, not an exchange rule; revisit when the margin model reads real broker margin per instrument."
