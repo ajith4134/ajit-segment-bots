@@ -274,6 +274,45 @@ def test_build_margin_quote_request_payload_refuses_more_than_twenty():
         adapter.build_margin_quote_request_payload(requests)
 
 
+def test_stream_authorize_url_is_the_documented_v3_path():
+    # upstox.com/developer/api-documentation/get-market-data-feed-authorize-v3,
+    # fetched 2026-09-02 (<endpoint-path>/feed/market-data-feed/authorize).
+    adapter = UpstoxAdapter()
+    assert adapter.stream_authorize_url() == (
+        "https://api.upstox.com/v3/feed/market-data-feed/authorize"
+    )
+
+
+def test_parse_authorized_stream_url_from_upstox_own_sample():
+    # Real bug, 2026-09-02: broker-market-feed-reader connected straight to
+    # a fixed wss:// URL with a Bearer header and never got a real
+    # connection -- Upstox's V3 feed requires calling this authorize
+    # endpoint first and connecting to the signed, single-use URL it
+    # returns. Source: same doc page, its own 200 response sample.
+    response = {
+        "status": "success",
+        "data": {
+            "authorized_redirect_uri": (
+                "wss://xyz.upstox.com/market-data-feeder/v3/upstox-developer-api/"
+                "feeds?requestId=2f646f57-a097-4402-bb36-c44085c5f8e7&"
+                "code=9355b100-25cf-4fa7-b038-06d27ddb4823"
+            ),
+        },
+    }
+    adapter = UpstoxAdapter()
+    url = adapter.parse_authorized_stream_url(response)
+    assert url.startswith("wss://xyz.upstox.com/market-data-feeder/v3/")
+    assert "requestId=" in url and "code=" in url
+
+
+def test_parse_authorized_stream_url_refuses_a_response_with_no_uri():
+    import pytest
+
+    adapter = UpstoxAdapter()
+    with pytest.raises(ValueError):
+        adapter.parse_authorized_stream_url({"status": "success", "data": {}})
+
+
 def test_read_margin_quotes_from_upstox_own_sample():
     # Source: same page, EQ response sample, fetched 2026-09-01.
     response = {

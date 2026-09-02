@@ -283,7 +283,7 @@ def start_part(context) -> int:
             generate_token=generate_token, standing=refresh_standing,
         )
         if current[0] is not None:
-            publish_standing(current[0])
+            publish_standing((current[0],))
 
     return run_part(
         declaration=PART_DECLARATION,

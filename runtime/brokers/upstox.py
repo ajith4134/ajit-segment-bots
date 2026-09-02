@@ -180,6 +180,33 @@ class UpstoxAdapter(BrokerAdapter):
     def stream_endpoint_url(self) -> str:
         return "wss://api.upstox.com/v3/feed/market-data-feed"
 
+    def stream_authorize_url(self) -> str:
+        """Where to GET the real, signed feed URL before connecting.
+
+        Real bug, 2026-09-02: `stream_endpoint_url()` above is not something
+        a client connects to directly -- Upstox's V3 feed requires this
+        separate authorize call first (Authorization: Bearer + Accept:
+        application/json), and the actual connection target is whatever
+        `parse_authorized_stream_url` extracts from its response. Source:
+        upstox.com/developer/api-documentation/get-market-data-feed-
+        authorize-v3, fetched 2026-09-02 (<endpoint-path>/feed/market-data-
+        feed/authorize).
+        """
+        return "https://api.upstox.com/v3/feed/market-data-feed/authorize"
+
+    @staticmethod
+    def parse_authorized_stream_url(response: dict) -> str:
+        """The signed, single-use wss:// URL from the authorize call's own
+        response shape -- same doc page's 200 sample:
+        `{"status": "success", "data": {"authorized_redirect_uri": "wss://..."}}`.
+        """
+        uri = response.get("data", {}).get("authorized_redirect_uri")
+        if not uri:
+            raise ValueError(
+                f"the authorize response carried no authorized_redirect_uri: {response!r}"
+            )
+        return uri
+
     def heartbeat_discipline(self) -> HeartbeatDiscipline:
         # Standard WS ping/pong, handled by most client libraries -- Upstox
         # sends the ping frame itself, simpler than a venue requiring an

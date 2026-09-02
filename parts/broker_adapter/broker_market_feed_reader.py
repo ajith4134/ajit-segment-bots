@@ -10,6 +10,7 @@ candle/market-data/order-book-snapshot apart for the crypto build).
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Sequence
 
@@ -20,6 +21,38 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "broker-market-feed-reader"
+
+
+def fetch_authorized_stream_url(
+    adapter, access_token: str, timeout_seconds: float = 15.0,
+    fetch=None,
+) -> str:
+    """The real, signed wss:// URL to connect to -- adapter.stream_endpoint_url()
+    is not one; see UpstoxAdapter.stream_authorize_url's own docstring for
+    why this call exists at all.
+
+    curl_cffi with Chrome impersonation, not stdlib urllib -- real bug,
+    2026-09-02: urllib.request got a Cloudflare 403 ("Error 1010:
+    browser_signature_banned", not an Upstox auth error at all) on this
+    exact endpoint. upstox_totp (already a dependency, already proven
+    against this same api.upstox.com Cloudflare front for the login flow)
+    uses curl_cffi's browser impersonation for exactly this reason; this
+    call needed the same technique, not a new one.
+    """
+    def default_fetch(url, headers):
+        from curl_cffi import requests as curl_requests
+
+        response = curl_requests.get(
+            url, headers=headers, impersonate="chrome131", timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        return response.content
+
+    body = (fetch or default_fetch)(
+        adapter.stream_authorize_url(),
+        {"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+    )
+    return adapter.parse_authorized_stream_url(json.loads(body))
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-market-feed-reader",
@@ -32,6 +65,20 @@ PART_DECLARATION = PartDeclaration(
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
+
+
+def listing_key_of(listing: InstrumentListing) -> str:
+    """One key per instrument, not per broker.
+
+    Real bug, 2026-09-02: start_part used to key instrument_listings'
+    LatestByKey by `adapter.broker_id` -- a constant, ignoring the message
+    entirely -- so every one of the 101,393 real listings from
+    broker-instrument-catalogue-reader overwrote the same single entry.
+    ensure_connected() then handed plan_subscriptions one InstrumentListing
+    instead of a collection of them, and `for listing in listings` crashed
+    the live spine the first time a real token let this part get that far.
+    """
+    return listing.instrument_key
 
 
 def plan_subscriptions(
@@ -77,7 +124,7 @@ def start_part(context) -> int:
     )
     instrument_listings = LatestByKey(
         read=context.bus.reader("broker-instrument-listing"),
-        key_of=lambda _: adapter.broker_id,
+        key_of=listing_key_of,
         maximum_age_seconds=context.number("broker_instrument_listing_maximum_age"),
     )
 
@@ -118,7 +165,7 @@ def start_part(context) -> int:
         if state["connection"] is not None:
             return True
         token = token_standing.mapping().get(adapter.broker_id)
-        listings = instrument_listings.mapping().get(adapter.broker_id)
+        listings = instrument_listings.values()
         if token is None or not token.is_still_valid() or not listings:
             # Not a failure -- a normal state before either producer has
             # spoken, or after the token has expired and refresh is still
@@ -128,16 +175,18 @@ def start_part(context) -> int:
         if not plan:
             return False
         try:
+            # Upstox's V3 feed is not connected to directly (spec section 5
+            # correction, 2026-09-02): the signed, single-use URL comes from
+            # this authorize call, and the websocket connection itself needs
+            # no Authorization header -- the auth is in the URL's own query.
+            stream_url = fetch_authorized_stream_url(adapter, token.access_token)
             connection = connect_websocket(
-                adapter.stream_endpoint_url(),
-                additional_headers={
-                    "Authorization": f"Bearer {token.access_token}",
-                    "Accept": "*/*",
-                },
+                stream_url,
+                additional_headers={"Accept": "*/*"},
                 open_timeout=context.number("broker_connection_open_timeout"),
             )
             connection.send(adapter.encode_subscribe_frame(plan))
-        except (OSError, WebSocketException) as failure:
+        except (OSError, WebSocketException, ValueError) as failure:
             counts["last_failure"] = f"{type(failure).__name__}: {failure}"
             return False
         state["connection"] = connection
@@ -198,6 +247,8 @@ __all__ = [
     "PART_DECLARATION",
     "PART_ID",
     "describe_standing",
+    "fetch_authorized_stream_url",
+    "listing_key_of",
     "plan_subscriptions",
     "start_part",
 ]
