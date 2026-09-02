@@ -287,14 +287,22 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
-    from runtime.input_assembly import LatestValue
+    from runtime.input_assembly import LatestByKey
 
     halts = Batch(read=context.bus.reader("trading-halt"))
-    # A level, not an event: the whole restricted list is republished, and the
-    # last one is true until it changes. Deliberately unbounded on this side --
-    # instrument-restriction-state already expires each source's claim, and
-    # ageing it twice would expire it here while it still stands there.
-    restrictions = LatestValue(read=context.bus.reader("instrument-restriction"))
+    # A level, per symbol, and it must be aged here as well as at its producer.
+    #
+    # The bus sends each item of a published level as its own message, and an
+    # empty level therefore sends nothing at all (runtime/bus.py `publish`:
+    # `for item in items`). So "this symbol is no longer banned" cannot arrive
+    # as an empty list -- the only way it can arrive is as a restatement that
+    # stops coming, which is exactly what an age bound reads. Without one, the
+    # first ban of the day would halt its symbol until the process restarted.
+    restrictions = LatestByKey(
+        read=context.bus.reader("instrument-restriction"),
+        key_of=lambda restriction: restriction.symbol,
+        maximum_age_seconds=context.number("market_condition_level_maximum_age_seconds"),
+    )
     decisions = Batch(read=context.bus.reader("policy-decision"))
     overrides = Batch(read=context.bus.reader("human-override"))
     verdicts = Batch(read=context.bus.reader("capital-settings-verdict"))
@@ -303,9 +311,7 @@ def start_part(context) -> int:
     segment = str(context.setting("segment_id").value)
 
     def read_halt_events(_enforcer) -> None:
-        standing = restrictions.value()
-        if standing is not None:
-            enforcer.observe_restrictions(standing)
+        enforcer.observe_restrictions(restrictions.values())
         for halt in halts.payloads():
             if halt.is_halted:
                 enforcer.raise_halt(TRADING_HALT, halt.scope, halt.reason)

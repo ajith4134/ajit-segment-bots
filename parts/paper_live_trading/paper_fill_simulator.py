@@ -845,11 +845,17 @@ def start_part(context) -> int:
     requests = Batch(read=context.bus.reader("order-request"))
     trades = Batch(read=context.bus.reader("market-data"))
     modes = LatestValue(read=context.bus.reader("money-mode"))
-    # A level: market-session-calendar publishes a one-item tuple, true until
-    # it changes. Unbounded here on purpose -- the calendar recomputes it from
-    # the clock every tick, so an age bound would only expire a fact that is
-    # still true while nothing else could restate it.
-    sessions = LatestValue(read=context.bus.reader("market-session-state"))
+    # A level, per exchange segment, aged here as well as at its producer. The
+    # bus sends each item of a level as its own message (runtime/bus.py
+    # `publish`), so this arrives as one MarketSessionState rather than the
+    # tuple the calendar published -- and a calendar that dies would otherwise
+    # leave its last "open" standing here forever. Expired reads as no session
+    # at all, which does not fill.
+    sessions = LatestByKey(
+        read=context.bus.reader("market-session-state"),
+        key_of=lambda session: session.segment,
+        maximum_age_seconds=context.number("market_condition_level_maximum_age_seconds"),
+    )
     costs = Batch(read=context.bus.reader("cost-estimate"))
     delayed = Batch(read=context.bus.reader("delayed-order-request"))
     jumps = Batch(read=context.bus.reader("feed-jump"))
@@ -873,10 +879,12 @@ def start_part(context) -> int:
     monotonic = time.monotonic
 
     def read_orders(simulator):
-        standing_session = sessions.value()
-        if standing_session is not None:
-            for session in standing_session:
-                simulator.observe_session(session)
+        # Passing None when nothing is standing is the point of the age bound:
+        # holding the last "open" after the calendar stopped saying so is how a
+        # dead sensor keeps a door open. One segment is read because this part
+        # fills for one segment; a second would need its own simulator.
+        standing_sessions = sessions.values()
+        simulator.observe_session(standing_sessions[0] if standing_sessions else None)
         for trade in trades_in(trades.payloads()):
             last_price[(trade.venue_id, trade.symbol)] = trade.price
         for jump in jumps.payloads():
