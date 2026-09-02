@@ -212,6 +212,34 @@ def describe_standing(standing: TokenStanding | None, refresh_standing: RefreshS
     }
 
 
+def relax_upstox_totp_poa_field() -> None:
+    """upstox-totp 1.0.8 (the latest release on PyPI -- verified 2026-09-02,
+    no newer version exists) requires `poa` (bool) on every access-token
+    response. A real Upstox login does not send it: confirmed against a
+    real account, every other required field validated and `poa` alone was
+    reported missing, which took the whole login down with a
+    pydantic.ValidationError despite Upstox's own API call having actually
+    succeeded and returned a real access_token. `poa` is never read by this
+    part, so relaxed to Optional here rather than waiting on an upstream
+    fix that may never land -- idempotent, safe to call on every attempt.
+
+    Both models need rebuilding, not just the one the missing field lives
+    on: AccessTokenResponse wraps AccessTokenData through pydantic's
+    generic model machinery (ResponseBase[AccessTokenData]), which caches
+    its own compiled schema independently -- rebuilding AccessTokenData
+    alone left AccessTokenResponse still enforcing the old, unrelaxed
+    field, confirmed by reproducing the exact failure with both patched
+    and only one rebuilt.
+    """
+    from upstox_totp.models import AccessTokenData, AccessTokenResponse
+
+    if AccessTokenData.model_fields["poa"].is_required():
+        AccessTokenData.model_fields["poa"].default = None
+        AccessTokenData.model_fields["poa"].annotation = bool | None
+        AccessTokenData.model_rebuild(force=True)
+        AccessTokenResponse.model_rebuild(force=True)
+
+
 def start_part(context) -> int:
     """T-1's one entry point. Reads login credentials from the sops+age store
     (docs/secrets.md), never from settings -- settings are the operator's
@@ -220,6 +248,7 @@ def start_part(context) -> int:
     """
     from upstox_totp import UpstoxTOTP
 
+    relax_upstox_totp_poa_field()
     store = TokenFileStore()
 
     def generate_token() -> str:
@@ -277,5 +306,6 @@ __all__ = [
     "describe_standing",
     "is_refresh_due",
     "refresh_if_needed",
+    "relax_upstox_totp_poa_field",
     "start_part",
 ]

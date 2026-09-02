@@ -223,6 +223,57 @@ def test_is_refresh_due_true_and_free_when_the_current_token_is_still_valid():
     )
 
 
+def test_relax_upstox_totp_poa_field_lets_a_real_response_parse():
+    """Real bug, 2026-09-02: upstox-totp 1.0.8 (the latest release on PyPI --
+    verified no newer version exists) requires `poa` on every access-token
+    response, but a real Upstox login response does not send it. Confirmed
+    against a real account: every other required field validated, `poa`
+    alone was reported missing. `poa` is never read by this part -- only
+    access_token is -- so relaxed rather than waiting on an upstream fix
+    that may never land.
+
+    Goes through AccessTokenResponse, the real path get_access_token()
+    uses -- not AccessTokenData alone. Patching only AccessTokenData looked
+    like it worked in isolation but still failed through the wrapper:
+    pydantic's generic model machinery (ResponseBase[AccessTokenData])
+    caches its own compiled schema independently of the field it wraps."""
+    from upstox_totp.models import AccessTokenResponse
+
+    from parts.broker_adapter.broker_token_refresh_scheduler import (
+        relax_upstox_totp_poa_field,
+    )
+
+    relax_upstox_totp_poa_field()
+
+    payload = {
+        "success": True,
+        "data": {
+            "email": "test@example.com", "exchanges": ["NSE"], "products": ["D"],
+            "broker": "UPSTOX", "user_id": "AB1234", "user_name": "Test User",
+            "order_types": ["MARKET"], "user_type": "individual",
+            "ddpi": True, "is_active": True, "access_token": "fake-token-value",
+            # poa deliberately absent, matching the real response shape
+        },
+    }
+    parsed = AccessTokenResponse(**payload)
+    assert parsed.success is True
+    assert parsed.data.access_token == "fake-token-value"
+    assert parsed.data.poa is None
+
+
+def test_relax_upstox_totp_poa_field_is_idempotent():
+    """Called once per process at start_part, but must not raise or
+    double-patch if called again -- guards against a future change calling
+    it more than once."""
+    from parts.broker_adapter.broker_token_refresh_scheduler import (
+        relax_upstox_totp_poa_field,
+    )
+
+    relax_upstox_totp_poa_field()
+    relax_upstox_totp_poa_field()
+    relax_upstox_totp_poa_field()
+
+
 def test_is_refresh_due_false_when_the_current_token_has_expired():
     from parts.broker_adapter.broker_token_refresh_scheduler import (
         TokenStanding, is_refresh_due,
