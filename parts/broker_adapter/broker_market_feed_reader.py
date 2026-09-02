@@ -102,6 +102,41 @@ def plan_subscriptions(
     return tuple(accepted)
 
 
+def plan_additional_subscriptions(
+    adapter: BrokerAdapter,
+    existing: Sequence[SubscriptionRequest],
+    listings: Sequence[InstrumentListing],
+    mode: SubscriptionMode,
+) -> tuple[SubscriptionRequest, ...]:
+    """The top-up plan_subscriptions can't express: new requests for listings
+    not already in `existing`, filling whatever room is left under the
+    connection's cap -- never resending one already streaming.
+
+    Real bug, 2026-09-02: ensure_connected() only ever called plan_subscriptions
+    once, at first connect, from whatever instrument_listings had accumulated
+    by then -- 4 real instruments, a timing race against broker-instrument-
+    catalogue-reader's 101,393-listing feed -- then short-circuited on every
+    later tick (`if state["connection"] is not None: return True`) before
+    ever looking at instrument_listings again. The other ~101,389 real
+    instruments, and every one discovered by a later catalogue refresh, were
+    never subscribed no matter how long the connection stayed open.
+    """
+    already = {request.instrument_key for request in existing}
+    accepted: list[SubscriptionRequest] = list(existing)
+    added: list[SubscriptionRequest] = []
+    for listing in listings:
+        if listing.instrument_key in already:
+            continue
+        candidate = SubscriptionRequest(instrument_key=listing.instrument_key, mode=mode)
+        if adapter.does_subscription_fit_connection(tuple(accepted), candidate):
+            accepted.append(candidate)
+            added.append(candidate)
+            already.add(listing.instrument_key)
+        else:
+            break
+    return tuple(added)
+
+
 def describe_standing(counts: dict, last_failure: str | None) -> dict:
     return {"part_id": PART_ID, **counts, "last_failure": last_failure}
 
@@ -158,8 +193,19 @@ def start_part(context) -> int:
         "connection": None,
         "subscribed": (),
         "backoff_seconds": context.number("broker_reconnect_backoff_floor"),
+        "next_growth_check_at": None,
     }
     counts["last_failure"] = None
+
+    def drop_connection(failure: Exception) -> None:
+        counts["last_failure"] = f"{type(failure).__name__}: {failure}"
+        connection = state["connection"]
+        if connection is not None:
+            connection.close()
+        state["connection"] = None
+        ceiling = context.number("broker_reconnect_backoff_ceiling")
+        state["backoff_seconds"] = min(state["backoff_seconds"] * 2, ceiling)
+        time.sleep(state["backoff_seconds"])
 
     def ensure_connected() -> bool:
         if state["connection"] is not None:
@@ -194,10 +240,42 @@ def start_part(context) -> int:
         state["backoff_seconds"] = context.number("broker_reconnect_backoff_floor")
         return True
 
+    def grow_subscriptions_if_due() -> None:
+        """The periodic top-up ensure_connected() can't do on its own: it
+        only plans a subscription once, at first connect, and this is what
+        picks up every instrument that arrived after that -- paced rather
+        than run every tick, since instrument_listings.values() copies the
+        whole known-listings table (up to 101,393 entries) on every call."""
+        now = time.monotonic()
+        if (
+            state["next_growth_check_at"] is not None
+            and now < state["next_growth_check_at"]
+        ):
+            return
+        state["next_growth_check_at"] = now + context.number(
+            "broker_subscription_growth_check_interval"
+        )
+        listings = instrument_listings.values()
+        additional = plan_additional_subscriptions(
+            adapter, state["subscribed"], listings, mode=SubscriptionMode.FULL,
+        )
+        if not additional:
+            return
+        connection = state["connection"]
+        try:
+            connection.send(adapter.encode_subscribe_frame(additional))
+        except (ConnectionClosed, WebSocketException, OSError) as failure:
+            drop_connection(failure)
+            return
+        state["subscribed"] = state["subscribed"] + additional
+
     def drain_one_tick() -> None:
         if not ensure_connected():
             return
+        grow_subscriptions_if_due()
         connection = state["connection"]
+        if connection is None:
+            return  # grow_subscriptions_if_due found the connection dead
         deadline = time.monotonic() + context.number("broker_stream_drain_interval")
         try:
             while True:
@@ -211,12 +289,7 @@ def start_part(context) -> int:
         except TimeoutError:
             return  # nothing arrived this drain window -- not a fault
         except (ConnectionClosed, WebSocketException, OSError) as failure:
-            counts["last_failure"] = f"{type(failure).__name__}: {failure}"
-            connection.close()
-            state["connection"] = None
-            ceiling = context.number("broker_reconnect_backoff_ceiling")
-            state["backoff_seconds"] = min(state["backoff_seconds"] * 2, ceiling)
-            time.sleep(state["backoff_seconds"])
+            drop_connection(failure)
 
     def describe() -> dict:
         return {
@@ -249,6 +322,7 @@ __all__ = [
     "describe_standing",
     "fetch_authorized_stream_url",
     "listing_key_of",
+    "plan_additional_subscriptions",
     "plan_subscriptions",
     "start_part",
 ]

@@ -528,6 +528,11 @@ value = 600
 unit  = "seconds"
 note  = "Claude, 2026-09-01: how old a broker-token-standing reading may be before broker-market-feed-reader stops trusting it. Every LatestByKey needs its keys to expire (2026-08-26 finding: a level with no age bound never lets a stopped producer be noticed) -- ten minutes is twice broker_token_refresh_check_interval (300s), so two missed refresh cycles must pass before this part treats the token as gone rather than merely due."
 
+[broker_subscription_growth_check_interval]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how often broker-market-feed-reader re-checks instrument_listings for instruments it has not subscribed to yet, once a connection is already open. Real bug found this date: ensure_connected() only ever planned a subscription once, at first connect, then never looked at instrument_listings again for the life of the connection -- 4 real instruments (a startup timing race) got locked in forever while the other ~101,389 real listings, and everything a later hourly catalogue refresh discovers, were never subscribed. A minute is far shorter than broker_catalogue_refresh_interval (3600s), so growth is picked up within the same hour it is published, without paying LatestByKey.mapping()'s full-table dict copy (up to 101,393 entries) on every one-second drain tick the way checking unconditionally would."
+
 [entry_slippage_fraction]
 value = 0.0005
 unit  = "fraction of price"

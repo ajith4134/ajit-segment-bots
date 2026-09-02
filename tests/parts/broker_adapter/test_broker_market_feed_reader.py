@@ -1,9 +1,12 @@
 import json
 
 from parts.broker_adapter.broker_market_feed_reader import (
-    fetch_authorized_stream_url, listing_key_of, plan_subscriptions,
+    fetch_authorized_stream_url, listing_key_of, plan_additional_subscriptions,
+    plan_subscriptions,
 )
-from runtime.brokers.broker_adapter import InstrumentListing, SubscriptionMode
+from runtime.brokers.broker_adapter import (
+    InstrumentListing, SubscriptionMode, SubscriptionRequest,
+)
 from runtime.brokers.upstox import UpstoxAdapter
 from runtime.bus import Message
 from runtime.input_assembly import LatestByKey
@@ -30,6 +33,53 @@ def test_plan_subscriptions_covers_every_listing_when_under_the_cap():
     listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(180))
     plan = plan_subscriptions(adapter, listings, mode=SubscriptionMode.FULL)
     assert len(plan) == 180
+
+
+def test_plan_additional_subscriptions_skips_what_is_already_subscribed():
+    """The real 2026-09-02 gap: ensure_connected() only plans once, at first
+    connect, and never revisits instrument_listings again -- 4 real
+    instruments got locked in forever while the other ~101,389 arrived too
+    late to matter. This is the periodic top-up: given what is already
+    subscribed, only listings not yet covered should come back, and existing
+    ones must never be resent."""
+    adapter = UpstoxAdapter()
+    existing = (
+        SubscriptionRequest(instrument_key="NSE_EQ|0", mode=SubscriptionMode.FULL),
+        SubscriptionRequest(instrument_key="NSE_EQ|1", mode=SubscriptionMode.FULL),
+    )
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(5))
+    additional = plan_additional_subscriptions(
+        adapter, existing, listings, mode=SubscriptionMode.FULL,
+    )
+    assert {request.instrument_key for request in additional} == {
+        "NSE_EQ|2", "NSE_EQ|3", "NSE_EQ|4",
+    }
+
+
+def test_plan_additional_subscriptions_stops_at_the_cap_counting_what_already_holds_a_slot():
+    adapter = UpstoxAdapter()
+    existing = tuple(
+        SubscriptionRequest(instrument_key=f"NSE_EQ|{i}", mode=SubscriptionMode.FULL)
+        for i in range(1998)
+    )
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(2500))  # includes the 1998 existing
+    additional = plan_additional_subscriptions(
+        adapter, existing, listings, mode=SubscriptionMode.FULL,
+    )
+    assert len(additional) == 2  # 2000 individual cap - 1998 already held
+
+
+def test_plan_additional_subscriptions_is_empty_when_nothing_grew():
+    adapter = UpstoxAdapter()
+    existing = tuple(
+        SubscriptionRequest(instrument_key=f"NSE_EQ|{i}", mode=SubscriptionMode.FULL)
+        for i in range(5)
+    )
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(5))  # identical set
+    additional = plan_additional_subscriptions(
+        adapter, existing, listings, mode=SubscriptionMode.FULL,
+    )
+    assert additional == ()
 
 
 def test_the_live_spine_crashed_on_this_2026_09_02():
