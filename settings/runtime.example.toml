@@ -4062,3 +4062,7 @@ note  = "Claude, 2026-09-02: how long one source's restriction claim stands afte
 value = 60.0
 unit  = "seconds"
 note  = "Claude, 2026-09-02: how long the unchanged restriction level may go unsaid before it is restated. Most days it does not change at all, so this is the heartbeat that tells a consumer starting mid-session what is banned without waiting for the next 15-minute poll. 60s matches the health interval already used across the spine -- a consumer that has been up a minute has the level."
+[corporate_action_poll_seconds]
+value = 3600.0
+unit  = "seconds between fetches"
+note  = "Claude, 2026-09-02: how often corporate-action-reader re-reads www.nseindia.com/api/corporates-corporateActions. The endpoint returns the actions around the current date and changes when a company files, which is a daily-to-weekly event per name rather than an intraday one -- so hourly is already far finer than the data moves. What actually matters is that an action is seen before its ex-date, and an hourly poll gives roughly twenty-four chances between a filing and the next open."
