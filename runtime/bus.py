@@ -193,12 +193,29 @@ def decode_frame(frame: bytes) -> Message:
 
 
 class Publisher:
-    """One socket, whatever the fan-out.
+    """One socket for the work, and a second one for the part's own health.
 
     Measured: sending to 65 consumers from one unconnected socket costs 2.52 us per
     send against 2.10 us with 65 connected sockets -- 20% more, for a producer that
     holds one descriptor instead of 65 and a descriptor count that follows what a
-    part declares rather than how popular its outputs happen to be.
+    part declares rather than how popular its outputs happen to be. That economy is
+    about fanning out to many consumers, so it is kept for every data type a part
+    produces.
+
+    **Health is the exception, and it is not an optimisation but a correctness
+    one** (2026-09-02). A datagram is charged to its socket's send buffer until its
+    consumer reads it, so a part sharing one socket between its work and its health
+    lets the work starve the instrument: broker-price-level-sampler published
+    21 KB price frames, ten of which fill the default 212,992-byte buffer, and the
+    send that then failed with EAGAIN was its 300-byte health report rather than
+    the frame that had filled it. The part ran perfectly for 71 minutes while
+    heartbeat-collector and failing-part-detector both watched 312 parts of 313,
+    and unattended-run-warden escalated a fault it did not have.
+
+    A part's own instrument is the smallest thing it sends and the first thing
+    starved, so it gets a buffer nothing else can spend. The same reasoning as
+    never_switched_off_priority_ceiling one layer down: a control loop does not
+    switch off its own instrument, and a part does not fill its own health channel.
     """
 
     def __init__(
@@ -239,6 +256,19 @@ class Publisher:
         if send_buffer_bytes is not None:
             self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, int(send_buffer_bytes))
         self.send_buffer_bytes = self._socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        # The health socket, whose buffer only health can spend. Built the same way
+        # and given the same size, because what it must survive is the work socket
+        # being full -- not a burst of its own, which one report per interval per
+        # part cannot produce.
+        self._health_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self._health_socket.setblocking(False)
+        if send_buffer_bytes is not None:
+            self._health_socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_SNDBUF, int(send_buffer_bytes)
+            )
+        self.health_send_buffer_bytes = self._health_socket.getsockopt(
+            socket.SOL_SOCKET, socket.SO_SNDBUF
+        )
         self._next_sequence: dict[str, int] = {data_type: 0 for data_type in self._outbound}
         self.standing: dict[str, PublishStanding] = {
             data_type: PublishStanding() for data_type in self._outbound
@@ -276,10 +306,18 @@ class Publisher:
                 standing.published_with_no_listener += 1
                 continue
             now = self._monotonic()
+            sender = self._health_socket if data_type == HEALTH_TYPE else self._socket
             for address in addresses:
-                self._send_one(frame, address, standing, now)
+                self._send_one(frame, address, standing, now, sender)
 
-    def _send_one(self, frame: bytes, address: str, standing: PublishStanding, now: float) -> None:
+    def _send_one(
+        self,
+        frame: bytes,
+        address: str,
+        standing: PublishStanding,
+        now: float,
+        sender: socket.socket,
+    ) -> None:
         retry_at = self._retry_absent_at.get(address)
         if retry_at is not None:
             if now < retry_at:
@@ -290,7 +328,7 @@ class Publisher:
                 return
             del self._retry_absent_at[address]
         try:
-            self._socket.sendto(frame, address)
+            sender.sendto(frame, address)
         except BlockingIOError:
             # EAGAIN, and the producer cannot tell which buffer was full. Measured
             # on this box: bursting 4.7 million datagrams at 66 addresses returned
@@ -317,6 +355,7 @@ class Publisher:
 
     def close(self) -> None:
         self._socket.close()
+        self._health_socket.close()
 
     def __enter__(self) -> Publisher:
         return self

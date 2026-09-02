@@ -559,3 +559,64 @@ def test_one_slow_consumer_does_not_silence_the_sends_to_the_others(bus_root, re
     # holds a couple of hundred. What matters is that the fast one was not
     # starved by the slow one's full queue.
     assert len(fast_received) >= 150, len(fast_received)
+
+
+def test_a_slow_consumer_of_one_type_cannot_silence_a_part_s_health(bus_root, real_trades):
+    """The failure that made broker-price-level-sampler read as silent, 2026-09-02.
+
+    The part was alive the whole time -- 0.09s of CPU per minute, waking on its
+    select, publishing 21 KB price frames to two consumers. What stopped was its
+    health, and with it every board's knowledge that it existed:
+    heartbeat-collector and failing-part-detector both watched 312 parts of 313,
+    unattended-run-warden escalated a fault the part did not have, and its
+    standing froze mid-run at frames_published 4233.
+
+    One socket carried both its data and its health, and every datagram in flight
+    is charged to that socket's send buffer until its consumer reads it. Ten
+    21 KB frames fill the default 212,992 bytes, so a consumer a few frames
+    behind spent the whole buffer -- and the send that then failed with EAGAIN
+    was the 300-byte health report, not the frame that had filled it. A part's
+    own instrument is the smallest thing it sends and the first thing starved.
+
+    Nothing about this is specific to that part: any part whose output is large
+    or whose consumer is behind goes dark on every board while working perfectly,
+    which is Rule 8's failure with the evidence removed rather than faked.
+    """
+    slow = open_bus(
+        wiring_for(bus_root, "feed-gap-detector", consumes=("market-data",)),
+        receive_buffer_bytes=SMALL_RECEIVE_BUFFER_BYTES,
+    )
+    collector = open_bus(wiring_for(bus_root, "heartbeat-collector", consumes=("part-health",)))
+    producer = open_bus(
+        wiring_for(
+            bus_root,
+            "broker-price-level-sampler",
+            produces=("market-data", "part-health"),
+            sends_to={
+                "market-data": ("feed-gap-detector",),
+                "part-health": ("heartbeat-collector",),
+            },
+        )
+    )
+    try:
+        # The collector drains every round, exactly as it does live. The slow
+        # consumer never does, exactly as a part a few frames behind does not.
+        heartbeats_received = 0
+        for _round in range(40):
+            producer.publish("market-data", (real_trades * 40)[:400])
+            producer.publish("part-health", ["a health report"])
+            heartbeats_received += len(collector.reader("part-health")())
+        health_standing = producer.standing()["outputs"]["part-health"]
+    finally:
+        producer.close()
+        slow.close()
+        collector.close()
+
+    assert heartbeats_received == 40, (
+        "the collector drained every round and must have received every health "
+        f"report; it got {heartbeats_received} of 40. A part starved of its own "
+        "health channel reads as silent while it is working."
+    )
+    assert health_standing["refused_by_a_full_buffer"] == 0, (
+        "health was refused against a send buffer another data type filled"
+    )
