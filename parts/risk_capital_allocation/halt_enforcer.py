@@ -27,7 +27,8 @@ PART_ID = "halt-enforcer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="halt-enforcer",
-    consumes=("trading-halt", "policy-decision", "human-override", "capital-settings-verdict"),
+    consumes=("capital-settings-verdict", "human-override", "instrument-restriction",
+              "policy-decision", "trading-halt"),
     produces=("risk-limit", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -38,6 +39,12 @@ HUMAN_OVERRIDE = "human-override"
 TRADING_HALT = "trading-halt"
 POLICY_REFUSAL = "policy-refusal"
 SETTINGS_INVALID = "capital-settings-invalid"
+# The exchange's own restriction on named instruments: an F&O ban, or an ASM
+# surveillance stage. Unlike every other kind here it is scoped to symbols
+# rather than to everything, and it is released by absence rather than by an
+# explicit release -- NSE publishes no un-ban, a lifted name simply stops
+# appearing in fo_secban.csv.
+INSTRUMENT_RESTRICTION = "instrument-restriction"
 
 # The instructions human-override-reader actually publishes (its own
 # INSTRUCTIONS tuple) that mean trading itself must stop. Named locally
@@ -76,7 +83,12 @@ def wants_halt(instruction: str) -> bool:
 
 # Which stop outranks which when several are in force. A human's decision is
 # first because it is the one nothing in the system is entitled to reason past.
-PRECEDENCE = (HUMAN_OVERRIDE, TRADING_HALT, POLICY_REFUSAL, SETTINGS_INVALID)
+#
+# INSTRUMENT_RESTRICTION is last because it is the narrowest stop here: every
+# kind above it scopes to EVERYTHING, so when one of those stands it subsumes
+# the restriction rather than being narrowed to a handful of banned symbols.
+PRECEDENCE = (HUMAN_OVERRIDE, TRADING_HALT, POLICY_REFUSAL, SETTINGS_INVALID,
+              INSTRUMENT_RESTRICTION)
 
 
 @dataclass(frozen=True)
@@ -186,6 +198,38 @@ class HaltEnforcer:
             decided_at_ns=self._now_ns(),
         )
 
+    def observe_restrictions(self, restrictions) -> None:
+        """Halt the restricted symbols; lift the halt when none are reported.
+
+        The only halt kind here released by absence rather than by an explicit
+        release, and deliberately so: every other kind is a decision someone
+        made and must un-make, while a ban is a list the exchange republishes
+        daily, and a lifted ban is a name that has stopped appearing on it.
+
+        The symbols travel in `source` because that is where this part already
+        carries a halt's scope -- `symbols_in_scope` parses exactly this shape.
+        Sorted, because the reason and the scope ride on every published
+        risk-limit and an order that wandered would read as a changing halt.
+        """
+        restricted = sorted(
+            restriction.symbol for restriction in restrictions
+            if not restriction.may_open_new_position
+        )
+        if not restricted:
+            self.release_halt(INSTRUMENT_RESTRICTION)
+            return
+        sources = sorted({
+            source
+            for restriction in restrictions
+            if not restriction.may_open_new_position
+            for source in restriction.sources
+        })
+        self.raise_halt(
+            INSTRUMENT_RESTRICTION,
+            ",".join(restricted),
+            f"restricted by {', '.join(sources)}",
+        )
+
     @property
     def is_halted(self) -> bool:
         return bool(self._halts)
@@ -243,7 +287,14 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
+    from runtime.input_assembly import LatestValue
+
     halts = Batch(read=context.bus.reader("trading-halt"))
+    # A level, not an event: the whole restricted list is republished, and the
+    # last one is true until it changes. Deliberately unbounded on this side --
+    # instrument-restriction-state already expires each source's claim, and
+    # ageing it twice would expire it here while it still stands there.
+    restrictions = LatestValue(read=context.bus.reader("instrument-restriction"))
     decisions = Batch(read=context.bus.reader("policy-decision"))
     overrides = Batch(read=context.bus.reader("human-override"))
     verdicts = Batch(read=context.bus.reader("capital-settings-verdict"))
@@ -252,6 +303,9 @@ def start_part(context) -> int:
     segment = str(context.setting("segment_id").value)
 
     def read_halt_events(_enforcer) -> None:
+        standing = restrictions.value()
+        if standing is not None:
+            enforcer.observe_restrictions(standing)
         for halt in halts.payloads():
             if halt.is_halted:
                 enforcer.raise_halt(TRADING_HALT, halt.scope, halt.reason)
