@@ -326,3 +326,82 @@ def test_read_margin_quotes_from_upstox_own_sample():
     quotes = adapter.read_margin_quotes(response, instrument_keys=["NSE_EQ|INE669E01016"])
     assert quotes["NSE_EQ|INE669E01016"].equity_margin == 33.6
     assert quotes["NSE_EQ|INE669E01016"].span_margin == 0
+
+
+# ---- historical candles ------------------------------------------------------
+# Source: upstox.com/developer/api-documentation/v3/get-historical-candle-data,
+# fetched 2026-09-02, plus one real response taken from the live API the same
+# day for NSE_FO|42654 (NIFTY 24350 PE 08 SEP 26) over 2026-09-01.
+
+def test_the_historical_candle_url_is_the_documented_v3_path():
+    """Upstox's own documented order: to_date before from_date, and the
+    instrument key percent-encoded because it contains a pipe."""
+    url = UpstoxAdapter().historical_candle_url(
+        instrument_key="NSE_FO|42654", unit="minutes", interval=1,
+        from_date="2026-09-01", to_date="2026-09-02",
+    )
+    assert url == (
+        "https://api.upstox.com/v3/historical-candle/"
+        "NSE_FO%7C42654/minutes/1/2026-09-02/2026-09-01"
+    )
+
+
+def test_a_unit_upstox_does_not_publish_is_refused():
+    """Guessing a unit name gets a 400 at best and silence at worst."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        UpstoxAdapter().historical_candle_url(
+            instrument_key="NSE_FO|42654", unit="fortnights", interval=1,
+            from_date="2026-09-01", to_date="2026-09-02",
+        )
+
+
+def test_reads_real_historical_candles_the_live_api_returned():
+    """A real response, fetched 2026-09-02 for a live nearest-expiry contract.
+
+    Two facts this pins, both of which have cost this project before: the rows
+    arrive **newest first**, and the stamp is **+05:30**, not UTC. 15:39 IST is
+    10:09 UTC -- a reader treating the stamp as UTC would place every bar of the
+    Indian session outside it, which is the trap market-session-calendar was
+    written against.
+    """
+    response = {
+        "status": "success",
+        "data": {
+            "candles": [
+                ["2026-09-01T15:39:00+05:30", 376.45, 376.45, 375.0, 375.95, 3835, 200395],
+                ["2026-09-01T15:38:00+05:30", 375.45, 376.5, 373.85, 376.5, 1365, 200460],
+                ["2026-09-01T15:37:00+05:30", 376.0, 376.7, 375.25, 375.45, 1040, 200460],
+            ]
+        },
+    }
+    candles = UpstoxAdapter().read_historical_candles(
+        "NSE_FO|42654", "minutes", 1, response
+    )
+
+    assert [c.bar_time_ms for c in candles] == sorted(c.bar_time_ms for c in candles), (
+        "Upstox returns newest first; a bar series read in that order is a series "
+        "running backwards through time"
+    )
+    first = candles[0]
+    assert first.instrument_key == "NSE_FO|42654"
+    assert (first.open, first.high, first.low, first.close) == (376.0, 376.7, 375.25, 375.45)
+    assert first.volume == 1040
+    # 2026-09-01T15:37:00+05:30 is 2026-09-01T10:07:00Z, which is 1788257220000 ms.
+    assert first.bar_time_ms == 1788257220000
+    assert first.is_closed is True, (
+        "a historical bar is closed by construction -- unlike the live feed's OHLC, "
+        "which states nothing and is therefore None"
+    )
+
+
+def test_a_historical_response_that_failed_is_refused_rather_than_read_as_empty():
+    """No candles and a failure are different facts; reading one as the other is
+    how a feed that stopped looks like a market that went quiet."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        UpstoxAdapter().read_historical_candles(
+            "NSE_FO|42654", "minutes", 1, {"status": "error", "errors": [{"message": "bad"}]}
+        )

@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import urllib.parse
 import uuid
 from typing import Mapping, Sequence
 
@@ -98,6 +99,19 @@ class MarginQuote:
 
 
 MAXIMUM_MARGIN_QUOTE_INSTRUMENTS = 20  # Upstox's own documented cap per call
+
+# Historical candles. Source: upstox.com/developer/api-documentation/v3/
+# get-historical-candle-data, fetched 2026-09-02, and one real response taken
+# from the live API the same day.
+HISTORICAL_CANDLE_HOST = "https://api.upstox.com/v3/historical-candle"
+# Upstox's own five units, written out rather than accepted freely: a unit it
+# does not publish is answered with a 400 at best and an empty series at worst,
+# and an empty series is indistinguishable from a market that did not trade.
+HISTORICAL_CANDLE_UNITS = ("minutes", "hours", "days", "weeks", "months")
+# What Upstox serves, per unit -- the bound a caller has to plan requests
+# against rather than discover by being refused.
+HISTORICAL_MINUTE_DATA_BEGINS = "2022-01-01"
+HISTORICAL_MINUTE_WINDOW_DAYS = 30  # one month per request, for 1-15 minute intervals
 
 # Source for every figure below: upstox.com/developer/api-documentation/v3/get-market-data-feed,
 # fetched 2026-09-01. Free-tier limits -- Upstox Plus limits are a settings
@@ -476,6 +490,74 @@ class UpstoxAdapter(BrokerAdapter):
         if response.get("status") != "success":
             raise OrderPlacementRefused(f"Upstox refused the order: {response}")
         return OrderResult(order_id=response["data"]["order_id"])
+
+    def historical_candle_url(
+        self, instrument_key: str, unit: str, interval: int,
+        from_date: str, to_date: str,
+    ) -> str:
+        """Upstox's own v3 path, in Upstox's own order: to_date before from_date.
+
+        Source: upstox.com/developer/api-documentation/v3/get-historical-candle-data,
+        fetched 2026-09-02. The instrument key carries a pipe and must be
+        percent-encoded or the path is not the path that was asked for.
+        """
+        if unit not in HISTORICAL_CANDLE_UNITS:
+            raise ValueError(
+                f"Upstox publishes the units {', '.join(HISTORICAL_CANDLE_UNITS)}; "
+                f"got {unit!r}. Guessing a unit name is answered with a 400 at best "
+                f"and an empty series at worst, which reads as a quiet market"
+            )
+        if interval < 1:
+            raise ValueError(f"an interval is a count of {unit} and must be positive; got {interval!r}")
+        return (
+            f"{HISTORICAL_CANDLE_HOST}/{urllib.parse.quote(instrument_key, safe='')}"
+            f"/{unit}/{interval}/{to_date}/{from_date}"
+        )
+
+    def read_historical_candles(
+        self, instrument_key: str, unit: str, interval: int, response: object
+    ) -> tuple[BrokerCandle, ...]:
+        """One already-fetched historical response, oldest bar first.
+
+        Two things this converts once, here at the edge, because every reader
+        downstream would otherwise have to know them:
+
+        **The rows arrive newest first.** A series read in the order Upstox
+        sends it runs backwards through time, and every window builder, every
+        return and every gap measured over it would be reversed.
+
+        **The stamp is +05:30, not UTC.** 15:39 IST is 10:09 UTC. Read as UTC,
+        every bar of the Indian session lands outside it -- the same trap
+        market-session-calendar carries its own warning about.
+
+        `is_closed` is True, unlike the live feed's OHLC where it is None: a bar
+        Upstox serves as history is finished by construction, and that is a fact
+        rather than the guess the live path refuses to make.
+        """
+        if not isinstance(response, Mapping) or response.get("status") != "success":
+            raise ValueError(
+                f"Upstox did not return a successful historical series for "
+                f"{instrument_key}: {response!r}. No candles and a failed request are "
+                f"different facts, and reading one as the other is how a feed that "
+                f"stopped looks like a market that went quiet"
+            )
+        rows = response.get("data", {}).get("candles", ()) or ()
+        candles = [
+            BrokerCandle(
+                instrument_key=instrument_key,
+                interval=f"{interval}{unit}",
+                open=float(row[1]), high=float(row[2]),
+                low=float(row[3]), close=float(row[4]),
+                volume=float(row[5]),
+                bar_time_ms=int(
+                    datetime.datetime.fromisoformat(row[0]).timestamp() * 1000
+                ),
+                is_closed=True,
+            )
+            for row in rows
+        ]
+        candles.sort(key=lambda candle: candle.bar_time_ms)
+        return tuple(candles)
 
     def margin_endpoint_url(self) -> str:
         return "https://api.upstox.com/v2/charges/margin"
