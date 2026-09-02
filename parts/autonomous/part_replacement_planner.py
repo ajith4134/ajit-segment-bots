@@ -76,6 +76,11 @@ class PlannerStanding:
     refused_not_reversible: int = 0
     plans_requiring_a_pause: int = 0
     refused_unknown_part: int = 0
+    # Blueprint parts with no source file: DECLARED, never startable, so they
+    # can never fault and there is nothing to plan a replacement for. Counted
+    # rather than dropped silently -- this number is how many parts the design
+    # names and the code has not built yet, and it belongs on a board.
+    parts_without_a_module: int = 0
 
 
 class PartReplacementPlanner:
@@ -210,6 +215,7 @@ def describe_replacement_planning(planner: PartReplacementPlanner) -> dict:
         "refused_not_reversible": planner.standing.refused_not_reversible,
         "plans_requiring_a_pause": planner.standing.plans_requiring_a_pause,
         "refused_unknown_part": planner.standing.refused_unknown_part,
+        "parts_without_a_module": planner.standing.parts_without_a_module,
         "swap_orders": [STOP_THEN_START, START_THEN_STOP],
         "writes_an_irreversible_plan": False,
         "leaves_a_gap_for_a_corrupting_part": False,
@@ -251,7 +257,7 @@ def start_part(context) -> int:
     rollback step names a real file rather than a version nobody recorded.
     """
     from runtime.input_assembly import Batch
-    from runtime.part_launcher import resolve_part_module
+    from runtime.part_launcher import PartHasNoModule, resolve_part_module
     from runtime.wiring_plan import load_blueprint
 
     faults = Batch(read=context.bus.reader("part-fault"))
@@ -266,12 +272,27 @@ def start_part(context) -> int:
         str(part) for part in context.setting("replacement_handover_parts").value
     }
     for feature in load_blueprint()["features"]:
+        try:
+            current_source = resolve_part_module(feature["id"])
+        except PartHasNoModule:
+            # A part the blueprint declares and the code has not built. It can
+            # never start, so it can never fault, so there is nothing here to
+            # plan a replacement for -- skipping it is the honest answer.
+            #
+            # This crash-looped the whole part on 2026-09-02, the first day the
+            # blueprint declared a part with no module: the two had been 1:1
+            # until then, and this loop had never met the case its own error
+            # message describes ("a part with no module is DECLARED, not
+            # startable"). Five parts were restarting and unattended-run-warden
+            # escalated before it was read.
+            planner.standing.parts_without_a_module += 1
+            continue
         planner.declare_part(
             feature["id"],
             skipped_tick_effect=feature["skipped_tick_effect"],
             holds_capital_state=feature["id"] in capital_state,
             can_hand_over_state=feature["id"] in hands_over,
-            current_source=resolve_part_module(feature["id"]),
+            current_source=current_source,
         )
 
     def read_faults():
