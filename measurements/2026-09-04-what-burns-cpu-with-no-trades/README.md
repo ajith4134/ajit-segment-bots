@@ -248,6 +248,73 @@ lives, whenever it had the catalogue: `56min 29s CPU over 59min 55s` and
 sweep a second; the live part is woken by its inputs and swept about three times
 that.
 
+## The catalogue never reached the parts that consume it
+
+Fixing the expiry detector's sweep exposed why it had never needed fixing: it had
+never held a single listing. `broker-instrument-catalogue-reader` published the
+instrument master **only when it re-fetched it**, once an hour
+(`broker_catalogue_refresh_interval`), and the governor restarts parts far more
+often than that. Seventeen parts consume `broker-instrument-listing`, including
+`broker-market-feed-reader`, which decides what to subscribe to.
+
+The burst did not arrive either. A listing pickles to **400 bytes** and the
+default socket buffer is 212,992, so it holds **532** of them: publishing 102,940
+at once overflows it 193 times over. That is the measurement already recorded in
+`runtime/input_assembly.py` -- the feed reader holding 1,067 listings of 102,940,
+with none of the three index underlyings the segment trades among them.
+
+Both halves are one fix: the reader keeps the master and **restates it evenly,
+forever**, at the master divided by `broker_catalogue_restatement_cycle_seconds`
+-- 57 listings a second at 1,800 s, a tenth of what one buffer holds, so no
+consumer can be overrun however slowly it drains. The rate is computed from
+elapsed time rather than as a fixed slice per tick, because this part is woken by
+its clock and a slice sized per tick would speed up and slow down with the load;
+and it is capped at one cycle so a long pause does not become the burst it
+replaces.
+
+Measured live, from a process that started well after the fetch:
+
+    reader: restated=11,827  ->  87,787       (57.19 listings/s, exactly as set)
+    detector: known=11,065   ->  87,025       (was 0 after ten minutes)
+
+## Making it work made five parts expensive, for the same reason
+
+The spine went 3.41 cores to 6.78 the moment the catalogue actually flowed, and
+all of it landed in parts that had been starved:
+
+    0.988  cross-segment-signal-bridge      0.605  bull-feature-builder
+    0.986  instrument-selector              0.593  bear-feature-builder
+                                            0.436  tail-crowding-detector
+
+`AtmStrikeTracker._atm_for` filtered **every contract it holds** -- about 87,000 --
+to find the handful on one underlying, and `observe_option_listing` calls it twice
+per listing. At 57 listings a second that is roughly ten million comparisons a
+second. Exactly the shape the expiry detector had: work proportional to the
+catalogue on every message, to reach an answer that cannot change.
+
+Which underlying a contract belongs to is decided when the contract is filed, so
+the ladder is indexed there. Both paths that file a contract needed it -- the
+direct one, and the one where a contract listed before its underlying is held
+pending and filed later when the underlying names itself.
+
+    spine                        6.78 cores  ->  3.21 cores
+    instrument-selector          0.986       ->  0.163
+    cross-segment-signal-bridge  0.988       ->  0.213
+    bull-feature-builder         0.605       ->  0.118
+    bear-feature-builder         0.593       ->  0.117
+
+The spine is now **cheaper than before the catalogue flowed at all** (3.41), while
+seventeen parts receive an input none of them had.
+
+## What is left
+
+The conveyor costs about 970 datagrams a second -- 57 listings to each of 17
+consumers -- and that is the argument for a change this does not make: sixteen of
+those seventeen want the traded universe, roughly 153 symbols, rather than the
+whole NSE master. Filtering would cut it by two orders of magnitude. It is a
+blueprint edit rather than a code change, because `broker-symbol-universe-bridge`
+selects the universe *from* the master and must keep receiving all of it.
+
 ## Re-running it
 
     .venv/bin/python measurements/2026-09-04-what-burns-cpu-with-no-trades/audit_level_publishing.py

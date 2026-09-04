@@ -50,11 +50,27 @@ def fetch_and_parse_listings(
     return tuple(listings)
 
 
-def describe_standing(listings: tuple, last_failure: str | None) -> dict:
+def describe_standing(
+    listings: tuple, last_failure: str | None, restatement: dict | None = None
+) -> dict:
+    """What the reader holds, and how far round the restatement cycle it is.
+
+    `listings_restated` climbing is the evidence that a consumer which started
+    after the last fetch will get the catalogue at all: until 2026-09-04 the
+    master was spoken only when it was re-fetched, once an hour, and seventeen
+    parts consume it while the governor restarts them far more often than that.
+    `cycle_position` says where in the master the next slice comes from, so a
+    conveyor that has stopped turning is visible rather than merely quiet.
+    """
+    restatement = restatement or {}
     return {
         "part_id": PART_ID,
         "listings_seen": len(listings),
         "last_failure": last_failure,
+        "listings_restated": restatement.get("restated", 0),
+        "cycle_position": restatement.get("position", 0),
+        "cycles_completed": restatement.get("cycles", 0),
+        "listings_per_second": restatement.get("rate", 0.0),
     }
 
 
@@ -69,12 +85,12 @@ def start_part(context) -> int:
     publish_listings = context.bus.publisher_for("broker-instrument-listing")
     refresh_interval_seconds = context.number("broker_catalogue_refresh_interval")
 
+    cycle_seconds = context.number("broker_catalogue_restatement_cycle_seconds")
+
     state = {"listings": (), "last_failure": None, "last_read_at": None}
+    cycle = {"position": 0, "restated": 0, "cycles": 0, "last_at": None, "rate": 0.0}
 
-    def read_if_due() -> None:
-        import time
-
-        now = time.monotonic()
+    def read_if_due(now: float) -> None:
         due = (
             state["last_read_at"] is None
             or now - state["last_read_at"] >= refresh_interval_seconds
@@ -82,23 +98,84 @@ def start_part(context) -> int:
         if not due:
             return
         try:
-            state["listings"] = fetch_and_parse_listings(adapter)
+            fetched = fetch_and_parse_listings(adapter)
             state["last_failure"] = None
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as failure:
             state["last_failure"] = f"{type(failure).__name__}: {failure}"
             return
         state["last_read_at"] = now
-        publish_listings(state["listings"])
+        # A re-fetch replaces the master and restarts the conveyor, so a listing
+        # that was dropped from the catalogue stops being restated and a new one
+        # is reached within a cycle.
+        state["listings"] = fetched
+        cycle["position"] = 0
+
+    def restate_a_slice(now: float) -> None:
+        """Say the next part of the master, at a rate a consumer can drain.
+
+        **The whole master, forever, evenly.** Publishing only at the fetch left a
+        consumer that started a second later waiting the full hour, and the
+        governor restarts parts far more often than that: measured 2026-09-04,
+        `expiry-day-zero-to-hero-detector` had never held a single listing.
+
+        **Paced, because one burst does not arrive.** A listing pickles to 400
+        bytes and the default socket buffer is 212,992, so it holds 532 of them;
+        publishing 102,940 at once overflows it 193 times over, which is why
+        `broker-market-feed-reader` was measured holding 1,067 of them and none of
+        the three index underlyings the segment trades. The rate is the master
+        divided by the cycle -- 57 a second at 1,800 s -- a tenth of what one
+        buffer holds, so no consumer can be overrun however slowly it drains.
+
+        Time-based rather than a fixed slice per tick: this part is woken by its
+        clock and the interval between ticks is not guaranteed, so a slice sized
+        per tick would speed up or slow down with the machine's load. What is
+        owed is computed from elapsed time, and capped at one cycle so a long
+        pause does not become the burst this exists to prevent.
+        """
+        listings = state["listings"]
+        if not listings:
+            return
+        rate = len(listings) / cycle_seconds
+        cycle["rate"] = rate
+        last = cycle["last_at"]
+        if last is None:
+            cycle["last_at"] = now
+            return
+        owed = int(rate * (now - last))
+        if owed <= 0:
+            return
+        owed = min(owed, len(listings))
+        cycle["last_at"] = now
+
+        position = cycle["position"]
+        end = position + owed
+        if end <= len(listings):
+            slice_ = listings[position:end]
+        else:
+            slice_ = listings[position:] + listings[: end - len(listings)]
+            cycle["cycles"] += 1
+        cycle["position"] = end % len(listings)
+        cycle["restated"] += len(slice_)
+        publish_listings(slice_)
+
+    def tick() -> None:
+        import time
+
+        now = time.monotonic()
+        read_if_due(now)
+        restate_a_slice(now)
 
     return run_part(
         declaration=PART_DECLARATION,
         control_socket=context.control_socket,
-        do_one_tick=read_if_due,
+        do_one_tick=tick,
         emit_health=context.emit_health,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
-        read_standing=lambda: describe_standing(state["listings"], state["last_failure"]),
+        read_standing=lambda: describe_standing(
+            state["listings"], state["last_failure"], cycle
+        ),
     )
 
 

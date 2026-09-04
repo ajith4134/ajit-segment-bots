@@ -129,3 +129,81 @@ def test_underlying_of_resolves_a_known_contract():
 def test_underlying_of_is_none_for_an_unresolved_contract():
     tracker = AtmStrikeTracker()
     assert tracker.underlying_of("NSE_FO|9999") is None
+
+
+def test_the_atm_pick_does_not_walk_every_contract_it_has_ever_seen():
+    """0.986 of a core, measured 2026-09-04.
+
+    `_atm_for` filtered the whole of `_contracts` to find the handful on one
+    underlying, and `instrument-selector.observe_option_listing` calls it twice
+    for every listing that arrives. That cost nothing while the catalogue was
+    only spoken once an hour and mostly lost to a full buffer. The moment
+    `broker-instrument-catalogue-reader` began restating the master evenly, the
+    selector spent about ten million comparisons a second on it.
+
+    Which underlying a contract belongs to is decided when the contract is filed
+    and cannot change, so the ladder is indexed there. This asserts the work, not
+    the wall clock: a timing assertion on a loaded box is a flake.
+    """
+    tracker = AtmStrikeTracker()
+    tracker.observe_listing(NIFTY_UNDERLYING)
+    tracker.observe_listing(_call("NSE_FO|1001", 24500.0))
+    tracker.observe_greeks(_greeks("NSE_FO|1001", 0.5))
+
+    # A second underlying with a large ladder of its own -- the shape of the real
+    # master, which carries about 87,000 contracts across many underlyings.
+    other_underlying = InstrumentListing(
+        instrument_key="NSE_INDEX|Nifty Bank", exchange="NSE", segment="NSE_INDEX",
+        instrument_type="INDEX", trading_symbol="BANKNIFTY", lot_size=None,
+        tick_size=None, freeze_quantity=None, expiry_ms=None, strike_price=None,
+        underlying_key=None, intraday_margin_percent=None, intraday_leverage=None,
+    )
+    tracker.observe_listing(other_underlying)
+    for index in range(5_000):
+        listing = InstrumentListing(
+            instrument_key=f"NSE_FO|B{index}", exchange="NSE", segment="NSE_FO",
+            instrument_type="CE", trading_symbol=f"BANKNIFTY {index} CE",
+            lot_size=15, tick_size=0.05, freeze_quantity=900.0,
+            expiry_ms=1_740_000_000_000, strike_price=50_000.0 + index,
+            underlying_key="NSE_INDEX|Nifty Bank",
+            intraday_margin_percent=None, intraday_leverage=None,
+        )
+        tracker.observe_listing(listing)
+        tracker.observe_greeks(_greeks(f"NSE_FO|B{index}", 0.5))
+
+    walked = {"count": 0}
+    real_contracts = tracker._contracts
+
+    class _CountingDict(dict):
+        def items(self):
+            walked["count"] += len(self)
+            return super().items()
+
+    tracker._contracts = _CountingDict(real_contracts)
+    picked = tracker.atm_call_for("NIFTY")
+
+    assert picked is not None
+    assert picked.trading_symbol == "NIFTY 24500 CE"
+    # The pick must not have iterated the whole book to find one ladder.
+    assert walked["count"] == 0, (
+        f"the ATM pick walked {walked['count']} contracts; it should read its "
+        f"underlying's ladder from the index"
+    )
+
+
+def test_a_contract_whose_underlying_arrives_late_is_still_indexed():
+    """A contract listed before its underlying is held pending, then filed.
+
+    The index is written where the contract is filed, and that happens twice --
+    once directly, once when the underlying finally names itself. Missing the
+    second path would leave every early-arriving contract invisible to the pick.
+    """
+    tracker = AtmStrikeTracker()
+    tracker.observe_listing(_call("NSE_FO|2001", 24500.0))  # underlying not seen yet
+    tracker.observe_greeks(_greeks("NSE_FO|2001", 0.5))
+    assert tracker.atm_call_for("NIFTY") is None
+
+    tracker.observe_listing(NIFTY_UNDERLYING)
+    picked = tracker.atm_call_for("NIFTY")
+    assert picked is not None
+    assert picked.trading_symbol == "NIFTY 24500 CE"

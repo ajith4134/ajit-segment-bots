@@ -59,6 +59,11 @@ class AtmStrikeTracker:
         # without this the answer existed here and could not be asked for.
         self._key_by_trading_symbol: dict[str, str] = {}
         self._latest_delta: dict[str, float] = {}
+        # Contract keys grouped by the underlying and side they belong to, so
+        # `_atm_for` asks for one underlying's ladder instead of filtering every
+        # contract this tracker has ever seen. Filed where a contract is filed,
+        # because which underlying a contract is on cannot change.
+        self._keys_by_underlying_side: dict[tuple[str, str], set[str]] = {}
 
     def observe_listing(self, listing) -> None:
         """One instrument listing -- either an underlying itself, or an option contract on one."""
@@ -67,6 +72,7 @@ class AtmStrikeTracker:
             for key, pending in list(self._pending_contracts.items()):
                 if pending[0] == listing.instrument_key:
                     self._contracts[key] = (listing.trading_symbol, *pending[1:])
+                    self._file_by_underlying(key, listing.trading_symbol, pending[1])
                     del self._pending_contracts[key]
             return
         if listing.instrument_type not in (CALL, PUT):
@@ -84,6 +90,23 @@ class AtmStrikeTracker:
             )
         else:
             self._contracts[listing.instrument_key] = record
+            self._file_by_underlying(listing.instrument_key, symbol, listing.instrument_type)
+
+    def _file_by_underlying(self, instrument_key: str, underlying_symbol: str, side: str) -> None:
+        """Index this contract under its underlying and side.
+
+        The whole cost of the ATM pick. `_atm_for` filtered every contract in
+        `_contracts` to find the handful on one underlying, and
+        `observe_option_listing` calls it twice for every listing that arrives --
+        so once `broker-instrument-catalogue-reader` began restating the master
+        continuously on 2026-09-04, `instrument-selector` spent 0.986 of a core
+        scanning about 87,000 contracts twice per listing, roughly ten million
+        comparisons a second. Which underlying a contract is on is decided when
+        the contract is filed and cannot change, so it is decided there.
+        """
+        self._keys_by_underlying_side.setdefault((underlying_symbol, side), set()).add(
+            instrument_key
+        )
 
     def observe_greeks(self, greeks) -> None:
         """One contract's latest delta reading, replacing its prior one."""
@@ -123,10 +146,13 @@ class AtmStrikeTracker:
         return self._atm_for(underlying_symbol, PUT, now_ms)
 
     def _atm_for(self, underlying_symbol: str, side: str, now_ms: int | None) -> AtmChoice | None:
+        # One underlying's ladder, from the index, rather than a filter over every
+        # contract the tracker holds -- see `_file_by_underlying` for what that
+        # cost when the catalogue started arriving continuously.
         candidates = [
-            (key, record)
-            for key, record in self._contracts.items()
-            if record[0] == underlying_symbol and record[1] == side and key in self._latest_delta
+            (key, self._contracts[key])
+            for key in self._keys_by_underlying_side.get((underlying_symbol, side), ())
+            if key in self._latest_delta and key in self._contracts
         ]
         if not candidates:
             return None
