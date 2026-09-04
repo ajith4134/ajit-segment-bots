@@ -97,6 +97,24 @@ NEITHER_A_TRADE_NOR_A_QUOTE_IS_RECENT = "this-symbol-has-no-recent-trade-and-no-
 
 
 @dataclass(frozen=True)
+class _ChainListing:
+    """One option-chain fact in the shape `AtmStrikeTracker` reads.
+
+    The tracker was written against `broker-instrument-listing`, and the same
+    facts now arrive on `symbol-universe`. This carries them across without
+    either type learning about the other (T-4), and without a second copy of
+    the ATM logic.
+    """
+
+    instrument_key: str
+    underlying_key: str | None
+    trading_symbol: str
+    instrument_type: str | None
+    strike_price: float | None
+    expiry_ms: int | None
+
+
+@dataclass(frozen=True)
 class ListedInstrument:
     """One way of expressing a view on a symbol, as the venue actually lists it."""
 
@@ -470,6 +488,50 @@ class InstrumentSelector:
             price=mid_price, observed_at_ns=observed_at_ns
         )
 
+    def _option_chain_fact_in(self, listed):
+        """This universe entry as the option chain tracker reads listings, or None.
+
+        `symbol-universe` is how option contracts actually reach this part.
+        Measured on the live spine 2026-09-04: `instrument-selector` received
+        **zero** `broker-instrument-listing` messages -- the 102,940-row
+        catalogue is published as one burst and this part never absorbed any of
+        it -- while receiving 58,308 `broker-option-greeks` and 70,115 option
+        prices it could do nothing with, because nothing could resolve a
+        contract to its underlying. Meanwhile 6,600 option entries arriving on
+        `symbol-universe`, which it *does* receive, were counted as an unpriced
+        kind and dropped.
+
+        The tracker resolves a contract to its underlying by the venue's own
+        key, because that is how greeks and prices are keyed and they carry no
+        symbol at all -- which is why the universe carries both the underlying's
+        name and its key.
+        """
+        key = listed.venue_instrument_id
+        if key is None:
+            return None
+        if listed.instrument_kind == OPTION:
+            if listed.underlying_venue_instrument_id is None or listed.expiry_ms is None:
+                return None
+            return _ChainListing(
+                instrument_key=key,
+                underlying_key=listed.underlying_venue_instrument_id,
+                trading_symbol=listed.symbol,
+                instrument_type=listed.contract_type,
+                strike_price=listed.strike_price,
+                expiry_ms=listed.expiry_ms,
+            )
+        if listed.underlying_symbol is None and listed.instrument_kind is None:
+            # An underlying: what every contract on it resolves through.
+            return _ChainListing(
+                instrument_key=key,
+                underlying_key=None,
+                trading_symbol=listed.symbol,
+                instrument_type=listed.contract_type,
+                strike_price=None,
+                expiry_ms=None,
+            )
+        return None
+
     def observe_listed_symbol(self, listed) -> None:
         """One entry of `symbol-universe`: a contract the venue lists, on its terms.
 
@@ -494,6 +556,14 @@ class InstrumentSelector:
         """
         if self._round_trip_cost_fraction is None:
             self.standing.listings_skipped["no round-trip cost was set for this selector"] += 1
+            return
+        if self._option_chain_fact_in(listed) is not None:
+            # An option, or the underlying an option is a claim on. Handed to
+            # the same ATM tracker `observe_option_listing` feeds, so options
+            # arriving this way are priced by the one path that prices them --
+            # ATM strike from real greeks, premium from the contract's own LTP
+            # against spot -- rather than by a second, poorer one beside it.
+            self.observe_option_listing(self._option_chain_fact_in(listed))
             return
         if listed.instrument_kind != PERPETUAL_FUTURE:
             self.standing.listings_skipped[

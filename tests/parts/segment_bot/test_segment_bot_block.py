@@ -7,6 +7,7 @@ and recording it as a choice.
 """
 
 import importlib
+import time
 
 import pytest
 
@@ -14,10 +15,12 @@ from parts.segment_bot.instrument_selector import (
     BEST_IS_IN_AN_UNBUILT_SEGMENT, CHOSEN, DATED_FUTURE,
     NO_REFERENCE_PRICE_HAS_EVER_ARRIVED, NONE_CAN_CARRY_THE_INTENT,
     NONE_LIQUID_ENOUGH, NOTHING_AVAILABLE, OPTION, PERPETUAL_FUTURE,
-    REFERENCE_PRICE_IS_TOO_OLD, SPOT, InstrumentSelector, ListedInstrument,
+    REFERENCE_PRICE_IS_TOO_OLD, SPOT, UPSTOX_VENUE_ID, InstrumentSelector,
+    ListedInstrument,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.price_staleness import PriceStalenessEstimator
+from runtime.symbol_universe import CapturableSymbol
 
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
@@ -606,3 +609,117 @@ def test_a_republished_universe_replaces_a_contract_s_terms(read_captured_json):
 
     assert after.considered == first.considered, "the same contract was listed twice"
     assert after.carry_cost_fraction == pytest.approx(first.carry_cost_fraction * 10.0)
+
+# ---- instrument-selector: options reach it through symbol-universe -----------
+
+NIFTY = "NIFTY"
+NIFTY_KEY = "NSE_INDEX|Nifty 50"
+A_CALL_KEY = "NSE_FO|48001"
+A_PUT_KEY = "NSE_FO|48002"
+
+
+def a_universe_underlying():
+    return CapturableSymbol(
+        venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, contract_type="INDEX",
+        quote_volume_24h=None, price_increment=None, instrument_kind=None,
+        venue_instrument_id=NIFTY_KEY,
+    )
+
+
+def a_universe_contract(key, symbol, contract_type, strike, expiry_ms):
+    return CapturableSymbol(
+        venue_id=UPSTOX_VENUE_ID, symbol=symbol, contract_type=contract_type,
+        quote_volume_24h=None, price_increment=0.05, instrument_kind=OPTION,
+        strike_price=strike, expiry_ms=expiry_ms, lot_size=75,
+        venue_instrument_id=key, underlying_symbol=NIFTY,
+        underlying_venue_instrument_id=NIFTY_KEY,
+    )
+
+
+class Greeks:
+    def __init__(self, instrument_key, delta):
+        self.instrument_key, self.delta = instrument_key, delta
+
+
+def a_selector_fed_from_the_universe(spot=24_500.0, premium=120.0):
+    """Everything the live part sees, in the order it sees it.
+
+    `broker-instrument-listing` is deliberately absent: measured on the live
+    spine 2026-09-04, `instrument-selector` received **zero** of them -- the
+    102,940-row catalogue is published as one burst and this part never
+    absorbed any of it -- while receiving 58,308 option greeks and 70,115
+    option prices it could do nothing with, because nothing could resolve a
+    contract to its underlying. `symbol-universe` is the bounded set it does
+    receive (6,735), and it carries the same facts.
+    """
+    expiry_ms = (time.time_ns() // 1_000_000) + 7 * 24 * 3_600_000
+    subject = InstrumentSelector(
+        built_segments=("index-options",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+    )
+    subject.observe_listed_symbol(a_universe_underlying())
+    subject.observe_listed_symbol(
+        a_universe_contract(A_CALL_KEY, "NIFTY24500CE", "CE", 24_500.0, expiry_ms))
+    subject.observe_listed_symbol(
+        a_universe_contract(A_PUT_KEY, "NIFTY24500PE", "PE", 24_500.0, expiry_ms))
+    subject.observe_price(UPSTOX_VENUE_ID, NIFTY, spot, time.time_ns())
+    subject.observe_option_greeks(Greeks(A_CALL_KEY, 0.5))
+    subject.observe_option_greeks(Greeks(A_PUT_KEY, -0.5))
+    subject.observe_option_price(A_CALL_KEY, premium, time.time_ns())
+    subject.observe_option_price(A_PUT_KEY, premium, time.time_ns())
+    return subject
+
+
+def test_an_option_from_the_universe_can_carry_an_intent_on_its_underlying():
+    """The gap that refused the first real intent this system ever produced.
+
+    Measured 2026-09-04: an intent reached this part and came back
+    `no-instrument-is-listed-for-this-symbol`, while 6,600 option listings sat
+    counted as "kind option is not priced by this part yet". The ATM path that
+    prices options was already built and already correct -- it was simply never
+    fed, because it was fed only from a catalogue this part does not receive.
+    """
+    subject = a_selector_fed_from_the_universe()
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY))
+
+    assert choice.chosen is not None, choice.reason
+    assert choice.chosen.instrument_kind == OPTION
+    assert choice.chosen.contract_symbol == "NIFTY24500CE"
+
+
+def test_a_bearish_intent_is_carried_by_the_put_and_a_bullish_one_by_the_call():
+    """Buy-only options: the delta's sign is what says which view a contract
+    can express, and neither contract can express the other's."""
+    subject = a_selector_fed_from_the_universe()
+
+    bullish = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, is_long=True))
+    bearish = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, is_long=False))
+
+    assert bullish.chosen.contract_symbol == "NIFTY24500CE"
+    assert bearish.chosen.contract_symbol == "NIFTY24500PE"
+
+
+def test_the_universe_alone_is_not_enough_without_a_greek_to_say_which_is_atm():
+    """A contract with no delta cannot be placed on the chain, and is not
+    guessed onto it -- the tracker resolves ATM from real greeks."""
+    subject = InstrumentSelector(
+        built_segments=("index-options",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+    )
+    expiry_ms = (time.time_ns() // 1_000_000) + 7 * 24 * 3_600_000
+    subject.observe_listed_symbol(a_universe_underlying())
+    subject.observe_listed_symbol(
+        a_universe_contract(A_CALL_KEY, "NIFTY24500CE", "CE", 24_500.0, expiry_ms))
+    subject.observe_price(UPSTOX_VENUE_ID, NIFTY, 24_500.0, time.time_ns())
+
+    assert subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY)).chosen is None
+
+
+def test_an_option_universe_entry_is_not_counted_as_an_unpriced_kind():
+    """The counter that named this gap must stop naming it once it is closed."""
+    subject = a_selector_fed_from_the_universe()
+
+    assert not any(
+        "kind option" in reason for reason in subject.standing.listings_skipped
+    ), dict(subject.standing.listings_skipped)

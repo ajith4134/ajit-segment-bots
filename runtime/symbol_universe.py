@@ -129,6 +129,22 @@ class CapturableSymbol:
     # a venue a key it does not recognise is not one lost instrument, because a
     # subscribe frame is one message.
     venue_instrument_id: str | None = None
+    # What an option is a contract on, named the way every other part names it
+    # -- the underlying's trading symbol ("NIFTY"), not the venue's key.
+    #
+    # An intent names the underlying, because that is what a bot forms an
+    # opinion about; the thing it buys is a contract on it. Without this an
+    # option could only be registered under its own contract symbol, where no
+    # intent would ever look for it. None on anything that is not a contract on
+    # something else.
+    underlying_symbol: str | None = None
+    # The venue's own key for that underlying, where `underlying_symbol` is its
+    # name. Both, because they answer different questions: a part registering an
+    # option under the thing an intent names needs the symbol, and a part
+    # resolving a contract back to its underlying by key -- which is how option
+    # greeks and option prices arrive, keyed by the venue's id and nothing else
+    # -- needs the key.
+    underlying_venue_instrument_id: str | None = None
     # The contracts one lot is, as the exchange fixes it. An NSE option is
     # traded in lots, not in units -- a size expressed in contracts is wrong by
     # the lot size, which for NIFTY is 75. None where the master did not state

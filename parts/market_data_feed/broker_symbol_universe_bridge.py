@@ -183,7 +183,9 @@ class BrokerSymbolUniverseBridge:
             venue_instrument_id=listing.instrument_key,
         )
 
-    def _entry_for_contract(self, listing) -> CapturableSymbol:
+    def _entry_for_contract(
+        self, listing, underlying_symbol: str, underlying_key: str,
+    ) -> CapturableSymbol:
         return CapturableSymbol(
             venue_id=UPSTOX_VENUE_ID,
             symbol=listing.trading_symbol,
@@ -199,6 +201,8 @@ class BrokerSymbolUniverseBridge:
             expiry_ms=listing.expiry_ms,
             lot_size=listing.lot_size,
             venue_instrument_id=listing.instrument_key,
+            underlying_symbol=underlying_symbol,
+            underlying_venue_instrument_id=underlying_key,
         )
 
     def contracts_for(self, underlying_key: str) -> tuple:
@@ -256,7 +260,9 @@ class BrokerSymbolUniverseBridge:
                 no_expiry += 1
                 continue
             for contract in self.contracts_for(key):
-                entries.append(self._entry_for_contract(contract))
+                entries.append(
+                    self._entry_for_contract(contract, listing.trading_symbol, key)
+                )
                 contracts += 1
             self.standing.nearest_expiry_ms[listing.trading_symbol] = self.nearest_expiry_for(key)
 
