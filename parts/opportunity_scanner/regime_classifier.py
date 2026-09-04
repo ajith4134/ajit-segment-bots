@@ -227,21 +227,15 @@ class RegimeClassifier:
 
         So both conditions are required: the series must be over *and* nothing must
         have arrived about it. A symbol is one of this part's subjects for as long as
-        messages about it keep coming, however old the stamps they carry.
+        messages about it keep coming, however old the stamps they carry. The rule
+        itself is `runtime.rolling_statistics.subjects_gone_quiet`, because
+        `correlation-cluster-mapper` needs the same answer about the same kind of
+        window and a second statement of it is a second thing to keep in step.
         """
+        from runtime.rolling_statistics import subjects_gone_quiet
+
         at = self._now_ns() if now_ns is None else now_ns
-        gone = []
-        for key, window in self._prices.items():
-            if not window.has_gone_silent_past_its_bound(at):
-                continue
-            last_seen = self._last_seen_at_ns.get(key)
-            if (
-                last_seen is not None
-                and window.maximum_gap_seconds is not None
-                and (at - last_seen) / 1e9 <= window.maximum_gap_seconds
-            ):
-                continue
-            gone.append(key)
+        gone = subjects_gone_quiet(self._prices, self._last_seen_at_ns, at)
         for key in gone:
             del self._prices[key]
             self._last_seen_at_ns.pop(key, None)

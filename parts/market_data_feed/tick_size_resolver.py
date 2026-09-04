@@ -36,6 +36,26 @@ class PriceIncrement:
     resolved_at_ns: int
 
 
+def increment_verdict_of(increments) -> tuple:
+    """What makes an increment a different increment, with the noticing left out.
+
+    A `PriceIncrement` carries two fields that restate when the resolver last
+    looked rather than what it found: `resolved_at_ns`, and an `observations`
+    count that climbs with every book seen. Compared whole, two statements of one
+    unchanging tick size are never equal, so nothing would ever be skipped and the
+    storm would survive the fix while the skip counter claimed otherwise -- the
+    failure `runtime/level_publishing.py` documents and this part would have
+    walked straight into, because it publishes one increment per symbol per tick.
+
+    What a reader acts on is which symbol, what the increment is, and whether it
+    was declared or inferred. `position-sizer` rounds an order to it and refuses
+    without one; none of that depends on how many spacings agreed.
+    """
+    return tuple(
+        (item.venue_id, item.symbol, item.increment, item.source) for item in increments
+    )
+
+
 @dataclass
 class ResolverStanding:
     symbols_declared: int = 0
@@ -133,9 +153,23 @@ class TickSizeResolver:
         )
 
 
-def describe_increments(resolver: TickSizeResolver) -> dict:
+def describe_increments(resolver: TickSizeResolver, levels=None) -> dict:
+    """This part's standing, and what its level publisher actually did.
+
+    `unchanged_increments_skipped` is on health because a change check whose skip
+    count reads zero is a change check doing nothing, and it looks exactly like one
+    that works. Here it should be very nearly everything: a tick size does not move.
+    """
     standing = resolver.standing
+    level_standing = {} if levels is None else {
+        "increments_published": levels.standing.publishes,
+        "unchanged_increments_skipped": levels.standing.unchanged_publishes_skipped,
+        "increment_refreshes": levels.standing.refreshes,
+        "increment_changes": levels.standing.changes,
+        "symbols_held_as_levels": levels.keys_held,
+    }
     return {
+        **level_standing,
         "part_id": PART_ID,
         "books_seen": standing.books_seen,
         "symbols_declared": standing.symbols_declared,
@@ -150,11 +184,14 @@ def run_tick_size_resolver(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    levels=None,
 ) -> int:
+    """`publish_increments(key, increments)` -- keyed, because the level is per symbol."""
     def tick() -> None:
         for venue_id, symbol, bids, asks in read_books():
             resolver.observe_book(venue_id, symbol, bids, asks)
-        publish_increments(resolver.resolve_all())
+        for increment in resolver.resolve_all():
+            publish_increments((increment.venue_id, increment.symbol), (increment,))
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -164,7 +201,7 @@ def run_tick_size_resolver(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_increments(resolver),
+        read_standing=lambda: describe_increments(resolver, levels),
     )
 
 
@@ -182,9 +219,20 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
+    from runtime.level_publishing import LevelPublisherByKey
+
     universe = Batch(read=context.bus.reader("symbol-universe"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
-    publish_increments = context.bus.publisher_for("price-increment")
+    # One level per symbol. Until 2026-09-04 this part published `resolve_all()`
+    # unconditionally on every tick -- an increment for every symbol it had ever
+    # seen, 1,204 messages a second and 13% of the spine, for 1,156 symbols of
+    # which 1,006 said UNKNOWN. A tick size is the most level-like thing on this
+    # bus: it comes from the catalogue and does not move.
+    increment_levels = LevelPublisherByKey(
+        publish=context.bus.publisher_for("price-increment"),
+        refresh_interval_seconds=context.number("price_increment_refresh_interval_seconds"),
+        identity_of=increment_verdict_of,
+    )
 
     def read_books():
         for entry in universe.payloads():
@@ -200,7 +248,8 @@ def start_part(context) -> int:
         resolver=resolver,
         control_socket=context.control_socket,
         read_books=read_books,
-        publish_increments=publish_increments,
+        levels=increment_levels,
+        publish_increments=increment_levels.publish_level,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

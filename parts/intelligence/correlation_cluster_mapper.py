@@ -74,6 +74,12 @@ class MapperStanding:
     symbols_tracked: int = 0
     largest_cluster_seen: int = 0
     strongest_correlation_seen: float | None = None
+    # Symbols dropped because their series ended and nothing is arriving about
+    # them. Counted rather than dropped quietly: pairs grow with the square of
+    # this part's universe, so a number that climbs steadily is a feed losing
+    # symbols and one that jumps once at start is a universe that outlived its
+    # venue.
+    symbols_forgotten_silent: int = 0
 
 
 class CorrelationClusterMapper:
@@ -106,10 +112,15 @@ class CorrelationClusterMapper:
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[str, RollingWindow] = {}
+        # When this part last received anything about a symbol, on its own clock
+        # rather than the venue's -- see `runtime.rolling_statistics.subjects_gone_quiet`
+        # for why both are needed.
+        self._last_seen_at_ns: dict[str, int] = {}
         self.standing = MapperStanding()
 
     def observe_price(self, symbol: str, price: float, at_ns: int) -> None:
         self.standing.observations += 1
+        self._last_seen_at_ns[symbol] = self._now_ns()
         window = self._prices.get(symbol)
         if window is None:
             window = RollingWindow(
@@ -138,8 +149,33 @@ class CorrelationClusterMapper:
             return None, length
         return correlation(left_returns[-length:], right_returns[-length:]), length
 
+    def forget_silent_symbols(self, now_ns: int | None = None) -> tuple:
+        """Drop every symbol whose series is over and about which nothing arrives.
+
+        Pairs grow with the square of the universe, so this is the only lever on
+        this part's cost that is not a slower answer. Measured on the live spine
+        2026-09-04: 467 symbols, 108,811 pairs, `unmeasured_pairs` 108,811 -- every
+        pair of them -- for 0.408 of a core, because the universe was still the
+        retired crypto one and no pair had enough shared observations to measure.
+
+        The rule is `runtime.rolling_statistics.subjects_gone_quiet`, shared with
+        `regime-classifier`, which needs the same answer about the same kind of
+        window.
+        """
+        from runtime.rolling_statistics import subjects_gone_quiet
+
+        at = self._now_ns() if now_ns is None else now_ns
+        gone = subjects_gone_quiet(self._prices, self._last_seen_at_ns, at)
+        for symbol in gone:
+            del self._prices[symbol]
+            self._last_seen_at_ns.pop(symbol, None)
+        self.standing.symbols_forgotten_silent += len(gone)
+        self.standing.symbols_tracked = len(self._prices)
+        return gone
+
     def map(self) -> tuple[CorrelationCluster, ...]:
         self.standing.mappings += 1
+        self.forget_silent_symbols()
         symbols = sorted(self._prices)
         if len(symbols) < 2:
             return ()
@@ -250,6 +286,7 @@ def describe_correlation_clusters(mapper: CorrelationClusterMapper) -> dict:
         "clusters_now": len(clusters),
         "largest_cluster": max((len(cluster.symbols) for cluster in clusters), default=0),
         "unmeasured_pairs": mapper.standing.unmeasured_pairs,
+        "symbols_forgotten_silent": mapper.standing.symbols_forgotten_silent,
         "strongest_correlation_seen": mapper.standing.strongest_correlation_seen,
         "clusters": [
             {"symbols": list(cluster.symbols), "average": cluster.average_correlation}
@@ -325,14 +362,21 @@ def start_part(context) -> int:
     # Paces the mapping, not just the send: correlating every pair is the
     # expensive half, and a publisher that only refused to send it would pay all
     # of that and discard the answer. Same shape as heartbeat-collector's.
+    # Its own interval, not the shared one, because the cost here is quadratic in
+    # the universe and the answer is not. `correlation_window_length` is 256
+    # observations -- about an hour -- so remapping once a second recomputed an
+    # hour-long statistic three and a half thousand times per window turnover.
+    # Measured 2026-09-04: 548 symbols, 149,878 pairs, every one of them
+    # unmeasured, for 0.423 of a core.
+    remap_interval = context.number("correlation_remap_interval_seconds")
     remaps = PacedPublisher(
         publish=lambda _items: None,
-        interval_seconds=context.number("level_refresh_interval_seconds"),
+        interval_seconds=remap_interval,
     )
 
     cluster_levels = LevelPublisher(
         publish=context.bus.publisher_for("correlation-cluster"),
-        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        refresh_interval_seconds=remap_interval,
         identity_of=without_observation_time,
     )
     mapper = CorrelationClusterMapper(

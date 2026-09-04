@@ -145,6 +145,68 @@ survival tier, bound by LLM quota in 37,935 of 38,244 readings, from a
 look: the tier that governs conservation is decided by a measurement nobody has
 wired a key for.
 
+## Ranking by messages was the wrong ranking
+
+The audit ranks by message count, and acting on that ranking directly would have
+been a mistake. Measured per part with `/proc`, message volume and CPU cost do
+not line up at all:
+
+    part-appetite-meter      15.5% of messages   0.070 cores
+    tick-size-resolver       13.0% of messages   0.023 cores
+    intra-bar-fill-sequencer  not in the top 20  0.735 cores
+    fill-volume-capper        not in the top 20  0.725 cores
+
+**`part-appetite-meter` is not a defect.** The whole `part-resource-usage` loop --
+the meter plus all four consumers, `hog-detector`, `duty-cycle-planner`,
+`switching-planner` and `off-state-verifier` -- costs **0.125 cores end to end**,
+1% of the box, to meter 318 parts once a second. A change check cannot help it:
+sampled directly, **0 of 12** consecutive readings were identical, because every
+part's CPU rate moves in the low bits every sweep. That is precisely the shape
+`PacedPublisher` exists for, and the meter already paces itself with a tick floor
+at `part_usage_cadence_seconds`. The only remaining levers are a slower cadence,
+which makes the governor slower to see a hog, and one snapshot message instead of
+318, which changes the payload and all four readers. Neither is worth 1% of a
+box, so it was left alone.
+
+**The two parts that were actually expensive published nothing.**
+`intra-bar-fill-sequencer` and `fill-volume-capper` were 1.46 cores, 27% of the
+spine, between them -- both consumers of `historical-window`, walking every bar of
+every window that arrived. `historical-bar-store` was restating those windows
+under the shared 1 s refresh: **`window_changes` 77 against `window_refreshes`
+70,699**, each carrying up to 1,440 bars. And `walk-forward-splitter` reported
+`refused_gappy_windows: 70,776` -- it refused every single one, so the whole 1.46
+cores produced nothing that could ever become a split.
+
+Reading a level publisher's own standing is what found it. A part can be the most
+expensive thing on the machine and appear nowhere in a ranking of publishers.
+
+## What changed, and what it cost
+
+| part | lever | before | after |
+|---|---|---|---|
+| `historical-bar-store` | own refresh, 30 s against a 60 s bar | 70,699 refreshes | 12 |
+| `intra-bar-fill-sequencer` + `fill-volume-capper` | downstream of the above | 1.55 cores | off the top 8 |
+| `correlation-cluster-mapper` | own remap interval, 15 s | 0.404 cores | 0.119 |
+| `tick-size-resolver` | first change check it has ever had | 1,204 msg/s | off the top 8 |
+| `failing-part-detector` | own refresh, 4 s inside a 10 s bound | 997 msg/s | off the top 8 |
+| `part-appetite-meter` | none -- measured, not a defect | 0.070 cores | unchanged |
+
+    spine   5.32 cores, 9,731 msg/s  ->  3.41 cores, 4,646 msg/s
+
+`correlation-cluster-mapper` is worth its own note: the first fix tried was
+`regime-classifier`'s -- forget symbols nothing is feeding -- and it did nothing,
+`symbols_forgotten_silent` 0 with the universe growing 467 to 548. The symbols
+were not silent; prices were arriving for all of them, and `subjects_gone_quiet`
+correctly declined to drop any. The cost was quadratic in a genuine universe, so
+the lever was the cadence: `correlation_window_length` is 256 observations, about
+an hour, and it was recorrelating every pair once a second.
+
+## What is left, measured after all of it
+
+`expiry-day-zero-to-hero-detector` at **0.957 cores** -- 28% of the spine, and now
+the single largest cost on it by a factor of three. It was not visible while the
+storms were.
+
 ## Re-running it
 
     .venv/bin/python measurements/2026-09-04-what-burns-cpu-with-no-trades/audit_level_publishing.py

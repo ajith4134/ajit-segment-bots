@@ -375,7 +375,14 @@ def start_part(context) -> int:
     # part's -- see runtime/level_publishing.py for what that cost when measured.
     fault_levels = LevelPublisherByKey(
         publish=context.bus.publisher_for("part-fault"),
-        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        # Its own refresh interval: the keepalive is per key and this part watches
+        # 314 of them, which measured 997 messages a second on 2026-09-04 -- 10.8%
+        # of the spine -- with the change check working and skipping the 16% whose
+        # verdict had genuinely not moved. It must stay inside
+        # warden_escalation_forget_seconds, because this part clears a fault by
+        # dropping the key rather than publishing an all-clear, so a gap longer
+        # than that bound would read as a fault clearing and coming back.
+        refresh_interval_seconds=context.number("part_fault_refresh_interval_seconds"),
         identity_of=verdict_of,
     )
 

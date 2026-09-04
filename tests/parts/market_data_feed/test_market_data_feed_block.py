@@ -233,6 +233,78 @@ def test_without_a_declared_increment_the_fraction_threshold_is_used():
 
 # ---- tick-size-resolver ------------------------------------------------------
 
+def test_an_unchanged_tick_size_is_not_restated_on_every_tick(read_captured_json):
+    """13% of the spine, measured 2026-09-04.
+
+    This part published `resolve_all()` unconditionally on every tick -- one
+    increment for every symbol it had ever seen a book for -- at 1,204 messages a
+    second, for 1,156 symbols of which 1,006 resolved to UNKNOWN.
+
+    The skip count is asserted rather than the absence of a crash: a `PriceIncrement`
+    carries `resolved_at_ns` and an `observations` count that climbs with every
+    book, so compared whole no two are ever equal and a change check would skip
+    nothing while appearing to work.
+    """
+    from parts.market_data_feed.tick_size_resolver import increment_verdict_of
+    from runtime.level_publishing import LevelPublisherByKey
+
+    sent = []
+    levels = LevelPublisherByKey(
+        publish=lambda items: sent.extend(items),
+        refresh_interval_seconds=1_000_000.0,
+        identity_of=increment_verdict_of,
+    )
+    resolver = TickSizeResolver(minimum_observations=4)
+    adapter = load_venue_adapter("binance-usdm")
+    listings = adapter.read_symbol_listings(
+        read_captured_json("binance-usdm", "2026-08-22-catalogue-subset.json")
+    )
+    declared = [listing for listing in listings if listing.price_increment][:20]
+    assert declared, "the captured catalogue declares no increments"
+    for listing in declared:
+        resolver.declare_from_catalogue("binance-usdm", listing.symbol, listing.price_increment)
+
+    first = resolver.resolve_all()
+    assert first, "the catalogue produced no increments to restate"
+    for increment in first:
+        levels.publish_level((increment.venue_id, increment.symbol), (increment,))
+    published = len(sent)
+    assert published == len(first)
+
+    # Nothing about a tick size has changed; resolving again must send nothing.
+    for _ in range(30):
+        for increment in resolver.resolve_all():
+            levels.publish_level((increment.venue_id, increment.symbol), (increment,))
+
+    assert len(sent) == published
+    assert levels.standing.unchanged_publishes_skipped == 30 * len(first)
+
+
+def test_a_tick_size_that_actually_changes_is_published_at_once(read_captured_json):
+    """Stable is not silent: the check must not swallow a real change."""
+    from parts.market_data_feed.tick_size_resolver import increment_verdict_of
+    from runtime.level_publishing import LevelPublisherByKey
+
+    sent = []
+    levels = LevelPublisherByKey(
+        publish=lambda items: sent.extend(items),
+        refresh_interval_seconds=1_000_000.0,
+        identity_of=increment_verdict_of,
+    )
+    resolver = TickSizeResolver(minimum_observations=4)
+    resolver.declare_from_catalogue("binance-usdm", "BTCUSDT", 0.10)
+    for increment in resolver.resolve_all():
+        levels.publish_level((increment.venue_id, increment.symbol), (increment,))
+    assert len(sent) == 1
+
+    resolver.declare_from_catalogue("binance-usdm", "BTCUSDT", 0.01)
+    for increment in resolver.resolve_all():
+        levels.publish_level((increment.venue_id, increment.symbol), (increment,))
+
+    assert len(sent) == 2
+    assert sent[-1].increment == 0.01
+
+
 def test_a_declared_increment_beats_an_inferred_one(read_captured_json):
     adapter = load_venue_adapter("binance-usdm")
     listings = adapter.read_symbol_listings(

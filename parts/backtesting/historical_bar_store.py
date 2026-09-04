@@ -335,10 +335,19 @@ def start_part(context) -> int:
     # range slides. It was published unconditionally once per health interval for
     # every symbol seen, which -- with the counter-based identity this part used to
     # mint -- is what OOM-killed the spine on 2026-09-04 (see `_identity_of`).
-    # Keyed per symbol so one symbol's new bar does not restate the other 635.
+    # Keyed per symbol so one symbol's new bar does not restate the other 188.
+    #
+    # Its own refresh interval, and a long one, because this is the largest payload
+    # on the bus: up to `backtest_window_bars` (1,440) bars, read by four parts.
+    # With the shared 1 s interval, measured the same day: 77 real changes against
+    # 70,699 refreshes, and the two parts that walk every bar of every window --
+    # `intra-bar-fill-sequencer` and `fill-volume-capper` -- were burning 1.46 cores
+    # between them, 27% of the spine, re-sequencing 24.8 million bars. A window can
+    # only change when a bar closes, so the interval is chosen against
+    # `backtest_bar_interval` rather than against any tick rate.
     windows = LevelPublisherByKey(
         publish=publish_windows,
-        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        refresh_interval_seconds=context.number("historical_window_refresh_interval_seconds"),
         identity_of=without_observation_time,
     )
 

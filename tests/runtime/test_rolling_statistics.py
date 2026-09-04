@@ -14,6 +14,8 @@ describes a continuous stretch of market are not conservative, they are wrong.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from runtime.rolling_statistics import RollingWindow
@@ -170,3 +172,50 @@ def test_patience_without_a_gap_bound_is_refused():
         RollingWindow(length=4, gap_patience_multiple=2.8)
     with pytest.raises(ValueError):
         RollingWindow(length=4, maximum_gap_seconds=120.0, gap_patience_multiple=0.0)
+
+def test_a_subject_is_only_forgotten_when_both_its_series_ended_and_it_went_quiet():
+    """`subjects_gone_quiet` -- the rule two parts share, and both halves of it.
+
+    The window's own verdict is judged on venue stamps, and with the market shut
+    every stamp is hours old: by that test alone every symbol is silent the moment
+    the session closes, and the next poll re-adds it. Measured 2026-09-04 on the
+    first version of this rule in `regime-classifier`: 12,903 forgettings in ten
+    minutes from a universe of 3,209, with `symbols_tracked` reading 3.
+    """
+    from runtime.rolling_statistics import subjects_gone_quiet
+
+    now = time.time_ns()
+    stale_stamps = now - 6 * 3600 * 1_000_000_000
+
+    def a_window(first_at_ns):
+        window = RollingWindow(length=50, maximum_gap_seconds=60.0)
+        for index in range(10):
+            window.observe(100.0 + index, first_at_ns + index * 1_000_000_000)
+        return window
+
+    # Still arriving, however old the stamps it carries: kept.
+    talking = a_window(stale_stamps)
+    assert talking.has_gone_silent_past_its_bound(now)
+    assert subjects_gone_quiet({"TALKING": talking}, {"TALKING": now}, now) == ()
+
+    # Series over and nothing arriving: gone.
+    quiet = a_window(stale_stamps)
+    assert subjects_gone_quiet(
+        {"QUIET": quiet}, {"QUIET": now - 3600 * 1_000_000_000}, now
+    ) == ("QUIET",)
+
+    # Series still live: kept whatever the holder last heard.
+    live = a_window(now - 10 * 1_000_000_000)
+    assert subjects_gone_quiet({"LIVE": live}, {}, now) == ()
+
+
+def test_a_window_with_no_gap_bound_is_never_reported_as_quiet():
+    """No rule for what a hole is means no rule for when a series is over."""
+    from runtime.rolling_statistics import subjects_gone_quiet
+
+    window = RollingWindow(length=50)
+    for index in range(10):
+        window.observe(100.0 + index, index * 1_000_000_000)
+
+    assert window.has_gone_silent_past_its_bound(time.time_ns()) is False
+    assert subjects_gone_quiet({"X": window}, {}, time.time_ns()) == ()

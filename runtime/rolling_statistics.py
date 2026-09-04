@@ -387,3 +387,46 @@ def correlation(left: list[float], right: list[float]) -> float | None:
     if spread_left == 0 or spread_right == 0:
         return None
     return covariance / (spread_left * spread_right)
+
+def subjects_gone_quiet(windows, last_seen_at_ns, now_ns) -> tuple:
+    """Which subjects a part is no longer watching: series over, and nothing arriving.
+
+    A holder of many windows -- one per symbol, one per pair -- needs to answer
+    "is this still one of mine", and getting it wrong is expensive in both
+    directions. Kept keys make the holder pay for subjects that no longer exist:
+    `regime-classifier` held 3,209 symbols, 3,208 restored from a checkpoint
+    written in the crypto era, and classified all of them once a second with 99.2%
+    of the answers saying nothing; `correlation-cluster-mapper` correlated 467
+    symbols into 108,811 pairs and could measure none of them.
+
+    Dropped keys are worse: a symbol dropped out from under a detector reads as a
+    market in which nothing is happening.
+
+    **Both conditions are required.** The window decides whether the series is
+    over -- `has_gone_silent_past_its_bound` is the same comparison `observe` makes
+    on an arriving gap, so nothing is discarded that the subject's own next
+    observation would not discard. But that is judged on the *venue's* stamps, and
+    with the market shut every stamp is hours old, so by that test alone every
+    symbol is silent the moment the session closes and the next poll re-adds it.
+    Measured 2026-09-04 on the first version of this rule: 12,903 forgettings in
+    ten minutes from a universe of 3,209, with `symbols_tracked` reading 3. So a
+    subject about which messages are still arriving is kept, however old the
+    stamps they carry.
+
+    `last_seen_at_ns` is the holder's own clock -- when it last received anything
+    about that subject -- and a subject missing from it has never been heard from
+    through this route, so only the window's verdict applies.
+    """
+    gone = []
+    for key, window in windows.items():
+        if not window.has_gone_silent_past_its_bound(now_ns):
+            continue
+        last_seen = last_seen_at_ns.get(key)
+        if (
+            last_seen is not None
+            and window.maximum_gap_seconds is not None
+            and (now_ns - last_seen) / 1e9 <= window.maximum_gap_seconds
+        ):
+            continue
+        gone.append(key)
+    return tuple(gone)
