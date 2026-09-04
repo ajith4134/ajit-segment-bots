@@ -201,11 +201,52 @@ correctly declined to drop any. The cost was quadratic in a genuine universe, so
 the lever was the cadence: `correlation_window_length` is 256 observations, about
 an hour, and it was recorrelating every pair once a second.
 
-## What is left, measured after all of it
+## expiry-day-zero-to-hero-detector: 0.957 cores to judge the same thing repeatedly
 
-`expiry-day-zero-to-hero-detector` at **0.957 cores** -- 28% of the spine, and now
-the single largest cost on it by a factor of three. It was not visible while the
-storms were.
+Once the storms were gone this was the largest single cost on the spine by a
+factor of three, and it had fired nothing. Its tick judged **every instrument the
+catalogue carries** -- 102,940 of them -- on every wake, and the first thing
+`detect` asked was whether the contract expires today, which
+`_is_expiry_today` answered by converting two timestamps to dates. About 200,000
+date conversions a tick, to reach the answer it had reached the tick before.
+
+An expiry date is a property of the contract and cannot change between ticks. So
+it is decided once, when the listing arrives, and the listing is filed under the
+date it expires; the tick asks the index what expires today. `instruments_known`
+and `instruments_expiring_today` both go on health, so a quiet day reads as
+"nothing expires today" rather than as a stopped detector.
+
+**The live part could not be made to answer for itself.** After the fix it ran ten
+minutes with `listings_seen` at zero: `broker-instrument-catalogue-reader`
+restates the master on its own long interval, and the detector's process had been
+restarted after the last burst. So the cost was measured directly instead, against
+the real NSE master, at the 102,940 rows the live catalogue carries
+(`measure_the_expiry_sweep.py`):
+
+     live expiries      walked    every instrument   todays expiries
+                 1      91,388            0.326 c           0.320 c
+                 2      45,762            0.330 c           0.172 c
+                 5      18,308            0.331 c           0.068 c
+                10       9,222            0.364 c           0.031 c
+                20       4,698            0.347 c           0.014 c
+                40       2,436            0.339 c           0.007 c
+
+The old sweep costs the same whatever the master looks like, because it walks all
+of it. The new one costs whatever today's slice is. NSE carries weekly index
+expiries beside monthly stock ones for many underlyings at once, so ten or more
+live expiry dates is the row to read: **0.33 cores to 0.03**.
+
+The first version of this script reported no saving at all, because it built its
+catalogue by repeating one captured NIFTY ladder verbatim -- which puts 89% of the
+instruments on a single expiry date, a shape the real master does not have. How
+many contracts actually expire on a given day is the one thing this measurement
+does not know, so it reports the curve rather than guessing a row.
+
+The systemd accounting agrees with the diagnosis. Across this part's earlier
+lives, whenever it had the catalogue: `56min 29s CPU over 59min 55s` and
+`57min 7s over 1h 3s` -- 0.94 and 0.91 of a core. The benchmark's 0.33 is one
+sweep a second; the live part is woken by its inputs and swept about three times
+that.
 
 ## Re-running it
 

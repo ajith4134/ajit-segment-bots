@@ -63,6 +63,14 @@ _PUT = "PE"
 @dataclass
 class DetectorStanding:
     listings_seen: int = 0
+    # What the sweep costs, and what it would have cost. The catalogue carries
+    # every tracked instrument -- 102,940 of them on 2026-09-04 -- and all but a
+    # handful can be ruled out by their expiry date alone, which does not change
+    # between ticks. Both numbers are on health so a day with no expiry reads as
+    # "nothing expires today" rather than as a detector that stopped (Rule 8).
+    instruments_known: int = 0
+    instruments_expiring_today: int = 0
+    instruments_that_are_not_options: int = 0
     ltps_seen: int = 0
     greeks_seen: int = 0
     detections_run: int = 0
@@ -105,11 +113,59 @@ class ZeroToHeroDetector:
         self._listings: dict[str, object] = {}
         self._premiums: dict[str, float] = {}
         self._deltas: dict[str, float] = {}
+        # Instrument keys grouped by the date their contract expires, so a tick
+        # asks "what expires today" with one date conversion instead of one per
+        # instrument. See `expiring_on` for what this replaced.
+        self._keys_by_expiry_date: dict[datetime.date, set[str]] = {}
+        self._expiry_date_of_key: dict[str, datetime.date] = {}
         self.standing = DetectorStanding()
 
     def observe_listing(self, listing) -> None:
-        self._listings[listing.instrument_key] = listing
+        """Record the listing, and file it under the date its contract expires.
+
+        Filing here rather than judging at detection time is the whole cost of
+        this part. An expiry date is a property of the contract and cannot change
+        between ticks, but `_is_expiry_today` converted two timestamps to dates
+        for every instrument on every tick -- about 200,000 conversions a tick
+        against the 102,940 instruments the catalogue carries, which measured
+        0.957 of a core on 2026-09-04, 28% of the whole spine, for a detector
+        that had fired nothing.
+        """
+        key = listing.instrument_key
+        # Whether this key has ever been seen, read before the store is written:
+        # a non-option filed for the first time and one restated for the hundredth
+        # both have no expiry date, and telling them apart is what makes
+        # `instruments_that_are_not_options` a count of instruments rather than of
+        # messages.
+        first_sight = key not in self._listings
+        self._listings[key] = listing
         self.standing.listings_seen += 1
+
+        # An INDEX listing carries no expiry: it is not an option contract, and it
+        # can never be a candidate. Counted once here rather than refused on every
+        # tick forever.
+        expiry_date = None
+        if listing.expiry_ms is not None:
+            expiry_date = datetime.datetime.fromtimestamp(
+                listing.expiry_ms / 1000, tz=IST
+            ).date()
+
+        previous = self._expiry_date_of_key.get(key)
+        if previous == expiry_date and not first_sight:
+            return
+        if previous is not None:
+            bucket = self._keys_by_expiry_date.get(previous)
+            if bucket is not None:
+                bucket.discard(key)
+                if not bucket:
+                    del self._keys_by_expiry_date[previous]
+        if expiry_date is None:
+            self._expiry_date_of_key.pop(key, None)
+            if first_sight:
+                self.standing.instruments_that_are_not_options += 1
+            return
+        self._expiry_date_of_key[key] = expiry_date
+        self._keys_by_expiry_date.setdefault(expiry_date, set()).add(key)
 
     def observe_ltp(self, update) -> None:
         self._premiums[update.instrument_key] = float(update.last_traded_price)
@@ -123,6 +179,28 @@ class ZeroToHeroDetector:
         expiry_date = datetime.datetime.fromtimestamp(expiry_ms / 1000, tz=IST).date()
         today_date = datetime.datetime.fromtimestamp(now_ns / 1e9, tz=IST).date()
         return expiry_date == today_date
+
+    def expiring_on(self, now_ns: int | None = None) -> tuple[str, ...]:
+        """The instruments whose contracts expire on the given day, sorted.
+
+        The only instruments this part can ever fire on. Everything else is
+        refused by `detect` for a reason that cannot change between ticks -- it is
+        not an option, or it expires on some other date -- so asking the question
+        once per listing beats asking it once per instrument per tick.
+
+        Dates already past are dropped as they are passed over: the index is keyed
+        by date and would otherwise keep one bucket per expiry ever seen, which is
+        the unbounded-structure shape this project keeps paying for.
+        """
+        at = self._now_ns() if now_ns is None else now_ns
+        today = datetime.datetime.fromtimestamp(at / 1e9, tz=IST).date()
+        for expired in [day for day in self._keys_by_expiry_date if day < today]:
+            for key in self._keys_by_expiry_date.pop(expired):
+                self._expiry_date_of_key.pop(key, None)
+        self.standing.instruments_known = len(self._listings)
+        today_keys = self._keys_by_expiry_date.get(today, ())
+        self.standing.instruments_expiring_today = len(today_keys)
+        return tuple(sorted(today_keys))
 
     def detect(self, instrument_key: str, now_ns: int | None = None):
         """Judge one instrument. Returns (candidate, reason) -- candidate is
@@ -210,6 +288,13 @@ def describe_detector(detector: ZeroToHeroDetector) -> dict:
     s = detector.standing
     return {
         "part_id": PART_ID,
+        # What the sweep actually costs. `instruments_known` is the catalogue --
+        # 102,940 on 2026-09-04 -- and `instruments_expiring_today` is what this
+        # part now looks at; the gap between them is the fix. Both are here so a
+        # quiet day reads as "nothing expires today" and not as a stopped part.
+        "instruments_known": s.instruments_known,
+        "instruments_expiring_today": s.instruments_expiring_today,
+        "instruments_that_are_not_options": s.instruments_that_are_not_options,
         "listings_seen": s.listings_seen,
         "ltps_seen": s.ltps_seen,
         "greeks_seen": s.greeks_seen,
@@ -255,14 +340,11 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("signal_minimum_observations")),
         ),
     )
-    known_instruments: set[str] = set()
-
     def tick() -> None:
         for payload in listings.payloads():
             for listing in payload if isinstance(payload, tuple) else (payload,):
                 if isinstance(listing, InstrumentListing):
                     detector.observe_listing(listing)
-                    known_instruments.add(listing.instrument_key)
         for ltp in ltps.payloads():
             if isinstance(ltp, LtpUpdate):
                 detector.observe_ltp(ltp)
@@ -271,9 +353,16 @@ def start_part(context) -> int:
                 detector.observe_greeks(greek)
         settle_claims_from(labels.payloads(), detector, PART_ID)
 
+        # Only the contracts that expire today can fire, and which those are is
+        # decided when a listing arrives rather than for every instrument on every
+        # tick. Sweeping all of them cost 0.957 of a core on 2026-09-04 -- 28% of
+        # the spine, and the largest single cost on it -- because
+        # `_is_expiry_today` converted two timestamps to dates for each of the
+        # 102,940 instruments the catalogue carries, every tick, to reach the same
+        # answer it had reached the tick before.
         candidates = tuple(
             candidate
-            for instrument_key in sorted(known_instruments)
+            for instrument_key in detector.expiring_on()
             for candidate, _ in (detector.detect(instrument_key),)
             if candidate is not None
         )
