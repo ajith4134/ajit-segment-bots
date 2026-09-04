@@ -241,6 +241,17 @@ def describe_bursts(detector: MomentumBurstDetector) -> dict:
         "candidates": detector.standing.candidates,
         "not_a_burst": detector.standing.not_a_burst,
         "too_few_observations": detector.standing.too_few,
+        # What separates "the window was emptied by a hole in the feed" from
+        # "the window has not filled yet". Both read as too_few_observations and
+        # they need opposite answers -- one is a feed to fix, the other is a
+        # detector that simply needs more time. Counted since this part was
+        # written and never reported until 2026-09-04, when 676,235 observations
+        # across 440 symbols sat at 99.99% too_few and nothing on the board could
+        # say which of the two it was.
+        "series_breaks": detector.standing.series_breaks,
+        "windows_broken_by_a_gap": sum(
+            window.series_breaks for window in detector._returns.values()
+        ),
         "no_playbook_rule": detector.standing.no_playbook,
         "expecting_pullback": detector.standing.expecting_pullback,
         "expecting_continuation": detector.standing.expecting_continuation,

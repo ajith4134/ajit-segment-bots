@@ -193,6 +193,19 @@ def describe_reversion(detector: MeanReversionDetector) -> dict:
         "not_stretched": detector.standing.not_stretched,
         "wrong_regime": detector.standing.wrong_regime,
         "too_few_observations": detector.standing.too_few,
+        # Summed from the windows themselves rather than counted alongside them,
+        # so the figure cannot drift from the thing it describes. See
+        # momentum-burst-detector's own note: too_few_observations alone cannot
+        # say whether a window is filling slowly or being emptied.
+        "windows_broken_by_a_gap": sum(
+            window.series_breaks for window in detector._prices.values()
+        ),
+        "symbols_with_a_full_window": sum(
+            1 for window in detector._prices.values() if window.is_full
+        ),
+        "deepest_window": max(
+            (window.count for window in detector._prices.values()), default=0
+        ),
         "no_volatility": detector.standing.no_volatility,
         "outcomes_learned": detector.standing.outcomes_learned,
         "largest_z": detector.standing.largest_z,
