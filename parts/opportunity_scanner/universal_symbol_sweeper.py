@@ -77,7 +77,12 @@ class SweepReport:
     candidates: int
     skipped_held: int
     skipped_untradeable: int
+    # Nothing has measured this symbol at all -- the sweeper is blind to it.
     skipped_unmeasurable: int
+    # The sweeper can see the symbol, but this condition asks about a
+    # measurement nobody computed for it. The opposite finding, and it used to
+    # be added into the counter above where neither could be read.
+    skipped_for_a_missing_measurement: int
     duration_seconds: float
     reason: str
     swept_at_ns: int
@@ -96,6 +101,7 @@ class SweeperStanding:
     skipped_held: int = 0
     skipped_untradeable: int = 0
     skipped_unmeasurable: int = 0
+    skipped_for_a_missing_measurement: int = 0
     slowest_sweep_seconds: float = 0.0
     by_condition: dict = field(default_factory=dict)
 
@@ -147,6 +153,7 @@ class UniversalSymbolSweeper:
         candidates = []
         swept = 0
         skipped_held = skipped_untradeable = skipped_unmeasurable = 0
+        skipped_for_a_missing_measurement = 0
 
         # Resume from where the last sweep stopped, so a universe too large for
         # one tick is covered across several rather than always the same prefix.
@@ -177,7 +184,10 @@ class UniversalSymbolSweeper:
             for condition in conditions:
                 value = measurements.get(condition.measurement)
                 if value is None:
-                    skipped_unmeasurable += 1
+                    # Not the same as an unmeasured symbol: this one is
+                    # measured, and this condition asks about something no
+                    # measurement produced for it.
+                    skipped_for_a_missing_measurement += 1
                     continue
                 if not condition.evaluate(value, previous.get(condition.measurement)):
                     continue
@@ -224,6 +234,7 @@ class UniversalSymbolSweeper:
         self.standing.skipped_held += skipped_held
         self.standing.skipped_untradeable += skipped_untradeable
         self.standing.skipped_unmeasurable += skipped_unmeasurable
+        self.standing.skipped_for_a_missing_measurement += skipped_for_a_missing_measurement
         self.standing.slowest_sweep_seconds = max(self.standing.slowest_sweep_seconds, duration)
         if not_reached:
             self.standing.incomplete_sweeps += 1
@@ -238,6 +249,7 @@ class UniversalSymbolSweeper:
             skipped_held=skipped_held,
             skipped_untradeable=skipped_untradeable,
             skipped_unmeasurable=skipped_unmeasurable,
+            skipped_for_a_missing_measurement=skipped_for_a_missing_measurement,
             duration_seconds=duration,
             reason=(
                 f"swept {swept} of {len(ordered)} symbols against {len(conditions)} condition(s) "
@@ -266,6 +278,7 @@ def describe_sweeps(sweeper: UniversalSymbolSweeper) -> dict:
         "skipped_already_held": sweeper.standing.skipped_held,
         "skipped_untradeable": sweeper.standing.skipped_untradeable,
         "skipped_unmeasurable": sweeper.standing.skipped_unmeasurable,
+        "skipped_for_a_missing_measurement": sweeper.standing.skipped_for_a_missing_measurement,
         "slowest_sweep_seconds": sweeper.standing.slowest_sweep_seconds,
         "by_condition": dict(sweeper.standing.by_condition),
     }

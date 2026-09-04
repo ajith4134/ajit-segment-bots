@@ -1026,3 +1026,41 @@ def test_a_detector_given_no_chooser_behaves_exactly_as_before():
     # given, so no quote can have reached the decision.
     assert reason != A_LEG_IS_STALE
     assert detector.standing.leg_quote_too_wide == 0
+
+
+def test_a_symbol_with_no_measurements_and_one_missing_measurement_are_counted_apart():
+    """One counter cannot answer two questions.
+
+    `skipped_unmeasurable` was incremented at two sites: once when a symbol had
+    no measurements at all, and once per condition whose own measurement was
+    absent from a symbol that *was* measured. Those are opposite findings -- the
+    first says the sweeper is blind to a symbol, the second says the sweeper can
+    see it and this particular condition asks about something nobody computed --
+    and reading the sum on the board told you neither.
+
+    Measured on the live spine 2026-09-04: 21,430 skips over 3,191 sweeps of a
+    153-symbol universe. That is ~6.7 per sweep, which cannot be "the universe
+    is unmeasurable" and cannot be diagnosed further from one number.
+    """
+    clock = Clock()
+    subject = sweeper(clock)
+    universe = [(VENUE, "SEEN"), (VENUE, "UNSEEN")]
+    # Measured, but not with the measurement this condition asks about.
+    subject.observe_measurements(VENUE, "SEEN", {"something_else": 1.0})
+    # "UNSEEN" is never measured at all.
+
+    _, report = subject.sweep(universe, (a_condition(),))
+
+    assert report.skipped_unmeasurable == 1, "only the symbol nothing measured"
+    assert report.skipped_for_a_missing_measurement == 1, "the condition nobody computed"
+
+
+def test_the_two_skips_are_reported_separately_on_the_standing():
+    clock = Clock()
+    subject = sweeper(clock)
+    subject.observe_measurements(VENUE, "SEEN", {"something_else": 1.0})
+
+    subject.sweep([(VENUE, "SEEN"), (VENUE, "UNSEEN")], (a_condition(),))
+
+    assert subject.standing.skipped_unmeasurable == 1
+    assert subject.standing.skipped_for_a_missing_measurement == 1
