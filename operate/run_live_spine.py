@@ -154,6 +154,16 @@ LIVE_SPINE = (
     "broker-order-book-bridge",
     "broker-underlying-price-frame-bridge",
     "broker-candle-bridge",
+    # The fifth bridge, and the one whose absence nothing reported: since the
+    # cutover took symbol-catalogue-reader off this spine, NOTHING produced
+    # symbol-universe. Eleven parts read it; seven of them were running and
+    # starved, and universal-symbol-sweeper had swept an empty list 3,114 times
+    # with every skip counter reading 0 -- so no entry-candidate, no
+    # bull-side-candidate, no feature vector, no conviction, no intent, no
+    # order. It is placed after broker-underlying-price-frame-bridge only for
+    # reading order; it takes its underlyings' prices from broker-price-frame,
+    # which broker-price-level-sampler above already publishes.
+    "broker-symbol-universe-bridge",
     # Prices for the hours the market is shut (2026-09-02). It fetches only
     # while market-session-state says the session is not open, so it never
     # stands in for a market it could be reading; it publishes `candle` and

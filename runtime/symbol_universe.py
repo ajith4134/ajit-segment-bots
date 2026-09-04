@@ -103,3 +103,21 @@ class CapturableSymbol:
     # funding_source: a number a position is priced against carries its
     # provenance (RL-061).
     margin_source: str | None = None
+    # What an option contract is a claim on, for a universe that carries one.
+    # None on everything else -- a perpetual has no strike and no expiry, and
+    # None here means "not an option" rather than a strike of zero or an expiry
+    # at the epoch, either of which would sort a contract to one end of any
+    # ladder built from these.
+    #
+    # An options universe without them is not usable by anything downstream:
+    # the strike is what says how far from the money a contract is, and the
+    # expiry is what separates this week's chain from next week's. Added
+    # 2026-09-04 with broker-symbol-universe-bridge, additive and defaulted so
+    # no existing producer of this type had to change.
+    strike_price: float | None = None
+    expiry_ms: int | None = None
+    # The contracts one lot is, as the exchange fixes it. An NSE option is
+    # traded in lots, not in units -- a size expressed in contracts is wrong by
+    # the lot size, which for NIFTY is 75. None where the master did not state
+    # one.
+    lot_size: int | None = None

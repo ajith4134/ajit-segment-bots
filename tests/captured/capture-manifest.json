@@ -1,457 +1,465 @@
 {
-  "captures": [
-    {
-      "path": "binance-usdm/2026-08-29-btcusdt-klines-5m.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=12",
-      "captured_on": "2026-08-29",
-      "how": "one public REST call, kept verbatim -- the short-window acceleration scan's own request shape (docs/proposals/rank-by-recent-acceleration-not-just-24h-range.md)",
-      "records": 12
-    },
-    {
-      "path": "bybit-linear/2026-08-29-btcusdt-kline-5m.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=12",
-      "captured_on": "2026-08-29",
-      "how": "one public REST call, kept verbatim -- rows arrived newest-first, confirming the reader must sort rather than trust chronological order",
-      "records": 12
-    },
-    {
-      "path": "binance-usdm/2026-08-22-btcusdt-aggtrade-run.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws (btcusdt@aggTrade), by way of the tape this project records",
-      "captured_on": "2026-08-22",
-      "how": "the first 2000 aggTrade frames of the live capture run, cut out of ~/.local/share/ajit-segment-bots/tape/binance-usdm/BTCUSDT/2026-08-22 with runtime.tape.read_tape_index and read_payload, each payload kept verbatim as the venue sent it. The short aggtrade-kline capture holds 34 trades, which is below what a Hurst estimate or a rolling z-score can be judged on, so the scanner's statistics are checked against a run long enough to mean something",
-      "records": 2000,
-      "seconds_spanned": 27.962,
-      "price_range": [
-        77415.1,
-        77518.1
-      ]
-    },
-    {
-      "path": "binance-usdm/2026-08-22-catalogue-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
-      "full_response_symbol_count": 872,
-      "symbol_counts_by_contract_type_and_status": {
-        "PERPETUAL/TRADING": 570,
-        "PERPETUAL/SETTLING": 127,
-        "PERPETUAL/PENDING_TRADING": 1,
-        "TRADIFI_PERPETUAL/TRADING": 170,
-        "CURRENT_QUARTER/TRADING": 2,
-        "NEXT_QUARTER/TRADING": 2
-      },
-      "response_headers_of_note": {
-        "x-mbx-used-weight-1m": "41"
-      }
-    },
-    {
-      "path": "binance-usdm/2026-08-22-funding-fundingInfo-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 760,
-      "symbols_kept_of_those_asked_for": "18 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-22-funding-premiumIndex-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 875,
-      "symbols_kept_of_those_asked_for": "26 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-22-market-ws-aggtrade-kline.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@aggTrade",
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-22-market-ws-kline-through-close.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
-    },
-    {
-      "path": "binance-usdm/2026-08-22-public-ws-depth20.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/public/ws",
-      "subscribed": [
-        "btcusdt@depth20@500ms"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-22-ticker-24h-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
-      "full_response_symbol_count": 744,
-      "highest_quote_volume": 30257823319.34,
-      "lowest_quote_volume": 982.453415
-    },
-    {
-      "path": "binance-usdm/2026-08-24-catalogue-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
-      "full_response_symbol_count": 872,
-      "symbol_counts_by_contract_type_and_status": {
-        "PERPETUAL/TRADING": 570,
-        "PERPETUAL/SETTLING": 127,
-        "PERPETUAL/PENDING_TRADING": 1,
-        "TRADIFI_PERPETUAL/TRADING": 170,
-        "CURRENT_QUARTER/TRADING": 2,
-        "NEXT_QUARTER/TRADING": 2
-      },
-      "response_headers_of_note": {
-        "x-mbx-used-weight-1m": "41"
-      }
-    },
-    {
-      "path": "binance-usdm/2026-08-24-funding-fundingInfo-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 760,
-      "symbols_kept_of_those_asked_for": "18 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-24-funding-premiumIndex-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 875,
-      "symbols_kept_of_those_asked_for": "26 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-24-market-ws-aggtrade-kline.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@aggTrade",
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-24-market-ws-kline-through-close.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
-    },
-    {
-      "path": "binance-usdm/2026-08-24-public-ws-depth20.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/public/ws",
-      "subscribed": [
-        "btcusdt@depth20@500ms"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-24-ticker-24h-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
-      "full_response_symbol_count": 744,
-      "highest_quote_volume": 17223890469.27,
-      "lowest_quote_volume": 406.157526
-    },
-    {
-      "path": "binance-usdm/2026-08-24-ws-bookticker-all-symbols.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/ws",
-      "subscribed": [
-        "!bookTicker"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. The bare route is deliberate and is the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is silent on /market/ws, which is the opposite of this venue's ticker streams"
-    },
-    {
-      "path": "binance-usdm/2026-08-26-btrusdt-trades-cross-venue.jsonl",
-      "venue": "binance-usdm",
-      "source": "the tape this project records: binance-usdm/BTRUSDT/2026-08-26",
-      "captured_on": "2026-08-26",
-      "records": 1200,
-      "trades": 1200,
-      "seconds_spanned": 36.605,
-      "price_range": [
-        0.07739,
-        0.07924
-      ],
-      "how": "the first 1200 trade frames of BTRUSDT on binance-usdm, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-catalogue-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
-      "captured_on": "2026-08-28",
-      "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
-      "full_response_symbol_count": 882,
-      "symbol_counts_by_contract_type_and_status": {
-        "PERPETUAL/TRADING": 567,
-        "PERPETUAL/SETTLING": 130,
-        "PERPETUAL/PENDING_TRADING": 1,
-        "TRADIFI_PERPETUAL/TRADING": 180,
-        "CURRENT_QUARTER/TRADING": 2,
-        "NEXT_QUARTER/TRADING": 2
-      },
-      "response_headers_of_note": {
-        "x-mbx-used-weight-1m": "41"
-      }
-    },
-    {
-      "path": "binance-usdm/2026-08-28-funding-fundingInfo-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
-      "captured_on": "2026-08-28",
-      "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 767,
-      "symbols_kept_of_those_asked_for": "18 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-funding-premiumIndex-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
-      "captured_on": "2026-08-28",
-      "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
-      "full_response_symbol_count": 885,
-      "symbols_kept_of_those_asked_for": "26 of 26"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-market-ws-aggtrade-kline.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@aggTrade",
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-28",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-market-ws-kline-through-close.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "btcusdt@kline_1m"
-      ],
-      "captured_on": "2026-08-28",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-public-ws-depth20.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/public/ws",
-      "subscribed": [
-        "btcusdt@depth20@500ms"
-      ],
-      "captured_on": "2026-08-28",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-ticker-24h-subset.json",
-      "venue": "binance-usdm",
-      "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
-      "captured_on": "2026-08-28",
-      "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
-      "full_response_symbol_count": 751,
-      "highest_quote_volume": 17426132761.9,
-      "lowest_quote_volume": 140.612372
-    },
-    {
-      "path": "binance-usdm/2026-08-28-ws-bookticker-all-symbols.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/ws",
-      "subscribed": [
-        "!bookTicker"
-      ],
-      "captured_on": "2026-08-28",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. The bare route is deliberate and is the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is silent on /market/ws, which is the opposite of this venue's ticker streams"
-    },
-    {
-      "path": "binance-usdm/2026-08-28-ws-markprice-all-symbols.jsonl",
-      "venue": "binance-usdm",
-      "source": "wss://fstream.binance.com/market/ws",
-      "subscribed": [
-        "!markPrice@arr@1s"
-      ],
-      "captured_on": "2026-08-28",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. One frame carries every listed symbol, so this fixture is what a reader of many symbols actually receives"
-    },
-    {
-      "path": "bybit-linear/2026-08-22-catalogue-subset.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
-      "full_response_symbol_count": 833,
-      "symbol_counts_by_contract_type_and_status": {
-        "LinearPerpetual/Trading": 793,
-        "LinearFutures/Trading": 40
-      },
-      "response_headers_of_note": {}
-    },
-    {
-      "path": "bybit-linear/2026-08-22-public-linear-kline-through-close.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "kline.1.BTCUSDT"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (confirm true), then four more"
-    },
-    {
-      "path": "bybit-linear/2026-08-22-public-linear-orderbook.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "orderbook.50.BTCUSDT"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement and the opening snapshot"
-    },
-    {
-      "path": "bybit-linear/2026-08-22-public-linear-trade.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "publicTrade.BTCUSDT"
-      ],
-      "captured_on": "2026-08-22",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "bybit-linear/2026-08-22-ticker-24h-subset.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/tickers?category=linear",
-      "captured_on": "2026-08-22",
-      "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
-      "full_response_symbol_count": 837,
-      "highest_quote_volume": 10837389354.1351,
-      "lowest_quote_volume": 193.5242
-    },
-    {
-      "path": "bybit-linear/2026-08-24-catalogue-subset.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
-      "full_response_symbol_count": 833,
-      "symbol_counts_by_contract_type_and_status": {
-        "LinearPerpetual/Trading": 793,
-        "LinearFutures/Trading": 40
-      },
-      "response_headers_of_note": {}
-    },
-    {
-      "path": "bybit-linear/2026-08-24-public-linear-kline-through-close.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "kline.1.BTCUSDT"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (confirm true), then four more"
-    },
-    {
-      "path": "bybit-linear/2026-08-24-public-linear-orderbook.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "orderbook.50.BTCUSDT"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement and the opening snapshot"
-    },
-    {
-      "path": "bybit-linear/2026-08-24-public-linear-tickers-through-one-sided-delta.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "tickers.BTCUSDT"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame until one is a delta naming a bid and no ask, then four more -- so the fixture holds the opening snapshot, ordinary deltas, and the one-sided delta the merge exists for"
-    },
-    {
-      "path": "bybit-linear/2026-08-24-public-linear-trade.jsonl",
-      "venue": "bybit-linear",
-      "source": "wss://stream.bybit.com/v5/public/linear",
-      "subscribed": [
-        "publicTrade.BTCUSDT"
-      ],
-      "captured_on": "2026-08-24",
-      "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
-    },
-    {
-      "path": "bybit-linear/2026-08-24-ticker-24h-subset.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/tickers?category=linear",
-      "captured_on": "2026-08-24",
-      "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
-      "full_response_symbol_count": 837,
-      "highest_quote_volume": 6839311843.7074,
-      "lowest_quote_volume": 206.9245
-    },
-    {
-      "path": "bybit-linear/2026-08-26-btrusdt-trades-cross-venue.jsonl",
-      "venue": "bybit-linear",
-      "source": "the tape this project records: bybit-linear/BTRUSDT/2026-08-26",
-      "captured_on": "2026-08-26",
-      "records": 1200,
-      "trades": 3243,
-      "seconds_spanned": 70.034,
-      "price_range": [
-        0.07693,
-        0.07939
-      ],
-      "how": "the first 1200 trade frames of BTRUSDT on bybit-linear, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
-    },
-    {
-      "path": "bybit-linear/2026-08-26-risk-limit-btcusdt.json",
-      "venue": "bybit-linear",
-      "source": "https://api.bybit.com/v5/market/risk-limit?category=linear&symbol=BTCUSDT",
-      "captured_on": "2026-08-26",
-      "how": "one public REST call, kept verbatim. This venue serves its maintenance margin ladder per symbol and needs no API key; asking without a symbol returns 407 rows covering 15 symbols and a cursor, so reading the whole venue that way is ~56 paged calls for ~840 symbols against the 50 this system captures. BTCUSDT is the fixture because its ladder is the longest and spans the widest range of notional, which is what exercises the floor-from-the-ceiling-below reading: this venue states riskLimitValue as a tier CEILING, and reading it as a floor would price every position under the first ceiling with the wrong rate.",
-      "tiers": 35,
-      "maintenance_margin_range": [
-        0.0033,
-        0.6
-      ],
-      "risk_limit_value_range": [
-        300000.0,
-        1200000000.0
-      ]
-    }
-  ]
+ "captures": [
+  {
+   "path": "binance-usdm/2026-08-29-btcusdt-klines-5m.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=12",
+   "captured_on": "2026-08-29",
+   "how": "one public REST call, kept verbatim -- the short-window acceleration scan's own request shape (docs/proposals/rank-by-recent-acceleration-not-just-24h-range.md)",
+   "records": 12
+  },
+  {
+   "path": "bybit-linear/2026-08-29-btcusdt-kline-5m.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=12",
+   "captured_on": "2026-08-29",
+   "how": "one public REST call, kept verbatim -- rows arrived newest-first, confirming the reader must sort rather than trust chronological order",
+   "records": 12
+  },
+  {
+   "path": "binance-usdm/2026-08-22-btcusdt-aggtrade-run.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws (btcusdt@aggTrade), by way of the tape this project records",
+   "captured_on": "2026-08-22",
+   "how": "the first 2000 aggTrade frames of the live capture run, cut out of ~/.local/share/ajit-segment-bots/tape/binance-usdm/BTCUSDT/2026-08-22 with runtime.tape.read_tape_index and read_payload, each payload kept verbatim as the venue sent it. The short aggtrade-kline capture holds 34 trades, which is below what a Hurst estimate or a rolling z-score can be judged on, so the scanner's statistics are checked against a run long enough to mean something",
+   "records": 2000,
+   "seconds_spanned": 27.962,
+   "price_range": [
+    77415.1,
+    77518.1
+   ]
+  },
+  {
+   "path": "binance-usdm/2026-08-22-catalogue-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
+   "full_response_symbol_count": 872,
+   "symbol_counts_by_contract_type_and_status": {
+    "PERPETUAL/TRADING": 570,
+    "PERPETUAL/SETTLING": 127,
+    "PERPETUAL/PENDING_TRADING": 1,
+    "TRADIFI_PERPETUAL/TRADING": 170,
+    "CURRENT_QUARTER/TRADING": 2,
+    "NEXT_QUARTER/TRADING": 2
+   },
+   "response_headers_of_note": {
+    "x-mbx-used-weight-1m": "41"
+   }
+  },
+  {
+   "path": "binance-usdm/2026-08-22-funding-fundingInfo-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 760,
+   "symbols_kept_of_those_asked_for": "18 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-22-funding-premiumIndex-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 875,
+   "symbols_kept_of_those_asked_for": "26 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-22-market-ws-aggtrade-kline.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@aggTrade",
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-22-market-ws-kline-through-close.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
+  },
+  {
+   "path": "binance-usdm/2026-08-22-public-ws-depth20.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/public/ws",
+   "subscribed": [
+    "btcusdt@depth20@500ms"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-22-ticker-24h-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
+   "full_response_symbol_count": 744,
+   "highest_quote_volume": 30257823319.34,
+   "lowest_quote_volume": 982.453415
+  },
+  {
+   "path": "binance-usdm/2026-08-24-catalogue-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
+   "full_response_symbol_count": 872,
+   "symbol_counts_by_contract_type_and_status": {
+    "PERPETUAL/TRADING": 570,
+    "PERPETUAL/SETTLING": 127,
+    "PERPETUAL/PENDING_TRADING": 1,
+    "TRADIFI_PERPETUAL/TRADING": 170,
+    "CURRENT_QUARTER/TRADING": 2,
+    "NEXT_QUARTER/TRADING": 2
+   },
+   "response_headers_of_note": {
+    "x-mbx-used-weight-1m": "41"
+   }
+  },
+  {
+   "path": "binance-usdm/2026-08-24-funding-fundingInfo-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 760,
+   "symbols_kept_of_those_asked_for": "18 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-24-funding-premiumIndex-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 875,
+   "symbols_kept_of_those_asked_for": "26 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-24-market-ws-aggtrade-kline.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@aggTrade",
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-24-market-ws-kline-through-close.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
+  },
+  {
+   "path": "binance-usdm/2026-08-24-public-ws-depth20.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/public/ws",
+   "subscribed": [
+    "btcusdt@depth20@500ms"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-24-ticker-24h-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
+   "full_response_symbol_count": 744,
+   "highest_quote_volume": 17223890469.27,
+   "lowest_quote_volume": 406.157526
+  },
+  {
+   "path": "binance-usdm/2026-08-24-ws-bookticker-all-symbols.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/ws",
+   "subscribed": [
+    "!bookTicker"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. The bare route is deliberate and is the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is silent on /market/ws, which is the opposite of this venue's ticker streams"
+  },
+  {
+   "path": "binance-usdm/2026-08-26-btrusdt-trades-cross-venue.jsonl",
+   "venue": "binance-usdm",
+   "source": "the tape this project records: binance-usdm/BTRUSDT/2026-08-26",
+   "captured_on": "2026-08-26",
+   "records": 1200,
+   "trades": 1200,
+   "seconds_spanned": 36.605,
+   "price_range": [
+    0.07739,
+    0.07924
+   ],
+   "how": "the first 1200 trade frames of BTRUSDT on binance-usdm, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-catalogue-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+   "captured_on": "2026-08-28",
+   "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
+   "full_response_symbol_count": 882,
+   "symbol_counts_by_contract_type_and_status": {
+    "PERPETUAL/TRADING": 567,
+    "PERPETUAL/SETTLING": 130,
+    "PERPETUAL/PENDING_TRADING": 1,
+    "TRADIFI_PERPETUAL/TRADING": 180,
+    "CURRENT_QUARTER/TRADING": 2,
+    "NEXT_QUARTER/TRADING": 2
+   },
+   "response_headers_of_note": {
+    "x-mbx-used-weight-1m": "41"
+   }
+  },
+  {
+   "path": "binance-usdm/2026-08-28-funding-fundingInfo-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/fundingInfo",
+   "captured_on": "2026-08-28",
+   "how": "one REST call, request 2 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 767,
+   "symbols_kept_of_those_asked_for": "18 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-funding-premiumIndex-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/premiumIndex",
+   "captured_on": "2026-08-28",
+   "how": "one REST call, request 1 of 2 this adapter names for funding, subset to exactly the symbols the catalogue subset beside it kept, each entry verbatim",
+   "full_response_symbol_count": 885,
+   "symbols_kept_of_those_asked_for": "26 of 26"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-market-ws-aggtrade-kline.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@aggTrade",
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-28",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-market-ws-kline-through-close.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "btcusdt@kline_1m"
+   ],
+   "captured_on": "2026-08-28",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (k.x true), then four more"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-public-ws-depth20.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/public/ws",
+   "subscribed": [
+    "btcusdt@depth20@500ms"
+   ],
+   "captured_on": "2026-08-28",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-ticker-24h-subset.json",
+   "venue": "binance-usdm",
+   "source": "https://fapi.binance.com/fapi/v1/ticker/24hr",
+   "captured_on": "2026-08-28",
+   "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
+   "full_response_symbol_count": 751,
+   "highest_quote_volume": 17426132761.9,
+   "lowest_quote_volume": 140.612372
+  },
+  {
+   "path": "binance-usdm/2026-08-28-ws-bookticker-all-symbols.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/ws",
+   "subscribed": [
+    "!bookTicker"
+   ],
+   "captured_on": "2026-08-28",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. The bare route is deliberate and is the fixture's point: measured 2026-08-24, !bookTicker answers on /ws and is silent on /market/ws, which is the opposite of this venue's ticker streams"
+  },
+  {
+   "path": "binance-usdm/2026-08-28-ws-markprice-all-symbols.jsonl",
+   "venue": "binance-usdm",
+   "source": "wss://fstream.binance.com/market/ws",
+   "subscribed": [
+    "!markPrice@arr@1s"
+   ],
+   "captured_on": "2026-08-28",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement. One frame carries every listed symbol, so this fixture is what a reader of many symbols actually receives"
+  },
+  {
+   "path": "bybit-linear/2026-08-22-catalogue-subset.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
+   "full_response_symbol_count": 833,
+   "symbol_counts_by_contract_type_and_status": {
+    "LinearPerpetual/Trading": 793,
+    "LinearFutures/Trading": 40
+   },
+   "response_headers_of_note": {}
+  },
+  {
+   "path": "bybit-linear/2026-08-22-public-linear-kline-through-close.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "kline.1.BTCUSDT"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (confirm true), then four more"
+  },
+  {
+   "path": "bybit-linear/2026-08-22-public-linear-orderbook.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "orderbook.50.BTCUSDT"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement and the opening snapshot"
+  },
+  {
+   "path": "bybit-linear/2026-08-22-public-linear-trade.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "publicTrade.BTCUSDT"
+   ],
+   "captured_on": "2026-08-22",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "bybit-linear/2026-08-22-ticker-24h-subset.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/tickers?category=linear",
+   "captured_on": "2026-08-22",
+   "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
+   "full_response_symbol_count": 837,
+   "highest_quote_volume": 10837389354.1351,
+   "lowest_quote_volume": 193.5242
+  },
+  {
+   "path": "bybit-linear/2026-08-24-catalogue-subset.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, subset to the 12 highest 24-hour quote volumes plus the first 3 of each (contractType, status) pair, each kept verbatim",
+   "full_response_symbol_count": 833,
+   "symbol_counts_by_contract_type_and_status": {
+    "LinearPerpetual/Trading": 793,
+    "LinearFutures/Trading": 40
+   },
+   "response_headers_of_note": {}
+  },
+  {
+   "path": "bybit-linear/2026-08-24-public-linear-kline-through-close.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "kline.1.BTCUSDT"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one carries a closed candle (confirm true), then four more"
+  },
+  {
+   "path": "bybit-linear/2026-08-24-public-linear-orderbook.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "orderbook.50.BTCUSDT"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement and the opening snapshot"
+  },
+  {
+   "path": "bybit-linear/2026-08-24-public-linear-tickers-through-one-sided-delta.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "tickers.BTCUSDT"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame until one is a delta naming a bid and no ask, then four more -- so the fixture holds the opening snapshot, ordinary deltas, and the one-sided delta the merge exists for"
+  },
+  {
+   "path": "bybit-linear/2026-08-24-public-linear-trade.jsonl",
+   "venue": "bybit-linear",
+   "source": "wss://stream.bybit.com/v5/public/linear",
+   "subscribed": [
+    "publicTrade.BTCUSDT"
+   ],
+   "captured_on": "2026-08-24",
+   "how": "connect with the adapter's own url and subscribe frame, keep every frame received including the acknowledgement"
+  },
+  {
+   "path": "bybit-linear/2026-08-24-ticker-24h-subset.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/tickers?category=linear",
+   "captured_on": "2026-08-24",
+   "how": "one REST call, subset to exactly the symbols kept in the catalogue subset beside it, each entry verbatim",
+   "full_response_symbol_count": 837,
+   "highest_quote_volume": 6839311843.7074,
+   "lowest_quote_volume": 206.9245
+  },
+  {
+   "path": "bybit-linear/2026-08-26-btrusdt-trades-cross-venue.jsonl",
+   "venue": "bybit-linear",
+   "source": "the tape this project records: bybit-linear/BTRUSDT/2026-08-26",
+   "captured_on": "2026-08-26",
+   "records": 1200,
+   "trades": 3243,
+   "seconds_spanned": 70.034,
+   "price_range": [
+    0.07693,
+    0.07939
+   ],
+   "how": "the first 1200 trade frames of BTRUSDT on bybit-linear, cut out of ~/.local/share/ajit-segment-bots/tape with runtime.tape.read_tape_index and read_payload, each payload kept verbatim. Cut alongside the same window on the other venue so the pair can be replayed against each other: market-anomaly-detector judges a print against what the other venue said at that moment, and two fixtures captured at different times would measure the capture"
+  },
+  {
+   "path": "bybit-linear/2026-08-26-risk-limit-btcusdt.json",
+   "venue": "bybit-linear",
+   "source": "https://api.bybit.com/v5/market/risk-limit?category=linear&symbol=BTCUSDT",
+   "captured_on": "2026-08-26",
+   "how": "one public REST call, kept verbatim. This venue serves its maintenance margin ladder per symbol and needs no API key; asking without a symbol returns 407 rows covering 15 symbols and a cursor, so reading the whole venue that way is ~56 paged calls for ~840 symbols against the 50 this system captures. BTCUSDT is the fixture because its ladder is the longest and spans the widest range of notional, which is what exercises the floor-from-the-ceiling-below reading: this venue states riskLimitValue as a tier CEILING, and reading it as a floor would price every position under the first ceiling with the wrong rate.",
+   "tiers": 35,
+   "maintenance_margin_range": [
+    0.0033,
+    0.6
+   ],
+   "risk_limit_value_range": [
+    300000.0,
+    1200000000.0
+   ]
+  },
+  {
+   "path": "upstox/2026-09-04-nse-instrument-master-nifty-slice.json",
+   "venue": "upstox",
+   "source": "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
+   "captured_on": "2026-09-04",
+   "how": "one public fetch of Upstox's own NSE instrument master (76,596 rows, no token required), cut to the rows broker-symbol-universe-bridge selects from: the NIFTY and BANKNIFTY index instruments, the whole of NIFTY's nearest expiry (174 contracts, expiry 2026-09-08) so ranking by distance from the money runs against a real strike ladder, and 20 contracts of the following expiry so 'nearest expiry only' is a claim these rows can falsify. Kept verbatim -- field names, the millisecond expiry and the NSE_INDEX|Nifty 50 underlying_key are Upstox's own.",
+   "records": 196
+  }
+ ]
 }

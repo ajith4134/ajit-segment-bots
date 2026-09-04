@@ -136,7 +136,7 @@
     {
       "id": "segment-bot",
       "name": "Segment bot (bull, bear, profit tailgating)",
-      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots \u2014 bull, bear and profit tailgating \u2014 each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
+      "summary": "The container. Inside it: the universal opportunity scanner, the AI brain, and three complete bots — bull, bear and profit tailgating — each its own block (RL-048). The bots issue opinions; the brain turns three opinions into one intent. The scanner raises every candidate to every bot and never learns what they prefer (RL-046).",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -594,7 +594,7 @@
       "flow_origin": "agreed-provisional",
       "scope": "per-segment",
       "scope_origin": "user",
-      "planned_extension": "Becomes a thinker in its own right once the rest is running \u2014 reasoning about the market rather than only answering other blocks' questions.",
+      "planned_extension": "Becomes a thinker in its own right once the rest is running — reasoning about the market rather than only answering other blocks' questions.",
       "contract_recomputed": {
         "on": "2026-09-02",
         "from": "its parts",
@@ -702,9 +702,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-04",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -1042,7 +1042,7 @@
     {
       "id": "closed-trade-decoding",
       "name": "Closed trade decoding",
-      "summary": "Decodes finished trades \u2014 winners and losers both \u2014 into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
+      "summary": "Decodes finished trades — winners and losers both — into instructions for the hypothesis feature. Portfolio state signals that a position closed; the ledger supplies that trade's full history, every scan, intent, sizing and fill that led to it. The loser is not discarded: its information is what hypothesis works on.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1492,7 +1492,7 @@
     {
       "id": "capital-desk",
       "name": "Capital desk",
-      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes \u2014 never applies \u2014 a rebalance.",
+      "summary": "The user's money settings, read from one file per scope on the server (RL-055) and shown on the board: the main paper balance and its currency, and for every segment bot the balance allocated to it, the largest and smallest capital one trade may use, and the leverage ceiling (RL-051). The desk checks that the allocations add up, converts between currencies at the live rate, journals every change, and proposes — never applies — a rebalance.",
       "origin": "user",
       "approved": true,
       "consumes": [
@@ -1732,7 +1732,7 @@
     {
       "id": "sized-order",
       "name": "sized order",
-      "description": "A trade intent with size, leverage and stops applied \u2014 or a refusal, which is also an answer."
+      "description": "A trade intent with size, leverage and stops applied — or a refusal, which is also an answer."
     },
     {
       "id": "order-request",
@@ -2619,7 +2619,7 @@
     {
       "id": "turbulence-index",
       "name": "turbulence index",
-      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance \u2014 is everything moving together abnormally."
+      "description": "One market-wide number: how far today's cross-symbol return vector sits from its trailing covariance — is everything moving together abnormally."
     },
     {
       "id": "verified-snapshot",
@@ -13573,11 +13573,37 @@
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-symbol-universe-bridge",
+      "name": "Broker symbol universe bridge",
+      "role": "republish a broker's instrument master as symbol-universe",
+      "category": "market-data-feed",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-price-frame"
+      ],
+      "produces": [
+        "symbol-universe",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-04",
+      "evidence": "docs/proposals/broker-symbol-universe-bridge.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
     "driver": "resource-governor",
-    "note": "T-2 \u2014 the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
+    "note": "T-2 — the gate is a third terminal. Only this part switches other parts, and it does so outside the data plane. No feature ever switches another."
   },
   "segments": {
     "note": "Every segment is a bot with all of this inside it. The user's words (docs/goal.md). The same structure is instantiated per segment, and the directional response to an opportunity depends on which segment is reacting -- a long call in index-options is a long in index-futures.",
@@ -13789,7 +13815,7 @@
       "used_by": [
         "skills"
       ],
-      "verified": "2026-08-20 via gh \u2014 the post said 16.3k stars, the repo has 23,262",
+      "verified": "2026-08-20 via gh — the post said 16.3k stars, the repo has 23,262",
       "note": "Distils a source into a skill of frameworks, decision rules and anti-patterns with per-chapter files, loaded on demand. Emits the open Agent Skills SKILL.md format, which Claude Code, Copilot CLI and Amp all read."
     },
     {
@@ -13878,7 +13904,7 @@
       "note": "Official SDK for Polymarket's CLOB. Read 2026-08-20 (repo-harvest/polymarket-py-sdk.md, commit c8fb84b). Prediction markets are not in this project's scope; recorded so the question is answered rather than reopened. Supersedes the earlier py-clob-client entry, which is archived."
     }
   ],
-  "_dependency_note": "Licence is recorded as a fact, not a constraint \u2014 see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
+  "_dependency_note": "Licence is recorded as a fact, not a constraint — see D-003: this is a personal project that is not distributed, so GPL and LGPL obligations do not attach. Ranked on merit. 'candidate dependency' means considered for use; 'architecture reference' means read rather than imported.",
   "opposing_positions": {
     "given": "2026-08-20",
     "exploration": "While a bot is still in exploration, bull and bear may both open on the same symbol. It is a live test of which one is right on this kind of setup, and the paired outcome is what the scorekeeper learns from.",
@@ -14294,5 +14320,11 @@
     "produces_candle_not_broker_candle": "broker-candle is what broker-market-tape-writer records as live capture. History published there would mix replayed bars into the tape and every measurement taken over it afterwards would be wrong with nothing saying so. `candle` reaches kline-window-builder, historical-bar-store and feed-jump-detector and no recorder of live capture -- history joins the circuit after the tape.",
     "verified_against_the_live_api": "2026-09-02: 385 one-minute bars for NSE_FO|42654 (NIFTY 24350 PE 08 SEP 26) across 2026-09-01, 09:15-15:39 IST, ascending after the reader's sort, every one closed. Minute data begins January 2022, one month per request. Expired contracts are absent from the instrument master, so history is read for currently listed contracts over the days they have already traded.",
     "evidence": "docs/proposals/broker-history-reader.md"
+  },
+  "_proposal_2026-09-04_broker_symbol_universe_bridge": {
+    "what": "broker-symbol-universe-bridge -- republishes Upstox's instrument master as symbol-universe, the type universal-symbol-sweeper, both feature builders, feed-coverage-auditor, options-flow-reader, instrument-selector and tick-size-resolver read and which nothing has produced since the crypto cutover. Measured 2026-09-04: the sweeper had run 3,114 sweeps over an empty list with every skip counter at 0, and the whole scanning chain below it was at zero. Publishes the tracked index underlyings plus the nearest expiry's option contracts ranked by distance from the underlying's own last price, capped per underlying -- the cap honours the operator's standing ruling on captured_symbol_count (2026-08-25, 'hold at 50 and stop walking'), whose reason is that the pair scanner fails as the square of the universe. symbol is trading_symbol, matching every other bridge, because the sweeper keys its universe (venue_id, symbol) and could not otherwise match a universe entry to a price.",
+    "origin": "designed by Claude, user asked for the symbol-universe bridge 2026-09-04",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_broker_symbol_universe_bridge.py",
+    "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
   }
 }
