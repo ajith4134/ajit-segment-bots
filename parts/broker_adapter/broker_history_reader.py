@@ -82,12 +82,6 @@ class HistoryReaderStanding:
     requests_refused: int = 0
     candles_published: int = 0
     prints_published: int = 0
-    # How many distinct instrument windows have been fetched, and how many
-    # instruments are still waiting for one. Levels, not running totals: the
-    # count of *skips* used to climb by the sweep size every tick forever, which
-    # read as progress while nothing was being fetched at all.
-    windows_already_read: int = 0
-    instruments_awaiting_a_window: int = 0
     skipped_because_the_market_is_open: int = 0
     skipped_because_the_session_is_unknown: int = 0
 
@@ -215,11 +209,7 @@ class HistoryReader:
             if request.window_key in self._windows_read:
                 continue
             requests.append(request)
-        self.standing.windows_already_read = len(self._windows_read)
         self.standing.requests_planned += len(requests)
-        self.standing.instruments_awaiting_a_window = max(
-            0, len(self._symbol_by_key) - len(self._windows_read)
-        )
         return tuple(requests)
 
     def observe_history(self, request: HistoryRequest, response) -> tuple[NormalisedCandle, ...]:
@@ -316,8 +306,14 @@ def describe_history_reading(reader: HistoryReader) -> dict:
         "requests_refused": reader.standing.requests_refused,
         "candles_published": reader.standing.candles_published,
         "prints_published": reader.standing.prints_published,
-        "windows_already_read": reader.standing.windows_already_read,
-        "instruments_awaiting_a_window": reader.standing.instruments_awaiting_a_window,
+        # Both derived from the live sets, so they are the same moment as
+        # `instruments_known` above rather than whenever a sweep last ran. A
+        # running total of skips stood here until 2026-09-04 and climbed by the
+        # sweep size every tick while nothing was being fetched at all.
+        "windows_already_read": len(reader._windows_read),
+        "instruments_awaiting_a_window": max(
+            0, len(reader._symbol_by_key) - len(reader._windows_read)
+        ),
         "skipped_because_the_market_is_open": reader.standing.skipped_because_the_market_is_open,
         "skipped_because_the_session_is_unknown": (
             reader.standing.skipped_because_the_session_is_unknown

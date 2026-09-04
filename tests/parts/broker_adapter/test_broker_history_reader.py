@@ -119,7 +119,7 @@ def test_the_same_window_is_not_asked_for_twice():
     reader.observe_history(first[0], _fixture_response())
 
     assert reader.requests_due(today=DAY) == ()
-    assert reader.standing.windows_already_read == 1
+    assert describe_history_reading(reader)["windows_already_read"] == 1
 
 
 def test_each_sweep_reaches_the_contracts_the_last_one_did_not():
@@ -152,8 +152,9 @@ def test_each_sweep_reaches_the_contracts_the_last_one_did_not():
         "every contract has to be reached eventually, two at a time"
     )
     assert reader.requests_due(today=DAY) == (), "and then there is nothing left to ask for"
-    assert reader.standing.windows_already_read == 5
-    assert reader.standing.instruments_awaiting_a_window == 0
+    reported = describe_history_reading(reader)
+    assert reported["windows_already_read"] == 5
+    assert reported["instruments_awaiting_a_window"] == 0
 
 
 def test_one_sweep_never_asks_for_more_than_its_cap():
@@ -168,7 +169,34 @@ def test_one_sweep_never_asks_for_more_than_its_cap():
     reader.observe_session(a_session(SessionKind.CLOSED))
 
     assert len(reader.requests_due(today=DAY)) == 2
-    assert reader.standing.instruments_awaiting_a_window == 5
+    assert describe_history_reading(reader)["instruments_awaiting_a_window"] == 5
+
+
+def test_what_is_awaiting_a_window_is_the_same_moment_as_what_is_known():
+    """Two figures in one row have to be read at the same instant.
+
+    `instruments_known` moves whenever a listing arrives; the count still
+    awaiting a window was cached when a sweep last ran. Live on 2026-09-04 that
+    reported "2 awaiting" beside "2,548 known" -- both true, neither current,
+    and together a statement nobody could act on.
+    """
+    reader = a_reader(most_instruments=2)
+    reader.observe_listings([Listing(key="NSE_FO|42654")])
+    reader.observe_session(a_session(SessionKind.CLOSED))
+    reader.requests_due(today=DAY)
+
+    # More contracts arrive, and no sweep has run since.
+    reader.observe_listings([
+        Listing(key=f"NSE_FO|{4270 + n}", symbol=f"NIFTY {n} CE 08 SEP 26",
+                instrument_type="CE", expiry_ms=1_788_892_199_000 + n)
+        for n in range(4)
+    ])
+
+    reported = describe_history_reading(reader)
+    assert reported["instruments_known"] == 5
+    assert reported["instruments_awaiting_a_window"] == 5, (
+        "nothing has been fetched, so every known contract is still awaiting one"
+    )
 
 
 def _fixture_response():
