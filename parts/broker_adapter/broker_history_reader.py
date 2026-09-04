@@ -82,7 +82,12 @@ class HistoryReaderStanding:
     requests_refused: int = 0
     candles_published: int = 0
     prints_published: int = 0
+    # How many distinct instrument windows have been fetched, and how many
+    # instruments are still waiting for one. Levels, not running totals: the
+    # count of *skips* used to climb by the sweep size every tick forever, which
+    # read as progress while nothing was being fetched at all.
     windows_already_read: int = 0
+    instruments_awaiting_a_window: int = 0
     skipped_because_the_market_is_open: int = 0
     skipped_because_the_session_is_unknown: int = 0
 
@@ -187,8 +192,19 @@ class HistoryReader:
             self._symbol_by_key,
             key=lambda key: (self._expiry_ms_by_key.get(key, float("inf")), key),
         )
+        # The cap is a rate limit on one sweep, not a horizon: what has already
+        # been fetched is passed over so the next sweep reaches the next
+        # contracts. Until 2026-09-04 the slice was taken *before* the
+        # already-read check, so every sweep re-offered the same first eight
+        # instruments and, once their windows were read, planned nothing at all.
+        # Measured that day: 2,966 instruments known, 8 read, requests_planned
+        # frozen at 38 and windows_already_read climbing by 8 a tick forever --
+        # so history replayed four instrument-days and stopped, and the detectors
+        # had prices for eight symbols to cross a 256-observation window with.
         requests = []
-        for key in by_nearest_expiry[: self._most_instruments]:
+        for key in by_nearest_expiry:
+            if len(requests) >= self._most_instruments:
+                break
             request = HistoryRequest(
                 instrument_key=key,
                 unit=self._unit,
@@ -197,10 +213,13 @@ class HistoryReader:
                 to_date=today.isoformat(),
             )
             if request.window_key in self._windows_read:
-                self.standing.windows_already_read += 1
                 continue
             requests.append(request)
+        self.standing.windows_already_read = len(self._windows_read)
         self.standing.requests_planned += len(requests)
+        self.standing.instruments_awaiting_a_window = max(
+            0, len(self._symbol_by_key) - len(self._windows_read)
+        )
         return tuple(requests)
 
     def observe_history(self, request: HistoryRequest, response) -> tuple[NormalisedCandle, ...]:
@@ -298,6 +317,7 @@ def describe_history_reading(reader: HistoryReader) -> dict:
         "candles_published": reader.standing.candles_published,
         "prints_published": reader.standing.prints_published,
         "windows_already_read": reader.standing.windows_already_read,
+        "instruments_awaiting_a_window": reader.standing.instruments_awaiting_a_window,
         "skipped_because_the_market_is_open": reader.standing.skipped_because_the_market_is_open,
         "skipped_because_the_session_is_unknown": (
             reader.standing.skipped_because_the_session_is_unknown

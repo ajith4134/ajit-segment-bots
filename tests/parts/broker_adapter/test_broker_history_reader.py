@@ -122,6 +122,55 @@ def test_the_same_window_is_not_asked_for_twice():
     assert reader.standing.windows_already_read == 1
 
 
+def test_each_sweep_reaches_the_contracts_the_last_one_did_not():
+    """The cap is a rate limit on one sweep, not a horizon.
+
+    Until 2026-09-04 the slice was taken before the already-read check, so every
+    sweep re-offered the same first `most_instruments` contracts and, once their
+    windows were read, planned nothing ever again. Measured on the live spine
+    that day: 2,966 instruments known, 8 windows read, `requests_planned` frozen
+    at 38 while `windows_already_read` climbed by 8 a tick -- history replayed
+    four instrument-days and stopped, and the price detectors had eight symbols
+    to fill a 256-observation window from.
+    """
+    reader = a_reader(most_instruments=2)
+    reader.observe_listings([
+        Listing(key=f"NSE_FO|{4260 + n}", symbol=f"NIFTY {n} CE 08 SEP 26",
+                instrument_type="CE", expiry_ms=1_788_892_199_000 + n)
+        for n in range(5)
+    ])
+    reader.observe_session(a_session(SessionKind.CLOSED))
+
+    reached = []
+    for _ in range(3):
+        requests = reader.requests_due(today=DAY)
+        reached.extend(request.instrument_key for request in requests)
+        for request in requests:
+            reader.observe_history(request, _fixture_response())
+
+    assert reached == [f"NSE_FO|{4260 + n}" for n in range(5)], (
+        "every contract has to be reached eventually, two at a time"
+    )
+    assert reader.requests_due(today=DAY) == (), "and then there is nothing left to ask for"
+    assert reader.standing.windows_already_read == 5
+    assert reader.standing.instruments_awaiting_a_window == 0
+
+
+def test_one_sweep_never_asks_for_more_than_its_cap():
+    """The rate limit still binds -- reaching the rest is not the same as
+    asking for everything at once."""
+    reader = a_reader(most_instruments=2)
+    reader.observe_listings([
+        Listing(key=f"NSE_FO|{4260 + n}", symbol=f"NIFTY {n} CE 08 SEP 26",
+                instrument_type="CE", expiry_ms=1_788_892_199_000 + n)
+        for n in range(5)
+    ])
+    reader.observe_session(a_session(SessionKind.CLOSED))
+
+    assert len(reader.requests_due(today=DAY)) == 2
+    assert reader.standing.instruments_awaiting_a_window == 5
+
+
 def _fixture_response():
     import json, pathlib
     return json.loads(
