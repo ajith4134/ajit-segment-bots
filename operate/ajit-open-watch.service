@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample the trading chain across a market open
+Documentation=file:///home/anushadudekula71/ajit-segment-bots/operate/watch_market_open.py
+After=ajit-spine.service
+Wants=ajit-spine.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/anushadudekula71/ajit-segment-bots
+ExecStart=/home/anushadudekula71/ajit-segment-bots/.venv/bin/python operate/watch_market_open.py
+# Long enough for the wait-for-open plus the watch itself, with headroom.
+TimeoutStartSec=30000

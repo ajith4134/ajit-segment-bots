@@ -1,0 +1,13 @@
+[Unit]
+Description=Arm the market-open watch shortly before each NSE session
+
+[Timer]
+# 03:40 UTC = 09:10 IST, five minutes before the 09:15 open. Weekdays only;
+# the watcher itself refuses to sample a session the calendar never reports, so
+# an exchange holiday is reported rather than assumed from the date.
+OnCalendar=Mon..Fri 03:40 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
