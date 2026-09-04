@@ -78,9 +78,8 @@ class MainAccountStanding:
 class MainAccountSettingsReader:
     """Reads the main account file and reports each genuine change to it."""
 
-    def __init__(self, settings_path=None, currency: str = "USDT", now_ns=time.time_ns) -> None:
+    def __init__(self, settings_path=None, now_ns=time.time_ns) -> None:
         self._path = settings_path or (settings_directory() / MAIN_ACCOUNT_FILE)
-        self._currency = currency
         self._now_ns = now_ns
         self._current: MainAccountSetting | None = None
         self.standing = MainAccountStanding(settings_path=str(self._path))
@@ -120,7 +119,14 @@ class MainAccountSettingsReader:
 
         self._current = MainAccountSetting(
             balance=float(document.read_value("main_balance")),
-            currency=self._currency,
+            # The currency the balance is denominated in is the operator's own
+            # statement of it -- every settings entry carries a mandatory unit
+            # (REQUIRED_ENTRY_KEYS) so that a number cannot travel without saying
+            # what it measures. This used to be a "USDT" constructor default that
+            # nothing ever passed, which meant a file converted to INR went on
+            # being reported as USDT and paper-currency-converter would have
+            # converted a rupee balance as though it were dollars.
+            currency=str(document.read_entry("main_balance").unit),
             maximum_capital_per_trade=float(document.read_value("maximum_capital_per_trade")),
             leverage_ceiling=float(document.read_value("leverage_ceiling")),
             content_digest=document.content_digest,

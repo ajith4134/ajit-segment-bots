@@ -9,15 +9,15 @@
 
 [main_balance]
 value = 0.0
-unit  = "USDT"
-note  = "operator: set this to the real balance before anything trades. Zero means nothing is allocated, which is the safe value to ship."
+unit  = "INR"
+note  = "operator: set this to the real balance before anything trades. Zero means nothing is allocated, which is the safe value to ship. The unit is read, not assumed -- main-account-settings-reader takes the account's currency from this entry, so a file denominated in rupees must say INR here or every part reading main-account-setting is told the wrong currency."
 
 [maximum_capital_per_trade]
 value = 0.0
-unit  = "USDT"
-note  = "operator: a hard ceiling on what any sizer may produce, whatever it estimates. RL-061 -- estimation gives the bot intelligence, this bound stops a broken estimator sizing a trade at any value."
+unit  = "INR"
+note  = "operator: a hard ceiling on what any sizer may produce, whatever it estimates. RL-061 -- estimation gives the bot intelligence, this bound stops a broken estimator sizing a trade at any value. capital-allotment-reader binds the tighter of this and the segment's own maximum_capital_per_trade, so setting this below a segment's ceiling silently overrides that segment -- which is what capped every index-options order at 100 rupees until 2026-09-04."
 
 [leverage_ceiling]
 value = 1.0
 unit  = "multiple"
-note  = "operator: the highest leverage any futures position may carry. 1.0 means unlevered, which is the safe value to ship."
+note  = "operator: the highest leverage any futures position may carry. 1.0 means unlevered, which is the safe value to ship, and the correct value for Phase A: a bought option carries no leverage dial and cannot be liquidated. This does not bind a segment's allotment -- capital-allotment-reader takes the ceiling from the segment's own file."

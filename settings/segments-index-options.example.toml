@@ -1,0 +1,45 @@
+# ajit-segment-bots -- the index-options segment's capital settings.
+#
+# Copy to ~/.config/ajit-segment-bots/settings/segments/index-options.toml and
+# edit there. This file is the template and the schema; the live values live
+# on the machine, outside every repository (docs/settings-schema.md).
+#
+# These are the numbers that decide how much money this segment may use and
+# whether that money is real. RL-055 makes them the operator's, not the
+# code's. Created 2026-09-02 when segment_id was still pointed at the retired
+# crypto "futures" segment's file (allocated_balance 1000 USDT, maximum_
+# capital_per_trade 50 USDT) -- a single NIFTY lot (75 x roughly Rs 100-300
+# premium) costs several thousand rupees, so every options trade would have
+# been refused by trade-capital-bounds-gate before this file existed. Sized
+# as a starting point the same way futures.toml's own history shows it was
+# tuned repeatedly via the board afterward, not as a fixed number.
+
+[money_mode]
+value = "paper"
+unit  = "paper or live"
+note  = "operator, 2026-09-02: whether this segment's orders go to the paper book or to a venue with real money. RL-005 is paper first, with full experimentation and no restriction, and live only for what paper proved. money-mode-reader refuses anything that is not exactly 'paper' or 'live' -- real money is never a default and never a typo."
+
+[allocated_balance]
+value = 500000.0
+unit  = "INR"
+note  = "operator, 2026-09-02: the balance this segment trades against. On paper it is the simulated account paper-account-keeper starts from, and it sets the scale of everything downstream: the position sizer risks a fraction of this. Five lakh rupees is a round starting figure that fits several NIFTY lots (75 x ~Rs 100-300 premium is roughly Rs 7,500-22,500 per lot) without being so large the first paper runs are illegible. Change it to the size you intend to trade -- futures.toml's own edit history shows this is a dial the board tunes repeatedly, not a one-time decision."
+
+[minimum_capital_per_trade]
+value = 5000.0
+unit  = "INR"
+note  = "operator, 2026-09-02: below this a trade is not placed at all. Set below a typical single-lot cost (roughly Rs 7,500 at a Rs 100 premium) so a cheap out-of-the-money lot is not refused outright, but above dust -- a trade this small would have fees and the flat Rs20 brokerage dominate the outcome."
+
+[maximum_capital_per_trade]
+value = 100000.0
+unit  = "INR"
+note  = "operator, 2026-09-02: the most one trade may commit, a fifth of the allocated balance. A ceiling per trade is what keeps one sizing mistake from being the whole account, and it binds regardless of what the sizer computed: trade-capital-bounds-gate refuses above it rather than trimming silently. Roughly 4-13 NIFTY lots at a Rs 100-300 premium."
+
+[leverage_ceiling]
+value = 1.0
+unit  = "multiple"
+note  = "operator, 2026-09-02: Phase A is buy-only index/stock options (goal.md) -- a bought option has no leverage dial and cannot be liquidated, so this is unlevered (1.0) by construction, not a safety choice to loosen later the way futures.toml's own leverage_ceiling was. leverage-selector correctly does not run for this segment; position-sizer's own default (1.0x when no leverage-choice arrives) already matches this."
+
+[quote_currency]
+value = "INR"
+unit  = "currency"
+note  = "operator, 2026-09-02: NSE index options trade and settle in INR, not USDT -- the allotment, the bounds and every fill are in this currency. usdt-pnl-accountant's own quote_currency field is threaded through as INR for this segment (the '_usdt' suffix in that part's field names is a pre-existing crypto-era naming wart, not a currency assumption -- verified 2026-09-01)."

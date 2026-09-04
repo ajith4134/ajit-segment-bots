@@ -1,0 +1,16 @@
+tape root            /home/anushadudekula71/.local/share/ajit-segment-bots/tape/upstox
+trading day          2026-09-04
+gap bound            120.0s  (price_series_maximum_gap_seconds)
+window floor         256  (detector_minimum_observations)
+
+segment      dirs  traded  filled a window  gaps>bound  median p99 gap
+----------------------------------------------------------------------
+NSE_INDEX       4       3       3 (100.0%)       0.0%            0.6s
+NSE_FO      1,922     891      76 ( 8.5%)       0.7%           69.9s
+NSE_EQ        487      89       8 ( 9.0%)       0.7%           70.8s
+NSE_COM       840      38       0 ( 0.0%)     100.0%          586.1s
+NCD_FO        739       4       0 ( 0.0%)     100.0%          586.0s
+
+`traded` counts instruments with two or more distinct trade times today.
+`filled a window` counts those with at least the window floor -- the only
+ones that could produce a detection at all, before any gap bound applies.
