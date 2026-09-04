@@ -1661,3 +1661,120 @@ def test_an_idea_may_never_be_traded():
     subject = a_generator()
     idea = subject.propose("hypotheses", FROM_A_MODEL, "an idea", "a refutation")
     assert idea.may_be_traded is False
+
+
+# ---- market-anomaly-detector: a symbol's own rhythm --------------------------
+
+def a_clock(at_seconds):
+    """A clock the test moves by hand, in seconds."""
+    state = {"now": at_seconds}
+
+    def now_ns():
+        return int(state["now"] * 1e9)
+
+    now_ns.set = lambda seconds: state.__setitem__("now", seconds)
+    return now_ns
+
+
+def a_detector_that_learns_a_rhythm(clock, floor=60.0, patience=2.8, gaps_needed=4):
+    return MarketAnomalyDetector(
+        disagreement_threshold=0.01, stale_after_seconds=floor,
+        minimum_volume_for_a_move=1000.0, move_threshold=0.02, window_length=50,
+        basis_window_observations=200, minimum_basis_observations=2,
+        reference_maximum_age_seconds=5.0,
+        silence_patience_multiple=patience,
+        silence_gaps_needed=gaps_needed,
+        now_ns=clock,
+    )
+
+
+def print_every(detector, clock, seconds, times, venue="upstox", symbol="NIFTY24500CE"):
+    at = 0.0
+    for _ in range(times):
+        at += seconds
+        clock.set(at)
+        detector.observe_price(venue, symbol, 100.0, at_ns=int(at * 1e9))
+    return at
+
+
+def test_a_symbol_that_ordinarily_prints_slowly_is_not_called_stopped():
+    """The bound this borrowed was written about crypto perpetuals.
+
+    `market-anomaly-detector` took its staleness bound from
+    `feed_coverage_window` -- a setting belonging to a different part, whose own
+    note says it was set because "the thinnest symbol in the captured thirty
+    printed at least once a minute on 2026-08-22". An NSE option contract does
+    not. Measured 2026-09-04, this produced 3,282 of 3,289 anomalies, all
+    `this-venue-has-stopped-updating`, on instruments that were simply quiet.
+    """
+    clock = a_clock(0.0)
+    subject = a_detector_that_learns_a_rhythm(clock)
+    # This contract's own rhythm: a print every 100s, comfortably past the floor.
+    last = print_every(subject, clock, seconds=100.0, times=10)
+
+    # 150s of silence is well inside this symbol's own habit.
+    clock.set(last + 150.0)
+    verdict = subject.check("upstox", "NIFTY24500CE")
+
+    assert verdict.anomaly != "this-venue-has-stopped-updating", verdict.reason
+
+
+def test_a_symbol_that_really_stopped_is_still_called_stopped():
+    """Patience is not blindness: past its own rhythm it is still an anomaly."""
+    clock = a_clock(0.0)
+    subject = a_detector_that_learns_a_rhythm(clock)
+    last = print_every(subject, clock, seconds=100.0, times=10)
+
+    # 2.8 x its ~100s p99 is 280s; an hour is not ordinary quiet for it.
+    clock.set(last + 3600.0)
+    verdict = subject.check("upstox", "NIFTY24500CE")
+
+    assert verdict.anomaly == "this-venue-has-stopped-updating"
+
+
+def test_the_floor_still_binds_a_fast_symbol():
+    """A symbol that prints every second must not inherit a slow one's patience."""
+    clock = a_clock(0.0)
+    subject = a_detector_that_learns_a_rhythm(clock)
+    last = print_every(subject, clock, seconds=0.5, times=20, symbol="NIFTY")
+
+    clock.set(last + 90.0)  # past the 60s floor
+    verdict = subject.check("upstox", "NIFTY")
+
+    assert verdict.anomaly == "this-venue-has-stopped-updating"
+
+
+def test_one_early_pause_cannot_set_the_patience():
+    """Until a symbol has shown enough of its own rhythm, the floor stands.
+
+    The same rule `RollingWindow._gap_bound_seconds` keeps, and for the same
+    reason: an estimate from a handful of gaps lets one early pause decide what
+    ordinary looks like forever.
+    """
+    clock = a_clock(0.0)
+    subject = a_detector_that_learns_a_rhythm(clock, gaps_needed=8)
+    # Only two gaps observed, one of them long.
+    clock.set(1.0)
+    subject.observe_price("upstox", "THIN", 100.0, at_ns=int(1e9))
+    clock.set(600.0)
+    subject.observe_price("upstox", "THIN", 100.0, at_ns=int(600 * 1e9))
+
+    clock.set(700.0)  # 100s of silence, past the 60s floor
+    verdict = subject.check("upstox", "THIN")
+
+    assert verdict.anomaly == "this-venue-has-stopped-updating"
+
+
+def test_the_patience_multiple_is_optional_and_off_means_the_floor_alone():
+    clock = a_clock(0.0)
+    subject = MarketAnomalyDetector(
+        disagreement_threshold=0.01, stale_after_seconds=60.0,
+        minimum_volume_for_a_move=1000.0, move_threshold=0.02, window_length=50,
+        basis_window_observations=200, minimum_basis_observations=2,
+        reference_maximum_age_seconds=5.0, now_ns=clock,
+    )
+    last = print_every(subject, clock, seconds=100.0, times=10)
+
+    clock.set(last + 90.0)
+
+    assert subject.check("upstox", "NIFTY24500CE").anomaly == "this-venue-has-stopped-updating"

@@ -39,6 +39,7 @@ goes unnoticed.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
@@ -115,6 +116,13 @@ class DetectorStanding:
     pairs_with_a_measured_basis: int = 0
     checks_against_a_stale_reference: int = 0
     widest_learned_basis: float | None = None
+    # How many symbols have shown enough of their own rhythm for the silence
+    # bound to widen past the floor, and how many checks ran inside a widened
+    # bound. Reported because a patience nobody can see is indistinguishable
+    # from one that never engages -- the way momentum-burst-detector's
+    # series_breaks stayed invisible while it decided everything.
+    symbols_with_a_measured_rhythm: int = 0
+    checks_inside_a_widened_bound: int = 0
 
 
 class MarketAnomalyDetector:
@@ -130,6 +138,8 @@ class MarketAnomalyDetector:
         basis_window_observations: int = 200,
         minimum_basis_observations: int = 50,
         reference_maximum_age_seconds: float = 5.0,
+        silence_patience_multiple: float | None = None,
+        silence_gaps_needed: int = 8,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < disagreement_threshold < 1.0:
@@ -157,6 +167,22 @@ class MarketAnomalyDetector:
             )
         if reference_maximum_age_seconds <= 0:
             raise ValueError("a reference with no age bound is never old, which is false")
+        if silence_patience_multiple is not None and silence_patience_multiple <= 0:
+            raise ValueError(
+                "the patience is a positive multiple of a symbol's own p99 gap between "
+                f"prints, or None for the stated floor alone; got {silence_patience_multiple!r}"
+            )
+        if silence_gaps_needed < 2:
+            raise ValueError(
+                "a p99 estimated from fewer than two gaps is one gap wearing a percentile; "
+                f"got {silence_gaps_needed!r}"
+            )
+        self._silence_patience_multiple = silence_patience_multiple
+        self._silence_gaps_needed = silence_gaps_needed
+        # Each symbol's own recent gaps between prints, bounded the same way
+        # RollingWindow bounds its own: as many gaps as the window has values,
+        # so the p99 describes the same stretch the prices do.
+        self._gaps_between_prints: dict[tuple[str, str], deque] = {}
         self._basis_window = basis_window_observations
         self._minimum_basis_observations = minimum_basis_observations
         self._reference_maximum_age_ns = int(reference_maximum_age_seconds * 1e9)
@@ -181,7 +207,14 @@ class MarketAnomalyDetector:
             window = RollingWindow(length=self._window)
             self._prices[key] = window
         window.observe(price)
-        self._last_update[key] = at_ns if at_ns is not None else self._now_ns()
+        at = at_ns if at_ns is not None else self._now_ns()
+        previous = self._last_update.get(key)
+        if previous is not None and at > previous:
+            gaps = self._gaps_between_prints.get(key)
+            if gaps is None:
+                gaps = self._gaps_between_prints[key] = deque(maxlen=self._window)
+            gaps.append((at - previous) / 1e9)
+        self._last_update[key] = at
 
     def observe_consolidated_price(
         self, symbol: str, price: float, venues: int, contributing_prices: dict | None = None,
@@ -222,6 +255,37 @@ class MarketAnomalyDetector:
         else:
             self._gaps.discard(key)
 
+    def silence_bound_ns(self, key) -> int:
+        """How long this symbol may be silent before that is a fault, right now.
+
+        The stated floor until this symbol has shown enough of its own rhythm to
+        be measured against, then the larger of the floor and a multiple of its
+        own p99 gap between prints. The same rule -- and the same reason --
+        `RollingWindow._gap_bound_seconds` keeps: an estimate from a handful of
+        gaps lets one early pause decide what ordinary looks like forever.
+
+        This exists because the floor alone is a statement about one market. The
+        bound this part used was `feed_coverage_window`, a setting belonging to
+        `feed-coverage-auditor` and written about crypto perpetuals -- "the
+        thinnest symbol in the captured thirty printed at least once a minute on
+        2026-08-22". An NSE option chain is mostly contracts that do not, and on
+        2026-09-04 that produced 3,282 of 3,289 anomalies, every one of them
+        `this-venue-has-stopped-updating`, on instruments that were merely quiet.
+        A detector that fires on ordinary quiet is not measuring the feed.
+        """
+        if self._silence_patience_multiple is None:
+            return self._stale_after_ns
+        gaps = self._gaps_between_prints.get(key)
+        if gaps is None or len(gaps) < self._silence_gaps_needed:
+            return self._stale_after_ns
+        ordered = sorted(gaps)
+        p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
+        widened = int(self._silence_patience_multiple * p99 * 1e9)
+        if widened > self._stale_after_ns:
+            self.standing.checks_inside_a_widened_bound += 1
+            return widened
+        return self._stale_after_ns
+
     def check(self, venue_id: str, symbol: str) -> MarketAnomaly:
         self.standing.checks += 1
         key = (venue_id, symbol)
@@ -246,12 +310,13 @@ class MarketAnomalyDetector:
             )
 
         last_update = self._last_update.get(key)
-        if last_update is not None and self._now_ns() - last_update > self._stale_after_ns:
+        silence_bound_ns = self.silence_bound_ns(key)
+        if last_update is not None and self._now_ns() - last_update > silence_bound_ns:
             return self._anomaly(
                 venue_id, symbol, STALE_FEED, True, price, None, None, 0,
                 f"{venue_id} has not updated {symbol} for "
                 f"{(self._now_ns() - last_update) / 1e9:.0f}s, past the "
-                f"{self._stale_after_ns / 1e9:.0f}s this detector treats as live",
+                f"{silence_bound_ns / 1e9:.0f}s this symbol's own rhythm allows",
             )
 
         consolidated = self._consolidated.get(symbol)
@@ -435,6 +500,14 @@ def describe_anomalies(detector: MarketAnomalyDetector) -> dict:
     return {
         "part_id": PART_ID,
         "checks": detector.standing.checks,
+        # Counted here rather than per check: this walks every tracked symbol,
+        # and a check runs thousands of times a second while health is read
+        # once. Pacing the work, not only the publish (2026-08-26).
+        "symbols_with_a_measured_rhythm": sum(
+            1 for gaps in detector._gaps_between_prints.values()
+            if len(gaps) >= detector._silence_gaps_needed
+        ),
+        "checks_inside_a_widened_bound": detector.standing.checks_inside_a_widened_bound,
         "anomalies": detector.standing.anomalies,
         "by_anomaly": dict(sorted(detector.standing.by_anomaly.items())),
         # One counter per kind as well as the map, because only numbers survive
@@ -510,7 +583,12 @@ def start_part(context) -> int:
     publish_anomalies = context.bus.publisher_for("market-anomaly")
     detector = MarketAnomalyDetector(
         disagreement_threshold=context.number("anomaly_disagreement_threshold"),
-        stale_after_seconds=context.number("feed_coverage_window"),
+        # Its own setting since 2026-09-04. This used to read
+        # feed_coverage_window, which belongs to feed-coverage-auditor and
+        # answers a different question with that part's provenance.
+        stale_after_seconds=context.number("anomaly_feed_silent_after_seconds"),
+        silence_patience_multiple=context.number("anomaly_feed_silence_patience_multiple"),
+        silence_gaps_needed=int(context.number("anomaly_feed_silence_gaps_needed")),
         minimum_volume_for_a_move=context.number("anomaly_minimum_quote_volume_for_a_move"),
         move_threshold=context.number("anomaly_move_threshold"),
         window_length=int(context.number("anomaly_window_length")),

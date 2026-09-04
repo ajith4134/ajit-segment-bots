@@ -4145,3 +4145,18 @@ note  = "Claude, 2026-09-04: how many of the nearest expiry's option contracts b
 value = 120.0
 unit  = "seconds"
 note  = "Claude, 2026-09-04: how old a symbol-universe reading may be before broker-market-feed-reader stops subscribing from it. Four times symbol_universe_restatement_interval (30s), the same one-missed-restatement-is-not-a-fault reasoning broker_instrument_listing_maximum_age carries against its own refresh interval. The bound exists at all because an unbounded LatestByKey is the trap this project has fallen into repeatedly -- on 2026-08-26 four parts read part-resource-usage with no bound, so every part the governor had ever switched off still counted as running, and off-state-verifier recorded 167 faults with 0 verified releases. A universe that stopped being restated must stop being subscribed from rather than standing forever."
+
+[anomaly_feed_silent_after_seconds]
+value = 300.0
+unit  = "seconds"
+note  = "Claude, 2026-09-04: the floor beneath which market-anomaly-detector never calls a symbol's feed stopped, whatever its own rhythm. Its own setting, because until today this part read feed_coverage_window -- a setting belonging to feed-coverage-auditor, answering a different question (does this stream cover this symbol at all) and carrying that part's provenance, not this one's. Borrowing it meant this detector's bound moved whenever the auditor's did, for reasons that had nothing to do with anomalies. Started at 300.0, the value it had been inheriting, so this change is the ownership and the per-symbol patience below rather than a silent retune of a live threshold."
+
+[anomaly_feed_silence_patience_multiple]
+value = 2.8
+unit  = "multiple of a symbol's own p99 gap between prints"
+note  = "Claude, 2026-09-04: how far past its own habit a symbol must be silent before that silence is an anomaly. The bound becomes max(anomaly_feed_silent_after_seconds, this x that symbol's own p99 inter-print gap, estimated online), so a liquid symbol keeps the floor exactly and an option contract that ordinarily prints every few minutes stops being reported as a stopped feed. 2.8 carries the same provenance price_gap_patience_multiple's does -- the ratio that let ordinary quiet through while a real 1031s outage still cleared every window by more than a factor of eight -- and is the same rule RollingWindow._gap_bound_seconds already applies to a price window. Measured 2026-09-04: with the floor alone, 3,282 of 3,289 anomalies were 'this-venue-has-stopped-updating' on NSE option contracts that were merely quiet, and each one halted trading in that symbol. Re-measure against a real chain rather than trusting the crypto-derived ratio; it is the first number here that has never been fitted to Indian data."
+
+[anomaly_feed_silence_gaps_needed]
+value = 8
+unit  = "gaps between prints"
+note  = "Claude, 2026-09-04: how many of its own gaps a symbol must have shown before the patience above applies to it at all; below this the floor stands alone. Eight, for the reason RollingWindow._gap_bound_seconds requires half a window: a p99 estimated from a handful of gaps is one early pause deciding what ordinary looks like for that symbol forever, and the failure it would cause is the one this whole bound exists to prevent -- a genuinely dead feed inheriting patience from the pause that killed it."
