@@ -815,6 +815,39 @@ def capital_in_of(payload: dict) -> float | None:
     return abs(float(quantity)) * float(entry_price)
 
 
+def segment_trading_venues() -> frozenset:
+    """The venues whose recorded trades belong to the segment now trading.
+
+    An allowlist, from the operator's settings. The position journal is
+    append-only and still holds the crypto era's round trips, so without this a
+    board reading its tail shows another segment's trades as this one's --
+    measured 2026-09-04, 100 SANDUSDT rows from binance-usdm beside capital, a
+    universe and open positions that were all index-options in INR.
+    """
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.settings_reader import load_settings_document, settings_directory
+
+    document = load_settings_document(
+        settings_directory() / "runtime.toml", RUNTIME_SCOPE
+    )
+    return frozenset(str(venue) for venue in document.read_value("segment_trading_venues"))
+
+
+def trades_belonging_to_this_segment(trades) -> tuple[list, int]:
+    """Those rows this segment actually made, and how many were left out.
+
+    The count is returned rather than swallowed: rows removed without saying so
+    is a board quietly editing the record, which is the other half of the same
+    failure as showing them unmarked (Rule 8).
+
+    A row naming no venue is dropped rather than assumed to be ours -- unknown
+    is not this segment.
+    """
+    venues = segment_trading_venues()
+    kept = [trade for trade in trades if trade.get("venue_id") in venues]
+    return kept, len(trades) - len(kept)
+
+
 def read_closed_trades() -> tuple[list[dict], dict]:
     """Recent round trips, from the end of the position journal."""
     from runtime.closed_trade_trust import judge_closed_trade
@@ -867,6 +900,11 @@ def read_closed_trades() -> tuple[list[dict], dict]:
             }
         )
     trades.reverse()
+    # Another segment's round trips are not this board's answer. The journal is
+    # append-only and still holds the crypto era's, so without this the newest
+    # rows in its tail are whatever traded last -- which, until this segment
+    # opens its first position, is always someone else's.
+    trades, from_another_segment = trades_belonging_to_this_segment(trades)
 
     attributions, attribution_provenance = read_attributions()
     for trade in trades:
@@ -889,8 +927,18 @@ def read_closed_trades() -> tuple[list[dict], dict]:
             f"stretch, of which the newest {len(trades)} are shown. Older ones are in the journal, "
             f"not on this board"
         )
+    if from_another_segment:
+        # Said, never silently dropped: rows removed without saying so is a board
+        # editing the record, the other half of the same failure as showing them
+        # as this segment's (Rule 8).
+        proof += (
+            f". {from_another_segment} row(s) in that stretch belong to a venue this "
+            f"segment does not trade ({', '.join(sorted(segment_trading_venues()))} "
+            f"is what it does) and are not shown -- they are still in the journal"
+        )
     return trades, {
         "ok": journal.exists(), "proof": proof, "is_whole_file": tail.is_whole_file,
+        "trades_from_another_segment": from_another_segment,
         "attribution_proof": attribution_provenance["proof"],
         "attributions_found": len(attributions),
     }

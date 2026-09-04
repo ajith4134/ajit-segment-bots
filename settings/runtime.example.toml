@@ -4160,3 +4160,8 @@ note  = "Claude, 2026-09-04: how far past its own habit a symbol must be silent 
 value = 8
 unit  = "gaps between prints"
 note  = "Claude, 2026-09-04: how many of its own gaps a symbol must have shown before the patience above applies to it at all; below this the floor stands alone. Eight, for the reason RollingWindow._gap_bound_seconds requires half a window: a p99 estimated from a handful of gaps is one early pause deciding what ordinary looks like for that symbol forever, and the failure it would cause is the one this whole bound exists to prevent -- a genuinely dead feed inheriting patience from the pause that killed it."
+
+[segment_trading_venues]
+value = ["upstox"]
+unit  = "venue id"
+note  = "Claude, 2026-09-04: the venues whose recorded trades belong to the segment now trading, so a board does not answer a question about this segment with another one's rows. The position journal is append-only and still holds the crypto era's round trips: measured on the live board 2026-09-04, it served 100 closed trades -- SANDUSDT on binance-usdm -- beside capital, a universe and open positions that were all index-options in INR. Those trades are real and are kept; they are simply not this segment's, and the true state of index-options is that nothing has closed yet. An allowlist rather than a list of crypto venues to drop, because an ignore-list admits the first venue nobody thought to exclude, and a second broker is already planned (goal.md item 6) -- add it here when its adapter lands. Naming Upstox here rather than reading it from an adapter keeps the board off the diagram (T-4): a board that imported a part to learn this would be wiring itself into the circuit."
