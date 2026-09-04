@@ -257,7 +257,12 @@ def start_part(context) -> int:
     counterfactuals = Batch(read=context.bus.reader("counterfactual-outcome"))
     rewards = Batch(read=context.bus.reader("learning-reward"))
     clusters = Batch(read=context.bus.reader("trade-cluster"))
-    significances = LatestByKey(read=context.bus.reader("outcome-significance"), key_of=lambda s: s.trade_id)
+    # Keyed by trade_id, so the key space is every trade ever closed, and none of
+    # these producers restates -- each publishes once per closed trade. Bounded
+    # 2026-09-04 by how long a join over one closed trade may wait for the rest of
+    # its facts; since that date an expired key is dropped, not merely hidden.
+    join_age = context.number("closed_trade_join_maximum_age_seconds")
+    significances = LatestByKey(read=context.bus.reader("outcome-significance"), key_of=lambda s: s.trade_id, maximum_age_seconds=join_age)
     verdicts = Batch(read=context.bus.reader("pair-verdict"))
     costs = Batch(read=context.bus.reader("decision-cost"))
     publish_scorecards = context.bus.publisher_for("bot-scorecard")

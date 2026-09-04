@@ -149,7 +149,66 @@ def test_staleness_is_counted_so_it_can_be_seen():
 
     assert levels.stale_keys == 2
     assert levels.fresh_keys == 0
-    assert levels.keys_seen == 2
+    # Dropped, not merely withheld: keys_seen counts what is held. Until 2026-09-04
+    # this read 2, and that retention is what OOM-killed the spine -- see
+    # test_an_expired_key_is_dropped_so_an_unbounded_key_space_cannot_grow.
+    assert levels.keys_seen == 0
+    assert levels.expired_keys == 2
+
+
+def test_an_expired_key_is_dropped_so_an_unbounded_key_space_cannot_grow():
+    """The bound must answer growth, not only staleness.
+
+    Measured 2026-09-04: `historical-bar-store` minted a fresh `window_id` for an
+    unchanged window once a second per symbol, each carrying 1,440 bars, and
+    `instruction-replayer` keyed a `LatestByKey` on that id. The process reached
+    13.9 GB and the kernel OOM-killed `ajit-spine.service` at 15:47:09. The bound
+    filtered the returned view and left the table whole, so it would have hidden
+    every one of those windows and freed none of them.
+    """
+    at = 1_000 * ONE_SECOND_NS
+    arrivals = [
+        (_message(Price(f"window-{n}", float(n)), at + n * ONE_SECOND_NS),)
+        for n in range(100)
+    ]
+    levels = LatestByKey(
+        read=_delivering(*arrivals),
+        key_of=lambda price: price.symbol,
+        maximum_age_seconds=10.0,
+    )
+    for n in range(100):
+        held = levels.mapping(now_ns=at + n * ONE_SECOND_NS)
+
+    # A hundred distinct keys arrived; at most the bound's worth are still held.
+    assert levels.keys_seen <= 11
+    assert len(held) <= 11
+    assert levels.expired_keys >= 89
+
+
+def test_a_key_that_is_restated_after_expiring_is_current_again():
+    """Dropping does not weaken "it comes back the moment a message for it does".
+
+    The drain re-inserts, so a symbol that went quiet past the bound and then spoke
+    again is present with its new value -- the property the class docstring promises,
+    unchanged by eviction.
+    """
+    at = 1_000 * ONE_SECOND_NS
+    levels = LatestByKey(
+        read=_delivering(
+            (_message(Price("ENAUSDT", 0.17019), at),),
+            (),
+            (_message(Price("ENAUSDT", 0.20000), at + 600 * ONE_SECOND_NS),),
+        ),
+        key_of=lambda price: price.symbol,
+        maximum_age_seconds=60.0,
+    )
+    levels.mapping(now_ns=at)
+    assert levels.mapping(now_ns=at + 300 * ONE_SECOND_NS) == {}
+    assert levels.keys_seen == 0
+
+    back = levels.mapping(now_ns=at + 600 * ONE_SECOND_NS)
+    assert back["ENAUSDT"].price == 0.20000
+    assert levels.age_seconds("ENAUSDT", now_ns=at + 600 * ONE_SECOND_NS) == 0.0
 
 
 def test_without_a_bound_nothing_expires():

@@ -324,6 +324,11 @@ def start_part(context) -> int:
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     universe = LatestByKey(read=context.bus.reader("symbol-universe"), key_of=lambda e: (e.venue_id, e.symbol))
+    # Deliberately unbounded (2026-09-04 sweep). watch-condition-compiler publishes when a condition is compiled or retired
+    # rather than restating a level, so an age bound here would silently retire
+    # something that is still live -- and a detector that quietly stops watching
+    # looks exactly like a market in which nothing is happening. The key space is
+    # bounded instead by the conditions compiled from live instructions.
     conditions = LatestByKey(read=context.bus.reader("watch-condition"), key_of=lambda c: c.condition_id)
     grades = Batch(read=context.bus.reader("liquidity-grade"))
     positions = Batch(read=context.bus.reader("position"))

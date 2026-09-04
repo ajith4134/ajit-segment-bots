@@ -556,9 +556,15 @@ def start_part(context) -> int:
     # has never carried -- and nothing failed while fund-lock-ledger was unbuilt,
     # because an assembly with no messages never calls its key function. The hour
     # that part first ran, this one crashed on every tick that saw a lock.
+    # fund-lock-ledger publishes its whole lock set every tick, so a released lock
+    # simply stops being published -- there is no release message. Unbounded, this
+    # held every lock forever and capital read as committed against orders that had
+    # closed, lowering what the next order is allowed for the life of the process
+    # (2026-09-04).
     locked = LatestByKey(
         read=context.bus.reader("locked-allocation"),
         key_of=lambda lock: lock.order_id,
+        maximum_age_seconds=context.number("locked_allocation_maximum_age_seconds"),
     )
     # The binding limit is the smallest fraction any limiter allows, so they are
     # kept per limiter and the minimum is taken: a limiter that says nothing must

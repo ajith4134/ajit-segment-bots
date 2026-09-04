@@ -253,6 +253,11 @@ def start_part(context) -> int:
     from runtime.sweep_measurements import KNOWN_MEASUREMENTS
 
     proven = Batch(read=context.bus.reader("proven-instruction"))
+    # Deliberately unbounded (2026-09-04 sweep). instruction-writer publishes when a hypothesis arrives
+    # rather than restating a level, so an age bound here would silently retire
+    # something that is still live -- and a detector that quietly stops watching
+    # looks exactly like a market in which nothing is happening. The key space is
+    # bounded instead by instruction-retirer, which withdraws an instruction explicitly.
     instructions = LatestByKey(
         read=context.bus.reader("opportunity-instruction"),
         key_of=lambda instruction: instruction.instruction_id,

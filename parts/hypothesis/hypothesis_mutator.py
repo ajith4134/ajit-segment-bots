@@ -286,6 +286,11 @@ def start_part(context) -> int:
 
     scorecards = Batch(read=context.bus.reader("instruction-scorecard"))
     retired = Batch(read=context.bus.reader("retired-instruction"))
+    # Deliberately unbounded (2026-09-04 sweep). instruction-archive publishes when an instruction's history changes
+    # rather than restating a level, so an age bound here would silently retire
+    # something that is still live -- and a detector that quietly stops watching
+    # looks exactly like a market in which nothing is happening. The key space is
+    # bounded instead by the instructions that exist, which is the same finite set.
     histories = LatestByKey(read=context.bus.reader("instruction-history"), key_of=lambda h: h.instruction_id)
     near_misses = Batch(read=context.bus.reader("near-miss-episode"))
     publish_hypotheses = context.bus.publisher_for("mutated-hypothesis")

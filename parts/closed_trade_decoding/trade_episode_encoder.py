@@ -284,8 +284,17 @@ def start_part(context) -> int:
 
     closed = Batch(read=context.bus.reader("closed-trade"))
     entries = Batch(read=context.bus.reader("journal-entry"))
+    # Keyed by trade_id, so the key space is every trade ever closed, and none of
+    # these producers restates -- each publishes once per closed trade. Bounded
+    # 2026-09-04 by how long a join over one closed trade may wait for the rest of
+    # its facts; since that date an expired key is dropped, not merely hidden.
+    join_age = context.number("closed_trade_join_maximum_age_seconds")
     by_trade = {
-        kind: LatestByKey(read=context.bus.reader(kind), key_of=lambda item: item.trade_id)
+        kind: LatestByKey(
+            read=context.bus.reader(kind),
+            key_of=lambda item: item.trade_id,
+            maximum_age_seconds=join_age,
+        )
         for kind in ("pnl-attribution", "entry-quality", "outcome-significance", "regime-transition-flag")
     }
     near_misses = Batch(read=context.bus.reader("near-miss-episode"))

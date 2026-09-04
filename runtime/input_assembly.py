@@ -82,6 +82,25 @@ class LatestByKey:
     reader's existing "I have no value for this symbol" refusal the thing that
     fires, instead of asking 81 parts each to grow an age check of their own.
 
+    **An expired key is dropped, not merely withheld.** Until 2026-09-04 the bound
+    filtered the view and left `_by_key` whole, so it answered staleness and not
+    growth -- and the two are the same question whenever the key space is not
+    finite. Measured that day: `historical-bar-store` minted a fresh `window_id`
+    for an unchanged window every second per symbol, each carrying 1,440 bars, and
+    `instruction-replayer` keyed this shape on that id. It reached 13.9 GB and the
+    kernel OOM-killed the whole spine at 15:47:09. A bound on that assembly would
+    have hidden every one of those windows and freed none of them.
+
+    Dropping changes nothing a reader can see through `mapping()` or `values()`,
+    because a key past the bound was already absent from both, and a key that is
+    restated is simply taken in again -- "it comes back the moment a message for it
+    does" is a property of the drain, not of the retention. What it does change is
+    `keys_seen`, which now counts what is held rather than what was ever seen, and
+    `observed_at_ns`/`age_seconds`, which answer None for a dropped key: never seen
+    and long gone are the same fact about a level nobody is restating. The count is
+    kept on `expired_keys` so the dropping stays visible -- an eviction nobody can
+    see is indistinguishable from a message that never came.
+
     The bound is opt-in per assembly because what counts as old belongs to the data
     type rather than to the shape: a hardware fact does not go stale in a minute and
     a price does. Where it is set it comes from a named setting with provenance,
@@ -96,6 +115,7 @@ class LatestByKey:
     _messages_seen: int = 0
     _fresh_keys: int = 0
     _stale_keys: int = 0
+    _expired_keys: int = 0
 
     def __post_init__(self) -> None:
         if self._by_key is None:
@@ -125,9 +145,16 @@ class LatestByKey:
         received 1,067 listings of 102,940, and the three index underlyings the
         segment is entirely about were not among them.
 
-        No age bound is applied here. A key too old for `mapping()` is still
-        taken in, so it is current again the moment it is restated rather than
-        having been dropped on the floor.
+        No age bound is applied here, and nothing is expired here either: a key
+        too old for `mapping()` is still taken in, so it is current again the
+        moment it is restated rather than having been dropped on the floor, and a
+        message that arrives already older than the bound still records when it
+        was observed. Expiry belongs to `mapping()`, where the caller's own clock
+        governs it -- a drain has no opinion about what time it is.
+
+        A part that only ever drains is therefore bounded by its key space rather
+        than by the clock, which is correct for the one that does it: instrument
+        listings are keyed by instrument, and there are finitely many.
         """
         self._take_in_what_arrived()
 
@@ -154,15 +181,32 @@ class LatestByKey:
             return dict(self._by_key)
 
         at = time.time_ns() if now_ns is None else now_ns
-        oldest_believable_ns = at - int(self.maximum_age_seconds * 1e9)
-        fresh = {
-            key: payload
-            for key, payload in self._by_key.items()
-            if self._observed_at_ns_by_key.get(key, 0) >= oldest_believable_ns
-        }
-        self._fresh_keys = len(fresh)
-        self._stale_keys = len(self._by_key) - len(fresh)
-        return fresh
+        expired = self._expire(at)
+        self._fresh_keys = len(self._by_key)
+        self._stale_keys = expired
+        return dict(self._by_key)
+
+    def _expire(self, now_ns: int) -> int:
+        """Drop every key past the bound, and say how many went.
+
+        Dropping rather than filtering is what makes the bound answer growth as
+        well as staleness; see the class docstring for the OOM that distinguishes
+        them. A key with no recorded observation time cannot be aged and is left
+        alone rather than guessed about.
+        """
+        if self.maximum_age_seconds is None:
+            return 0
+        oldest_believable_ns = now_ns - int(self.maximum_age_seconds * 1e9)
+        gone = [
+            key
+            for key in self._by_key
+            if self._observed_at_ns_by_key.get(key, 0) < oldest_believable_ns
+        ]
+        for key in gone:
+            self._by_key.pop(key, None)
+            self._observed_at_ns_by_key.pop(key, None)
+        self._expired_keys += len(gone)
+        return len(gone)
 
     def values(self, now_ns: int | None = None) -> tuple:
         return tuple(self.mapping(now_ns=now_ns).values())
@@ -195,7 +239,17 @@ class LatestByKey:
 
     @property
     def keys_seen(self) -> int:
+        """How many keys are held now -- not how many have ever been seen.
+
+        With a bound set, an expired key is gone from here; `expired_keys` counts
+        those.
+        """
         return len(self._by_key)
+
+    @property
+    def expired_keys(self) -> int:
+        """How many keys have been dropped for being past the bound, cumulatively."""
+        return self._expired_keys
 
     @property
     def fresh_keys(self) -> int:
@@ -204,10 +258,11 @@ class LatestByKey:
 
     @property
     def stale_keys(self) -> int:
-        """How many keys the last mapping() withheld as too old to believe.
+        """How many keys the last mapping() dropped as too old to believe.
 
         Counted rather than dropped quietly: a refusal nobody can see is
-        indistinguishable from an input that never came.
+        indistinguishable from an input that never came. This is the last call's
+        number; `expired_keys` is the running total.
         """
         return self._stale_keys
 

@@ -94,6 +94,11 @@ class ClassifierStanding:
     # different facts, and only the second is a fault (Rule 8).
     restored_symbols: int = 0
     checkpoint_verdict: str = ""
+    # A symbol whose series went silent past its own gap bound is no longer one of
+    # this part's subjects. Counted rather than dropped quietly: a number that
+    # climbs steadily is a feed losing symbols, which is a finding, and one that
+    # jumps once at start is a checkpoint outliving the universe it was written for.
+    symbols_forgotten_silent: int = 0
 
 
 class RegimeClassifier:
@@ -125,6 +130,14 @@ class RegimeClassifier:
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
         self._prices: dict[tuple[str, str], RollingWindow] = {}
+        # When this part last *received* anything for a symbol, on its own clock.
+        # Not the venue's print time, which is what the window keeps: with the
+        # market shut every print carries a stamp hours old, so judging "is this
+        # still one of my subjects" by the venue's clock forgets every symbol the
+        # moment the session closes and re-adds it on the next poll. Measured
+        # 2026-09-04 on the first run of the sweep below: 12,903 forgettings in
+        # ten minutes from a universe of 3,209.
+        self._last_seen_at_ns: dict[tuple[str, str], int] = {}
         self.standing = ClassifierStanding()
 
     def observe_price(self, venue_id: str, symbol: str, price: float, at_ns: int) -> None:
@@ -136,6 +149,7 @@ class RegimeClassifier:
         come to be classified as a breakout.
         """
         self.standing.observations += 1
+        self._last_seen_at_ns[(venue_id, symbol)] = self._now_ns()
         self._window_for((venue_id, symbol)).observe(price, at_ns)
         self.standing.symbols_tracked = len(self._prices)
 
@@ -178,7 +192,61 @@ class RegimeClassifier:
         return self._regime(venue_id, symbol, regime, hurst, len(series), volatility, reason)
 
     def classify_all(self) -> tuple[MarketRegime, ...]:
+        """Every symbol this part is still watching.
+
+        Callers wanting the dropped keys as well -- to forget them somewhere else
+        too -- call `forget_silent_symbols` themselves first; this is the shorthand
+        for the ones that do not. On 2026-09-04 the difference between the two sets
+        was 3,208 symbols restored from a checkpoint written in the crypto era: this
+        returned 3,209 regimes once per health interval, 99.2% of them classifying
+        nothing, for a part that had received 1,190 prices.
+        """
+        self.forget_silent_symbols()
         return tuple(self.classify(venue, symbol) for venue, symbol in sorted(self._prices))
+
+    def forget_silent_symbols(self, now_ns: int | None = None) -> tuple:
+        """Drop every series whose next print would clear it anyway. Returns which.
+
+        The keys, not a count, because whoever holds a per-symbol structure beside
+        this one must drop the same symbols: a level publisher keyed by symbol would
+        otherwise remember what was last said about a symbol that no longer exists,
+        which is the unbounded-structure shape all over again one layer along.
+
+        The window decides whether the series is over: `has_gone_silent_past_its_bound`
+        is the same comparison `observe` makes on an arriving gap, so nothing is
+        discarded here that the symbol's own next observation would not discard. A
+        window with no gap bound is never dropped -- it was given no rule for what a
+        hole is.
+
+        **But silence is measured on this part's clock as well as the venue's.** With
+        the market shut every print carries a stamp from before the close, so by the
+        window's measure alone every symbol is silent the moment the session ends --
+        and the next poll re-adds it, to be dropped again. Measured on the first run
+        of this sweep, live: 12,903 forgettings in ten minutes from a universe of
+        3,209, with `symbols_tracked` reading 3.
+
+        So both conditions are required: the series must be over *and* nothing must
+        have arrived about it. A symbol is one of this part's subjects for as long as
+        messages about it keep coming, however old the stamps they carry.
+        """
+        at = self._now_ns() if now_ns is None else now_ns
+        gone = []
+        for key, window in self._prices.items():
+            if not window.has_gone_silent_past_its_bound(at):
+                continue
+            last_seen = self._last_seen_at_ns.get(key)
+            if (
+                last_seen is not None
+                and window.maximum_gap_seconds is not None
+                and (at - last_seen) / 1e9 <= window.maximum_gap_seconds
+            ):
+                continue
+            gone.append(key)
+        for key in gone:
+            del self._prices[key]
+            self._last_seen_at_ns.pop(key, None)
+        self.standing.symbols_forgotten_silent += len(gone)
+        return tuple(gone)
 
     def _window_for(self, key) -> RollingWindow:
         window = self._prices.get(key)
@@ -243,7 +311,14 @@ class RegimeClassifier:
         )
 
 
-def describe_regimes(classifier: RegimeClassifier) -> dict:
+def describe_regimes(classifier: RegimeClassifier, levels=None) -> dict:
+    level_standing = {} if levels is None else {
+        "regimes_published": levels.standing.publishes,
+        "unchanged_regimes_skipped": levels.standing.unchanged_publishes_skipped,
+        "regime_refreshes": levels.standing.refreshes,
+        "regime_changes": levels.standing.changes,
+        "symbols_held_as_levels": levels.keys_held,
+    }
     return {
         "part_id": PART_ID,
         "observations": classifier.standing.observations,
@@ -253,6 +328,8 @@ def describe_regimes(classifier: RegimeClassifier) -> dict:
         "by_regime": dict(classifier.standing.by_regime),
         "restored_symbols": classifier.standing.restored_symbols,
         "checkpoint_verdict": classifier.standing.checkpoint_verdict,
+        "symbols_forgotten_silent": classifier.standing.symbols_forgotten_silent,
+        **level_standing,
     }
 
 
@@ -262,7 +339,14 @@ def run_regime_classifier(
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
     write_checkpoint=None,
+    levels=None,
+    forget_level=lambda key: None,
 ) -> int:
+    """`publish_regimes(key, regimes)` -- keyed, because the level is per symbol.
+
+    `forget_level` drops a symbol from whatever remembers what was last said about
+    it, so the two structures shed the same symbols on the same sweep.
+    """
     import time as _time
 
     last_full_publish = [float("-inf")]
@@ -273,19 +357,30 @@ def run_regime_classifier(
         # symbols -- a Hurst exponent over each window -- on each wake made its
         # tick slower than the feed, so it lost market-data at about nine
         # messages a second while using a fifth of a core. A regime for a symbol
-        # with no new price is the regime already published. The full set still
-        # goes out once per health interval, so a consumer started later holds
-        # every symbol within a second.
+        # with no new price is the regime already published. The full set is still
+        # swept once per health interval, so a consumer started later holds every
+        # symbol within a second.
+        #
+        # What is computed and what is sent are two decisions since 2026-09-04.
+        # The sweep above paces the work; `levels` paces the sending, and a regime
+        # that has not changed does not go on the bus again until its own refresh
+        # is due. Measured that day, with neither in place: 33,535,257
+        # `market-regime` messages published from 1,190 prices received, 69% of
+        # all traffic on the spine, with the market shut.
         touched = set()
         for venue_id, symbol, price, at_ns in read_prices():
             classifier.observe_price(venue_id, symbol, price, at_ns)
             touched.add((venue_id, symbol))
         now = _time.monotonic()
         if now - last_full_publish[0] >= health_interval_seconds:
-            publish_regimes(classifier.classify_all())
+            for key in classifier.forget_silent_symbols():
+                forget_level(key)
+            regimes = classifier.classify_all()
             last_full_publish[0] = now
-        elif touched:
-            publish_regimes(tuple(classifier.classify(v, s) for v, s in sorted(touched)))
+        else:
+            regimes = tuple(classifier.classify(v, s) for v, s in sorted(touched))
+        for regime in regimes:
+            publish_regimes((regime.venue_id, regime.symbol), (regime,))
         if touched and write_checkpoint is not None:
             write_checkpoint(classifier.standing.observations)
 
@@ -297,7 +392,7 @@ def run_regime_classifier(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_regimes(classifier),
+        read_standing=lambda: describe_regimes(classifier, levels),
     )
 
 
@@ -323,9 +418,27 @@ def start_part(context) -> int:
 
     from runtime.durable_state import CheckpointSchedule, DurableStateStore, restore_and_arm_checkpoint
     from runtime.input_assembly import Batch
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
-    publish_regimes = context.bus.publisher_for("market-regime")
+    publish_to_bus = context.bus.publisher_for("market-regime")
+    # One level per symbol, so one symbol's new price does not restate the other
+    # 599. Each key keeps its own refresh clock, so the refreshes spread across the
+    # interval instead of arriving as the one-per-second burst that `classify_all`
+    # used to send whole.
+    #
+    # Its own refresh interval, not the shared one, because the keepalive is **per
+    # key** and this level has more keys than any other. Measured 2026-09-04 after
+    # the change check went in: 600 symbols held, 14 parts consuming market-regime,
+    # so one publish is 14 datagrams and the refresh alone floors this part at
+    # 8,400 messages a second whatever the change check does. The skip count was
+    # 55,212 and the bus rate had not fallen -- the check was working and was not
+    # the lever.
+    levels = LevelPublisherByKey(
+        publish=publish_to_bus,
+        refresh_interval_seconds=context.number("regime_refresh_interval_seconds"),
+        identity_of=without_observation_time,
+    )
     classifier = RegimeClassifier(
         window_length=int(context.number("regime_window_length")),
         minimum_observations=int(context.number("regime_minimum_observations")),
@@ -368,7 +481,9 @@ def start_part(context) -> int:
         classifier=classifier,
         control_socket=context.control_socket,
         read_prices=read_prices,
-        publish_regimes=publish_regimes,
+        publish_regimes=levels.publish_level,
+        levels=levels,
+        forget_level=levels.forget,
         health_interval_seconds=context.health_interval_seconds,
         emit_health=context.emit_health,
         input_descriptors=context.input_descriptors,

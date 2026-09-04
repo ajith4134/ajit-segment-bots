@@ -204,6 +204,32 @@ class RollingWindow:
             return None
         return (now_ns - self._last_observed_at_ns) / 1e9
 
+    def has_gone_silent_past_its_bound(self, now_ns: int) -> bool:
+        """Whether the next print would clear this series anyway.
+
+        The same comparison `observe` makes on an arriving gap, asked of the silence
+        so far instead. A holder of many windows needs it to answer "is this subject
+        still one of mine": a window this quiet has nothing to carry forward, because
+        the observation that ends the silence is the one that empties it.
+
+        A window with no gap bound never answers yes -- it was given no rule for what
+        counts as a hole, and inventing one here would be a bound nobody set.
+
+        Added 2026-09-04, when `regime-classifier` was found holding 3,209 symbols,
+        3,208 of them restored from a checkpoint written in the crypto era, and
+        publishing a regime for every one of them once per health interval: 33.5
+        million messages from 1,190 prices received, 99.2% of them classifying
+        nothing. The rule lives here rather than there so that "this series is over"
+        is decided in one place.
+        """
+        if self.maximum_gap_seconds is None or self._last_observed_at_ns is None:
+            return False
+        silent_seconds = (now_ns - self._last_observed_at_ns) / 1e9
+        return (
+            silent_seconds > self.maximum_gap_seconds
+            and silent_seconds > self._gap_bound_seconds()
+        )
+
     @property
     def count(self) -> int:
         return len(self.values)

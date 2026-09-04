@@ -250,7 +250,7 @@ def start_part(context) -> int:
 
     requests = Batch(read=context.bus.reader("llm-request"))
     versions = Batch(read=context.bus.reader("prompt-version"))
-    contexts = LatestByKey(read=context.bus.reader("prompt-context"), key_of=lambda c: c.request_id)
+    contexts = LatestByKey(read=context.bus.reader("prompt-context"), key_of=lambda c: c.request_id, maximum_age_seconds=context.number("llm_request_context_maximum_age_seconds"))
     publish_rendered = context.bus.publisher_for("rendered-llm-request")
     renderer = PromptRenderer()
     active_by_purpose: dict[str, object] = {}

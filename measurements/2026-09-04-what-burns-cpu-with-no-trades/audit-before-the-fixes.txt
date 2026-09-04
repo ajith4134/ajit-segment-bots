@@ -1,0 +1,24 @@
+parts publishing anything but health 100   published 87,176,660   received 12,686,260
+part files naming a level publisher: 17 of 343
+
+part                                      published    received  per recv  level pub
+regime-classifier                        64,201,007       2,083    30821x  yes            74% of all
+signal-excursion-profiler                 6,643,004           0  no input  yes             8% of all
+execution-cost-model                      2,602,142      15,091      172x  no              3% of all
+part-appetite-meter                       2,431,255           0  no input  no              3% of all
+tick-size-resolver                        1,820,857       9,625      189x  no              2% of all
+historical-bar-store                      1,496,760      14,978      100x  yes             2% of all
+broker-instrument-catalogue-reader          912,280           0  no input  no              1% of all
+survival-tier-monitor                       848,089       3,544      239x  no              1% of all
+feed-coverage-auditor                       761,898      26,230       29x  no              1% of all
+correlation-cluster-mapper                  738,481         710     1040x  yes             1% of all
+trading-halt-decider                        483,213     599,050        1x  no              1% of all
+autonomy-boundary                           422,292     213,951        2x  no              0% of all
+part-restart-budgeter                       416,682      20,533       20x  yes             0% of all
+broker-history-reader                       357,636     102,155        4x  no              0% of all
+folded-circuit-view                         287,516           0  no input  no              0% of all
+idea-generator                              274,542     105,832        3x  no              0% of all
+event-risk-limiter                          274,092       4,263       64x  no              0% of all
+skill-gap-finder                            272,272      68,373        4x  no              0% of all
+llm-backpressure-gauge                      211,911     215,785        1x  no              0% of all
+conservation-planner                        211,614     211,614        1x  no              0% of all

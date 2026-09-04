@@ -216,6 +216,136 @@ def test_a_constructed_trend_classifies_as_trending():
     assert subject.classify(VENUE, SYMBOL).regime == TRENDING
 
 
+def test_a_symbol_that_has_gone_silent_stops_being_one_of_this_parts_subjects():
+    """The 33.5-million-message defect, measured on the live spine 2026-09-04.
+
+    `classify_all` returned a regime for every symbol ever seen, and the part
+    restored 3,208 of them from a checkpoint written in the crypto era. It
+    published 33,535,257 `market-regime` messages -- 69% of all traffic on the
+    spine, with the Indian market shut -- from 1,190 prices received, and 99.2% of
+    those classifications said "unclassified" because the symbols they named had no
+    prices at all.
+
+    A window silent past its own gap bound would be cleared by its next print
+    anyway, so nothing is discarded here that the symbol itself would not discard.
+    """
+    subject = RegimeClassifier(
+        window_length=300, minimum_observations=50,
+        trending_above=0.55, reverting_below=0.45,
+        maximum_gap_seconds=60.0,
+    )
+    # Venue stamps, so the times are wall-clock scale: `classify_all` sweeps against
+    # the box's own clock, and a series stamped at second 100 of the epoch would be
+    # forty years silent.
+    began = time.time_ns()
+    for index in range(100):
+        subject.observe_price(VENUE, SYMBOL, 100.0 + index, began + index * SECOND_NS)
+    for index in range(100):
+        subject.observe_price(VENUE, "QUIETUSDT", 50.0 + index, began + index * SECOND_NS)
+
+    still_here = began + 100 * SECOND_NS
+    assert subject.forget_silent_symbols(now_ns=still_here) == ()
+    assert len(subject.classify_all()) == 2
+
+    # One symbol keeps printing; the other has said nothing for 101 seconds, past
+    # the 60-second bound its own window was given.
+    for index in range(100, 200):
+        subject.observe_price(VENUE, SYMBOL, 200.0 + index, began + index * SECOND_NS)
+    now = began + 200 * SECOND_NS
+    forgotten = subject.forget_silent_symbols(now_ns=now)
+
+    assert forgotten == ((VENUE, "QUIETUSDT"),)
+    assert subject.standing.symbols_forgotten_silent == 1
+    assert [regime.symbol for regime in subject.classify_all()] == [SYMBOL]
+
+
+def test_a_symbol_still_arriving_is_not_forgotten_because_its_stamps_are_old():
+    """Silence is this part's, not the venue's -- the churn found on the live spine.
+
+    With the market shut every print carries a stamp from before the close, so by
+    the window's own measure every symbol is silent the moment the session ends.
+    Judged that way, the first version of the sweep forgot 12,903 symbols in ten
+    minutes from a universe of 3,209 and reported `symbols_tracked` of 3: dropped,
+    re-added by the next poll, dropped again.
+    """
+    subject = RegimeClassifier(
+        window_length=300, minimum_observations=50,
+        trending_above=0.55, reverting_below=0.45,
+        maximum_gap_seconds=60.0,
+    )
+    stale = time.time_ns() - 6 * 3_600 * SECOND_NS
+    for index in range(100):
+        subject.observe_price(VENUE, SYMBOL, 100.0 + index, stale + index * SECOND_NS)
+
+    # The series is over by the window's measure -- and messages are still arriving.
+    assert subject._prices[(VENUE, SYMBOL)].has_gone_silent_past_its_bound(time.time_ns())
+    assert subject.forget_silent_symbols() == ()
+    assert [regime.symbol for regime in subject.classify_all()] == [SYMBOL]
+
+
+def test_a_window_with_no_gap_bound_is_never_forgotten():
+    """No rule for what a hole is means no rule for when a series is over.
+
+    Inventing one here would be a bound nobody set -- and every crypto-era window
+    restored without a gap bound would vanish on the first sweep.
+    """
+    subject = classifier()
+    began = time.time_ns()
+    for index in range(100):
+        subject.observe_price(VENUE, SYMBOL, 100.0 + index, began + index * SECOND_NS)
+
+    assert subject.forget_silent_symbols(now_ns=began + 10**15) == ()
+    assert len(subject.classify_all()) == 1
+
+
+def test_an_unchanged_regime_is_not_put_on_the_bus_again_every_tick():
+    """The other half of the same defect: the sending, not the computing.
+
+    The part wakes on every arriving burst, and each wake republished the level.
+    Asserting the skip count rather than the absence of a crash is deliberate: a
+    change check that compares payloads carrying a "when I looked" field skips
+    nothing while appearing to work, which is exactly how the first version of
+    `runtime/level_publishing.py` behaved.
+    """
+    from parts.opportunity_scanner.regime_classifier import run_regime_classifier
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
+
+    sent = []
+    levels = LevelPublisherByKey(
+        publish=lambda items: sent.extend(items),
+        refresh_interval_seconds=1_000_000.0,
+        identity_of=without_observation_time,
+    )
+    subject = classifier(minimum=30)
+    prices = [(VENUE, SYMBOL, 100.0 + index * 0.5, index * SECOND_NS) for index in range(60)]
+
+    def read_prices():
+        return tuple(prices.pop(0) for _ in range(min(10, len(prices))))
+
+    ticks = 0
+
+    def emit_health(*_args, **_kwargs):
+        nonlocal ticks
+        ticks += 1
+        return None
+
+    # Drive the tick directly: run_part owns the loop, and what is under test is
+    # what one tick puts on the bus.
+    for _ in range(6):
+        for venue_id, symbol, price, at_ns in read_prices():
+            subject.observe_price(venue_id, symbol, price, at_ns)
+        levels.publish_level((VENUE, SYMBOL), (subject.classify(VENUE, SYMBOL),))
+    changing = len(sent)
+
+    # Now the same regime, restated: nothing new goes out until the refresh is due.
+    for _ in range(50):
+        levels.publish_level((VENUE, SYMBOL), (subject.classify(VENUE, SYMBOL),))
+
+    assert len(sent) == changing
+    assert levels.standing.unchanged_publishes_skipped == 50
+    assert callable(run_regime_classifier)
+
+
 def test_a_regime_only_favours_the_detector_it_suits():
     assert Regime(TRENDING).favours(CONTINUATION) is True
     assert Regime(TRENDING).favours(REVERSION) is False

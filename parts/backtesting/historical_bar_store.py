@@ -110,7 +110,6 @@ class HistoricalBarStore:
         self._interval_ns = int(interval_seconds * 1e9)
         self._now_ns = now_ns
         self._bars: dict[tuple, dict] = {}
-        self._sequence = 0
         self.standing = StoreStanding()
 
     def store(self, venue_id: str, symbol: str, bar: Bar) -> bool:
@@ -156,9 +155,11 @@ class HistoricalBarStore:
                 max(len(span) for span in gaps),
             )
 
-        self._sequence += 1
         window = HistoricalWindow(
-            window_id=f"window-{self._sequence}",
+            window_id=self._identity_of(
+                venue_id, symbol, present[0].at_ns, present[-1].at_ns,
+                len(wanted), len(missing),
+            ),
             venue_id=venue_id,
             symbol=symbol,
             interval_seconds=self._interval_seconds,
@@ -188,6 +189,32 @@ class HistoricalBarStore:
             f"unmodified from the tape",
         )
 
+    def _identity_of(
+        self, venue_id: str, symbol: str, first_at_ns: int, last_at_ns: int,
+        expected_bars: int, missing_bars: int,
+    ) -> str:
+        """What this window is, so that restating it is recognisable as a restatement.
+
+        Until 2026-09-04 this was `f"window-{self._sequence}"` -- a counter, so the
+        same unchanged window got a fresh identity every time it was built. A window
+        is built for every symbol once per health interval (`read_requests`), which
+        made a new identity every second per symbol, each carrying
+        `backtest_window_bars` (1,440) bars. `instruction-replayer` keys a
+        `LatestByKey` on `window_id`; the process reached 13.9 GB and the kernel
+        OOM-killed `ajit-spine.service` at 15:47:09. It leaked hardest with the
+        market shut, because then nothing changes and every second's window is the
+        same one under a new name.
+
+        Identity is the window itself: which series, over which range, with which
+        holes. Two builds of the same bars are the same window and say so; a bar
+        closing, a gap opening or the range sliding all change it, which is exactly
+        when a consumer must see a new one.
+        """
+        return (
+            f"{venue_id}:{symbol}:{self._interval_seconds:.0f}s:"
+            f"{first_at_ns}-{last_at_ns}:{expected_bars}:{missing_bars}"
+        )
+
     def _gap_spans(self, missing) -> list:
         spans: list = []
         for stamp in sorted(missing):
@@ -204,7 +231,22 @@ class HistoricalBarStore:
         )
 
 
-def describe_bar_store(store: HistoricalBarStore) -> dict:
+def describe_bar_store(store: HistoricalBarStore, levels=None) -> dict:
+    """What the store did, including how many restatements it did not put on the bus.
+
+    A skip count that is not climbing means the window really is changing every
+    tick, which is a finding about the feed rather than a fault here -- and a fix
+    that quietly stopped working would otherwise look exactly like one that works.
+    `windows_held` is the other half: this part publishes one level per symbol, so
+    that number is the symbol count and not something that should climb with time.
+    """
+    level_standing = {} if levels is None else {
+        "windows_published": levels.standing.publishes,
+        "unchanged_windows_skipped": levels.standing.unchanged_publishes_skipped,
+        "window_refreshes": levels.standing.refreshes,
+        "window_changes": levels.standing.changes,
+        "windows_held": levels.keys_held,
+    }
     return {
         "part_id": PART_ID,
         "bars_stored": store.standing.bars_stored,
@@ -218,6 +260,7 @@ def describe_bar_store(store: HistoricalBarStore) -> dict:
         "interpolates_gaps": False,
         "interpolations_performed": store.standing.interpolations_performed,
         "fetches_history_from_a_venue_endpoint": False,
+        **level_standing,
     }
 
 
@@ -226,6 +269,7 @@ def run_historical_bar_store(
     publish_windows, health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    levels=None,
 ) -> int:
     def tick() -> None:
         for venue_id, symbol, bar in read_bars():
@@ -243,7 +287,7 @@ def run_historical_bar_store(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_bar_store(store),
+        read_standing=lambda: describe_bar_store(store, levels),
     )
 
 
@@ -257,6 +301,7 @@ def start_part(context) -> int:
     import time as _time
 
     from runtime.input_assembly import Batch
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
     from runtime.venues.venue_adapter import NormalisedCandle
 
     updates = Batch(read=context.bus.reader("candle"))
@@ -286,9 +331,20 @@ def start_part(context) -> int:
         last_window[0] = now
         return tuple((key[0], key[1], to_ns - span_ns, to_ns) for key, to_ns in sorted(latest.items()))
 
+    # A window is a level per symbol: true until a bar closes, a gap opens or the
+    # range slides. It was published unconditionally once per health interval for
+    # every symbol seen, which -- with the counter-based identity this part used to
+    # mint -- is what OOM-killed the spine on 2026-09-04 (see `_identity_of`).
+    # Keyed per symbol so one symbol's new bar does not restate the other 635.
+    windows = LevelPublisherByKey(
+        publish=publish_windows,
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=without_observation_time,
+    )
+
     def publish(item) -> None:
         if item is not None:
-            publish_windows((item,))
+            windows.publish_level((item.venue_id, item.symbol), (item,))
 
     return run_historical_bar_store(
         store=store,
@@ -296,6 +352,7 @@ def start_part(context) -> int:
         read_bars=read_bars,
         read_requests=read_requests,
         publish_windows=publish,
+        levels=windows,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

@@ -353,6 +353,18 @@ OBSERVATION_TIME_FIELDS = frozenset(
         "recorded_at_ns",
         "planned_at_ns",
         "read_at_ns",
+        # Added 2026-09-04. Carried by HistoricalWindow, KlineWindow, FeatureVector
+        # and TrainingLabel, and on every one of them it is when the thing was
+        # assembled rather than anything the thing says -- two builds of the same
+        # bars differ only here. Named one at a time on purpose: a rule over
+        # `*_at_ns` would also swallow `next_settlement_at_ns`, which is content.
+        "built_at_ns",
+        # Added 2026-09-04, on MarketRegime and LossCause: when this part last ran
+        # its classifier, not what the classifier found. Left out, `regime-classifier`
+        # would compare every restatement of an unchanged regime as different and
+        # skip nothing -- the storm surviving the fix while the skip counter claims
+        # it did not, which is how the first version of this class behaved.
+        "classified_at_ns",
     }
 )
 

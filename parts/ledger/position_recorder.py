@@ -292,7 +292,13 @@ def start_part(context) -> int:
     import pathlib
 
     from runtime.input_assembly import Batch
-    from runtime.journal import Journal, journal_path_for, read_journal_tail
+    from runtime.journal import (
+        JOURNAL_SEGMENT_BYTES_SETTING,
+        Journal,
+        RollingJournalSink,
+        journal_path_for,
+        read_journal_tail,
+    )
 
     positions = Batch(read=context.bus.reader("position"))
     closed_trades = Batch(read=context.bus.reader("closed-trade"))
@@ -309,13 +315,20 @@ def start_part(context) -> int:
     )
     journal_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def append_line(line: str) -> None:
-        # Opened per append and flushed, for the same reason the lifecycle
-        # recorder does it: a part is killed the way every part is killed, and a
-        # buffered ledger loses exactly the entries that were about to matter.
-        with open(journal_path, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-            handle.flush()
+    # Rotation lives in the sink, not here: a segment at its bound is renamed to
+    # carry the sequence it ended at and a new one starts, with the chain running
+    # on into it. Nothing is deleted -- the journal is the only account of what the
+    # system did (2026-09-04, when five journals held 38 GB with no trade placed).
+    # Opened per append and flushed inside the sink: a recorder is killed the way
+    # every part is, and a buffered ledger loses exactly the entries that were
+    # about to matter.
+    tail = read_journal_tail(journal_path)
+    sink = RollingJournalSink(
+        journal_path,
+        maximum_bytes=int(context.number(JOURNAL_SEGMENT_BYTES_SETTING)),
+        continues_from_sequence=tail.sequence if tail else 0,
+    )
+    append_line = sink.append_line
 
     def read_events():
         return (
@@ -329,7 +342,7 @@ def start_part(context) -> int:
         recorder=PositionRecorder(
             journal=Journal(
                 append_line=append_line,
-                continues_from=read_journal_tail(journal_path),
+                continues_from=tail,
             ),
             excursion_move_fraction=context.number("excursion_journal_move_fraction"),
         ),

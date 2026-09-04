@@ -278,7 +278,18 @@ class InstructionReplayer:
         )
 
 
-def describe_replaying(replayer: InstructionReplayer) -> dict:
+def describe_replaying(replayer: InstructionReplayer, windows=None) -> dict:
+    """What the replayer did, and how many windows it is holding while doing it.
+
+    `windows_held` is on health because the failure it reports is otherwise
+    invisible: on 2026-09-04 this part held every window ever published, reached
+    13.9 GB and OOM-killed the spine, and every counter above read zero throughout
+    -- it had replayed nothing. A part can be idle and fatal at the same time.
+    """
+    held = {} if windows is None else {
+        "windows_held": windows.keys_seen,
+        "windows_expired": windows.expired_keys,
+    }
     return {
         "part_id": PART_ID,
         "runs": replayer.standing.runs,
@@ -291,6 +302,7 @@ def describe_replaying(replayer: InstructionReplayer) -> dict:
         "fill_assumption": AT_THE_NEXT_OPEN,
         "fills_at_the_signal_bars_close": False,
         "decisions_offered_the_future": replayer.standing.decisions_offered_the_future,
+        **held,
     }
 
 
@@ -299,6 +311,7 @@ def run_instruction_replayer(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    windows=None,
 ) -> int:
     def tick() -> None:
         for job in read_jobs():
@@ -314,7 +327,7 @@ def run_instruction_replayer(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_replaying(replayer),
+        read_standing=lambda: describe_replaying(replayer, windows),
     )
 
 
@@ -344,17 +357,39 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch, LatestByKey
 
+    # Three of these key on something with no finite key space -- a window id, and a
+    # bar time -- so each is bounded, and since 2026-09-04 a bound drops the key
+    # rather than only hiding it. Unbounded, `windows` grew by one 1,440-bar window
+    # per symbol per second and the kernel OOM-killed the spine at 15:47:09 that
+    # day; the store no longer mints a new identity for an unchanged window, and
+    # this is the second half of that fix.
+    #
+    # `instructions` is deliberately left unbounded: `instruction-writer` publishes
+    # when a hypothesis arrives rather than restating a level, so a bound here would
+    # retire live instructions silently. Its key space is the instructions that
+    # exist, which is finite for a different reason. `estimates` keys on
+    # (venue, symbol) and is finite by construction.
+    reading_age = context.number("backtest_window_reading_maximum_age_seconds")
     instructions = LatestByKey(read=context.bus.reader("opportunity-instruction"), key_of=lambda i: i.instruction_id)
     splits = Batch(read=context.bus.reader("walk-forward-split"))
     estimates = LatestByKey(read=context.bus.reader("cost-estimate"), key_of=lambda e: (e.venue_id, e.symbol))
-    sequences = LatestByKey(read=context.bus.reader("fill-sequence"), key_of=lambda s: (s.venue_id, s.symbol, s.at_ns))
-    sizes = LatestByKey(read=context.bus.reader("fillable-size"), key_of=lambda s: (s.venue_id, s.symbol, s.at_ns))
+    sequences = LatestByKey(
+        read=context.bus.reader("fill-sequence"),
+        key_of=lambda s: (s.venue_id, s.symbol, s.at_ns),
+        maximum_age_seconds=reading_age,
+    )
+    sizes = LatestByKey(
+        read=context.bus.reader("fillable-size"),
+        key_of=lambda s: (s.venue_id, s.symbol, s.at_ns),
+        maximum_age_seconds=reading_age,
+    )
     publish_runs = context.bus.publisher_for("backtest-run")
     replayer = InstructionReplayer()
     quantity = context.number("replay_quantity")
     windows = LatestByKey(
         read=context.bus.reader("historical-window"),
         key_of=lambda window: window.window_id,
+        maximum_age_seconds=reading_age,
     )
 
     def cost_of(venue_id, symbol, notional):
@@ -428,4 +463,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        windows=windows,
     )

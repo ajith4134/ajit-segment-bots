@@ -332,10 +332,15 @@ def start_part(context) -> int:
 
     episodes = Batch(read=context.bus.reader("trade-episode"))
     excursions = LatestByKey(read=context.bus.reader("peak-excursion"), key_of=lambda e: (e.venue_id, e.symbol))
-    attributions = LatestByKey(read=context.bus.reader("pnl-attribution"), key_of=lambda a: a.trade_id)
-    flags = LatestByKey(read=context.bus.reader("regime-transition-flag"), key_of=lambda f: f.trade_id)
-    audits = LatestByKey(read=context.bus.reader("stop-audit"), key_of=lambda a: a.trade_id)
-    breakdowns = LatestByKey(read=context.bus.reader("shortfall-breakdown"), key_of=lambda b: b.trade_id)
+    # Keyed by trade_id, so the key space is every trade ever closed, and none of
+    # these producers restates -- each publishes once per closed trade. Bounded
+    # 2026-09-04 by how long a join over one closed trade may wait for the rest of
+    # its facts; since that date an expired key is dropped, not merely hidden.
+    join_age = context.number("closed_trade_join_maximum_age_seconds")
+    attributions = LatestByKey(read=context.bus.reader("pnl-attribution"), key_of=lambda a: a.trade_id, maximum_age_seconds=join_age)
+    flags = LatestByKey(read=context.bus.reader("regime-transition-flag"), key_of=lambda f: f.trade_id, maximum_age_seconds=join_age)
+    audits = LatestByKey(read=context.bus.reader("stop-audit"), key_of=lambda a: a.trade_id, maximum_age_seconds=join_age)
+    breakdowns = LatestByKey(read=context.bus.reader("shortfall-breakdown"), key_of=lambda b: b.trade_id, maximum_age_seconds=join_age)
     publish_causes = context.bus.publisher_for("loss-cause")
     classifier = LossCauseClassifier(
         gave_back_threshold=context.number("exit_quality_gave_back_threshold"),

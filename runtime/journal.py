@@ -218,3 +218,125 @@ def journal_path_for(base_path, part_id: str):
 
     base = _pathlib.Path(base_path)
     return base.with_name(f"{base.stem}.{part_id}{base.suffix}")
+
+# How large one journal segment may grow before the next entry starts a new file.
+# A size rather than a time, because what makes a segment unwieldy is its bytes:
+# `read_journal_tail` walks backwards in blocks and does not care, but everything
+# that reads a journal forwards does, and on 2026-09-04 the five journals held
+# 38 GB between them -- 15.4 GB in one file -- written on a day with no trade
+# placed. The number is a setting, never a literal in a part (RL-061); this is the
+# name it is read under.
+JOURNAL_SEGMENT_BYTES_SETTING = "journal_segment_maximum_bytes"
+
+
+def segment_paths_for(live_path) -> tuple:
+    """Every segment of one recorder's chain, oldest first, ending at the live file.
+
+    Rolled segments are `<stem>.<sequence-it-ended-at><suffix>`, so they sort by
+    the number rather than by name, and the live file is always last. A reader
+    verifying the chain must walk them in this order: the first entry of a segment
+    carries the digest of the last entry of the one before it, which is what makes
+    rotation a place the file changes rather than a place the chain does.
+    """
+    import pathlib as _pathlib
+    import re as _re
+
+    live = _pathlib.Path(live_path)
+    pattern = _re.compile(rf"^{_re.escape(live.stem)}\.(\d+){_re.escape(live.suffix)}$")
+    rolled = []
+    for candidate in live.parent.glob(f"{live.stem}.*{live.suffix}"):
+        match = pattern.match(candidate.name)
+        if match:
+            rolled.append((int(match.group(1)), candidate))
+    return tuple(path for _, path in sorted(rolled)) + ((live,) if live.exists() else ())
+
+
+class RollingJournalSink:
+    """Appends to one file until it is large enough, then starts the next.
+
+    **Nothing is deleted and the chain is not broken.** A full segment is renamed
+    to carry the sequence it ended at and a new live file is started; the next
+    entry still carries the digest of the previous one, because the chain lives in
+    the entries and not in the file. Read `segment_paths_for` in order and it
+    verifies exactly as one file would.
+
+    Retention by rotation rather than by deletion is the whole point. The journal
+    is the only account of what the system did, so a policy that throws the oldest
+    part of it away destroys evidence to save disk; a policy that splits it leaves
+    every entry in place and lets an operator archive, compress or move a closed
+    segment with a tool that is not this one. Nothing here removes a file.
+
+    Written 2026-09-04, when the five journals held 38 GB between them -- 15.4 GB
+    of it in a single `learning-recorder` file, 75% `decision-rationale` -- on a
+    day when no trade had been placed.
+    """
+
+    def __init__(self, live_path, maximum_bytes: int, continues_from_sequence: int = 0) -> None:
+        if maximum_bytes <= 0:
+            raise ValueError(
+                "a journal segment must be allowed a positive number of bytes; got "
+                f"{maximum_bytes!r}. Zero or negative would roll on every entry, which "
+                "is one file per record rather than a rotation policy."
+            )
+        self._live_path = live_path
+        self._maximum_bytes = int(maximum_bytes)
+        self._rolls = 0
+        # The sequence of the last entry written, so a closed segment is named for
+        # where it ends. Seeded from the tail the recorder already read, because a
+        # sink that started counting at zero after a restart would name its second
+        # segment with a number the first one already used.
+        self._sequence = int(continues_from_sequence)
+
+    @property
+    def rolls(self) -> int:
+        """How many segments this sink has closed. On health, so a rotation that
+        never happens and one that happens constantly are different numbers."""
+        return self._rolls
+
+    @property
+    def live_bytes(self) -> int:
+        return self._live_path.stat().st_size if self._live_path.exists() else 0
+
+    def roll_if_full(self, sequence: int | None = None) -> bool:
+        """Close the live segment if it is at its bound. Returns whether it rolled.
+
+        Called before an append rather than after, so a segment never exceeds the
+        bound by the size of the entry that noticed -- and so the sequence naming
+        the closed file is the last one actually in it.
+        """
+        if self.live_bytes < self._maximum_bytes:
+            return False
+        ended_at = self._sequence if sequence is None else sequence
+        closed = self._live_path.with_name(
+            f"{self._live_path.stem}.{ended_at}{self._live_path.suffix}"
+        )
+        if closed.exists():
+            # Two rolls at one sequence cannot happen with one writer per chain,
+            # and silently overwriting a closed segment would destroy the evidence
+            # this class exists to keep. Refuse rather than clobber.
+            raise FileExistsError(
+                f"{closed} already exists, so rolling would overwrite a closed segment. "
+                f"One writer per chain is the assumption; check what else is writing "
+                f"{self._live_path}."
+            )
+        self._live_path.rename(closed)
+        self._rolls += 1
+        return True
+
+    def append_line(self, line: str) -> None:
+        """Write one entry, rolling first if the live segment is already at its bound.
+
+        This is the whole interface a recorder needs: it is a drop-in for the
+        `append_line` closure all five of them used to define, so rotation is a
+        property of the substrate rather than something each recorder remembers to
+        do. Rolling before the write keeps a segment from exceeding the bound by
+        the size of the entry that noticed it.
+        """
+        self.roll_if_full()
+        self._sequence += 1
+        # Opened per append and flushed: a recorder is killed the same way every
+        # part is, and a buffered ledger loses exactly the entries that were about
+        # to matter.
+        with open(self._live_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()

@@ -123,6 +123,58 @@ def test_a_gap_is_reported_and_never_filled_in():
     assert outcome.window.can_be_backtested is False
 
 
+def test_rebuilding_the_same_window_gives_it_the_same_identity():
+    """The defect that OOM-killed the spine on 2026-09-04.
+
+    `window_id` was `f"window-{self._sequence}"` -- a counter -- so the same
+    unchanged window got a fresh identity on every build. A window is built for
+    every symbol once per health interval, so that was a new identity every second
+    per symbol, each carrying `backtest_window_bars` (1,440) bars.
+    `instruction-replayer` keys a `LatestByKey` on `window_id` and so held every
+    one of them: the process reached 13.9 GB and the kernel OOM-killed
+    `ajit-spine.service` at 15:47:09, with the replayer's own counters all reading
+    zero because it had replayed nothing. It leaked hardest with the market shut,
+    when nothing changes and every second's window is the same one renamed.
+    """
+    subject = a_store()
+    _fill_store(subject, count=10)
+    first = subject.window("binance-usdm", "BTCUSDT", 0, 9 * MINUTE_NS)
+    again = subject.window("binance-usdm", "BTCUSDT", 0, 9 * MINUTE_NS)
+
+    assert first.window.window_id == again.window.window_id
+
+
+def test_a_window_that_has_actually_changed_gets_a_new_identity():
+    """Stable is not constant: a consumer must still see a window that moved.
+
+    A bar closing, a gap opening, or the range sliding are each a different window
+    and say so -- otherwise the fix above would trade a leak for a staleness bug,
+    which is the worse of the two.
+    """
+    subject = a_store()
+    _fill_store(subject, count=10)
+    before = subject.window("binance-usdm", "BTCUSDT", 0, 9 * MINUTE_NS)
+
+    subject.store("binance-usdm", "BTCUSDT", a_bar(10 * MINUTE_NS))
+    after = subject.window("binance-usdm", "BTCUSDT", 0, 10 * MINUTE_NS)
+    assert after.window.window_id != before.window.window_id
+
+    holed = a_store()
+    _fill_store(holed, count=10, skip=(4,))
+    assert (
+        holed.window("binance-usdm", "BTCUSDT", 0, 9 * MINUTE_NS).window.window_id
+        != before.window.window_id
+    )
+
+    other_symbol = a_store()
+    for index in range(10):
+        other_symbol.store("binance-usdm", "ETHUSDT", a_bar(index * MINUTE_NS))
+    assert (
+        other_symbol.window("binance-usdm", "ETHUSDT", 0, 9 * MINUTE_NS).window.window_id
+        != before.window.window_id
+    )
+
+
 def test_a_complete_window_says_so():
     subject = a_store()
     _fill_store(subject, count=10)
