@@ -113,6 +113,36 @@ HISTORICAL_CANDLE_UNITS = ("minutes", "hours", "days", "weeks", "months")
 HISTORICAL_MINUTE_DATA_BEGINS = "2022-01-01"
 HISTORICAL_MINUTE_WINDOW_DAYS = 30  # one month per request, for 1-15 minute intervals
 
+
+# Upstox states an instrument's tick size in paise while quoting every price in
+# rupees, so the master's 5.0 for an NSE option is the standard 0.05-rupee tick.
+#
+# **Upstox's documentation does not say this.** The instruments page
+# (upstox.com/developer/api-documentation/instruments/, raw-fetched 2026-09-04)
+# describes the field only as "The minimum price movement of the equity" and
+# gives no unit; its own EQ sample carries `tick_size: 5.0` for a cash equity,
+# whose NSE tick is 0.05 rupees. The conclusion is from measurement, not from the
+# document -- see `tick_size_in_rupees` and
+# `measurements/2026-09-04-why-no-paper-order-ever-fills/`.
+#
+# Not a settings question under RL-061: this is a unit conversion between two
+# statements of one physical fact, fixed by what the exchange quotes in, and a
+# number an operator could tune would only let the two disagree again.
+PAISE_PER_RUPEE = 100.0
+
+
+def tick_size_in_rupees(declared) -> float | None:
+    """One instrument's tick, in the unit its prices are quoted in.
+
+    Absence stays absence: a listing Upstox does not carry a tick for reports
+    None, never a zero and never a guessed default. A zero would read as "this
+    instrument has no minimum increment", and position-sizer refuses a
+    non-positive increment by name rather than dividing by it.
+    """
+    if declared is None:
+        return None
+    return float(declared) / PAISE_PER_RUPEE
+
 # Source for every figure below: upstox.com/developer/api-documentation/v3/get-market-data-feed,
 # fetched 2026-09-01. Free-tier limits -- Upstox Plus limits are a settings
 # question for whenever that tier is actually bought, not baked in here.
@@ -170,6 +200,29 @@ class UpstoxAdapter(BrokerAdapter):
         )
 
     def read_instrument_listings(self, response: object) -> tuple[InstrumentListing, ...]:
+        """The instrument master, in this project's terms.
+
+        `tick_size` is converted from paise to rupees here, which is the one
+        place this venue's unit meets the rest of the system. Measured on the
+        real NSE master and the real tape for 2026-09-04
+        (`measurements/2026-09-04-why-no-paper-order-ever-fills/`): every one of
+        the 194 option rows declares `tick_size` 5.0, including contracts trading
+        at 0.82 rupees, while the prices Upstox streams for those same contracts
+        move in 0.01 to 0.05. A 5-rupee tick cannot quote a 0.82-rupee contract
+        at all, so 5.0 is five paise -- the standard NSE option tick of 0.05
+        rupees -- stated in a unit the rest of the feed does not use.
+
+        Taken as rupees it cost every trade this segment tried to open.
+        `position-sizer` snaps an entry and its stop to a multiple of the
+        increment, so any stop inside 5 rupees of the entry snapped onto it, and
+        a stop equal to its entry is refused as being on the wrong side of it:
+        707 of 843 actionable intents, 84%, with entry and stop printed as the
+        same number (750.0/750.0, 80.0/80.0, 20.0/20.0). `tick-size-resolver`
+        had already noticed -- it counted 967,114 disagreements between this
+        declared tick and the one it inferred from the book -- but a declared
+        tick beats an inferred one, correctly, so the disagreement was recorded
+        and never acted on.
+        """
         listings = []
         for row in response:
             listings.append(
@@ -180,7 +233,7 @@ class UpstoxAdapter(BrokerAdapter):
                     instrument_type=row["instrument_type"],
                     trading_symbol=row.get("trading_symbol", ""),
                     lot_size=row.get("lot_size"),
-                    tick_size=row.get("tick_size"),
+                    tick_size=tick_size_in_rupees(row.get("tick_size")),
                     freeze_quantity=row.get("freeze_quantity"),
                     expiry_ms=row.get("expiry"),
                     strike_price=row.get("strike_price"),

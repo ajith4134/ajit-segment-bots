@@ -43,7 +43,9 @@ def test_reads_equity_instrument_listing_from_upstox_own_sample():
     assert listing.segment == "NSE_EQ"
     assert listing.instrument_type == "EQ"
     assert listing.lot_size == 1
-    assert listing.tick_size == 5.0
+    # Upstox states 5.0 and means five paise. NSE's tick for a cash equity is
+    # 0.05 rupees, and rupees is what every price on this feed is quoted in.
+    assert listing.tick_size == 0.05
     assert listing.expiry_ms is None
     assert listing.strike_price is None
 
@@ -77,6 +79,51 @@ def test_reads_option_instrument_listing_with_strike_and_expiry():
     assert listing.expiry_ms == 1706207399000
     assert listing.strike_price == 22.0
     assert listing.underlying_key == "NSE_EQ|INE669E01016"
+    assert listing.tick_size == 0.05
+
+
+def test_a_declared_tick_matches_what_prices_on_the_real_master_actually_do():
+    """The unit that cost every trade this segment tried to open.
+
+    Read against the captured NSE instrument master for 2026-09-04. Every option
+    row in it declares `tick_size` 5.0 -- including contracts trading under two
+    rupees, which a five-rupee tick could not quote at all -- while the prices
+    Upstox streams for those same contracts move in 0.01 to 0.05.
+
+    Taken as rupees, `position-sizer` snapped an entry and its stop onto the same
+    multiple of 5 and refused the result as a stop on the wrong side of its
+    entry: 707 of 843 actionable intents, with both numbers printed identically.
+    """
+    import json
+    import pathlib
+
+    master = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "tests/captured/upstox/2026-09-04-nse-instrument-master-nifty-slice.json"
+        ).read_text()
+    )
+    options = [row for row in master if row.get("tick_size") is not None]
+    assert options, "the captured master carries no tick_size to check"
+    assert {row["tick_size"] for row in options} == {5.0}, "the master's own declaration"
+
+    listings = UpstoxAdapter().read_instrument_listings(options)
+    assert {listing.tick_size for listing in listings} == {0.05}
+
+    # And the tick has to be able to express the cheapest contract in the file.
+    cheapest = min(
+        row["strike_price"] for row in options if row.get("strike_price")
+    )
+    assert cheapest > 0
+    for listing in listings:
+        assert listing.tick_size < 1.0
+
+
+def test_an_absent_tick_stays_absent_rather_than_becoming_zero():
+    """A zero would read as "no minimum increment" and be divided by."""
+    from runtime.brokers.upstox import tick_size_in_rupees
+
+    assert tick_size_in_rupees(None) is None
 
 
 def test_decodes_a_market_full_feed_ltpc_and_book_and_open_interest():

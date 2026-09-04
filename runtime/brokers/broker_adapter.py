@@ -125,6 +125,12 @@ class InstrumentListing:
     instrument_type: str
     trading_symbol: str
     lot_size: int | None
+    # In the currency prices are quoted in -- rupees for every Indian exchange
+    # here -- never in the venue's own unit. Upstox states this field in paise
+    # and its adapter converts on the way in; see UpstoxAdapter's own note for
+    # the measurement. A tick in one unit beside prices in another snaps an
+    # entry and its stop to the same number, which is not a smaller order but no
+    # order at all.
     tick_size: float | None
     freeze_quantity: float | None
     expiry_ms: int | None
