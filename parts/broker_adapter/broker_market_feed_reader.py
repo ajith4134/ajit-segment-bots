@@ -365,6 +365,23 @@ def start_part(context) -> int:
         state["subscribed"] = state["subscribed"] + additional
 
     def drain_one_tick() -> None:
+        # Every tick, before anything else: this part spends its whole tick
+        # inside connection.recv(), and its two levels are otherwise touched
+        # only by ensure_connected() -- which returns immediately once
+        # connected -- and by the 60-second-paced growth check. Pacing the
+        # growth check paced the *drain* with it, and
+        # broker-instrument-catalogue-reader restates all 102,940 listings
+        # repeatedly, so the bounded bus buffer overflowed in between: measured
+        # on the live spine 2026-09-04, this part had received 1,067 listings of
+        # 102,940 with input_loss on the type, and the three index underlyings
+        # the whole segment is about were not among them. The subscription
+        # priority prioritize_index_option_chain() applies was working
+        # perfectly and had nothing to promote.
+        #
+        # Draining is cheap; it is values()/mapping() that copies the whole
+        # table, and that stays on its interval.
+        instrument_listings.take_in_what_arrived()
+        token_standing.take_in_what_arrived()
         if not ensure_connected():
             return
         grow_subscriptions_if_due()

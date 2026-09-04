@@ -362,3 +362,54 @@ def test_a_statement_bound_that_is_not_a_positive_number_is_refused():
     for refused in (0.0, -1.0):
         with pytest.raises(ValueError):
             _statements(_delivering(), maximum_age_seconds=refused)
+
+
+def test_taking_in_what_arrived_is_public_and_does_not_copy_the_table():
+    """Draining the bus and reading the whole table are separate costs.
+
+    `broker-market-feed-reader` reached its listings only through `values()`,
+    which copies the entire known-listings table -- up to 101,393 entries -- so
+    it was paced to once every 60 seconds to keep that copy off every tick.
+    Pacing the copy also paced the *drain*, and the two are not the same thing:
+    `broker-instrument-catalogue-reader` restates all 102,940 listings
+    repeatedly, so between drains the bounded bus buffer overflowed. Measured on
+    the live spine 2026-09-04, the reader had received 1,067 listings of 102,940
+    with `input_loss` on the type, and the three index underlyings the whole
+    segment is about were not among them -- so the subscription priority that
+    already existed had nothing to promote.
+
+    A part must be able to keep its level current every tick without paying for
+    a snapshot of it.
+    """
+    arrived = _message(Price("NIFTY", 24_500.0), ONE_SECOND_NS)
+    later = _message(Price("BANKNIFTY", 54_000.0), 2 * ONE_SECOND_NS)
+    level = LatestByKey(
+        read=_delivering((arrived,), (later,)),
+        key_of=lambda price: price.symbol,
+    )
+
+    level.take_in_what_arrived()
+    level.take_in_what_arrived()
+
+    # Both drains landed, and neither needed mapping() to do it.
+    assert set(level.mapping(now_ns=2 * ONE_SECOND_NS)) == {"NIFTY", "BANKNIFTY"}
+
+
+def test_taking_in_what_arrived_keeps_a_key_an_age_bound_would_hide():
+    """The drain is not the age filter.
+
+    A key too old for `mapping()` is still taken in, so that when it is restated
+    it is current again rather than having been dropped on the floor.
+    """
+    old = _message(Price("NIFTY", 24_500.0), ONE_SECOND_NS)
+    level = LatestByKey(
+        read=_delivering((old,)),
+        key_of=lambda price: price.symbol,
+        maximum_age_seconds=1.0,
+    )
+
+    level.take_in_what_arrived()
+
+    assert level.observed_at_ns("NIFTY") == ONE_SECOND_NS
+    # Too old to be returned, but taken in rather than lost.
+    assert level.mapping(now_ns=10 * ONE_SECOND_NS) == {}

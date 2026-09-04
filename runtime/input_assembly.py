@@ -111,6 +111,26 @@ class LatestByKey:
                 f"level that never expires; got {self.maximum_age_seconds!r}"
             )
 
+    def take_in_what_arrived(self) -> None:
+        """Drain whatever is on the bus into this level, and nothing else.
+
+        Public and separate from `mapping()` because draining the bus and
+        snapshotting the table are different costs, and a part that can only pay
+        the second one ends up pacing the first. `broker-market-feed-reader`
+        read its listings only through `values()`, which copies the whole table
+        (up to 101,393 entries), so it paced that call to once every 60 seconds
+        -- and thereby paced the drain too. `broker-instrument-catalogue-reader`
+        restates all 102,940 listings repeatedly, so the bounded bus buffer
+        overflowed between drains: measured 2026-09-04, the feed reader had
+        received 1,067 listings of 102,940, and the three index underlyings the
+        segment is entirely about were not among them.
+
+        No age bound is applied here. A key too old for `mapping()` is still
+        taken in, so it is current again the moment it is restated rather than
+        having been dropped on the floor.
+        """
+        self._take_in_what_arrived()
+
     def _take_in_what_arrived(self) -> None:
         for message in self.read():
             key = self.key_of(message.payload)
