@@ -19,6 +19,7 @@ from parts.segment_bot.instrument_selector import (
     ListedInstrument,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
+from runtime.trading_types import BUY
 from runtime.price_staleness import PriceStalenessEstimator
 from runtime.symbol_universe import CapturableSymbol
 
@@ -698,6 +699,80 @@ def test_a_bearish_intent_is_carried_by_the_put_and_a_bullish_one_by_the_call():
 
     assert bullish.chosen.contract_symbol == "NIFTY24500CE"
     assert bearish.chosen.contract_symbol == "NIFTY24500PE"
+
+
+def test_an_intent_naming_a_contract_is_resolved_to_its_underlying():
+    """63 of the 69 intents formed on 2026-09-04 named a contract, none named an
+    underlying, and the registry is keyed by underlying -- so every lookup missed
+    and every intent came back `no-instrument-is-listed-for-this-symbol`."""
+    subject = a_selector_fed_from_the_universe()
+
+    choice = subject.select(
+        Intent(venue_id=UPSTOX_VENUE_ID, symbol="NIFTY24500CE", is_long=True)
+    )
+
+    assert choice.chosen is not None, choice.reason
+    assert choice.resolved_underlying == NIFTY
+    assert choice.chosen.contract_symbol == "NIFTY24500CE"
+    assert choice.view_was_converted is False
+
+
+def test_a_sell_of_a_call_becomes_a_buy_of_the_put():
+    """While the segment is buy-only, a bearish view is carried by BUYING a put.
+
+    Selling the call is the same direction and a different trade: it writes an
+    option, whose loss is unbounded and whose margin this account does not have.
+    settings/segments/index-options.toml: "Phase A is buy-only index/stock
+    options". Until 2026-09-04 this intent became a sell-to-open on the call.
+    """
+    subject = a_selector_fed_from_the_universe()
+
+    choice = subject.select(
+        Intent(venue_id=UPSTOX_VENUE_ID, symbol="NIFTY24500CE", is_long=False)
+    )
+
+    assert choice.chosen.contract_symbol == "NIFTY24500PE"
+    assert choice.order_side == BUY
+    assert choice.view_was_converted is True
+    assert subject.standing.views_converted_to_a_buy == 1
+
+
+def test_a_sell_of_a_put_becomes_a_buy_of_the_call():
+    """The other half of the same rule: short a put is a bullish view."""
+    subject = a_selector_fed_from_the_universe()
+
+    choice = subject.select(
+        Intent(venue_id=UPSTOX_VENUE_ID, symbol="NIFTY24500PE", is_long=False)
+    )
+
+    assert choice.chosen.contract_symbol == "NIFTY24500CE"
+    assert choice.order_side == BUY
+    assert choice.view_was_converted is True
+
+
+def test_every_option_choice_is_a_buy_whichever_way_the_view_points():
+    """There is no sell-to-open in this segment. The direction is carried by
+    which contract is bought, never by the side."""
+    subject = a_selector_fed_from_the_universe()
+
+    for symbol in ("NIFTY24500CE", "NIFTY24500PE"):
+        for is_long in (True, False):
+            choice = subject.select(
+                Intent(venue_id=UPSTOX_VENUE_ID, symbol=symbol, is_long=is_long)
+            )
+            assert choice.chosen is not None, choice.reason
+            assert choice.order_side == BUY, f"{symbol} is_long={is_long}"
+
+
+def test_a_view_carried_by_the_contract_it_names_is_not_counted_as_converted():
+    """The counter has to separate the trades that were turned around from the
+    ones that were not, or the cost of converting cannot be read later."""
+    subject = a_selector_fed_from_the_universe()
+
+    subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol="NIFTY24500CE", is_long=True))
+    subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol="NIFTY24500PE", is_long=True))
+
+    assert subject.standing.views_converted_to_a_buy == 0
 
 
 def test_the_universe_alone_is_not_enough_without_a_greek_to_say_which_is_atm():

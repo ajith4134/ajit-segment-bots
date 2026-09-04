@@ -52,6 +52,12 @@ class AtmStrikeTracker:
         # instrument_key -> (underlying_symbol, instrument_type, trading_symbol, strike, expiry_ms)
         self._contracts: dict[str, tuple] = {}
         self._pending_contracts: dict[str, tuple] = {}
+        # trading_symbol -> instrument_key, so a caller holding only the name a
+        # contract trades under can ask what it is a claim on. Every other part
+        # in this system names an instrument by its trading symbol -- an intent
+        # says "NIFTY 24000 CE 08 SEP 26", never an Upstox instrument_key -- and
+        # without this the answer existed here and could not be asked for.
+        self._key_by_trading_symbol: dict[str, str] = {}
         self._latest_delta: dict[str, float] = {}
 
     def observe_listing(self, listing) -> None:
@@ -65,6 +71,7 @@ class AtmStrikeTracker:
             return
         if listing.instrument_type not in (CALL, PUT):
             return
+        self._key_by_trading_symbol[listing.trading_symbol] = listing.instrument_key
         symbol = self._underlying_symbol_by_key.get(listing.underlying_key)
         record = (
             symbol, listing.instrument_type, listing.trading_symbol,
@@ -92,6 +99,22 @@ class AtmStrikeTracker:
         the whole trading day."""
         record = self._contracts.get(instrument_key)
         return record[0] if record is not None else None
+
+    def contract_named(self, trading_symbol: str) -> tuple[str, str] | None:
+        """(underlying_symbol, "CE" or "PE") for a contract, by the name it trades under.
+
+        None when this is not a contract this tracker has seen, or when the
+        listing arrived before the underlying it refers to and the underlying's
+        own name is therefore still unknown. Both are the same answer to the
+        caller -- "this cannot be resolved yet" -- and neither is a guess.
+        """
+        key = self._key_by_trading_symbol.get(trading_symbol)
+        if key is None:
+            return None
+        record = self._contracts.get(key)
+        if record is None or record[0] is None:
+            return None
+        return record[0], record[1]
 
     def atm_call_for(self, underlying_symbol: str, now_ms: int | None = None) -> AtmChoice | None:
         return self._atm_for(underlying_symbol, CALL, now_ms)

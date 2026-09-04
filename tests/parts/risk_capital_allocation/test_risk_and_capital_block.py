@@ -55,7 +55,7 @@ from parts.risk_capital_allocation.participation_capped_order_splitter import (
 )
 from parts.risk_capital_allocation.position_sizer import (
     REFUSED_NO_INCREMENT, REFUSED_NO_LIMIT, REFUSED_STOP_INVALID, REFUSED_TOO_SMALL,
-    SIZED, SHRUNK_TO_FIT, PositionSizer, entry_price_for,
+    SIZED, SHRUNK_TO_FIT, PositionSizer, entry_price_for, opening_order_target,
 )
 from parts.risk_capital_allocation.profit_lock import (
     HELD, MOVED_TO_BREAK_EVEN, NOT_YET_PROFITABLE, TRAILED, ProfitLock,
@@ -849,17 +849,64 @@ def test_no_forecast_and_no_history_places_nothing():
 
 # ---- position-sizer ----------------------------------------------------------
 
+class Contract:
+    """The chosen instrument, as the sizer reads it -- by shape, never by import."""
+
+    def __init__(self, contract_symbol="BTCUSDT-PERP"):
+        self.contract_symbol = contract_symbol
+
+
 class Choice:
     """An instrument-choice, as the sizer reads it -- by shape, never by import."""
 
-    def __init__(self, reference_price=None, chosen="BTCUSDT-PERP", state="chosen"):
+    def __init__(
+        self, reference_price=None, chosen="BTCUSDT-PERP", state="chosen", order_side=None
+    ):
         self.reference_price = reference_price
         self.chosen = chosen
         self.state = state
+        self.order_side = order_side
 
     @property
     def is_actionable(self):
         return self.chosen is not None
+
+
+class OpeningIntent:
+    def __init__(self, symbol="NIFTY24500CE", side=SHORT, action="open"):
+        self.symbol = symbol
+        self.side = side
+        self.action = action
+
+
+def test_an_open_is_placed_on_the_contract_the_selector_chose():
+    """Until 2026-09-04 the order carried the symbol the intent named and the
+    selector's decision reached nothing -- so a bearish view on a call became a
+    sell-to-open on that call, writing a naked option in a buy-only segment."""
+    target = opening_order_target(
+        OpeningIntent(symbol="NIFTY24500CE", side=SHORT),
+        Choice(chosen=Contract("NIFTY24500PE"), order_side=BUY),
+    )
+
+    assert target == ("NIFTY24500PE", BUY)
+
+
+def test_an_open_with_no_instrument_choice_is_not_placed_at_all():
+    """A stop-target-plan's entry price alone used to be enough to open a
+    position in an instrument nothing had selected."""
+    assert opening_order_target(OpeningIntent(), Choice(chosen=None)) is None
+    assert opening_order_target(OpeningIntent(), Choice(chosen=Contract(), order_side=None)) is None
+
+
+def test_a_close_keeps_the_contract_it_is_closing():
+    """A close acts on the contract actually held; it is not a fresh selection,
+    and re-selecting one would close a position nobody opened."""
+    target = opening_order_target(
+        OpeningIntent(symbol="NIFTY24500PE", side=SHORT, action="close"),
+        Choice(chosen=None),
+    )
+
+    assert target == ("NIFTY24500PE", SELL)
 
 
 class Plan:

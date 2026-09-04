@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED
+from runtime.trade_intent import OPEN
 from runtime.trading_types import BUY, LONG, SELL, SHORT, order_side_for
 
 PART_ID = "position-sizer"
@@ -137,6 +138,11 @@ class SizerStanding:
     intents_seen: int = 0
     missing_entry_price: int = 0
     missing_stop_price: int = 0
+    # Opens that named no instrument the selector had chosen. Before 2026-09-04
+    # these were sized anyway, against the symbol the intent named, because a
+    # stop-target-plan's entry price alone was enough to proceed -- which is how
+    # orders were placed on instruments nothing had selected.
+    opens_without_an_instrument_choice: int = 0
     missing_account_balance: int = 0
     missing_risk_limit: int = 0
 
@@ -371,6 +377,32 @@ def free_capital_from_locks(locks) -> float | None:
     return None if newest is None else newest.free_balance_after
 
 
+def opening_order_target(intent, choice) -> tuple[str, str] | None:
+    """The contract to trade and the side to trade it on, or None if there is no choice.
+
+    An intent names an asset and a direction; a choice names the contract that
+    expresses them and the side that opens it. Taking the contract from one and
+    the side from the other is the specific way to get this wrong: while the
+    segment is buy-only a bearish view is carried by BUYING a put, so a reader
+    that kept the intent's own side would sell the put it was handed.
+
+    Only an open is selected for. `reduce` and `close` act on the contract
+    actually held, which is not a fresh selection, so they keep the intent's own
+    symbol and the ordinary translation of its side.
+
+    Read by shape rather than by import, like every other input here: this part
+    knows the data it consumes and not the part that produces it (T-4).
+    """
+    if intent.action != OPEN:
+        return intent.symbol, order_side_for(intent.side)
+    chosen = getattr(choice, "chosen", None)
+    side = getattr(choice, "order_side", None)
+    contract = getattr(chosen, "contract_symbol", None)
+    if chosen is None or side is None or contract is None:
+        return None
+    return contract, side
+
+
 def entry_price_for(plan, instrument) -> float | None:
     """What to size against, or None when nothing here is a price.
 
@@ -423,6 +455,9 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "actionable_intents_seen": sizer.standing.intents_seen,
         "missing_entry_price": sizer.standing.missing_entry_price,
         "missing_stop_price": sizer.standing.missing_stop_price,
+        "opens_without_an_instrument_choice": (
+            sizer.standing.opens_without_an_instrument_choice
+        ),
         "missing_account_balance": sizer.standing.missing_account_balance,
         "missing_risk_limit": sizer.standing.missing_risk_limit,
     }
@@ -643,6 +678,19 @@ def start_part(context) -> int:
             # at. Counted in a fixed order and only once per intent, so the
             # counters add up to the intents that could not be sized rather than
             # to the inputs that happened to be missing at the same moment.
+            # An open is expressed by the instrument the selector chose, on the
+            # side that choice names. Until 2026-09-04 this part built every
+            # order from the intent's own symbol and side and read the choice
+            # only for a reference price, so the selector chose and nothing
+            # listened -- and a short view on a call became a sell-to-open on
+            # that call: writing a naked option, in a segment whose settings say
+            # buy-only. `reduce` and `close` are not selected for; they act on
+            # the contract actually held, so they keep the intent's own symbol.
+            target = opening_order_target(intent, instrument)
+            if target is None:
+                sizer.standing.opens_without_an_instrument_choice += 1
+                continue
+            order_symbol, order_side = target
             if entry_price is None:
                 sizer.standing.missing_entry_price += 1
                 continue
@@ -658,7 +706,9 @@ def start_part(context) -> int:
             sizable.append(
                 {
                     "venue_id": intent.venue_id,
-                    "symbol": intent.symbol,
+                    # The contract the selector chose, not the symbol the intent
+                    # named -- an intent names an asset, a choice names a contract.
+                    "symbol": order_symbol,
                     # The decision this order serves, so every order for one
                     # standing intent carries one id all the way to the venue.
                     "intent_id": intent.decision_id,
@@ -666,7 +716,7 @@ def start_part(context) -> int:
                     # venue's: the sizer reasons about an order, and an untranslated
                     # "long" would read as not-a-buy and put the stop on the wrong
                     # side of the entry.
-                    "side": order_side_for(intent.side),
+                    "side": order_side,
                     "entry_price": entry_price,
                     "stop_price": stop_price,
                     # Equity rather than cash: the fraction risked is a fraction of

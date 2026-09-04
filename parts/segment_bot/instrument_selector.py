@@ -43,7 +43,16 @@ from runtime.quote_frames import quote_levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
-from runtime.trading_types import DATED_FUTURE, OPTION, PERPETUAL_FUTURE, SPOT
+from runtime.trading_types import (
+    BUY,
+    DATED_FUTURE,
+    LONG,
+    OPTION,
+    PERPETUAL_FUTURE,
+    SHORT,
+    SPOT,
+    order_side_for,
+)
 
 PART_ID = "instrument-selector"
 
@@ -175,6 +184,26 @@ class InstrumentChoice:
     # whenever the symbol last traded, and on the live run of 2026-08-23 that gap
     # reached fifty-six minutes while every message about it looked current.
     reference_price_observed_at_ns: int | None = None
+    # The side the chosen contract is traded on to OPEN the intended view, in the
+    # venue's vocabulary. None when nothing was chosen.
+    #
+    # It is on the choice rather than derived downstream because the instrument
+    # and the side are one decision: while this segment is buy-only a bearish
+    # view is carried by BUYING a put, so a reader that took the direction from
+    # the intent and the contract from here would sell the put it was handed.
+    # That is not hypothetical -- position-sizer built every order from the
+    # intent's own side until 2026-09-04, and a bearish intent on a call became
+    # a sell-to-open on that call: writing a naked option, in a segment whose
+    # settings say buy-only.
+    order_side: str | None = None
+    # The underlying the chosen contract is a claim on, when the intent named a
+    # contract rather than an asset. Carried so a reader can see that a view was
+    # re-expressed, rather than having to work out why the traded symbol is not
+    # the one the intent named.
+    resolved_underlying: str | None = None
+    # Whether the intent's own direction had to be turned around to reach a buy.
+    # True for "short a call" and "short a put" while the segment is buy-only.
+    view_was_converted: bool = False
 
     @property
     def is_actionable(self) -> bool:
@@ -191,6 +220,12 @@ class SelectorStanding:
     by_kind: dict = field(default_factory=dict)
     by_refusal: dict = field(default_factory=dict)
     unbuilt_segment_wins: dict = field(default_factory=dict)
+    # How many intents had their direction turned around to reach a buy: a short
+    # view on a call, or a short view on a put. Counted rather than silent
+    # because the converted trade is not the trade the bot asked for -- it keeps
+    # the direction and loses the premium-selling economics -- and the cost of
+    # that has to be readable rather than inferred.
+    views_converted_to_a_buy: int = 0
     largest_carry_avoided: float = 0.0
     # How many listings from the venue's own universe became instruments this part
     # can price, and why each of the rest did not. Counted because a selector that
@@ -248,6 +283,13 @@ class InstrumentSelector:
         # refusal was.
         self._deciding_at_ns = now_ns()
         self._deciding_about: tuple[str, str] = ("", "")
+        # The view this decision is actually being made about, which is not always
+        # the intent's own side once a contract-named intent has been resolved to
+        # its underlying. Kept here, beside the two above, so every refusal and
+        # every choice reports the same view without seven call sites passing it.
+        self._deciding_view: bool | None = None
+        self._deciding_underlying: str | None = None
+        self._deciding_converted: bool = False
         self._listed: dict[tuple[str, str], list] = {}
         # A grade that arrived before any listing for its symbol, and the options
         # market's own surface. Both are held rather than dropped: a measurement
@@ -613,18 +655,69 @@ class InstrumentSelector:
         key = (intent.venue_id, intent.symbol)
         self._deciding_at_ns, self._deciding_about = at, key
         listed = self._listed.get(key, [])
+        wants_bullish = intent.is_long
+        underlying = None
+        converted = False
+        self._deciding_view, self._deciding_underlying = wants_bullish, None
+        self._deciding_converted = False
 
         if not listed:
+            # The intent may name a contract rather than an asset. 63 of the 69
+            # intents formed on 2026-09-04 did, and none named an underlying, so
+            # every lookup missed a registry that is keyed by underlying.
+            resolved = self._atm_tracker.contract_named(intent.symbol)
+            if resolved is not None:
+                underlying, contract_type = resolved
+                key = (intent.venue_id, underlying)
+                listed = self._listed.get(key, [])
+                # A view on a contract is a view on what the contract is a claim
+                # on, and which way round depends on both halves. Buying a call
+                # and selling a put are bullish; selling a call and buying a put
+                # are bearish. One rule covers all four.
+                #
+                # The vocabulary is the tracker's, because the tracker is what
+                # read it off the venue's listing -- naming "CE" here again would
+                # be a second copy of a fact this part does not own (T-4).
+                from runtime.atm_strike_tracker import CALL
+
+                wants_bullish = (contract_type == CALL) == intent.is_long
+                # What was converted is a *sell*, not a direction. Buying a put
+                # is already a buy and carries a bearish view honestly; it is
+                # only a short of a contract that has to become the opposite
+                # buy. Counting every put here would have made the counter read
+                # as though half the book were being turned around.
+                converted = not intent.is_long
+                if converted:
+                    self.standing.views_converted_to_a_buy += 1
+                self._deciding_about = key
+                self._deciding_view = wants_bullish
+                self._deciding_underlying = underlying
+                self._deciding_converted = converted
+
+        if not listed:
+            # Deliberately one state and not two. 6 of the 69 intents on
+            # 2026-09-04 named cash equities, which is a different problem from an
+            # option chain that has not been registered yet -- but this part
+            # cannot tell them apart from what it consumes: a symbol it has never
+            # resolved looks identical whether it is out of segment or merely not
+            # listed here yet. The reason says which one was ruled out, and
+            # inventing a state on evidence this part does not have would be a
+            # confident answer to a question nobody measured.
             return self._choice(
                 intent, None, None, None, 0, {}, None, NOTHING_AVAILABLE,
-                "nothing is listed for this symbol, so there is no way to express the intent",
+                "nothing is listed for this symbol, so there is no way to express the intent"
+                + (
+                    f"; it is a contract on {underlying}, which has no instrument registered yet"
+                    if underlying is not None
+                    else "; it is not a contract this part has resolved either"
+                ),
             )
 
         rejected: dict[str, str] = {}
         priced = []
 
         for instrument in listed:
-            refusal = self._cannot_carry(instrument, intent)
+            refusal = self._cannot_carry(instrument, intent, wants_bullish)
             if refusal is not None:
                 rejected[instrument.contract_symbol] = refusal
                 continue
@@ -648,7 +741,7 @@ class InstrumentSelector:
 
             signed_carry = (
                 carry
-                if intent.is_long or instrument.instrument_kind == OPTION
+                if wants_bullish or instrument.instrument_kind == OPTION
                 else -carry
             )
             priced.append((cost + max(0.0, signed_carry), signed_carry, instrument))
@@ -820,11 +913,20 @@ class InstrumentSelector:
             f"trading it and nobody is quoting it",
         )
 
-    def _cannot_carry(self, instrument: ListedInstrument, intent) -> str | None:
-        """Why this instrument cannot express this intent, or None if it can."""
-        if not intent.is_long and not instrument.supports_short:
+    def _cannot_carry(self, instrument: ListedInstrument, intent, wants_bullish=None) -> str | None:
+        """Why this instrument cannot express this view, or None if it can.
+
+        `wants_bullish` is the view after any re-expression, which is not always
+        the intent's own side: a short view on a call is a bearish view on the
+        underlying, and while the segment is buy-only it is carried by a put.
+        Defaults to the intent's own direction so a caller with nothing to
+        convert reads unchanged.
+        """
+        if wants_bullish is None:
+            wants_bullish = intent.is_long
+        if not wants_bullish and not instrument.supports_short:
             return "it cannot be sold short"
-        if intent.is_long and not instrument.supports_long:
+        if wants_bullish and not instrument.supports_long:
             return "it cannot express a long view"
         if getattr(intent, "needs_convexity", False) and not instrument.supports_convexity:
             return "it cannot express a convexity view"
@@ -857,6 +959,29 @@ class InstrumentSelector:
             )
         return None
 
+    def _order_side_for(self, chosen) -> str | None:
+        """Which side opens the chosen contract, or None when nothing was chosen.
+
+        An option is always bought while this segment is buy-only: the direction
+        is carried by *which* contract, never by the side, so a bearish view is a
+        bought put and there is no sell-to-open at all. Writing an option has
+        unbounded loss and needs margin far past the premium, which is why the
+        segment settings say buy-only and why the rule lives here rather than in
+        each reader.
+
+        Any other kind follows the view in the usual way, so this generalises
+        instead of hard-coding one segment's rule -- a short perpetual is a sell.
+        When a sell-options bot exists, this is the one place that changes.
+        """
+        if chosen is None:
+            return None
+        if chosen.instrument_kind == OPTION:
+            return BUY
+        wants_bullish = (
+            self._deciding_view if self._deciding_view is not None else True
+        )
+        return order_side_for(LONG if wants_bullish else SHORT)
+
     def _choice(
         self, intent, chosen, cost, carry, considered, rejected, unbuilt, state, reason
     ) -> InstrumentChoice:
@@ -867,6 +992,9 @@ class InstrumentSelector:
             venue_id=intent.venue_id,
             symbol=intent.symbol,
             chosen=chosen,
+            order_side=self._order_side_for(chosen),
+            resolved_underlying=self._deciding_underlying,
+            view_was_converted=self._deciding_converted,
             total_cost_fraction=cost,
             carry_cost_fraction=carry,
             considered=considered,
@@ -889,6 +1017,7 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "instruments_repriced_by_a_grade": selector.standing.instruments_repriced_by_a_grade,
         "implied_vol_surfaces_seen": selector.standing.implied_vol_surfaces_seen,
         "chosen": selector.standing.chosen,
+        "views_converted_to_a_buy": selector.standing.views_converted_to_a_buy,
         "chosen_by_kind": dict(sorted(selector.standing.by_kind.items())),
         "refused_by_reason": dict(sorted(selector.standing.by_refusal.items())),
         "times_an_unbuilt_segment_held_the_best_instrument": dict(
