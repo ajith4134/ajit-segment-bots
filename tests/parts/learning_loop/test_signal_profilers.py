@@ -158,6 +158,53 @@ def test_every_built_declaration_equals_the_blueprint(part_id, declaration):
 
 # ---- signal-excursion-profiler -----------------------------------------------
 
+def test_an_unchanged_profile_is_not_restated_and_the_skip_is_counted(real_labels):
+    """43% of everything left on the spine, measured 2026-09-04.
+
+    This part had received no labels at all and had published 13,044,004
+    `excursion-profile` messages: 838 keys restored from a checkpoint, each
+    refreshed once a second, times the five parts that consume the type.
+
+    The skip count is asserted rather than the absence of a crash, because a
+    change check that compares a payload carrying a "when I looked" field skips
+    nothing while appearing to work -- this part's own `identity_of` was found
+    wanting that way once already, at 565,409 published against 268,978 fitted
+    with the counter reading zero.
+    """
+    from runtime.level_publishing import LevelPublisherByKey, without_observation_time
+
+    sent = []
+    levels = LevelPublisherByKey(
+        publish=lambda items: sent.extend(items),
+        refresh_interval_seconds=1_000_000.0,
+        identity_of=without_observation_time,
+    )
+    subject = an_excursion_profiler()
+    for label in real_labels:
+        subject.observe_label(label)
+
+    profiles = subject.profile_all()
+    assert profiles, "the fixture produced no profile to restate"
+    for profile in profiles:
+        levels.publish_level((profile.venue_id, profile.symbol, profile.side), (profile,))
+    first = len(sent)
+    assert first == len(profiles)
+
+    # Nothing has changed: restating the same profiles must put nothing on the bus.
+    for _ in range(20):
+        for profile in subject.profile_all():
+            levels.publish_level(
+                (profile.venue_id, profile.symbol, profile.side), (profile,)
+            )
+
+    assert len(sent) == first
+    assert levels.standing.unchanged_publishes_skipped == 20 * len(profiles)
+
+    standing = describe_excursion_profiling(subject, levels)
+    assert standing["unchanged_profiles_skipped"] == 20 * len(profiles)
+    assert standing["profiles_held_as_levels"] == len(profiles)
+
+
 def test_the_labeller_reports_the_excursions_it_measured(real_labels):
     """The whole mechanism in one assertion: the numbers reach the label.
 

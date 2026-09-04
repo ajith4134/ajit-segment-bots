@@ -101,8 +101,53 @@ Parts naming a level-publishing shape: **17 of 343**. The audit script ranks the
 rest by what they actually cost, so the next one to fix is measured rather than
 guessed.
 
+## signal-excursion-profiler, the one the audit named next
+
+With the regime storm gone it was 43% of everything left: **13,044,004 messages
+published while receiving no labels at all**. 838 keys -- 419 symbols on both
+sides, every one of them restored from a checkpoint -- refreshed once a second,
+times the five parts that consume `excursion-profile`.
+
+**Its fix is deliberately not regime-classifier's.** Dropping keys is right for a
+regime, whose window is rebuilt from a few minutes of prices; it would be wrong
+here, where the distributions took 52,958 settled claims to fit and are
+checkpointed precisely so a restart does not throw them away. What was wrong was
+only the cadence, so only the cadence changed:
+`excursion_profile_refresh_interval_seconds`.
+
+Ten seconds is safe because **every consumer keeps what it drains** --
+`profit-lock`, `stop-target-placer`, both exit-plan proposers and
+`tail-trailing-exit-planner` each read the type through `Batch` and store it per
+symbol (`bull_exit_plan_proposer.py:224`). So the refresh is what a cold reader
+needs once, not a cadence anything depends on. That cold-start wait is the real
+cost and is why it is not longer: an exit-plan proposer refuses to plan without a
+fitted profile, and a position is open while it waits.
+
+    signal-excursion-profiler   3,815 msg/s  ->  374 msg/s   (1st -> 7th)
+    spine total                15,630 msg/s  ->  6,706 msg/s
+    unchanged_profiles_skipped                     268,160
+
+That last number is the point of putting it on health. A change check whose skip
+count reads zero is a change check doing nothing, and it looks exactly like one
+that works -- which is how this part's own `identity_of` was found wanting once
+already.
+
+**What the fix exposed.** With the storms gone the largest single CPU consumer on
+the box is `part_health_api` at 1.03 cores -- the board, which is not a part. And
+the top of the audit is now `broker-instrument-catalogue-reader` (18%) and
+`part-appetite-meter` (17%), both publishing steadily while receiving nothing.
+
+**A note on the restart.** The spine sheds hard during its start-up spike and the
+governor brought every part back: 135 parts at 17:41, 318 by 17:48, 160 `on`
+flips against 17 `off`. The shed reason was `conserving-a-short-runway` -- the
+survival tier, bound by LLM quota in 37,935 of 38,244 readings, from a
+`subscription-quota-watch` that has never seen a provider header. Worth its own
+look: the tier that governs conservation is decided by a measurement nobody has
+wired a key for.
+
 ## Re-running it
 
     .venv/bin/python measurements/2026-09-04-what-burns-cpu-with-no-trades/audit_level_publishing.py
 
-`audit-before-the-fixes.txt` is the run above, taken while the defects were live.
+`audit-before-the-fixes.txt` is the run above, taken while the defects were live;
+`audit-after-the-fixes.txt` is the same probe once they were deployed.

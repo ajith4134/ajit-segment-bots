@@ -1,0 +1,24 @@
+parts publishing anything but health 91   published 5,083,623   received 2,892,225
+part files naming a level publisher: 17 of 343
+
+part                                      published    received  per recv  level pub
+broker-instrument-catalogue-reader          902,060           0  no input  no             18% of all
+part-appetite-meter                         881,348           0  no input  no             17% of all
+tick-size-resolver                          727,398       4,880      149x  no             14% of all
+survival-tier-monitor                       285,347       1,662      172x  no              6% of all
+feed-coverage-auditor                       281,019      11,939       24x  no              6% of all
+correlation-cluster-mapper                  227,660         576      395x  yes             4% of all
+trading-halt-decider                        203,434     230,860        1x  no              4% of all
+event-risk-limiter                          163,737       1,417      116x  no              3% of all
+autonomy-boundary                           156,116      78,276        2x  no              3% of all
+regime-classifier                           150,456         692      217x  yes             3% of all
+signal-excursion-profiler                   150,002           0  no input  yes             3% of all
+folded-circuit-view                         127,624           0  no input  no              3% of all
+halt-enforcer                               101,337     106,647        1x  no              2% of all
+broker-history-reader                        87,395     101,260        1x  no              2% of all
+conservation-planner                         77,942      77,942        1x  no              2% of all
+part-priority-reader                         76,800           0  no input  no              2% of all
+venue-outage-rider                           73,295       1,632       45x  yes             1% of all
+part-restart-budgeter                        73,077       4,625       16x  yes             1% of all
+capability-gap-finder                        45,420      63,828        1x  no              1% of all
+llm-backpressure-gauge                       32,037      32,874        1x  no              1% of all

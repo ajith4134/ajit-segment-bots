@@ -301,8 +301,24 @@ class SignalExcursionProfiler:
         self.standing.keys_tracked = len(self._adverse)
 
 
-def describe_excursion_profiling(profiler: SignalExcursionProfiler) -> dict:
+def describe_excursion_profiling(profiler: SignalExcursionProfiler, levels=None) -> dict:
+    """This part's standing, and what its level publisher actually did.
+
+    `unchanged_profiles_skipped` is on health deliberately: a change check whose
+    skip count reads zero is a change check doing nothing, and it looks exactly
+    like one that is working -- which is how this part's own `identity_of` was
+    found wanting the first time. `profiles_held_as_levels` is the other half: the
+    keepalive is per key, so that number times the refresh rate times the five
+    consumers is this part's floor on the bus whatever the check does.
+    """
+    level_standing = {} if levels is None else {
+        "unchanged_profiles_skipped": levels.standing.unchanged_publishes_skipped,
+        "profile_refreshes": levels.standing.refreshes,
+        "profile_changes": levels.standing.changes,
+        "profiles_held_as_levels": levels.keys_held,
+    }
     return {
+        **level_standing,
         "part_id": PART_ID,
         "labels_seen": profiler.standing.labels_seen,
         "claims_recorded": profiler.standing.claims_recorded,
@@ -351,6 +367,7 @@ def run_signal_excursion_profiler(
     health_interval_seconds: float, emit_health, checkpoint=None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    levels=None,
 ) -> int:
     """Observe what arrived, and publish the profiles that moved because of it.
 
@@ -381,7 +398,7 @@ def run_signal_excursion_profiler(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_excursion_profiling(profiler),
+        read_standing=lambda: describe_excursion_profiling(profiler, levels),
     )
 
 
@@ -400,9 +417,18 @@ def start_part(context) -> int:
     labels = Batch(read=context.bus.reader("training-label"))
     # Keyed by exactly what makes one profile a different profile, so a label for
     # one symbol does not restate the other four hundred.
+    #
+    # Its own refresh interval, not the shared one, because the keepalive is **per
+    # key** and this part holds 838 of them -- 419 symbols on both sides, restored
+    # from a checkpoint -- against 5 consumers. Measured 2026-09-04, after the
+    # regime storm was fixed: 13,044,004 messages published while receiving no
+    # labels at all, 43% of everything left on the spine, all of it keepalive for
+    # profiles nothing had changed. Every consumer keeps what it drains, so the
+    # refresh is what a cold reader needs once rather than a cadence anything
+    # depends on.
     profile_levels = LevelPublisherByKey(
         publish=context.bus.publisher_for("excursion-profile"),
-        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        refresh_interval_seconds=context.number("excursion_profile_refresh_interval_seconds"),
         # An ExcursionProfile is restamped on every fit, so compared whole no two
         # are ever equal and nothing would be skipped -- measured: 565,409
         # published against 268,978 fitted, with the skip counter reading zero.
@@ -453,6 +479,7 @@ def start_part(context) -> int:
         control_socket=context.control_socket,
         read_labels=labels.payloads,
         publish_profiles=publish_profiles,
+        levels=profile_levels,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
