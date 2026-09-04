@@ -134,11 +134,81 @@ def candle(symbol, open_price, close_price, at_ns):
     return Candle("binance-usdm", symbol, at_ns, open_price, close_price, max(open_price, close_price), min(open_price, close_price))
 
 
-def test_a_continuous_candle_sequence_reports_no_jump():
+def test_a_continuous_candle_sequence_says_so_rather_than_saying_nothing():
+    """The first bar cannot be judged; the second is judged and found continuous.
+
+    None means no comparison was possible, not that the symbol is fine -- the
+    two were the same answer before 2026-09-04 and that is exactly why a symbol
+    barred from filling could never be released.
+    """
     detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
     detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
     assert detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1)) is None
-    assert detector.observe_closed_candle(candle("BTCUSDT", 100.5, 101.0, 2)) is None
+    continuous = detector.observe_closed_candle(candle("BTCUSDT", 100.5, 101.0, 2))
+    assert continuous is not None and continuous.is_continuous
+    assert detector.standing.jumps_found == 0
+
+
+def test_a_symbol_that_jumps_and_then_settles_is_reported_continuous_again():
+    """The release the fill path needs: a break, then the break being over."""
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
+    detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
+    detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1))
+
+    broke = detector.observe_closed_candle(candle("BTCUSDT", 101.5, 101.6, 2))
+    assert broke is not None and not broke.is_continuous
+    assert detector.standing.symbols_discontinuous_now == 1
+
+    settled = detector.observe_closed_candle(candle("BTCUSDT", 101.6, 101.7, 3))
+    assert settled is not None and settled.is_continuous
+    assert detector.standing.continuity_restored == 1
+    assert detector.standing.symbols_discontinuous_now == 0
+
+
+def test_a_symbol_is_judged_against_its_own_moves_once_it_has_shown_enough():
+    """An NSE option premium moves percent-scale a bar and that is not a jump.
+
+    Measured on the 2026-09-04 Upstox I1 tape, NSE_FO contracts move p50 0.208%
+    / p99 5.69% close-to-open, against a 0.5% threshold fitted to crypto
+    perpetuals -- 38.1% of ordinary option bars were called a feed artefact.
+    """
+    detector = FeedJumpDetector(
+        jump_threshold_increments=2.0,
+        jump_threshold_fraction=0.01,
+        patience_multiple=2.8,
+        moves_needed=8,
+    )
+    price = 100.0
+    # Each bar opens 0.8% above the previous close -- what this part measures is
+    # the gap between bars, not the move within one. Eight such gaps, each under
+    # the 1% floor, so each is a move the symbol was allowed to make.
+    for step in range(9):
+        price = price * 1.008
+        detector.observe_closed_candle(candle("NIFTY-CE", price, price, step))
+    assert detector.standing.symbols_with_a_measured_rhythm == 1
+
+    # 2% is twice the floor and would have been a jump; it is inside 2.8x this
+    # symbol's own p99 of 0.8%, so it is the market and not a discontinuity.
+    ordinary = detector.observe_closed_candle(candle("NIFTY-CE", price * 1.02, price * 1.02, 99))
+    assert ordinary is not None and ordinary.is_continuous
+    assert ordinary.bound_is_the_symbols_own
+    assert detector.standing.checks_inside_a_widened_bound > 0
+
+
+def test_a_break_is_not_remembered_as_one_of_the_symbols_own_moves():
+    """Otherwise a feed that gaps repeatedly widens its own bound until nothing
+    can ever be a jump again."""
+    detector = FeedJumpDetector(
+        jump_threshold_increments=2.0,
+        jump_threshold_fraction=0.01,
+        patience_multiple=2.8,
+        moves_needed=2,
+    )
+    detector.observe_closed_candle(candle("NIFTY-CE", 100.0, 100.0, 1))
+    detector.observe_closed_candle(candle("NIFTY-CE", 200.0, 200.0, 2))  # a 100% break
+    detector.observe_closed_candle(candle("NIFTY-CE", 400.0, 400.0, 3))  # another
+    assert detector.standing.jumps_found == 2
+    assert detector.standing.symbols_with_a_measured_rhythm == 0
 
 
 def test_a_gap_wider_than_two_ticks_is_a_jump():
@@ -154,8 +224,11 @@ def test_a_gap_wider_than_two_ticks_is_a_jump():
 def test_without_a_declared_increment_the_fraction_threshold_is_used():
     detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
     detector.observe_closed_candle(candle("ETHUSDT", 100.0, 100.0, 1))
-    assert detector.observe_closed_candle(candle("ETHUSDT", 100.5, 100.5, 2)) is None
-    assert detector.observe_closed_candle(candle("ETHUSDT", 105.0, 105.0, 3)) is not None
+    inside = detector.observe_closed_candle(candle("ETHUSDT", 100.5, 100.5, 2))
+    assert inside is not None and inside.is_continuous
+    assert inside.gap_increments is None  # inferred, never mistaken for declared
+    outside = detector.observe_closed_candle(candle("ETHUSDT", 105.0, 105.0, 3))
+    assert outside is not None and not outside.is_continuous
 
 
 # ---- tick-size-resolver ------------------------------------------------------

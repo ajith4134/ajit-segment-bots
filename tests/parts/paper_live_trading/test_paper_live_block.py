@@ -452,6 +452,32 @@ def test_nothing_fills_across_a_feed_jump():
     assert subject.simulate(**an_order()).outcome == REFUSED_FEED_JUMP
 
 
+def test_a_symbol_fills_again_once_its_prices_are_continuous():
+    """The bar has to lift, or the refusal is permanent.
+
+    `clear_feed_jump` existed with no caller anywhere in the repository until
+    2026-09-04, so `_jumped_symbols` only ever grew: 993 of the 1,474 streams on
+    that day's tape cross the jump threshold at least once, and each one was
+    unfillable for the life of the process. 54 of the 111 orders this part had
+    ever seen were refused for a jump and none had ever filled.
+    """
+    subject = fill_simulator()
+    subject.observe_feed_jump(VENUE, SYMBOL)
+    assert subject.simulate(**an_order()).outcome == REFUSED_FEED_JUMP
+
+    subject.clear_feed_jump(VENUE, SYMBOL)
+    assert subject.standing.feed_jumps_cleared == 1
+    assert subject.simulate(**an_order()).outcome == FILLED
+
+
+def test_clearing_a_symbol_that_was_never_barred_is_not_counted_as_a_release():
+    """Otherwise the counter that proves the bar lifts would climb on every
+    continuous bar of every symbol, and prove nothing."""
+    subject = fill_simulator()
+    subject.clear_feed_jump(VENUE, SYMBOL)
+    assert subject.standing.feed_jumps_cleared == 0
+
+
 def test_an_order_larger_than_the_book_fills_partially():
     result = fill_simulator().simulate(
         **an_order(quantity=5.0, fill_price_estimate=Estimate(100.5, 2.0))

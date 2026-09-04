@@ -169,6 +169,10 @@ class SimulatorStanding:
     held_in_flight: int = 0
     released_without_a_verdict: int = 0
     refused_feed_jump: int = 0
+    # How many times a symbol's bar was lifted because its prices went continuous
+    # again. Zero here beside a climbing refused_feed_jump is the 2026-09-04
+    # defect returning: the break is seen and the recovery is not.
+    feed_jumps_cleared: int = 0
     refused_no_price: int = 0
     # Market orders put on the book because no price had arrived for their symbol
     # yet. They are not refusals and must not be counted as one: a refusal is an
@@ -292,6 +296,23 @@ class PaperFillSimulator:
         self._jumped_symbols.add((venue_id, symbol))
 
     def clear_feed_jump(self, venue_id: str, symbol: str) -> None:
+        """This symbol's prices are continuous again, so it may fill again.
+
+        Until 2026-09-04 this had no caller anywhere in the repository and
+        `_jumped_symbols` only ever grew: one discontinuity barred a symbol from
+        filling for the life of the process. On the 2026-09-04 tape 993 of 1,474
+        streams cross the jump threshold at least once, so within minutes of a
+        start two thirds of everything tradeable was unfillable -- 54 of the 111
+        orders this part had ever seen were refused for a jump and none had ever
+        filled. Nothing reported it, because every one of those refusals was a
+        decision this part was entitled to make. Only the return was missing.
+
+        `feed-jump` states continuity in both directions now, so the release is
+        driven by the part that measures continuity rather than by a timer here:
+        the bar lifts on evidence the feed recovered, not on a clock.
+        """
+        if (venue_id, symbol) in self._jumped_symbols:
+            self.standing.feed_jumps_cleared += 1
         self._jumped_symbols.discard((venue_id, symbol))
 
     # -- the book ------------------------------------------------------------
@@ -809,6 +830,7 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "held_in_flight": simulator.standing.held_in_flight,
         "released_without_a_verdict": simulator.standing.released_without_a_verdict,
         "refused_feed_jump": simulator.standing.refused_feed_jump,
+        "feed_jumps_cleared": simulator.standing.feed_jumps_cleared,
         "refused_no_price": simulator.standing.refused_no_price,
         "refused_already_filled": simulator.standing.refused_already_filled,
         "fees_charged": simulator.standing.fees_charged,
@@ -923,7 +945,13 @@ def start_part(context) -> int:
                 trade, "fidelity", None
             )
         for jump in jumps.payloads():
-            simulator.observe_feed_jump(jump.venue_id, jump.symbol)
+            # A level in both directions since 2026-09-04: false is the break,
+            # true is the break being over. Read as a level and not an event --
+            # the last thing said about a symbol is what is true of it.
+            if jump.is_continuous:
+                simulator.clear_feed_jump(jump.venue_id, jump.symbol)
+            else:
+                simulator.observe_feed_jump(jump.venue_id, jump.symbol)
         costs.payloads()
         consolidated.payloads()
         estimate_by_symbol = prices.mapping()

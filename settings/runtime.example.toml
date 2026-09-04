@@ -718,6 +718,26 @@ value = 0.005
 unit  = "fraction of price"
 note  = "operator, 2026-08-23: the jump threshold used where the symbol declares no price increment, reported as inferred rather than declared. Measured on today's tape: the 99th percentile boundary move was at most 0.45% (TRUMPUSDT on bybit-linear), with single outliers to 1.46%. Half a percent is above the 99th percentile on every symbol measured and below the outliers that are exactly what this part exists to report."
 
+[feed_jump_patience_multiple]
+value = 2.8
+unit  = "multiples of the symbol's own p99 bar-to-bar move"
+note  = "Claude, 2026-09-04: how far past its own p99 close-to-open move a symbol may go before feed-jump-detector calls it a discontinuity, once it has shown feed_jump_moves_needed of its own moves. Below that it is judged against feed_jump_threshold_fraction alone. Same value and same reasoning as anomaly_feed_silence_patience_multiple, which is deliberate: both answer 'how much more than usual is no longer usual for this symbol', and a second number fitted independently would drift from it without either being more correct. Measured on the Upstox I1 tape for 2026-09-04 (measurements/2026-09-04-why-no-paper-order-ever-fills/): NSE_FO option contracts move p50 0.208% / p95 2.85% / p99 5.69% between one bar's close and the next bar's open, so 2.8 x p99 puts the bound near 16% -- above every ordinary option move measured and below the discontinuity this part exists to report. NSE_INDEX p99 is 0.056%, so 2.8 x it stays far under the floor and the index underlyings are judged exactly as before."
+
+[feed_jump_moves_needed]
+value = 8
+unit  = "bar-to-bar moves"
+note  = "Claude, 2026-09-04: how many of its own moves a symbol must show before feed-jump-detector judges it against its own rhythm instead of the stated floor. Eight for the same reason anomaly_feed_silence_gaps_needed is eight: a p99 from a handful of observations is one observation wearing a percentile, and an estimate taken too early lets one quiet stretch decide what ordinary looks like for the rest of the run. A symbol earns its own bound by printing, so the busy contracts earn it first and the sparse ones take longest -- a fresh restart showing few symbols with a measured rhythm is the mechanism working, not failing."
+
+[feed_jump_moves_remembered]
+value = 256
+unit  = "bar-to-bar moves"
+note  = "Claude, 2026-09-04: how many of a symbol's own recent moves feed-jump-detector keeps to estimate its p99 from. Bounded rather than unbounded because an estimate that never forgets lets an early session decide what ordinary looks like forever, and because 488 symbols x an unbounded list is the unbounded-structure shape this system has been bitten by more than once. 256 matches detector_minimum_observations, the window length the price detectors already reason over, so the p99 describes about the same recent stretch of the session that the rest of the scanner does. At one I1 bar a minute that is a little over four hours -- a full Indian session is six and a quarter."
+
+[feed_jump_restatement_interval_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-04: how long feed-jump-detector may leave one symbol's continuity unsaid before saying it again. Deliberately not level_refresh_interval_seconds (1.0 s): this level is derived from closed candles at upstox_candle_interval (I1, one minute), so it cannot change more than once a minute, and restating ~1,400 symbols every second would be ~1,400 msg/s of pure restatement of a level nobody had changed -- the storm shape of 2026-08-26, in a new place. Sixty seconds matches the cadence of the data the level is computed from. It bounds how long paper-fill-simulator can be wrong about a symbol after its own restart, which is a bound the previous code did not have at all: a level that was never restated, and a bar that was never lifted."
+
 [consolidated_price_maximum_quote_age]
 value = 5.0
 unit  = "seconds"

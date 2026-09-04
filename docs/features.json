@@ -2610,7 +2610,7 @@
     {
       "id": "feed-jump",
       "name": "feed jump",
-      "description": "A candle whose open does not match the prior close: present but discontinuous data, so a stop in the gap still counts as crossed."
+      "description": "One symbol's price continuity as of its last closed candle, from that candle's open against the previous one's close. `is_continuous` false is a break -- present but discontinuous data, so a stop in the gap still counts as crossed and nothing may fill across it; true is the break being over. Stated in both directions since 2026-09-04: it was a break-only event, and the only consumer that acts on it had no way to learn the break had ended, so a flagged symbol could never fill again. A level, not an event -- true until it changes."
     },
     {
       "id": "forecast-out-of-distribution-flag",
@@ -14334,5 +14334,12 @@
     "origin": "designed by Claude, user asked for it 2026-09-04",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_feed_reader_subscribes_the_universe.py",
     "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
+  },
+  "_proposal_2026-09-04_feed_jump_carries_continuity": {
+    "what": "feed-jump gains is_continuous and is published on every closed candle the detector can compare, not only on a break. paper-fill-simulator's clear_feed_jump -- which existed with no caller -- is wired to the true case, so a symbol barred from filling is released when its own prices are continuous again. Published as a level keyed per symbol so one symbol changing does not restate the rest (2026-08-26). Neither part's consumes or produces changes; the type's meaning does.",
+    "origin": "designed by Claude, user chose this over a timer 2026-09-04",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_feed_jump_carries_continuity.py",
+    "proposal": "docs/proposals/feed-jump-carries-continuity.md",
+    "recorded_on": "2026-09-04"
   }
 }
