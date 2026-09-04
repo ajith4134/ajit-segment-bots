@@ -180,6 +180,7 @@ class BrokerSymbolUniverseBridge:
             price_increment=listing.tick_size,
             instrument_kind=None,
             lot_size=listing.lot_size,
+            venue_instrument_id=listing.instrument_key,
         )
 
     def _entry_for_contract(self, listing) -> CapturableSymbol:
@@ -197,6 +198,7 @@ class BrokerSymbolUniverseBridge:
             strike_price=listing.strike_price,
             expiry_ms=listing.expiry_ms,
             lot_size=listing.lot_size,
+            venue_instrument_id=listing.instrument_key,
         )
 
     def contracts_for(self, underlying_key: str) -> tuple:

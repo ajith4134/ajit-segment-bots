@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from runtime.brokers.broker_adapter import (
@@ -57,7 +58,7 @@ def fetch_authorized_stream_url(
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-market-feed-reader",
-    consumes=("broker-token-standing", "broker-instrument-listing"),
+    consumes=("broker-token-standing", "broker-instrument-listing", "symbol-universe"),
     produces=(
         "broker-market-data", "broker-candle", "broker-order-book-snapshot",
         "broker-open-interest", "broker-option-greeks", "part-health",
@@ -142,6 +143,60 @@ def prioritize_index_option_chain(
 
     rest = (listing for listing in listings if listing.instrument_key not in priority_keys)
     return tuple(priority) + tuple(rest)
+
+
+@dataclass(frozen=True)
+class SubscribableInstrument:
+    """Something to subscribe to, reduced to the only field planning reads.
+
+    `plan_subscriptions` and `plan_additional_subscriptions` read
+    `.instrument_key` and nothing else, so what they order can come from the
+    instrument master or from `symbol-universe` without either having to know
+    about the other.
+    """
+
+    instrument_key: str
+
+
+def subscribe_the_universe_first(
+    universe: Sequence, listings: Sequence[InstrumentListing],
+) -> tuple[SubscribableInstrument, ...]:
+    """The selected universe ahead of whatever the catalogue race delivered.
+
+    `prioritize_index_option_chain` can only promote what already arrived, and
+    what arrives is a race this part loses: `broker-instrument-catalogue-reader`
+    restates all 102,940 listings into a 212,992-byte inbox that holds a few
+    hundred messages. Measured on the live spine 2026-09-04, after the per-tick
+    drain raised intake from 1,067 to 14,560 listings, the three index
+    underlyings the segment is entirely about were still not among them.
+
+    `symbol-universe` is the bounded, already-selected set, and
+    `broker-symbol-universe-bridge` builds it from the whole catalogue with zero
+    input loss -- its tick is cheap, so it never falls behind. Taking it first
+    is what makes the underlyings certain instead of lucky.
+
+    The catalogue still fills the rest of the connection behind it. This adds a
+    guarantee about what is definitely subscribed; it does not narrow what the
+    tape records.
+
+    A universe entry naming no `venue_instrument_id` is skipped rather than
+    subscribed by its trading symbol: a subscribe frame is one message, so one
+    key the venue does not recognise is not one lost instrument.
+    """
+    ordered: list[SubscribableInstrument] = []
+    seen: set[str] = set()
+    for entry in universe:
+        key = getattr(entry, "venue_instrument_id", None)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(SubscribableInstrument(instrument_key=key))
+    for listing in listings:
+        if listing.instrument_key in seen:
+            continue
+        seen.add(listing.instrument_key)
+        ordered.append(SubscribableInstrument(instrument_key=listing.instrument_key))
+    return tuple(ordered)
 
 
 def plan_subscriptions(
@@ -253,6 +308,15 @@ def start_part(context) -> int:
         key_of=listing_key_of,
         maximum_age_seconds=context.number("broker_instrument_listing_maximum_age"),
     )
+    # The bounded, already-selected set. Read with an age bound like every
+    # other level here: an unbounded LatestByKey is the trap this project has
+    # fallen into repeatedly (2026-08-26), and a universe that stopped being
+    # restated must stop being subscribed from rather than standing forever.
+    selected_universe = LatestByKey(
+        read=context.bus.reader("symbol-universe"),
+        key_of=lambda entry: (entry.venue_id, entry.symbol),
+        maximum_age_seconds=context.number("broker_subscription_universe_maximum_age"),
+    )
     tracked_index_trading_symbols = tuple(
         str(symbol)
         for symbol in context.setting("underlying_price_bridge_index_trading_symbols").value
@@ -301,15 +365,26 @@ def start_part(context) -> int:
             return True
         token = token_standing.mapping().get(adapter.broker_id)
         listings = instrument_listings.values()
-        if token is None or not token.is_still_valid() or not listings:
+        universe = selected_universe.values()
+        if token is None or not token.is_still_valid() or not (listings or universe):
             # Not a failure -- a normal state before either producer has
             # spoken, or after the token has expired and refresh is still
             # in flight. Reported on the standing, never raised.
+            #
+            # Either source is enough to connect on. The universe alone is the
+            # bootstrap this part depends on: broker-symbol-universe-bridge
+            # publishes the index underlyings without needing any price, so
+            # they can be subscribed before the catalogue race resolves, and
+            # their chains follow once those prices arrive.
             return False
         listings = prioritize_index_option_chain(
             listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
-        plan = plan_subscriptions(adapter, listings, mode=SubscriptionMode.FULL)
+        plan = plan_subscriptions(
+            adapter,
+            subscribe_the_universe_first(universe, listings),
+            mode=SubscriptionMode.FULL,
+        )
         if not plan:
             return False
         try:
@@ -352,7 +427,10 @@ def start_part(context) -> int:
             listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
         additional = plan_additional_subscriptions(
-            adapter, state["subscribed"], listings, mode=SubscriptionMode.FULL,
+            adapter,
+            state["subscribed"],
+            subscribe_the_universe_first(selected_universe.values(), listings),
+            mode=SubscriptionMode.FULL,
         )
         if not additional:
             return
@@ -382,6 +460,7 @@ def start_part(context) -> int:
         # table, and that stays on its interval.
         instrument_listings.take_in_what_arrived()
         token_standing.take_in_what_arrived()
+        selected_universe.take_in_what_arrived()
         if not ensure_connected():
             return
         grow_subscriptions_if_due()
@@ -408,6 +487,7 @@ def start_part(context) -> int:
             "part_id": PART_ID,
             "connected": state["connection"] is not None,
             "subscribed_instruments": len(state["subscribed"]),
+            "universe_instruments_known": len(selected_universe.mapping()),
             "decoded_messages": counts["decoded_messages"],
             "last_failure": counts["last_failure"],
         }
@@ -437,6 +517,7 @@ __all__ = [
     "listing_key_of",
     "plan_additional_subscriptions",
     "plan_subscriptions",
+    "subscribe_the_universe_first",
     "prioritize_index_option_chain",
     "start_part",
 ]

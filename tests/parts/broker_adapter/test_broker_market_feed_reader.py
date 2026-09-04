@@ -3,6 +3,7 @@ import json
 from parts.broker_adapter.broker_market_feed_reader import (
     fetch_authorized_stream_url, listing_key_of, plan_additional_subscriptions,
     plan_subscriptions, prioritize_index_option_chain,
+    subscribe_the_universe_first,
 )
 from runtime.brokers.broker_adapter import (
     InstrumentListing, SubscriptionMode, SubscriptionRequest,
@@ -10,6 +11,7 @@ from runtime.brokers.broker_adapter import (
 from runtime.brokers.upstox import UpstoxAdapter
 from runtime.bus import Message
 from runtime.input_assembly import LatestByKey
+from runtime.symbol_universe import CapturableSymbol
 
 
 def _listing(key: str) -> InstrumentListing:
@@ -231,3 +233,74 @@ def test_fetch_authorized_stream_url_default_fetch_uses_curl_cffi_not_urllib():
     source = inspect.getsource(fetch_authorized_stream_url)
     assert "curl_cffi" in source
     assert "impersonate" in source
+
+
+def _universe_entry(venue_instrument_id: str, symbol: str) -> CapturableSymbol:
+    return CapturableSymbol(
+        venue_id="upstox", symbol=symbol, contract_type="INDEX",
+        quote_volume_24h=None, price_increment=None,
+        venue_instrument_id=venue_instrument_id,
+    )
+
+
+def test_the_universe_is_subscribed_before_anything_the_catalogue_race_happened_to_deliver():
+    """The three index rows must not have to win a race against 102,940 messages.
+
+    Measured 2026-09-04: broker-instrument-catalogue-reader restates all 102,940
+    listings into a 212,992-byte inbox, and this part received 14,560 of them --
+    the three index underlyings the segment is entirely about were not among
+    them, twice running. `symbol-universe` is the bounded, already-selected set,
+    and broker-symbol-universe-bridge receives the whole catalogue with zero
+    input loss because its tick is cheap. Subscribing that first is what makes
+    the underlyings certain rather than lucky.
+
+    The listings still fill the rest of the connection: this adds a guarantee,
+    it does not narrow what the tape records.
+    """
+    universe = (_universe_entry("NSE_INDEX|Nifty 50", "NIFTY"),)
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(2500))
+
+    ordered = subscribe_the_universe_first(universe, listings)
+
+    assert ordered[0].instrument_key == "NSE_INDEX|Nifty 50"
+    # And the catalogue still follows it, rather than being replaced by it.
+    assert len(ordered) == 2501
+
+
+def test_an_instrument_in_both_the_universe_and_the_catalogue_is_subscribed_once():
+    universe = (_universe_entry("NSE_EQ|7", "SEVEN"),)
+    listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(10))
+
+    ordered = subscribe_the_universe_first(universe, listings)
+
+    keys = [item.instrument_key for item in ordered]
+    assert keys[0] == "NSE_EQ|7"
+    assert keys.count("NSE_EQ|7") == 1
+    assert len(keys) == 10
+
+
+def test_a_universe_entry_with_no_venue_instrument_id_is_skipped_not_guessed():
+    """A crypto producer of this type names no venue_instrument_id at all.
+
+    Subscribing to the trading symbol instead would send Upstox a key it does
+    not recognise, and the whole subscribe frame is one message -- one bad key
+    is not one lost instrument.
+    """
+    nameless = CapturableSymbol(
+        venue_id="upstox", symbol="NIFTY", contract_type="INDEX",
+        quote_volume_24h=None, price_increment=None,
+    )
+
+    ordered = subscribe_the_universe_first((nameless,), (_listing("NSE_EQ|1"),))
+
+    assert [item.instrument_key for item in ordered] == ["NSE_EQ|1"]
+
+
+def test_the_universe_alone_is_enough_before_any_listing_has_arrived():
+    """The bootstrap: the bridge publishes the underlyings without needing a
+    price, so this part can subscribe them before the catalogue race resolves."""
+    universe = (_universe_entry("NSE_INDEX|Nifty 50", "NIFTY"),)
+
+    ordered = subscribe_the_universe_first(universe, ())
+
+    assert [item.instrument_key for item in ordered] == ["NSE_INDEX|Nifty 50"]

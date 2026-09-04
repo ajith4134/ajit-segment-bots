@@ -1620,7 +1620,8 @@
         "broker-option-greeks",
         "broker-order-book-snapshot",
         "broker-token-standing",
-        "market-session-state"
+        "market-session-state",
+        "symbol-universe"
       ],
       "produces": [
         "broker-account-funds",
@@ -1640,7 +1641,7 @@
       "scope": "global",
       "scope_origin": "claude-flagged",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-04",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -12507,8 +12508,9 @@
       "role": "stream a broker's feed, decomposed into this project's own record kinds",
       "category": "broker-adapter",
       "consumes": [
+        "broker-instrument-listing",
         "broker-token-standing",
-        "broker-instrument-listing"
+        "symbol-universe"
       ],
       "produces": [
         "broker-market-data",
@@ -14325,6 +14327,12 @@
     "what": "broker-symbol-universe-bridge -- republishes Upstox's instrument master as symbol-universe, the type universal-symbol-sweeper, both feature builders, feed-coverage-auditor, options-flow-reader, instrument-selector and tick-size-resolver read and which nothing has produced since the crypto cutover. Measured 2026-09-04: the sweeper had run 3,114 sweeps over an empty list with every skip counter at 0, and the whole scanning chain below it was at zero. Publishes the tracked index underlyings plus the nearest expiry's option contracts ranked by distance from the underlying's own last price, capped per underlying -- the cap honours the operator's standing ruling on captured_symbol_count (2026-08-25, 'hold at 50 and stop walking'), whose reason is that the pair scanner fails as the square of the universe. symbol is trading_symbol, matching every other bridge, because the sweeper keys its universe (venue_id, symbol) and could not otherwise match a universe entry to a price.",
     "origin": "designed by Claude, user asked for the symbol-universe bridge 2026-09-04",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_broker_symbol_universe_bridge.py",
+    "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
+  },
+  "_proposal_2026-09-04_feed_reader_subscribes_the_universe": {
+    "what": "broker-market-feed-reader gains symbol-universe as an input and subscribes it ahead of whatever the instrument-catalogue race delivered. prioritize_index_option_chain could only ever promote listings that had arrived, and after the per-tick drain fix raised intake from 1,067 to 14,560 of 102,940 the three index underlyings still were not among them. The catalogue still fills the rest of the connection behind the universe, so this adds a guarantee about what is definitely subscribed rather than narrowing what the tape records. CapturableSymbol carries venue_instrument_id for it, because Upstox streams by instrument_key while every other part names an instrument by its trading symbol.",
+    "origin": "designed by Claude, user asked for it 2026-09-04",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_feed_reader_subscribes_the_universe.py",
     "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
   }
 }

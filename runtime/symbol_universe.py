@@ -116,6 +116,19 @@ class CapturableSymbol:
     # no existing producer of this type had to change.
     strike_price: float | None = None
     expiry_ms: int | None = None
+    # The venue's own identifier for subscribing to this contract, where that
+    # differs from `symbol`. On a venue that streams by its trading symbol --
+    # every crypto venue this system has read -- the two are the same and this
+    # stays None. Upstox streams by `instrument_key` ("NSE_INDEX|Nifty 50")
+    # while every other part names the instrument by its trading symbol
+    # ("NIFTY"), so the universe has to carry both or a consumer cannot act on
+    # what it is told: the sweeper matches prices by `symbol`, and the feed
+    # reader subscribes by this.
+    #
+    # None means "this producer did not say", never "use the symbol" -- sending
+    # a venue a key it does not recognise is not one lost instrument, because a
+    # subscribe frame is one message.
+    venue_instrument_id: str | None = None
     # The contracts one lot is, as the exchange fixes it. An NSE option is
     # traded in lots, not in units -- a size expressed in contracts is wrong by
     # the lot size, which for NIFTY is 75. None where the master did not state
