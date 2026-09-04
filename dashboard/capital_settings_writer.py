@@ -63,20 +63,49 @@ REFUSED_FROM_THE_BOARD = ("money_mode",)
 # What each setting is, so a value can be checked before it is written. A setting
 # absent here cannot be edited at all: an allowlist refuses the thing nobody
 # thought of, where a blocklist admits it.
-EDITABLE = {
-    ("main-account", "main_balance"): float,
-    ("main-account", "maximum_capital_per_trade"): float,
-    ("main-account", "leverage_ceiling"): float,
-    ("futures", "allocated_balance"): float,
-    ("futures", "minimum_capital_per_trade"): float,
-    ("futures", "maximum_capital_per_trade"): float,
-    ("futures", "leverage_ceiling"): float,
-}
+# The settings the segment scope owns. Keyed by name here and paired with the
+# live segment below, because the scope's *name* is `segment_id`'s to give --
+# this allowlist and SCOPE_FILES both said "futures" until 2026-09-04, so after
+# the segment changed on 2026-09-02 every real edit was refused as not editable,
+# and any that had matched would have been written into a file no running part
+# reads: accepted, confirmed on screen, and with no effect on the number the bot
+# sizes trades against.
+SEGMENT_EDITABLE = (
+    "allocated_balance",
+    "minimum_capital_per_trade",
+    "maximum_capital_per_trade",
+    "leverage_ceiling",
+)
 
-SCOPE_FILES = {
-    "main-account": "main-account.toml",
-    "futures": "segments/futures.toml",
-}
+MAIN_ACCOUNT_EDITABLE = (
+    "main_balance",
+    "maximum_capital_per_trade",
+    "leverage_ceiling",
+)
+
+
+def segment_scope_name() -> str:
+    """Which segment's capital the board may edit, as `segment_id` names it."""
+    from dashboard.capital_settings_view import segment_scope_name as named
+
+    return named()
+
+
+def editable_settings() -> dict:
+    """The allowlist, against the segment that is actually trading."""
+    segment = segment_scope_name()
+    allowed = {("main-account", name): float for name in MAIN_ACCOUNT_EDITABLE}
+    allowed.update({(segment, name): float for name in SEGMENT_EDITABLE})
+    return allowed
+
+
+def scope_files() -> dict:
+    """Which file each scope is written to."""
+    segment = segment_scope_name()
+    return {
+        "main-account": "main-account.toml",
+        segment: f"segments/{segment}.toml",
+    }
 
 ACCEPTED = "accepted"
 REFUSED_NOT_EDITABLE = "this setting is not editable from the board"
@@ -162,7 +191,7 @@ def judge_change(scope: str, name: str, new_value, current: dict) -> WriteVerdic
     """
     if name in REFUSED_FROM_THE_BOARD:
         return WriteVerdict(False, REFUSED_REAL_MONEY)
-    if (scope, name) not in EDITABLE:
+    if (scope, name) not in editable_settings():
         return WriteVerdict(False, REFUSED_NOT_EDITABLE)
 
     number = read_number(new_value)
@@ -194,9 +223,10 @@ def find_contradictions(values: dict) -> list[str]:
     faults: list[str] = []
     get = lambda scope, name: read_number(values.get((scope, name)))  # noqa: E731
 
-    minimum = get("futures", "minimum_capital_per_trade")
-    maximum = get("futures", "maximum_capital_per_trade")
-    allocated = get("futures", "allocated_balance")
+    segment = segment_scope_name()
+    minimum = get(segment, "minimum_capital_per_trade")
+    maximum = get(segment, "maximum_capital_per_trade")
+    allocated = get(segment, "allocated_balance")
     balance = get("main-account", "main_balance")
 
     if minimum is not None and maximum is not None and minimum > maximum:
@@ -213,7 +243,7 @@ def find_contradictions(values: dict) -> list[str]:
             f"this segment is allocated {allocated:,.2f} of a main balance of "
             f"{balance:,.2f}; the money is not there"
         )
-    for scope in ("main-account", "futures"):
+    for scope in ("main-account", segment):
         ceiling = get(scope, "leverage_ceiling")
         if ceiling is not None and ceiling < 1.0:
             faults.append(f"a {scope} ceiling of {ceiling} is below unlevered; 1.0 is the floor")
@@ -234,7 +264,7 @@ def write_setting(scope: str, name: str, new_value: float, changed_by: str = "th
     """
     from runtime.settings_reader import settings_directory
 
-    path = settings_directory() / SCOPE_FILES[scope]
+    path = settings_directory() / scope_files()[scope]
     text = path.read_text(encoding="utf-8")
 
     section = re.search(rf"^\[{re.escape(name)}\]$", text, flags=re.M)
@@ -286,12 +316,12 @@ def read_current_values() -> dict:
 
     root = settings_directory()
     values: dict = {}
-    for scope, relative in SCOPE_FILES.items():
+    for scope, relative in scope_files().items():
         try:
             document = load_settings_document(root / relative, scope)
         except Exception:
             continue
-        for (entry_scope, entry_name) in EDITABLE:
+        for (entry_scope, entry_name) in editable_settings():
             if entry_scope != scope:
                 continue
             entry = document.entries.get(entry_name)

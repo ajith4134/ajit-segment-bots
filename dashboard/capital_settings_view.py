@@ -43,7 +43,7 @@ for path in (str(PROJECT), str(HERE)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from capital_settings_writer import EDITABLE, REFUSED_FROM_THE_BOARD  # noqa: E402
+from capital_settings_writer import editable_settings, REFUSED_FROM_THE_BOARD  # noqa: E402
 
 NOT_MEASURED = "NOT MEASURED"
 
@@ -154,6 +154,36 @@ def read_settings_journal() -> tuple[dict, dict]:
     }
 
 
+def segment_scope_name() -> str:
+    """Which segment's capital this board is about, as `segment_id` names it.
+
+    Read rather than hardcoded, because this board hardcoded `"futures"` and
+    went on showing the retired crypto segment after `segment_id` became
+    `index-options` on 2026-09-02 -- serving 1,000 USDT and 50 USDT from a file
+    whose own note says it is "not read by anything now", and never showing the
+    500,000 INR the bot actually sizes against.
+
+    This is the same setting every per-segment part reads to find its own file,
+    so the board and the bot cannot disagree about which segment is trading.
+    """
+    # Imported inside the function, not at module scope: this module is loaded
+    # by part_health_api with dashboard/ on the path rather than the repo root,
+    # so a top-level `import runtime...` crash-loops the board service. Every
+    # other runtime import in this file is function-local for the same reason.
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.settings_reader import load_settings_document, settings_directory
+
+    document = load_settings_document(
+        settings_directory() / "runtime.toml", RUNTIME_SCOPE
+    )
+    return str(document.read_value("segment_id"))
+
+
+def segment_settings_path() -> str:
+    """The segment file's path relative to the settings directory."""
+    return f"segments/{segment_scope_name()}.toml"
+
+
 def read_settings_documents() -> tuple[dict, dict]:
     """The live settings, as the parts read them, with each entry's own note."""
     from runtime.settings_reader import load_settings_document, settings_directory
@@ -164,7 +194,7 @@ def read_settings_documents() -> tuple[dict, dict]:
 
     for scope, relative in (
         ("main-account", "main-account.toml"),
-        ("futures", "segments/futures.toml"),
+        (segment_scope_name(), segment_settings_path()),
     ):
         try:
             documents[scope] = load_settings_document(root / relative, scope)
@@ -179,7 +209,10 @@ def build_capital_settings_view() -> dict:
     documents, problems = read_settings_documents()
 
     scopes = []
-    for scope, wanted in (("main-account", MAIN_ACCOUNT_SETTINGS), ("futures", SEGMENT_SETTINGS)):
+    for scope, wanted in (
+        ("main-account", MAIN_ACCOUNT_SETTINGS),
+        (segment_scope_name(), SEGMENT_SETTINGS),
+    ):
         document = documents.get(scope)
         if document is None:
             scopes.append({
@@ -213,7 +246,7 @@ def build_capital_settings_view() -> dict:
                 # Asked of the writer rather than restated here. Two lists of
                 # what may be edited would drift, and the one that drifted
                 # would be this one -- the board is not where that answer lives.
-                is_editable=(scope, name) in EDITABLE and name not in REFUSED_FROM_THE_BOARD,
+                is_editable=(scope, name) in editable_settings() and name not in REFUSED_FROM_THE_BOARD,
                 not_editable_reason=reason_not_editable(scope, name),
             ).as_dict())
 
@@ -238,7 +271,7 @@ def reason_not_editable(scope: str, name: str) -> str:
             "changed on the server, not from here. RL-005 makes paper-first the "
             "method, and a public URL is not where a segment starts trading real money"
         )
-    if (scope, name) not in EDITABLE:
+    if (scope, name) not in editable_settings():
         return "not one of the capital settings this board may change"
     return ""
 
