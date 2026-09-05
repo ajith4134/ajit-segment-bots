@@ -307,7 +307,14 @@ def start_part(context) -> int:
     ideas = Batch(read=context.bus.reader("web-idea"))
     publish_findings = context.bus.publisher_for("research-finding")
     miner = GithubStrategyMiner(
-        available_data_kinds=("market-data", "kline-window", "consolidated-price", "funding-forecast"),
+        # What this project can actually feed a mined strategy. `funding-forecast`
+        # was here until 2026-09-05 and is now retired with the perpetual chain
+        # that produced it -- a miner that advertised it would judge a strategy
+        # testable on data nothing carries.
+        available_data_kinds=(
+            "market-data", "kline-window", "consolidated-price",
+            "broker-margin-requirement",
+        ),
         minimum_conditions=int(context.number("github_minimum_conditions")),
     )
     defect_names = (LOOKAHEAD, NO_COST_MODEL, FITTED_ON_ITS_OWN_TEST_DATA, SURVIVORSHIP, UNFILLABLE, NO_OUT_OF_SAMPLE)

@@ -764,34 +764,64 @@ def test_an_anomaly_decays_back_rather_than_releasing_at_a_cliff():
 
 # ---- leverage-selector -------------------------------------------------------
 
-def selector(target=0.05, horizons=2.0, funding_tolerance=0.001, maintenance=0.005):
+def selector(target=0.05, horizons=2.0, carry_tolerance=0.001, maintenance=0.005,
+             daily_borrowing_rate=0.0):
     return LeverageSelector(
         target_liquidation_distance=target,
         volatility_horizons_to_survive=horizons,
-        funding_tolerance_per_day=funding_tolerance,
+        carry_tolerance_per_day=carry_tolerance,
+        daily_borrowing_rate=daily_borrowing_rate,
         maintenance_margin_rate=maintenance,
     )
 
 
 def test_a_violent_symbol_gets_less_leverage_than_a_calm_one():
     subject = selector()
-    calm = subject.choose(VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.01, funding_forecast=0.0)
-    violent = subject.choose(VENUE, "ALTUSDT", ceiling=50.0, volatility_forecast=0.10, funding_forecast=0.0)
+    calm = subject.choose(VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.01)
+    violent = subject.choose(VENUE, "ALTUSDT", ceiling=50.0, volatility_forecast=0.10)
     assert calm.leverage > violent.leverage
 
 
 def test_the_operators_ceiling_is_never_exceeded():
     """RL-053: the ceiling is not advice."""
-    chosen = selector().choose(VENUE, SYMBOL, ceiling=3.0, volatility_forecast=0.001, funding_forecast=0.0)
+    chosen = selector().choose(VENUE, SYMBOL, ceiling=3.0, volatility_forecast=0.001)
     assert chosen.leverage == 3.0
     assert chosen.outcome == AT_CEILING
 
 
-def test_expensive_funding_cuts_the_leverage():
-    subject = selector(funding_tolerance=0.001)
-    cheap = subject.choose(VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.02, funding_forecast=0.0)
-    dear = subject.choose(VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.02, funding_forecast=0.01)
-    assert dear.leverage < cheap.leverage
+def test_expensive_borrowing_cuts_the_leverage():
+    """The Indian analogue of the funding test this replaces: what is borrowed
+    is the part of the position the broker's margin does not cover, and paying
+    for it reduces how much is worth borrowing.
+
+    At 5x the broker covers a fifth, so four fifths is borrowed; a rate of 1% a
+    day on that is 0.8% of notional, eight times the 0.1% tolerance.
+    """
+    free = selector(daily_borrowing_rate=0.0)
+    dear = selector(daily_borrowing_rate=0.01)
+
+    cheap_choice = free.choose(
+        VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.01,
+        broker_available_leverage=5.0,
+    )
+    dear_choice = dear.choose(
+        VENUE, SYMBOL, ceiling=50.0, volatility_forecast=0.01,
+        broker_available_leverage=5.0,
+    )
+
+    assert dear_choice.leverage < cheap_choice.leverage
+    assert dear.standing.carry_reduced == 1
+    assert free.standing.carry_reduced == 0
+
+
+def test_borrowing_nothing_costs_nothing():
+    """Unlevered borrows none of the position, so no carry can apply -- the
+    crypto version charged 0.5 of the leverage for an unknown funding rate,
+    which on an Indian segment halved every choice for a cost nobody levies."""
+    subject = selector(daily_borrowing_rate=0.01)
+
+    assert subject.carry_cost_per_day(1.0) == 0.0
+    assert subject.carry_cost_per_day(None) is None
 
 
 def test_no_volatility_forecast_means_unlevered():
@@ -1949,7 +1979,7 @@ def test_the_broker_s_limit_binds_even_when_volatility_would_allow_more():
     subject = selector()
     chosen = subject.choose(
         venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
-        volatility_forecast=0.002, funding_forecast=0.0,
+        volatility_forecast=0.002,
         broker_available_leverage=3.2,
     )
 
@@ -1965,7 +1995,7 @@ def test_the_operator_ceiling_still_binds_when_it_is_the_smaller_of_the_two():
     subject = selector()
     chosen = subject.choose(
         venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
-        volatility_forecast=0.002, funding_forecast=0.0,
+        volatility_forecast=0.002,
         broker_available_leverage=20.0,
     )
 
@@ -1982,7 +2012,7 @@ def test_a_silent_broker_is_unlevered_and_never_the_ceiling():
     subject = selector()
     chosen = subject.choose(
         venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
-        volatility_forecast=0.002, funding_forecast=0.0,
+        volatility_forecast=0.002,
         broker_available_leverage=None, a_broker_quote_is_required=True,
     )
 
@@ -1997,7 +2027,7 @@ def test_a_segment_that_does_not_borrow_needs_no_broker_quote():
     subject = selector()
     chosen = subject.choose(
         venue_id="upstox", symbol="NIFTY 24150 CE", ceiling=1.0,
-        volatility_forecast=0.002, funding_forecast=0.0,
+        volatility_forecast=0.002,
         broker_available_leverage=None, a_broker_quote_is_required=False,
     )
 

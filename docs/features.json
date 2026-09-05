@@ -481,7 +481,6 @@
         "sample-weight",
         "symbol-price-frame",
         "symbol-universe",
-        "venue-premium",
         "vol-feature-set",
         "volatility-forecast"
       ],
@@ -491,7 +490,6 @@
         "flow-entropy",
         "forecast-accuracy",
         "forecast-out-of-distribution-flag",
-        "funding-forecast",
         "implied-vol-surface",
         "kline-window",
         "liquidation-map",
@@ -507,9 +505,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -696,7 +694,6 @@
         "symbol-price-frame",
         "symbol-quote-frame",
         "symbol-universe",
-        "venue-premium",
         "venue-standing"
       ],
       "flow_origin": "agreed-provisional",
@@ -728,7 +725,6 @@
         "excursion-profile",
         "exposure-view",
         "fill",
-        "funding-forecast",
         "human-override",
         "instrument-choice",
         "instrument-restriction",
@@ -2259,13 +2255,6 @@
       "proposed": "2026-08-20"
     },
     {
-      "id": "funding-forecast",
-      "name": "funding forecast",
-      "description": "Where the funding rate is headed next period, so a short that pays funding is priced before it is opened.",
-      "origin": "proposed",
-      "proposed": "2026-08-20"
-    },
-    {
       "id": "liquidation-map",
       "name": "liquidation map",
       "description": "Price levels where leveraged positions would be liquidated, from open interest, so a stop is not placed where the crowd's is.",
@@ -3324,13 +3313,6 @@
       "id": "candle",
       "name": "candle",
       "description": "One OHLCV bar for one symbol at one interval, with the venue's own flag for whether the bar is closed. Split from market-data on 2026-08-25: that type carried trades, candles and books at once, and the minute candles began flowing on it feed-gap-detector -- which reads a trade's sequence number -- crashed every two seconds. A candle is a summary of many trades and shares no field with one."
-    },
-    {
-      "id": "venue-premium",
-      "name": "venue premium",
-      "description": "One symbol's mark price and index price on one venue, with the funding rate the venue has declared for the next settlement and the moment it settles. The premium is mark minus index as a fraction of the index, and it is what a funding rate is averaged from -- so it is a different fact from the rate itself, which the venue states about a settlement that has not happened yet.",
-      "origin": "proposed",
-      "added": "2026-08-28"
     },
     {
       "id": "strategy-review",
@@ -6356,32 +6338,6 @@
       "skipped_tick_effect": "corrupts"
     },
     {
-      "id": "funding-rate-forecaster",
-      "name": "Funding rate forecaster",
-      "role": "forecast next period's funding rate",
-      "category": "prediction",
-      "consumes": [
-        "market-data",
-        "venue-premium",
-        "symbol-universe"
-      ],
-      "produces": [
-        "funding-forecast",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "proposed": "2026-08-20",
-      "resource_class": "compute-bound",
-      "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
-    },
-    {
       "id": "liquidation-cluster-mapper",
       "name": "Liquidation cluster mapper",
       "role": "map the price levels where leveraged positions would be liquidated",
@@ -6860,12 +6816,11 @@
     {
       "id": "leverage-selector",
       "name": "Leverage selector",
-      "role": "choose leverage per trade from volatility plus funding (RL-041), never above the user's ceiling (RL-053)",
+      "role": "choose the leverage each trade is opened at",
       "category": "risk-capital-allocation",
       "consumes": [
         "trade-intent",
         "volatility-forecast",
-        "funding-forecast",
         "leverage-ceiling",
         "broker-margin-requirement"
       ],
@@ -6892,6 +6847,10 @@
         {
           "on": "2026-09-05",
           "why": "docs/proposals/broker-margin-quoter.md"
+        },
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/carry-replaces-funding.md"
         }
       ]
     },
@@ -12419,31 +12378,6 @@
       "skipped_tick_effect": "delays"
     },
     {
-      "id": "venue-premium-stream-reader",
-      "name": "Venue premium stream reader",
-      "role": "read one venue's premium stream",
-      "category": "market-data-feed",
-      "consumes": [
-        "stream-plan",
-        "venue-standing"
-      ],
-      "produces": [
-        "venue-premium",
-        "part-health"
-      ],
-      "switchable": true,
-      "off_releases_resources": true,
-      "states": [
-        "off",
-        "on"
-      ],
-      "origin": "proposed",
-      "evidence": "docs/proposals/the-premium-both-venues-send-and-nobody-reads.md",
-      "resource_class": "bandwidth-bound",
-      "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
-    },
-    {
       "id": "strategy-review-reasoner",
       "name": "Strategy review reasoner",
       "role": "judge, with reasons, which of this system's own bots or detectors is working",
@@ -14614,5 +14548,18 @@
     "origin": "designed by Claude, user asked for the margin quote part 2026-09-05",
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-05_broker_margin_quoter.py",
     "proposal": "docs/proposals/broker-margin-quoter.md"
+  },
+  "_proposal_2026-09-05_carry_replaces_funding": {
+    "what": "leverage-selector's funding input replaced by the broker's own cost of borrowing, computed from broker-margin-requirement rather than forecast: borrowed = notional - margin required, carry = borrowed fraction x the broker's daily rate. funding-rate-forecaster and venue-premium-stream-reader retired with the types funding-forecast and venue-premium, which nothing produces or consumes any more.",
+    "why": "The user's standing instruction is that a crypto-only part is replaced with its Indian analogue rather than left in place. `funding-forecast` had no Indian producer and never would: funding is a perpetual's mechanism. Worse than dead -- `_funding_penalty` returned 0.5 for an absent forecast, deliberately, because a perpetual always pays funding and not knowing the rate is a risk. On an Indian segment that meant every leverage was halved for a cost nobody charges. An intraday equity position squared off the same session pays no financing at all.",
+    "decisions": {
+      "D-C1": "computed, not forecast: the borrowed amount is already known from what the broker lends, so no part had to be built to predict it and no new data type was needed",
+      "D-C2": "zero is the measured answer for intraday MIS, not a placeholder -- interest is what the margin trading facility charges to carry overnight, a product intraday-square-off-placer exists to keep this segment out of. The mechanism is wired so a real MTF rate reduces leverage the day one applies",
+      "D-C3": "a missing broker quote is still unlevered on a borrowing segment (UNLEVERAGED_NO_BROKER_QUOTE), so removing the 0.5 penalty does not remove the protection it was standing in for",
+      "D-C4": "the two orphaned parts are retired rather than left declared, the same cascade whale-transfer-reader and social-sentiment-reader took when their last consumer stopped reading them"
+    },
+    "origin": "user instruction, 2026-09-05: crypto-only parts are replaced with Indian ones",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-05_carry_replaces_funding.py",
+    "proposal": "docs/proposals/carry-replaces-funding.md"
   }
 }
