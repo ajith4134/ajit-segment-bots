@@ -53,7 +53,7 @@ BOT = "bear-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="bear-feature-builder",
     consumes=(
-        "bear-side-candidate", "broker-instrument-listing", "broker-open-interest",
+        "bear-side-candidate", "broker-subscribed-instrument-listing", "broker-open-interest",
         "order-book-snapshot", "symbol-price-frame", "symbol-profile", "symbol-universe",
     ),
     produces=("bear-feature-vector", "part-health"),
@@ -446,7 +446,7 @@ def start_part(context) -> int:
     candidates = Batch(read=context.bus.reader("bear-side-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_vectors = context.bus.publisher_for("bear-feature-vector")
     oi_aggregator = UnderlyingOpenInterestAggregator()

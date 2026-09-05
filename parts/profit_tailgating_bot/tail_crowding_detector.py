@@ -49,7 +49,7 @@ BOT = "profit-tailgating-bot"
 PART_DECLARATION = PartDeclaration(
     part_id="tail-crowding-detector",
     consumes=(
-        "follow-candidate", "order-book-snapshot", "broker-instrument-listing",
+        "follow-candidate", "order-book-snapshot", "broker-subscribed-instrument-listing",
         "broker-open-interest",
     ),
     produces=("crowding-reading", "part-health"),
@@ -266,7 +266,7 @@ def start_part(context) -> int:
 
     candidates = Batch(read=context.bus.reader("follow-candidate"))
     books = Batch(read=context.bus.reader("order-book-snapshot"))
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_readings = context.bus.publisher_for("crowding-reading")
     detector = TailCrowdingDetector(

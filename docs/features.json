@@ -86,10 +86,10 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "broker-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
         "broker-price-frame",
+        "broker-subscribed-instrument-listing",
         "cointegrated-pair",
         "consolidated-price",
         "cross-segment-signal",
@@ -128,9 +128,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -140,9 +140,9 @@
       "origin": "user",
       "approved": true,
       "consumes": [
-        "broker-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
+        "broker-subscribed-instrument-listing",
         "implied-vol-surface",
         "liquidity-grade",
         "symbol-price-frame",
@@ -165,9 +165,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -178,8 +178,8 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
-        "broker-instrument-listing",
         "broker-open-interest",
+        "broker-subscribed-instrument-listing",
         "consolidated-price",
         "counter-argument",
         "counterfactual-outcome",
@@ -245,9 +245,9 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -666,6 +666,7 @@
         "broker-market-data",
         "broker-order-book-snapshot",
         "broker-price-frame",
+        "broker-subscribed-instrument-listing",
         "candle",
         "feed-gap",
         "hardware-capacity",
@@ -702,7 +703,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-04",
+        "on": "2026-09-05",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -1289,8 +1290,8 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
-        "broker-instrument-listing",
         "broker-open-interest",
+        "broker-subscribed-instrument-listing",
         "bull-calibrated-conviction",
         "bull-entry-timing",
         "bull-exit-plan",
@@ -1348,9 +1349,9 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       },
       "peer_group": "segment-bots"
     },
@@ -1370,8 +1371,8 @@
         "bear-setup-weight",
         "bear-side-candidate",
         "bot-scorecard",
-        "broker-instrument-listing",
         "broker-open-interest",
+        "broker-subscribed-instrument-listing",
         "champion-choice",
         "entry-candidate",
         "excursion-profile",
@@ -1421,9 +1422,9 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       },
       "peer_group": "segment-bots"
     },
@@ -1435,8 +1436,8 @@
       "approved": true,
       "consumes": [
         "bot-scorecard",
-        "broker-instrument-listing",
         "broker-open-interest",
+        "broker-subscribed-instrument-listing",
         "champion-choice",
         "copy-latency",
         "copy-score",
@@ -1483,9 +1484,9 @@
         "RL-047"
       ],
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-05",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       },
       "peer_group": "segment-bots"
     },
@@ -1619,6 +1620,7 @@
         "broker-open-interest",
         "broker-option-greeks",
         "broker-order-book-snapshot",
+        "broker-subscription-state",
         "broker-token-standing",
         "market-session-state",
         "symbol-universe"
@@ -1632,6 +1634,8 @@
         "broker-option-greeks",
         "broker-order-book-snapshot",
         "broker-price-frame",
+        "broker-subscribed-instrument-listing",
+        "broker-subscription-state",
         "broker-token-standing",
         "candle",
         "market-data",
@@ -1641,7 +1645,7 @@
       "scope": "global",
       "scope_origin": "claude-flagged",
       "contract_recomputed": {
-        "on": "2026-09-04",
+        "on": "2026-09-05",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -3488,6 +3492,22 @@
       "id": "venue-announcement",
       "name": "venue announcement",
       "description": "A listing, delisting, maintenance window or rule change a venue published."
+    },
+    {
+      "id": "broker-subscription-state",
+      "name": "broker subscription state",
+      "description": "The instrument keys a broker feed reader currently has subscribed, and when it looked. A level: true until the subscription set changes. Stated by the part that holds the connection rather than re-derived from symbol-universe and the nearest-expiry rule, which is what that part uses to choose -- a second derivation would be free to disagree with the real subscription (Rule 8).",
+      "origin": "proposed",
+      "proposed": "2026-09-05",
+      "evidence": "docs/proposals/subscribed-instrument-listing-filter.md"
+    },
+    {
+      "id": "broker-subscribed-instrument-listing",
+      "name": "broker subscribed instrument listing",
+      "description": "One contract as the broker's instrument master lists it, narrowed to the instruments the feed is actually subscribed to. The same payload as broker-instrument-listing and a separate wire on purpose: everything that joins a listing to an LTP, a greek, an open-interest reading or a depth snapshot can only use a subscribed instrument, and the master is fifty times larger than the subscription.",
+      "origin": "proposed",
+      "proposed": "2026-09-05",
+      "evidence": "docs/proposals/subscribed-instrument-listing-filter.md"
     }
   ],
   "features": [
@@ -5950,7 +5970,7 @@
         "timed-intent",
         "symbol-universe",
         "symbol-quote-frame",
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-option-greeks",
         "broker-market-data"
       ],
@@ -5968,7 +5988,13 @@
       "proposed": "2026-08-20",
       "resource_class": "compute-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "cross-segment-lesson-bridge",
@@ -8688,7 +8714,7 @@
       "category": "bull-bot",
       "consumes": [
         "bull-side-candidate",
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-open-interest",
         "order-book-snapshot",
         "symbol-price-frame",
@@ -8713,7 +8739,13 @@
       },
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "bull-outlier-rejector",
@@ -9040,7 +9072,7 @@
       "category": "bear-bot",
       "consumes": [
         "bear-side-candidate",
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-open-interest",
         "order-book-snapshot",
         "symbol-price-frame",
@@ -9065,7 +9097,13 @@
       },
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "bear-outlier-rejector",
@@ -9486,7 +9524,7 @@
       "consumes": [
         "follow-candidate",
         "order-book-snapshot",
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-open-interest"
       ],
       "produces": [
@@ -9507,7 +9545,13 @@
       },
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "tail-follow-conviction-model",
@@ -9775,7 +9819,7 @@
       "role": "restate a reading from one segment for the sweepers of the other two",
       "category": "intelligence",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-open-interest",
         "symbol-price-frame",
         "position"
@@ -9794,7 +9838,13 @@
       "evidence": "docs/proposals/thinking-blocks-and-feed-expansion.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "self-model-reporter",
@@ -12518,6 +12568,7 @@
         "broker-order-book-snapshot",
         "broker-open-interest",
         "broker-option-greeks",
+        "broker-subscription-state",
         "part-health"
       ],
       "switchable": true,
@@ -12531,7 +12582,13 @@
       "evidence": "docs/superpowers/specs/2026-09-01-upstox-adapter-design.md",
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "broker-market-tape-writer",
@@ -12592,7 +12649,7 @@
       "role": "spot a far-out-of-the-money index option cheap enough to spike sharply if the underlying reaches its strike before today's close",
       "category": "opportunity-scanner",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
         "broker-price-frame",
@@ -12613,7 +12670,13 @@
       "evidence": "docs/superpowers/specs/2026-09-01-options-segment-bots-design.md",
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "broker-price-level-sampler",
@@ -12646,7 +12709,7 @@
       "role": "republish a broker's underlying-instrument prices as symbol-price-frame",
       "category": "market-data-feed",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-price-frame"
       ],
       "produces": [
@@ -12664,7 +12727,13 @@
       "evidence": "docs/proposals/broker-underlying-price-frame-bridge.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "broker-market-data-bridge",
@@ -12672,7 +12741,7 @@
       "role": "republish a broker's own LTP updates as market-data",
       "category": "market-data-feed",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-market-data"
       ],
       "produces": [
@@ -12690,7 +12759,13 @@
       "evidence": "docs/proposals/broker-market-data-bridge.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "broker-order-book-bridge",
@@ -12698,7 +12773,7 @@
       "role": "republish a broker's own depth updates as order-book-snapshot",
       "category": "market-data-feed",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-order-book-snapshot"
       ],
       "produces": [
@@ -12716,7 +12791,13 @@
       "evidence": "docs/proposals/broker-order-book-bridge.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "broker-candle-bridge",
@@ -12724,7 +12805,7 @@
       "role": "republish a broker's own OHLC bars as candle",
       "category": "market-data-feed",
       "consumes": [
-        "broker-instrument-listing",
+        "broker-subscribed-instrument-listing",
         "broker-candle"
       ],
       "produces": [
@@ -12742,7 +12823,13 @@
       "evidence": "docs/proposals/broker-candle-bridge.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-05",
+          "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        }
+      ]
     },
     {
       "id": "exchange-filing-reader",
@@ -13601,6 +13688,32 @@
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "subscribed-instrument-listing-filter",
+      "name": "Subscribed instrument listing filter",
+      "role": "restate the instrument master's rows for the instruments the feed is subscribed to",
+      "category": "broker-adapter",
+      "consumes": [
+        "broker-instrument-listing",
+        "broker-subscription-state"
+      ],
+      "produces": [
+        "broker-subscribed-instrument-listing",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-05",
+      "evidence": "docs/proposals/subscribed-instrument-listing-filter.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -14348,5 +14461,18 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-04_the_choice_decides_what_is_traded.py",
     "proposal": "docs/proposals/the-choice-decides-what-is-traded.md",
     "recorded_on": "2026-09-04"
+  },
+  "_proposal_2026-09-05_subscribed_instrument_listing_filter": {
+    "what": "subscribed-instrument-listing-filter -- holds the broker's instrument master and restates, on its own conveyor, only the rows for the instruments broker-market-feed-reader states it has subscribed. Ten of the fifteen consumers of broker-instrument-listing move onto the narrowed type; five stay on the master because they select from it, subscribe from it, or ask about the exchange rather than about this project's subscription.",
+    "why": "Measured on the live spine 2026-09-05, 35 minutes after start: broker-instrument-catalogue-reader published broker-instrument-listing 571,464 times and 77,477 of those deliveries did not land -- 13.6%, the second-worst undelivered type on the spine -- while broker-market-feed-reader reported subscribed_instruments 2,000 against a 102,940-row master. A listing for an unsubscribed instrument carries no LTP, no greek, no open interest and no depth, so none of those ten parts can join it to anything. Named as the outstanding argument by a8bdbb0, which fixed the master's delivery and did not act on its width.",
+    "decisions": {
+      "D-S1": "the bound is what the feed subscribed (2,000), not what the segment trades (symbol-universe, ~153) -- expiry-day-zero-to-hero-detector exists to find far-OTM contracts an ATM-ranked universe cap excludes, and not the master (102,940) either",
+      "D-S2": "the subscription is stated by the part that owns the connection, never re-derived from symbol-universe plus the nearest-expiry rule -- a second derivation may disagree with the real subscription (Rule 8)",
+      "D-S3": "a new part rather than a second audience on the catalogue reader or the feed reader (T-6); the filter is switchable and its being off costs the feed nothing (T-2/T-3), and a restatement loop must not live in the io-bound part whose skipped_tick_effect is corrupts",
+      "D-S4": "the filter holds the whole master and emits the subscribed subset. Keeping only rows already subscribed when they passed would make a newly subscribed contract wait a full restatement cycle -- and expiry-day contracts are subscribed on expiry morning, exactly when the detector needs them"
+    },
+    "origin": "designed by Claude, user asked for the blueprint edit 2026-09-05",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-05_subscribed_instrument_listing_filter.py",
+    "proposal": "docs/proposals/subscribed-instrument-listing-filter.md"
   }
 }

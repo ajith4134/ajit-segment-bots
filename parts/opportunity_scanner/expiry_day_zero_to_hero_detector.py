@@ -36,7 +36,7 @@ PART_ID = "expiry-day-zero-to-hero-detector"
 PART_DECLARATION = PartDeclaration(
     part_id="expiry-day-zero-to-hero-detector",
     consumes=(
-        "broker-instrument-listing", "broker-market-data", "broker-option-greeks",
+        "broker-subscribed-instrument-listing", "broker-market-data", "broker-option-greeks",
         "broker-price-frame", "training-label",
     ),
     produces=("entry-candidate", "part-health"),
@@ -323,7 +323,7 @@ def start_part(context) -> int:
     )
     from runtime.input_assembly import Batch
 
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     ltps = Batch(read=context.bus.reader("broker-market-data"))
     greeks = Batch(read=context.bus.reader("broker-option-greeks"))
     labels = Batch(read=context.bus.reader("training-label"))

@@ -60,7 +60,7 @@ PART_DECLARATION = PartDeclaration(
     part_id="instrument-selector",
     consumes=(
         "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
-        "symbol-universe", "symbol-quote-frame", "broker-instrument-listing", "broker-option-greeks",
+        "symbol-universe", "symbol-quote-frame", "broker-subscribed-instrument-listing", "broker-option-greeks",
         "broker-market-data",
     ),
     produces=("instrument-choice", "part-health"),
@@ -1097,7 +1097,7 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     quotes = Batch(read=context.bus.reader("symbol-quote-frame"))
     universe = Batch(read=context.bus.reader("symbol-universe"))
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     greeks = Batch(read=context.bus.reader("broker-option-greeks"))
     option_prices = Batch(read=context.bus.reader("broker-market-data"))
     publish_choices = context.bus.publisher_for("instrument-choice")

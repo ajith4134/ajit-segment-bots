@@ -40,7 +40,7 @@ UPSTOX_VENUE_ID = "upstox"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-order-book-bridge",
-    consumes=("broker-instrument-listing", "broker-order-book-snapshot"),
+    consumes=("broker-subscribed-instrument-listing", "broker-order-book-snapshot"),
     produces=("order-book-snapshot", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -96,7 +96,7 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
 
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     updates = Batch(read=context.bus.reader("broker-order-book-snapshot"))
     publish_books = context.bus.publisher_for("order-book-snapshot")
     bridge = BrokerOrderBookBridge()

@@ -38,7 +38,7 @@ UPSTOX_VENUE_ID = "upstox"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-underlying-price-frame-bridge",
-    consumes=("broker-instrument-listing", "broker-price-frame"),
+    consumes=("broker-subscribed-instrument-listing", "broker-price-frame"),
     produces=("symbol-price-frame", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -115,7 +115,7 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
 
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     publish_frames = context.bus.publisher_for("symbol-price-frame")
 

@@ -16,6 +16,7 @@ import urllib.request
 from runtime.brokers.broker_adapter import BrokerAdapter, InstrumentListing
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.restatement_conveyor import RestatementConveyor
 
 PART_ID = "broker-instrument-catalogue-reader"
 
@@ -85,10 +86,11 @@ def start_part(context) -> int:
     publish_listings = context.bus.publisher_for("broker-instrument-listing")
     refresh_interval_seconds = context.number("broker_catalogue_refresh_interval")
 
-    cycle_seconds = context.number("broker_catalogue_restatement_cycle_seconds")
+    conveyor = RestatementConveyor(
+        context.number("broker_catalogue_restatement_cycle_seconds")
+    )
 
     state = {"listings": (), "last_failure": None, "last_read_at": None}
-    cycle = {"position": 0, "restated": 0, "cycles": 0, "last_at": None, "rate": 0.0}
 
     def read_if_due(now: float) -> None:
         due = (
@@ -104,11 +106,13 @@ def start_part(context) -> int:
             state["last_failure"] = f"{type(failure).__name__}: {failure}"
             return
         state["last_read_at"] = now
-        # A re-fetch replaces the master and restarts the conveyor, so a listing
-        # that was dropped from the catalogue stops being restated and a new one
-        # is reached within a cycle.
+        # A re-fetch replaces the master, so a listing dropped from the
+        # catalogue stops being restated at once and a new one is reached within
+        # a cycle. The conveyor keeps its position across the swap rather than
+        # restarting -- see RestatementConveyor.hold for why restarting is the
+        # trap, not the safeguard.
         state["listings"] = fetched
-        cycle["position"] = 0
+        conveyor.hold(fetched)
 
     def restate_a_slice(now: float) -> None:
         """Say the next part of the master, at a rate a consumer can drain.
@@ -131,32 +135,14 @@ def start_part(context) -> int:
         per tick would speed up or slow down with the machine's load. What is
         owed is computed from elapsed time, and capped at one cycle so a long
         pause does not become the burst this exists to prevent.
-        """
-        listings = state["listings"]
-        if not listings:
-            return
-        rate = len(listings) / cycle_seconds
-        cycle["rate"] = rate
-        last = cycle["last_at"]
-        if last is None:
-            cycle["last_at"] = now
-            return
-        owed = int(rate * (now - last))
-        if owed <= 0:
-            return
-        owed = min(owed, len(listings))
-        cycle["last_at"] = now
 
-        position = cycle["position"]
-        end = position + owed
-        if end <= len(listings):
-            slice_ = listings[position:end]
-        else:
-            slice_ = listings[position:] + listings[: end - len(listings)]
-            cycle["cycles"] += 1
-        cycle["position"] = end % len(listings)
-        cycle["restated"] += len(slice_)
-        publish_listings(slice_)
+        The rate itself lives in `runtime/restatement_conveyor.py`, shared with
+        `subscribed-instrument-listing-filter`, which restates the subscribed
+        subset of this same master to the parts that can only use that.
+        """
+        slice_ = conveyor.due_slice(now)
+        if slice_:
+            publish_listings(slice_)
 
     def tick() -> None:
         import time
@@ -174,7 +160,7 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         read_standing=lambda: describe_standing(
-            state["listings"], state["last_failure"], cycle
+            state["listings"], state["last_failure"], conveyor.standing()
         ),
     )
 

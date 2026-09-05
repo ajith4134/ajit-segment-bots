@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from runtime.brokers.broker_adapter import (
-    BrokerAdapter, DecodedFeedMessage, InstrumentListing, SubscriptionMode,
-    SubscriptionRequest,
+    BrokerAdapter, BrokerSubscriptionState, DecodedFeedMessage, InstrumentListing,
+    SubscriptionMode, SubscriptionRequest,
 )
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -58,10 +58,19 @@ def fetch_authorized_stream_url(
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-market-feed-reader",
-    consumes=("broker-token-standing", "broker-instrument-listing", "symbol-universe"),
+    # In the blueprint's own order: code follows the registry, never the other
+    # way round, and this part's declaration had silently disagreed with it
+    # since the universe input was added -- no test compared the two for this
+    # block until 2026-09-05.
+    consumes=("broker-instrument-listing", "broker-token-standing", "symbol-universe"),
     produces=(
         "broker-market-data", "broker-candle", "broker-order-book-snapshot",
-        "broker-open-interest", "broker-option-greeks", "part-health",
+        "broker-open-interest", "broker-option-greeks",
+        # What it actually subscribed. Only this part knows: it takes the
+        # universe first and fills the rest of the connection from the master,
+        # under the adapter's own cap, so nothing downstream can re-derive the
+        # set without being free to disagree with it.
+        "broker-subscription-state", "part-health",
     ),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -143,6 +152,24 @@ def prioritize_index_option_chain(
 
     rest = (listing for listing in listings if listing.instrument_key not in priority_keys)
     return tuple(priority) + tuple(rest)
+
+
+def state_of_the_subscription(
+    broker_id: str,
+    subscribed: Sequence[SubscriptionRequest],
+    observed_at_ns: int,
+) -> BrokerSubscriptionState:
+    """What this connection carries right now, as one level.
+
+    Every instrument, not the newly added ones: a reader that started after the
+    connection opened has to be able to learn the whole set, and a part that is
+    told only about additions can never learn about the ones it missed.
+    """
+    return BrokerSubscriptionState(
+        broker_id=broker_id,
+        instrument_keys=tuple(request.instrument_key for request in subscribed),
+        observed_at_ns=observed_at_ns,
+    )
 
 
 @dataclass(frozen=True)
@@ -296,6 +323,7 @@ def start_part(context) -> int:
 
     from runtime.brokers.upstox import UpstoxAdapter
     from runtime.input_assembly import LatestByKey
+    from runtime.level_publishing import LevelPublisher, without_observation_time
 
     adapter = UpstoxAdapter()
     token_standing = LatestByKey(
@@ -327,6 +355,15 @@ def start_part(context) -> int:
     publish_book = context.bus.publisher_for("broker-order-book-snapshot")
     publish_oi = context.bus.publisher_for("broker-open-interest")
     publish_greeks = context.bus.publisher_for("broker-option-greeks")
+    # A level, not an event: the subscription is true until it changes, and it
+    # changes at most once a growth check. Compared without observed_at_ns, or
+    # the "when I looked" stamp would make every restatement look like a new
+    # subscription and nothing would ever be skipped.
+    say_the_subscription = LevelPublisher(
+        publish=context.bus.publisher_for("broker-subscription-state"),
+        refresh_interval_seconds=context.number("level_refresh_interval_seconds"),
+        identity_of=without_observation_time,
+    )
 
     counts = {"decoded_messages": 0}
 
@@ -461,9 +498,20 @@ def start_part(context) -> int:
         instrument_listings.take_in_what_arrived()
         token_standing.take_in_what_arrived()
         selected_universe.take_in_what_arrived()
-        if not ensure_connected():
+        connected = ensure_connected()
+        if connected:
+            grow_subscriptions_if_due()
+        # Said whether or not there is a connection, and before the drain that
+        # spends the rest of the tick: an empty subscription is a fact
+        # subscribed-instrument-listing-filter has to be told, or it would go on
+        # restating the set from a connection that has since dropped.
+        say_the_subscription.publish_level(
+            (state_of_the_subscription(
+                adapter.broker_id, state["subscribed"], time.time_ns(),
+            ),)
+        )
+        if not connected:
             return
-        grow_subscriptions_if_due()
         connection = state["connection"]
         if connection is None:
             return  # grow_subscriptions_if_due found the connection dead
@@ -520,4 +568,5 @@ __all__ = [
     "subscribe_the_universe_first",
     "prioritize_index_option_chain",
     "start_part",
+    "state_of_the_subscription",
 ]

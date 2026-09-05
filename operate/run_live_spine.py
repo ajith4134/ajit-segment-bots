@@ -135,6 +135,14 @@ LIVE_SPINE = (
     # bridge below read from this one part, the same shape as venue-trade-
     # stream-reader writing market-data for every crypto reader that followed.
     "broker-market-feed-reader",
+    # The master, narrowed to what that feed actually subscribed. Everything
+    # below joins a listing to an LTP, a greek, an open-interest reading or a
+    # depth snapshot, and none of those exist for an instrument nobody
+    # subscribed -- so ten parts were draining all 102,940 rows to use 2,000 of
+    # them, and 13.6% of the catalogue's deliveries were being dropped for want
+    # of inbox room (measured 2026-09-05). After the feed reader, because the
+    # subscription is the feed reader's own statement about itself.
+    "subscribed-instrument-listing-filter",
     "broker-market-tape-writer",
     "broker-price-level-sampler",
     "broker-account-funds-reader",
@@ -164,6 +172,14 @@ LIVE_SPINE = (
     # reading order; it takes its underlyings' prices from broker-price-frame,
     # which broker-price-level-sampler above already publishes.
     "broker-symbol-universe-bridge",
+    # Whether the market is open, before the one part whose whole behaviour
+    # turns on that answer. It sat forty lines further down until 2026-09-05,
+    # so broker-history-reader started with no market-session-state at all and
+    # decided whether to fetch history against a level nobody had published
+    # yet -- the ordering test had been failing on exactly this since the
+    # 2026-09-02 cutover, and a permanently red ordering test hides the next
+    # real inversion it exists to catch.
+    "market-session-calendar",
     # Prices for the hours the market is shut (2026-09-02). It fetches only
     # while market-session-state says the session is not open, so it never
     # stands in for a market it could be reading; it publishes `candle` and
@@ -185,7 +201,6 @@ LIVE_SPINE = (
     "instrument-restriction-state",
     "corporate-action-reader",
     "corporate-action-adjuster",
-    "market-session-calendar",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and

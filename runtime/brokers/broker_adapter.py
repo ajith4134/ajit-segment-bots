@@ -29,6 +29,7 @@ __all__ = [
     "BrokerOptionGreeks",
     "BrokerOrderBookLevel",
     "BrokerOrderBookUpdate",
+    "BrokerSubscriptionState",
     "BrokerTokenPolicy",
     "ConnectionDiscipline",
     "DecodedFeedMessage",
@@ -174,6 +175,26 @@ class SubscriptionRequest:
 
     instrument_key: str
     mode: SubscriptionMode
+
+
+@dataclass(frozen=True)
+class BrokerSubscriptionState:
+    """Which instruments a broker feed reader currently has subscribed.
+
+    Stated by the part that holds the connection, never re-derived: the feed
+    reader chooses from `symbol-universe` first and fills the rest of its
+    connection from the instrument master, under a cap the broker's own adapter
+    decides, so a second derivation of "what is probably subscribed" would be
+    free to disagree with what actually is (Rule 8).
+
+    `observed_at_ns` is when the reader looked at its own connection, not when
+    the subscription was sent -- a reader whose connection dropped restates this
+    with the set it has now.
+    """
+
+    broker_id: str
+    instrument_keys: tuple[str, ...]
+    observed_at_ns: int
 
 
 @dataclass(frozen=True)

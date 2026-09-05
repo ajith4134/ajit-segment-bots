@@ -55,7 +55,7 @@ PART_ID = "cross-segment-signal-bridge"
 PART_DECLARATION = PartDeclaration(
     part_id="cross-segment-signal-bridge",
     consumes=(
-        "broker-instrument-listing", "broker-open-interest", "symbol-price-frame", "position",
+        "broker-subscribed-instrument-listing", "broker-open-interest", "symbol-price-frame", "position",
     ),
     produces=("cross-segment-signal", "part-health"),
     resource_class="compute-bound",
@@ -355,7 +355,7 @@ def start_part(context) -> int:
     # flattened to its levels.
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
     positions = Batch(read=context.bus.reader("position"))
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     open_interest = Batch(read=context.bus.reader("broker-open-interest"))
     publish_signals = context.bus.publisher_for("cross-segment-signal")
     segment = str(context.setting("segment_id").value)

@@ -36,7 +36,7 @@ UPSTOX_VENUE_ID = "upstox"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-market-data-bridge",
-    consumes=("broker-instrument-listing", "broker-market-data"),
+    consumes=("broker-subscribed-instrument-listing", "broker-market-data"),
     produces=("market-data", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -81,7 +81,7 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
 
-    listings = Batch(read=context.bus.reader("broker-instrument-listing"))
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     updates = Batch(read=context.bus.reader("broker-market-data"))
     publish_trades = context.bus.publisher_for("market-data")
     bridge = BrokerMarketDataBridge()
