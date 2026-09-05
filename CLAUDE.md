@@ -27,14 +27,20 @@ necessary**, never cloned per segment.
 
 The user asked for this to be read at the start of every session so that
 reminding is not theirs to do. The full statement, in their own words, plus the
-two conflicts it has with the standing build order — Phase B being pulled
-forward, and the parked margin machinery a 5x equity bot actually needs — is at
-the top of `docs/goal.md`. **Index options has never completed a paper trade
-live as of 2026-09-05**; Monday's open is its first real test. All three
-segments were verified opening and closing a trade together on the real
-captured tape that day (index-options 500 tried/343 opened/216 closed,
-stock-options 254/80/13, cash-equity-intraday's real top-50 shortlist 50/49/23)
-— replay, not live, per RL-071; Monday's live open is still unproven.
+one still-open conflict it has with the standing build order — Phase B being
+pulled forward — is at the top of `docs/goal.md`. **Index options has never
+completed a paper trade live as of 2026-09-05**; Monday's open is its first
+real test. All three segments were verified opening and closing a trade
+together on the real captured tape that day (index-options 500 tried/343
+opened/216 closed, stock-options 254/80/13, cash-equity-intraday's real
+top-50 shortlist 50/49/23) — replay, not live, per RL-071; Monday's live open
+is still unproven. The other named conflict, the 5x-equity leverage machinery,
+was already resolved before this session (`leverage-selector` on since commit
+`b0a2d37`; `liquidation-price-tracker`/`paper-liquidation-simulator` correctly
+stay off — an intraday equity position is squared off by the broker, not
+liquidated at a price, and `intraday-square-off-placer` models that live) —
+verified 2026-09-05 by reading the code, `docs/goal.md`'s note updated to say
+so.
 
 `/home/anushadudekula71/ajit-segment-bots` is the home directory for this project.
 Everything built for it lives inside this directory. Claude Code starts here on

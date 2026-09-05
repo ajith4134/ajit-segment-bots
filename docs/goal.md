@@ -105,12 +105,23 @@ first real test this goal names.
 - Item 3 (the user's own correction of 2026-09-01) puts cash equity intraday
   with margin in **Phase B**, after both options bots are complete end-to-end.
   This temporary goal pulls it forward.
-- The 5x-leverage equity bot needs machinery this project deliberately parked:
-  `leverage-selector`, `liquidation-price-tracker` and
-  `paper-liquidation-simulator` were each closed as "not a gap — does not apply
-  to buy-only options". For a leveraged equity segment they stop being
-  non-applicable and become real, unbuilt work, alongside SEBI intraday margin
-  and the broker's own auto-square-off.
+- **Resolved before this session (verified 2026-09-05, this note was stale):**
+  the 5x-leverage equity bot needed machinery this project had parked as "not
+  a gap — does not apply to buy-only options". `leverage-selector` is no
+  longer one of them: commit `b0a2d37` turned it on, sized against the
+  broker's own `broker-margin-requirement` carry cost (replacing a crypto
+  `funding-forecast` placeholder that had been silently halving every Indian
+  leverage choice), and `position-sizer` reads its `leverage-choice`
+  (confirmed by reading both files, 263 tests pass). `liquidation-price-
+  tracker` and `paper-liquidation-simulator` stay off, and that is now a
+  documented finding rather than an omission (`operate/run_live_spine.py`,
+  same commit): an intraday equity position on Indian broker margin is not
+  liquidated at a price the way a perpetual is — the broker squares it off
+  from around 15:15 IST, which `intraday-square-off-placer` already models,
+  live on the spine. A liquidation price from a maintenance-margin rate would
+  be a number this market does not quote; those two stay declared-but-off
+  until a real margin-shortfall model is built, which is real unbuilt work
+  and not a switch.
 
 ## The goal in the user's words
 
