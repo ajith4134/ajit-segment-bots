@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import built_segments
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED, RiskLimit
 
@@ -60,7 +61,11 @@ class DrawdownBreaker:
         recovery_fraction: float,
         allowed_fraction_when_trading: float,
         now_ns=time.time_ns,
+        segment: str = "",
     ) -> None:
+        # Whose equity this breaker watches. Empty is spine-wide, which is what a
+        # caller trading one segment states.
+        self._segment = segment
         if not 0.0 < maximum_drawdown_fraction < 1.0:
             raise ValueError("a drawdown floor must be a fraction of equity between 0 and 1")
         if not 0.0 < recovery_fraction <= 1.0:
@@ -138,6 +143,10 @@ class DrawdownBreaker:
             reason=reason,
             is_binding=fraction <= NO_RISK_ALLOWED,
             decided_at_ns=self._now_ns(),
+            # Whose equity fell. Each segment bot has its own account since
+            # 2026-09-05, and a brake applied because one account drew down must
+            # not stop a segment whose own equity never moved.
+            segment=self._segment,
         )
         return self._standing_limit
 
@@ -174,24 +183,61 @@ def describe_drawdown(breaker: DrawdownBreaker) -> dict:
     }
 
 
+class SegmentDrawdownBreakers:
+    """One drawdown breaker per segment this spine trades.
+
+    A drawdown is a fall from an account's own high-water mark, and each segment
+    bot has its own account since 2026-09-05. One breaker fed one segment's
+    equity would apply that segment's brake to all three -- and, worse, would
+    never brake a segment whose own equity was the one that fell.
+    """
+
+    def __init__(self, breakers: dict) -> None:
+        if not breakers:
+            raise ValueError(
+                "a drawdown breaker with no segment publishes no risk-limit, and a "
+                "brake nobody can apply is not a brake"
+            )
+        self.breakers = dict(breakers)
+
+
+def describe_segment_drawdown(breakers: SegmentDrawdownBreakers) -> dict:
+    return {
+        "part_id": PART_ID,
+        "segments": sorted(breakers.breakers),
+        "by_segment": {
+            segment: describe_drawdown(breaker)
+            for segment, breaker in sorted(breakers.breakers.items())
+        },
+    }
+
+
 def run_drawdown_breaker(
-    breaker: DrawdownBreaker, control_socket, read_equity, publish_limit,
+    breaker: SegmentDrawdownBreakers, control_socket, read_equity, publish_limit,
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        equity = read_equity()
-        if equity is not None:
-            breaker.observe_equity(equity)
+        equity_by_segment = read_equity()
+        for segment, equity in equity_by_segment.items():
+            one = breaker.breakers.get(segment)
+            if one is not None and equity is not None:
+                one.observe_equity(equity)
         # Restated on every tick, whether or not equity arrived. Its five sibling
         # limiters already publish unconditionally; this one published only on a
         # reading, so a brake it had applied went quiet between readings and the
         # sizer -- which holds a limiter's word for a bounded time, because a
         # silent limiter and a stopped one are the same thing on the wire --
         # would have let the trade the brake was stopping through.
-        standing = breaker.read_limit()
-        if standing is not None:
+        # Restated for every segment on every tick, whether or not that
+        # segment's equity arrived.
+        standing = [
+            limit
+            for limit in (one.read_limit() for one in breaker.breakers.values())
+            if limit is not None
+        ]
+        if standing:
             publish_limit(standing)
 
     return run_part(
@@ -202,7 +248,7 @@ def run_drawdown_breaker(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_drawdown(breaker),
+        read_standing=lambda: describe_segment_drawdown(breaker),
     )
 
 
@@ -221,24 +267,33 @@ def start_part(context) -> int:
     closed = Batch(read=context.bus.reader("closed-trade"))
     episodes = Batch(read=context.bus.reader("drawdown-episode"))
     publish_limits = context.bus.publisher_for("risk-limit")
-    segment = str(context.setting("segment_id").value)
-    breaker = DrawdownBreaker(
-        maximum_drawdown_fraction=context.number("risk_maximum_drawdown_fraction"),
-        recovery_fraction=context.number("risk_drawdown_recovery_fraction"),
-        allowed_fraction_when_trading=context.number("risk_allowed_fraction_when_clear"),
+    breakers = SegmentDrawdownBreakers(
+        breakers={
+            segment: DrawdownBreaker(
+                maximum_drawdown_fraction=context.number("risk_maximum_drawdown_fraction"),
+                recovery_fraction=context.number("risk_drawdown_recovery_fraction"),
+                allowed_fraction_when_trading=context.number(
+                    "risk_allowed_fraction_when_clear"
+                ),
+                segment=segment,
+            )
+            for segment in built_segments(context)
+        }
     )
 
     def read_equity():
         closed.payloads()
         episodes.payloads()
-        balance = balances.mapping().get(segment)
-        return None if balance is None else balance.equity
+        return {
+            segment: balance.equity
+            for segment, balance in balances.mapping().items()
+        }
 
     return run_drawdown_breaker(
-        breaker=breaker,
+        breaker=breakers,
         control_socket=context.control_socket,
         read_equity=read_equity,
-        publish_limit=lambda limit: publish_limits((limit,)),
+        publish_limit=lambda limits: publish_limits(list(limits)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

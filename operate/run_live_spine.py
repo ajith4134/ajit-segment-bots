@@ -494,13 +494,24 @@ LIVE_SPINE = (
     # The block that decides how much money a decision may use, and the desk that
     # holds the numbers the operator sets. Every capital ruling lands here.
     #
-    # leverage-selector, liquidation-price-tracker and margin-liquidation-
-    # watch are off: all three are margin/leverage-specific (RL-041/RL-053's
-    # ceiling-and-choice mechanism, a liquidation price, a margin-call risk
-    # limit), and Phase A is buy-only options -- no leverage dial, no
-    # liquidation price. position-sizer already defaults leverage to 1.0x
-    # without a leverage-choice; verified 2026-09-01, not a gap. Kept
-    # declared for Phase B's margin/leverage bot.
+    # leverage-selector is ON since 2026-09-05, and it was the gap the temporary
+    # goal named. It was off because Phase A was buy-only options -- no leverage
+    # dial, and position-sizer defaults to 1.0x without a leverage-choice, which
+    # was correct then and is a wrong answer now: cash-equity-intraday says
+    # leverage_ceiling 5.0 and the bot would have been sized unlevered while its
+    # own settings said five, with nothing reporting it. It answers once per
+    # segment that trades the underlying, so the options segments still get their
+    # 1.0x and only the segment that borrows borrows.
+    "leverage-selector",
+    # liquidation-price-tracker, margin-liquidation-watch and
+    # paper-liquidation-simulator stay off, and this is a finding rather than an
+    # omission: an intraday equity position on Indian broker margin is not
+    # liquidated at a price the way a perpetual is. The broker squares it off
+    # from around 15:15 IST, or calls for margin -- and the square-off is
+    # modelled, by `intraday-square-off-placer`. A liquidation price computed
+    # from a maintenance-margin rate would be a number this market does not
+    # quote. Kept declared; they need a margin-shortfall model, which is real
+    # unbuilt work and not a switch.
     "fund-lock-ledger",
     "drawdown-episode-tracker",
     # The brakes. Each emits its own risk-limit and the sizer takes the smallest,

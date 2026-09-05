@@ -1,0 +1,129 @@
+<title>Replay Board — 2026-09-04</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --ground:#eceff4; --surface:#ffffff; --ink:#161a21; --muted:#5c6675;
+  --line:#d3d9e2; --line-strong:#b6bfcd; --accent:#0c7c74; --warn:#9c6100;
+  --fail:#a32b22; --replay:#5b4bbd;
+  --shadow:0 1px 2px rgba(22,26,33,.06), 0 8px 24px -16px rgba(22,26,33,.28);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:#0f1319; --surface:#171c24; --ink:#e4e8ee; --muted:#8a93a2;
+    --line:#262d38; --line-strong:#3a4453; --accent:#35c9bc; --warn:#e0a22b;
+    --fail:#f0776b; --replay:#a99cf5;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:#0f1319; --surface:#171c24; --ink:#e4e8ee; --muted:#8a93a2;
+  --line:#262d38; --line-strong:#3a4453; --accent:#35c9bc; --warn:#e0a22b;
+  --fail:#f0776b; --replay:#a99cf5;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--ground); color:var(--ink); line-height:1.55;
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased; }
+.page { max-width:1180px; margin:0 auto; display:flex; flex-direction:column;
+  gap:2.2rem; padding:clamp(1.5rem,4vw,3.5rem) clamp(1rem,4vw,2rem) 5rem; }
+.eyebrow { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.72rem;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+h1 { font-family:Archivo,system-ui,sans-serif; font-weight:700; margin:0;
+  font-size:clamp(1.9rem,5vw,2.9rem); letter-spacing:-.025em; line-height:1.05; }
+.banner { border:1px solid var(--replay); border-left:4px solid var(--replay);
+  border-radius:3px; padding:.9rem 1.1rem; color:var(--ink); background:var(--surface);
+  box-shadow:var(--shadow); }
+.banner strong { color:var(--replay); font-family:"IBM Plex Mono",ui-monospace,monospace;
+  letter-spacing:.08em; }
+.stamp { display:flex; flex-wrap:wrap; gap:.5rem 1.25rem; padding-top:.9rem;
+  border-top:1px solid var(--line); font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.82rem; color:var(--muted); }
+.stamp strong { color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums; }
+h2 { font-family:Archivo,system-ui,sans-serif; font-weight:600; font-size:.82rem;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 .8rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:.85rem; }
+.tile { background:var(--surface); border:1px solid var(--line);
+  border-left:3px solid var(--line-strong); border-radius:3px; padding:.9rem 1rem;
+  display:flex; flex-direction:column; gap:.3rem; box-shadow:var(--shadow); }
+.tile .k { font-size:.74rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
+  font-family:"IBM Plex Mono",ui-monospace,monospace; }
+.tile .v { font-size:1.35rem; font-variant-numeric:tabular-nums; }
+.tile.win { border-left-color:var(--accent); } .tile.win .v { color:var(--accent); }
+.tile.lose { border-left-color:var(--fail); } .tile.lose .v { color:var(--fail); }
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.88rem; min-width:820px; }
+th { text-align:right; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.68rem;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:500;
+  padding:.5rem .7rem; border-bottom:1px solid var(--line-strong); }
+th:first-child, td:first-child { text-align:left; }
+td { padding:.55rem .7rem; border-bottom:1px solid var(--line); color:var(--muted);
+  text-align:right; font-variant-numeric:tabular-nums; }
+td:first-child { color:var(--ink); white-space:nowrap;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.8rem; }
+td.win { color:var(--accent); } td.lose { color:var(--fail); }
+.flag { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.62rem;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--warn);
+  border:1px solid currentColor; border-radius:2px; padding:.05rem .3rem; margin-left:.4rem; }
+.empty { border:1px dashed var(--line-strong); border-radius:3px; text-align:center;
+  padding:clamp(2rem,6vw,3.5rem) 1.5rem; color:var(--muted); }
+.empty .headline { font-family:Archivo,system-ui,sans-serif; font-weight:600;
+  font-size:1.05rem; color:var(--ink); }
+footer { border-top:1px solid var(--line); padding-top:1.1rem; color:var(--muted);
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.74rem; line-height:1.8; }
+</style>
+<div class="page">
+  <header>
+    <div class="eyebrow">ajit-segment-bots · index-options</div>
+    <h1>Replay Board</h1>
+    <div class="banner" style="margin-top:1rem">
+      <strong>THIS IS A REPLAY — NOT LIVE TRADING.</strong>
+      Every row below was produced by walking captured Upstox prints from
+      2026-09-04 through the same fill, lot-book and
+      close-detection parts the live spine runs. No live money, no live decision, and
+      nothing here reached the spine's own state (RL-071). Live trades are on the
+      trade board, which never shows these.
+    </div>
+    <div class="stamp">
+      <span>replayed day <strong>2026-09-04</strong></span>
+      <span>run at <strong>2026-09-04T13:42:28+0000</strong></span>
+      <span>rendered <strong>2026-09-04 13:43 UTC</strong></span>
+      <span>source <strong>captured Upstox tape</strong></span>
+    </div>
+  </header>
+
+  <section>
+    <h2>What the replay did</h2>
+    <div class="grid">
+      <div class="tile"><div class="k">contracts replayed</div><div class="v">25</div></div>
+      <div class="tile"><div class="k">positions opened</div><div class="v">25</div></div>
+      <div class="tile"><div class="k">trades closed</div><div class="v">25</div></div>
+      <div class="tile"><div class="k">closed in profit</div><div class="v">8 of 25</div></div>
+      <div class="tile"><div class="k">fees paid (INR)</div><div class="v">1,416.22</div></div>
+      <div class="tile lose"><div class="k">net after fees (INR)</div><div class="v">-24.97</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Closed trades — replayed, not live</h2>
+    <div class="table-wrap"><table><thead><tr><th>contract</th><th>entry</th><th>exit</th><th>stop</th><th>target</th><th>qty</th><th>fees</th><th>net</th><th>prints walked</th></tr></thead><tbody><tr><td>NSE_FO|84221<span class="flag">venue key</span></td><td>68.25</td><td>78.00</td><td>61.85</td><td>77.85</td><td>75</td><td>57.80</td><td class='win'>673.45</td><td>194</td></tr><tr><td>NIFTY 24050 PE 08 SEP 26</td><td>124.95</td><td>131.45</td><td>122.55</td><td>128.55</td><td>75</td><td>65.40</td><td class='win'>422.10</td><td>28</td></tr><tr><td>NIFTY 24100 PE 08 SEP 26</td><td>155.75</td><td>161.25</td><td>152.95</td><td>159.95</td><td>75</td><td>69.61</td><td class='win'>342.89</td><td>23</td></tr><tr><td>NIFTY 23800 CE 08 SEP 26</td><td>223.05</td><td>228.25</td><td>219.85</td><td>227.85</td><td>75</td><td>79.01</td><td class='win'>310.99</td><td>51</td></tr><tr><td>NIFTY 23900 CE 08 SEP 26</td><td>146.80</td><td>150.55</td><td>144.40</td><td>150.40</td><td>75</td><td>68.17</td><td class='win'>213.08</td><td>24</td></tr><tr><td>NIFTY 23850 CE 08 SEP 26</td><td>182.90</td><td>186.65</td><td>180.50</td><td>186.50</td><td>75</td><td>73.23</td><td class='win'>208.02</td><td>10</td></tr><tr><td>NIFTY 23950 CE 08 SEP 26</td><td>114.15</td><td>117.55</td><td>112.15</td><td>117.15</td><td>75</td><td>63.56</td><td class='win'>191.44</td><td>10</td></tr><tr><td>NIFTY 24000 CE 08 SEP 26</td><td>86.50</td><td>88.95</td><td>84.90</td><td>88.90</td><td>75</td><td>59.58</td><td class='win'>124.17</td><td>10</td></tr><tr><td>NIFTY 23500 PE 08 SEP 26</td><td>4.95</td><td>5.55</td><td>4.55</td><td>5.55</td><td>75</td><td>47.96</td><td class='lose'>-2.96</td><td>1,301</td></tr><tr><td>NIFTY 24300 CE 08 SEP 26</td><td>9.75</td><td>10.35</td><td>9.35</td><td>10.35</td><td>75</td><td>48.63</td><td class='lose'>-3.63</td><td>181</td></tr><tr><td>NIFTY 23600 PE 08 SEP 26</td><td>7.85</td><td>7.40</td><td>7.45</td><td>8.45</td><td>75</td><td>48.25</td><td class='lose'>-82.00</td><td>142</td></tr><tr><td>NIFTY 23650 PE 08 SEP 26</td><td>10.55</td><td>10.10</td><td>10.15</td><td>11.15</td><td>75</td><td>48.63</td><td class='lose'>-82.38</td><td>121</td></tr><tr><td>NIFTY 24350 CE 08 SEP 26</td><td>6.95</td><td>6.45</td><td>6.55</td><td>7.55</td><td>75</td><td>48.12</td><td class='lose'>-85.62</td><td>595</td></tr><tr><td>NIFTY 24250 CE 08 SEP 26</td><td>17.70</td><td>17.20</td><td>17.30</td><td>18.30</td><td>75</td><td>49.63</td><td class='lose'>-87.13</td><td>10</td></tr><tr><td>NIFTY 24200 CE 08 SEP 26</td><td>26.50</td><td>25.90</td><td>26.10</td><td>27.10</td><td>75</td><td>50.85</td><td class='lose'>-95.85</td><td>1</td></tr><tr><td>NIFTY 23700 PE 08 SEP 26</td><td>14.30</td><td>13.50</td><td>13.50</td><td>15.50</td><td>75</td><td>49.12</td><td class='lose'>-109.12</td><td>119</td></tr><tr><td>NIFTY 23750 PE 08 SEP 26</td><td>19.85</td><td>19.05</td><td>19.05</td><td>21.05</td><td>75</td><td>49.90</td><td class='lose'>-109.90</td><td>51</td></tr><tr><td>NIFTY 23800 PE 08 SEP 26</td><td>27.65</td><td>26.80</td><td>26.85</td><td>28.85</td><td>75</td><td>50.98</td><td class='lose'>-114.73</td><td>32</td></tr><tr><td>NIFTY 23850 PE 08 SEP 26</td><td>37.85</td><td>36.55</td><td>36.65</td><td>39.65</td><td>75</td><td>52.37</td><td class='lose'>-149.87</td><td>9</td></tr><tr><td>NIFTY 24150 CE 08 SEP 26</td><td>38.70</td><td>37.40</td><td>37.90</td><td>39.90</td><td>75</td><td>52.48</td><td class='lose'>-149.98</td><td>1</td></tr><tr><td>NIFTY 24050 CE 08 SEP 26</td><td>72.10</td><td>70.60</td><td>70.90</td><td>73.90</td><td>75</td><td>57.14</td><td class='lose'>-169.64</td><td>11</td></tr><tr><td>NIFTY 23900 PE 08 SEP 26</td><td>51.70</td><td>49.80</td><td>50.10</td><td>54.10</td><td>75</td><td>54.24</td><td class='lose'>-196.74</td><td>9</td></tr><tr><td>NIFTY 24100 CE 08 SEP 26</td><td>54.60</td><td>52.70</td><td>53.80</td><td>55.80</td><td>75</td><td>54.65</td><td class='lose'>-197.15</td><td>1</td></tr><tr><td>NIFTY 23950 PE 08 SEP 26</td><td>69.30</td><td>66.50</td><td>67.70</td><td>71.70</td><td>75</td><td>56.61</td><td class='lose'>-266.61</td><td>10</td></tr><tr><td>NIFTY 24000 PE 08 SEP 26</td><td>98.90</td><td>91.60</td><td>96.90</td><td>101.90</td><td>75</td><td>60.28</td><td class='lose'>-607.78</td><td>28</td></tr></tbody></table></div>
+  </section>
+
+  <footer>
+    Generated by dashboard/build_replay_board.py from /home/anushadudekula71/.local/share/ajit-segment-bots/replay/2026-09-04.closed-trades.json<br>
+    Real: every price is a captured Upstox print, in the order and at the time it printed.
+    The fills, fees (Upstox's own charge stack on both legs), lot book, excursion tracking
+    and close detection are the live parts, not reimplementations.<br>
+    Stated: the entry is the session's first print for that contract, and the exits sit
+    8.0x (stop) and
+    12.0x (target) the contract's own median
+    move between prints. The live path takes these from stop-target-placer, which needs a
+    volatility forecast a cold replay does not have.<br>
+    Quantity is 75.0 per trade.
+    0 opened without closing; 0 never opened.<br>
+    A contract tagged <span class="flag">venue key</span> is shown by its Upstox instrument
+    key because the captured instrument master does not name it.
+  </footer>
+</div>

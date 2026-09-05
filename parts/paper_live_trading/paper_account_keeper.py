@@ -352,6 +352,7 @@ class SegmentPaperAccounts:
         self.keepers = dict(keepers)
         self.fills_without_a_segment = 0
         self.fills_for_an_unknown_segment: dict[str, int] = {}
+        self.allotments_for_a_segment_not_traded: dict[str, int] = {}
 
     def keeper_for(self, fill):
         segment = getattr(fill, "segment", "") or ""
@@ -366,6 +367,34 @@ class SegmentPaperAccounts:
         return keeper
 
 
+def fund_each_account_from_its_allotment(
+    accounts: SegmentPaperAccounts, allotment_by_segment: dict, funded_at: dict,
+) -> tuple[str, ...]:
+    """Set each segment's starting balance from its own allotment, once.
+
+    Named rather than left inside the part's tick closure so it can be tested:
+    the defect it prevents is silent, because an account nobody funded refuses
+    every fill for insufficient cash, which looks exactly like a strategy that
+    found no trades. Returns the segments funded by this call.
+    """
+    funded = []
+    for segment, allotment in allotment_by_segment.items():
+        keeper = accounts.keepers.get(segment)
+        if keeper is None:
+            # An allotment for a segment this spine does not trade. Not an error:
+            # the reader publishes what the operator listed, and this part keeps
+            # accounts for what the spine actually runs.
+            accounts.allotments_for_a_segment_not_traded[segment] = (
+                accounts.allotments_for_a_segment_not_traded.get(segment, 0) + 1
+            )
+            continue
+        if allotment.allotted != funded_at.get(segment):
+            keeper.set_allotment(allotment.allotted)
+            funded_at[segment] = allotment.allotted
+            funded.append(segment)
+    return tuple(funded)
+
+
 def describe_segment_paper_accounts(accounts: SegmentPaperAccounts) -> dict:
     return {
         "part_id": PART_ID,
@@ -377,6 +406,16 @@ def describe_segment_paper_accounts(accounts: SegmentPaperAccounts) -> dict:
         "fills_for_an_unknown_segment": dict(
             sorted(accounts.fills_for_an_unknown_segment.items())
         ),
+        "allotments_for_a_segment_not_traded": dict(
+            sorted(accounts.allotments_for_a_segment_not_traded.items())
+        ),
+        # The one number that says whether each bot has money at all. An account
+        # nobody funded refuses every fill for insufficient cash, which reads
+        # exactly like a strategy that found no trades.
+        "starting_balance_by_segment": {
+            segment: keeper.read_balance().starting_balance
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
         "by_segment": {
             segment: describe_paper_account(keeper)
             for segment, keeper in sorted(accounts.keepers.items())
@@ -513,16 +552,7 @@ def start_part(context) -> int:
     funded_at: dict = {}
 
     def read_fills(_accounts):
-        for segment, allotment in allotments.mapping().items():
-            keeper = accounts.keepers.get(segment)
-            if keeper is None:
-                # An allotment for a segment this spine does not trade. Not an
-                # error here: the reader publishes what the operator listed, and
-                # this part keeps accounts for what the spine actually runs.
-                continue
-            if allotment.allotted != funded_at.get(segment):
-                keeper.set_allotment(allotment.allotted)
-                funded_at[segment] = allotment.allotted
+        fund_each_account_from_its_allotment(accounts, allotments.mapping(), funded_at)
         modes.payloads()
         rates.payloads()
         return fills.payloads()

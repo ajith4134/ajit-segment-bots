@@ -51,6 +51,14 @@ class RiskLimit:
     # the scope -- zeroed the whole segment's risk. Nine thousand consecutive
     # zero limits, over two symbols out of a hundred.
     symbols: tuple[str, ...] = EVERY_SYMBOL
+    # Which segment this limit is about, on the same principle as `symbols`:
+    # empty means every segment. Added 2026-09-05, when three segment bots began
+    # sharing one spine. The two limiters that reason about money -- exposure and
+    # drawdown -- compute a fraction of one segment's own equity, and applying
+    # that to another segment's order judges bot 3's risk against bot 1's
+    # account. The limiters that reason about a symbol or about the money mode
+    # are spine-wide and say so by naming no segment.
+    segment: str = ""
 
     @property
     def forbids_new_risk(self) -> bool:
@@ -66,6 +74,18 @@ class RiskLimit:
         if not self.symbols:
             return True
         return symbol is None or symbol in self.symbols
+
+    def applies_to_segment(self, segment: str | None) -> bool:
+        """Whether this limit binds the segment being sized.
+
+        A limit naming no segment binds every one of them, and a segment-scoped
+        limit binds a caller that names no segment too -- for the same reason
+        `applies_to` does: a sizer that cannot say whose money it is spending
+        cannot be told the limit does not apply.
+        """
+        if not self.segment:
+            return True
+        return not segment or segment == self.segment
 
 
 def tightest_limit(limits, now_ns=time.time_ns) -> RiskLimit:

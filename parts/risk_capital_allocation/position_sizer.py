@@ -663,18 +663,26 @@ def start_part(context) -> int:
         every_limit = limits.mapping()
 
 
-        def binding_limit_for(symbol: str | None) -> tuple[float, str] | None:
+        def binding_limit_for(
+            symbol: str | None, order_segment: str | None = None,
+        ) -> tuple[float, str] | None:
             """The smallest fraction any limiter allows for this symbol.
 
             Per symbol since 2026-08-25: a limit carries the symbols it is about,
             and a halt raised over an anomaly on two symbols used to zero the risk
             on all hundred. A limiter that says nothing about a symbol must not be
             able to stop it.
+
+            Per segment since 2026-09-05, on the same principle: exposure and
+            drawdown are fractions of one segment's own equity, and a limit
+            computed against the index bot's account must not size bot 3's order.
+            A limiter naming no segment is spine-wide and still binds everything.
             """
             applying = [
                 (limit.fraction_of_allotment, limit.limiter)
                 for limit in every_limit.values()
                 if limit.applies_to(symbol)
+                and limit.applies_to_segment(order_segment)
             ]
             return min(applying) if applying else None
 
@@ -698,7 +706,6 @@ def start_part(context) -> int:
 
             entry_price = entry_price_for(plan, instrument)
             stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
-            binding = binding_limit_for(intent.symbol)
             # Whose account this order is sized against. The selector's choice is
             # what names the segment -- a NIFTY option is an index-options order
             # because that is the segment whose settings claim it -- and this part
@@ -709,6 +716,7 @@ def start_part(context) -> int:
             order_segment = getattr(instrument, "chosen_segment", "") or segment
             balance = balance_by_segment.get(order_segment)
             leverage = leverage_by_symbol.get((*key, order_segment))
+            binding = binding_limit_for(intent.symbol, order_segment)
             sizer.standing.intents_seen += 1
             # Named one by one rather than as one condition: each is a different
             # part not producing, and which one it is decides what to go and look

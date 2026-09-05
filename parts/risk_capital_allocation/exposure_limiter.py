@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import built_segments
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED, RiskLimit
 
@@ -74,7 +75,12 @@ class ExposureLimiter:
         maximum_total_fraction: float,
         maximum_per_cluster_fraction: float,
         now_ns=time.time_ns,
+        segment: str = "",
     ) -> None:
+        # Whose equity this limiter measures against. Empty is spine-wide, which
+        # is what a caller trading one segment states and what every test written
+        # before 2026-09-05 assumes.
+        self._segment = segment
         for name, value in (
             ("per position", maximum_per_position_fraction),
             ("total", maximum_total_fraction),
@@ -257,6 +263,10 @@ class ExposureLimiter:
             reason=self._reason(binding_cap, allowed, total_used, cluster, cluster_used),
             is_binding=allowed <= NO_RISK_ALLOWED,
             decided_at_ns=self._now_ns(),
+            # Whose equity this fraction is of. Three segment bots share one spine
+            # since 2026-09-05 and each has its own allocated balance, so a limit
+            # computed against one account must not size another's order.
+            segment=self._segment,
         )
 
     def _reason(self, binding_cap, allowed, total_used, cluster, cluster_used) -> str:
@@ -308,15 +318,60 @@ def describe_exposure(limiter: ExposureLimiter) -> dict:
     }
 
 
+class SegmentExposureLimiters:
+    """One exposure limiter per segment this spine trades.
+
+    Exposure is an amount of risk measured against an account's equity, and each
+    segment bot has its own account since 2026-09-05. One limiter summing all
+    three segments' positions against one segment's equity would refuse bot 3's
+    order because bot 1 was already exposed -- and report a reason naming a
+    number from the wrong account.
+    """
+
+    def __init__(self, limiters: dict) -> None:
+        if not limiters:
+            raise ValueError(
+                "an exposure limiter with no segment publishes no risk-limit, and "
+                "position-sizer refuses every intent that has no limit applying to it"
+            )
+        self.limiters = dict(limiters)
+        self.positions_for_a_segment_not_traded: dict[str, int] = {}
+
+    def limiter_for(self, segment: str):
+        limiter = self.limiters.get(segment)
+        if limiter is None and segment:
+            self.positions_for_a_segment_not_traded[segment] = (
+                self.positions_for_a_segment_not_traded.get(segment, 0) + 1
+            )
+        return limiter
+
+    def read_limits(self) -> tuple:
+        return tuple(limiter.read_limit() for limiter in self.limiters.values())
+
+
+def describe_segment_exposure(limiters: SegmentExposureLimiters) -> dict:
+    return {
+        "part_id": PART_ID,
+        "segments": sorted(limiters.limiters),
+        "positions_for_a_segment_not_traded": dict(
+            sorted(limiters.positions_for_a_segment_not_traded.items())
+        ),
+        "by_segment": {
+            segment: describe_exposure(limiter)
+            for segment, limiter in sorted(limiters.limiters.items())
+        },
+    }
+
+
 def run_exposure_limiter(
-    limiter: ExposureLimiter, control_socket, read_exposure, publish_limit,
+    limiter: SegmentExposureLimiters, control_socket, read_exposure, publish_limit,
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
         read_exposure(limiter)
-        publish_limit(limiter.read_limit())
+        publish_limit(limiter.read_limits())
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -326,7 +381,7 @@ def run_exposure_limiter(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_exposure(limiter),
+        read_standing=lambda: describe_segment_exposure(limiter),
     )
 
 
@@ -354,28 +409,37 @@ def start_part(context) -> int:
     clusters = Batch(read=context.bus.reader("correlation-cluster"))
     trade_clusters = Batch(read=context.bus.reader("trade-cluster"))
     publish_limit = context.bus.publisher_for("risk-limit")
-    segment = str(context.setting("segment_id").value)
 
-    def read_exposure(limiter):
+    def read_exposure(limiters):
         # Exposure views and clusters are drained so a slow reader cannot fill an
         # inbox, and used where the limiter has somewhere to put them. Nothing
         # produces either in the first runs; the positions do the work.
         views.payloads()
         clusters.payloads()
         trade_clusters.payloads()
-        balance = balances.mapping().get(segment)
-        if balance is not None:
-            limiter.set_allotment(balance.equity)
+        for segment, balance in balances.mapping().items():
+            limiter = limiters.limiter_for(segment)
+            if limiter is not None:
+                limiter.set_allotment(balance.equity)
         for adjustment in stops.payloads():
             # Whichever stop is current: `new_stop` is where the position's stop
             # is after this decision, including the decision to leave it where it
             # was, so `previous_stop` is only read when there is no new one.
-            limiter.observe_stop(
-                adjustment.venue_id,
-                adjustment.symbol,
-                getattr(adjustment, "new_stop", None) or getattr(adjustment, "previous_stop", None),
-            )
+            # A stop names a symbol and not a segment, so it is offered to every
+            # segment's limiter: the one holding that position uses it and the
+            # others have no position to attach it to. Two segments cannot hold
+            # the same (venue, symbol) at once, so this cannot double-count.
+            for limiter in limiters.limiters.values():
+                limiter.observe_stop(
+                    adjustment.venue_id,
+                    adjustment.symbol,
+                    getattr(adjustment, "new_stop", None)
+                    or getattr(adjustment, "previous_stop", None),
+                )
         for position in positions.payloads():
+            limiter = limiters.limiter_for(getattr(position, "segment", ""))
+            if limiter is None:
+                continue
             limiter.observe_position(
                 position.venue_id,
                 position.symbol,
@@ -385,14 +449,24 @@ def start_part(context) -> int:
             )
 
     return run_exposure_limiter(
-        limiter=ExposureLimiter(
-            maximum_per_position_fraction=context.number("risk_maximum_per_position_fraction"),
-            maximum_total_fraction=context.number("risk_maximum_total_fraction"),
-            maximum_per_cluster_fraction=context.number("risk_maximum_per_cluster_fraction"),
+        limiter=SegmentExposureLimiters(
+            limiters={
+                segment: ExposureLimiter(
+                    maximum_per_position_fraction=context.number(
+                        "risk_maximum_per_position_fraction"
+                    ),
+                    maximum_total_fraction=context.number("risk_maximum_total_fraction"),
+                    maximum_per_cluster_fraction=context.number(
+                        "risk_maximum_per_cluster_fraction"
+                    ),
+                    segment=segment,
+                )
+                for segment in built_segments(context)
+            }
         ),
         control_socket=context.control_socket,
         read_exposure=read_exposure,
-        publish_limit=lambda limit: publish_limit([limit]),
+        publish_limit=lambda limits: publish_limit(list(limits)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
