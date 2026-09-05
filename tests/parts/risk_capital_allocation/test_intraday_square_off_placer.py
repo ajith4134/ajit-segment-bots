@@ -52,17 +52,26 @@ class _Session:
         self.is_tradeable = True
 
 
-def a_position(symbol="RELIANCE", quantity=100.0):
+# The segment this part's positions belong to. Since 2026-09-05 a position names
+# its own segment and the placer closes only what a segment that squares off
+# daily holds -- an option position on the same spine must be left alone.
+AN_INTRADAY_SEGMENT = "cash-equity-intraday"
+A_SEGMENT_THAT_MAY_HOLD = "index-options"
+
+
+def a_position(symbol="RELIANCE", quantity=100.0, segment=AN_INTRADAY_SEGMENT):
     return Position(
         venue_id="upstox", symbol=symbol, quantity=quantity,
         average_entry_price=1402.5, realised_pnl=0.0, fees_paid=0.0,
-        opened_at_ns=at(10, 0), updated_at_ns=at(10, 0),
+        opened_at_ns=at(10, 0), updated_at_ns=at(10, 0), segment=segment,
     )
 
 
 def a_placer(clock, intraday=True, minutes_before=25.0):
     return IntradaySquareOffPlacer(
-        segment_is_intraday=intraday,
+        segments_squared_off_daily=(
+            frozenset({AN_INTRADAY_SEGMENT}) if intraday else frozenset()
+        ),
         minutes_before_the_close=minutes_before,
         session_closes_at=CLOSES_AT,
         timezone=IST,
@@ -230,3 +239,66 @@ def test_a_partly_filled_square_off_asks_only_for_what_is_left():
 
     assert placer.exits_to_place() == ()
     assert placer.placer.standing.quantity_asked_beyond_the_position == 0.0
+
+
+# ---- three segments on one spine (2026-09-05) --------------------------------
+
+
+def test_an_option_position_is_left_alone_on_a_spine_that_also_trades_equity():
+    """The defect this prevents: one boolean read from the spine's `segment_id`
+    closed either everything or nothing. With three segment bots running, only
+    what cash equity intraday holds may be squared off -- a bought option is held
+    to its own expiry and closing it every afternoon would end every options
+    trade the same way, at 15:15, for a reason nobody chose."""
+    clock = _Clock(at(15, 5))
+    placer = a_placer(clock)
+    placer.observe_session(_Session())
+    placer.observe_money_mode("paper", AN_INTRADAY_SEGMENT)
+    placer.observe_money_mode("paper", A_SEGMENT_THAT_MAY_HOLD)
+
+    placer.observe_position(a_position(symbol="RELIANCE"))
+    placer.observe_position(
+        a_position(symbol="NIFTY25000CE", segment=A_SEGMENT_THAT_MAY_HOLD)
+    )
+
+    exits = placer.exits_to_place()
+
+    assert [exit.symbol for exit in exits] == ["RELIANCE"]
+    assert placer.positions_on_a_segment_that_may_hold == 1
+
+
+def test_an_exit_carries_the_segment_whose_money_the_position_is():
+    """Carried to the fill, so the account that pays for the close is the one
+    that paid for the open."""
+    clock = _Clock(at(15, 5))
+    placer = a_placer(clock)
+    placer.observe_session(_Session())
+    placer.observe_money_mode("paper", AN_INTRADAY_SEGMENT)
+    placer.observe_position(a_position())
+
+    exits = placer.exits_to_place()
+
+    assert [exit.segment for exit in exits] == [AN_INTRADAY_SEGMENT]
+
+
+def test_a_segment_with_no_money_mode_stops_only_its_own_positions_closing():
+    """One segment's unreadable mode must not stop the other two closing what
+    they hold: the refusal is per position, not per tick."""
+    clock = _Clock(at(15, 5))
+    placer = IntradaySquareOffPlacer(
+        segments_squared_off_daily=frozenset({AN_INTRADAY_SEGMENT, "another-intraday"}),
+        minutes_before_the_close=25.0,
+        session_closes_at=CLOSES_AT,
+        timezone=IST,
+        repeat_after_seconds=5.0,
+        quantity_increment=1.0,
+        now_ns=clock,
+    )
+    placer.observe_session(_Session())
+    placer.observe_money_mode("paper", AN_INTRADAY_SEGMENT)
+    placer.observe_position(a_position(symbol="RELIANCE"))
+    placer.observe_position(a_position(symbol="TCS", segment="another-intraday"))
+
+    exits = placer.exits_to_place()
+
+    assert [exit.symbol for exit in exits] == ["RELIANCE"]

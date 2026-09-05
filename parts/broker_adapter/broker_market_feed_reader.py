@@ -345,12 +345,13 @@ def start_part(context) -> int:
         key_of=lambda entry: (entry.venue_id, entry.symbol),
         maximum_age_seconds=context.number("broker_subscription_universe_maximum_age"),
     )
-    # Which underlyings' chains get subscription priority. The segment's own,
-    # so pointing this spine at stock-options subscribes stock chains rather
-    # than filling the connection with index contracts it will never trade.
-    from runtime.segment_settings import underlyings_this_segment_trades
+    # Which underlyings' chains get subscription priority: every built segment's
+    # (2026-09-05), each once. Three bots share one connection to the broker, and
+    # a segment whose underlyings are not subscribed here receives no prices at
+    # all -- the bot runs, reports healthy, and never sees its own market.
+    from runtime.segment_settings import underlyings_every_built_segment_trades
 
-    tracked_index_trading_symbols = underlyings_this_segment_trades(context)
+    tracked_index_trading_symbols = underlyings_every_built_segment_trades(context)
 
     publish_ltp = context.bus.publisher_for("broker-market-data")
     publish_candle = context.bus.publisher_for("broker-candle")

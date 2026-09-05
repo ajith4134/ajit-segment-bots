@@ -52,3 +52,8 @@ note  = "Claude, 2026-09-05: the single-stock underlyings this segment trades th
 value = 20
 unit  = "option contracts per underlying per expiry"
 note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are published per underlying, nearest the money first. Twenty rather than index-options' fifty, and the arithmetic is the reason: fourteen underlyings at fifty is 700 contracts, and at twenty it is 280, against the 2,000 instruments one Upstox connection carries and which the index segment fills with three chains. Twenty each also keeps the pair scanner inside the bound the operator's captured_symbol_count ruling fixed for the same square-law reason. A stock chain is thinner than an index chain, so twenty nearest the money reaches further out of the money here than fifty does on NIFTY -- this is a dial to walk with measurement once the segment has completed a round trip, not before."
+
+[segment_instrument_types]
+value = ["option"]
+unit  = "instrument type"
+note  = "operator, 2026-09-05: which instrument types this segment claims. The same type as index-options, told apart by the underlyings above -- RELIANCE and the rest are single stocks. RELIANCE is also a cash-equity-intraday underlying and that is not an overlap: that segment claims spot, this one claims the option on it, and the pair (type, underlying) is what identifies a segment."

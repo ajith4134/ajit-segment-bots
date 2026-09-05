@@ -131,6 +131,9 @@ class OrderDestinationRouter:
                     # The order is still a market order; this is what lets the
                     # book refuse one whose decision has gone stale.
                     decided_at_price=stamped_order.entry_price,
+                    # Whose money this spends, carried to the fill and to the
+                    # account that pays for it (2026-09-05).
+                    segment=getattr(stamped_order, "segment", ""),
                     # The protective stop this entry will need once it fills.
                     # Carried, not acted on: what makes an order wait for a
                     # trigger is its type, never the presence of this number.
@@ -182,6 +185,7 @@ class OrderDestinationRouter:
             outcome=outcome,
             reason=reason,
             routed_at_ns=self._now_ns(),
+            segment=getattr(stamped_order, "segment", ""),
         )
 
 
@@ -237,7 +241,17 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey, LatestValue
 
     stamped = Batch(read=context.bus.reader("stamped-order"))
-    modes = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05). money-mode-reader publishes one for
+    # every segment this spine trades, and a LatestValue here would route every
+    # order by whichever segment's mode arrived last -- which on a spine where one
+    # segment is live and another is on paper is exactly the failure this part
+    # exists to prevent. Age-bounded: a mode that stopped being restated must stop
+    # addressing orders, and an order with no mode is refused by name already.
+    modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     schedules = LatestByKey(
         read=context.bus.reader("execution-schedule"),
         key_of=lambda schedule: (schedule.venue_id, schedule.symbol),
@@ -247,10 +261,14 @@ def start_part(context) -> int:
 
     def read_orders():
         bounded.payloads()  # the gate's output arrives here too; the stamper's is what is routed
-        mode = modes.value()
+        mode_by_segment = modes.mapping()
         schedule_by_symbol = schedules.mapping()
         return tuple(
-            (order, mode, schedule_by_symbol.get((order.venue_id, order.symbol)))
+            (
+                order,
+                mode_by_segment.get(getattr(order, "segment", "")),
+                schedule_by_symbol.get((order.venue_id, order.symbol)),
+            )
             for order in stamped.payloads()
         )
 

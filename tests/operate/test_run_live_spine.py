@@ -290,11 +290,51 @@ def test_a_segment_that_is_not_on_paper_refuses_to_start(spine, durable_tmp_path
 
 
 def test_the_operator_s_own_settings_are_on_paper_right_now(spine):
-    """Not a test of the code -- a test of the machine this is running on."""
+    """Not a test of the code -- a test of the machine this is running on.
+
+    Every segment this spine trades, since 2026-09-05: checking only `segment_id`
+    would give exactly the reassurance this refusal exists for while two other
+    segments could be live.
+    """
     settings = spine.read_runtime_settings()
-    assert spine.refuse_unless_the_segment_is_on_paper(settings) == (
-        str(settings.read_value(spine.SEGMENT_ID_SETTING)), spine.PAPER
+    named = settings.entries.get(spine.BUILT_SEGMENTS_SETTING)
+    expected = (
+        [str(segment) for segment in named.value]
+        if named is not None and isinstance(named.value, (list, tuple)) and named.value
+        else [str(settings.read_value(spine.SEGMENT_ID_SETTING))]
     )
+
+    assert spine.refuse_unless_the_segment_is_on_paper(settings) == (
+        ", ".join(expected), spine.PAPER
+    )
+
+
+def test_a_live_segment_anywhere_in_the_list_refuses_the_spine(
+    spine, durable_tmp_path, monkeypatch,
+):
+    """The one that matters on a three-bot spine: `segment_id` still says paper
+    and a segment further down the list does not. Copied into a temporary config
+    home for the same reason the test above is -- the operator's own files are
+    never edited by a test."""
+    config_home = durable_tmp_path / "config-built-segments"
+    settings_root = config_home / "ajit-segment-bots" / "settings"
+    shutil.copytree(settings_directory(), settings_root)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    settings = spine.read_runtime_settings()
+    named = settings.entries.get(spine.BUILT_SEGMENTS_SETTING)
+    if named is None or len(named.value) < 2:
+        pytest.skip("this machine's spine trades one segment")
+    last = str(named.value[-1])
+    segment_file = settings_root / "segments" / f"{last}.toml"
+    segment_file.write_text(
+        segment_file.read_text().replace('value = "paper"', 'value = "live"', 1)
+    )
+
+    with pytest.raises(SystemExit) as refusal:
+        spine.refuse_unless_the_segment_is_on_paper(settings)
+
+    assert last in str(refusal.value)
+    assert "paper first" in str(refusal.value)
 
 
 def test_every_input_a_running_part_declares_has_a_producer_on_the_spine(spine):

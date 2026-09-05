@@ -116,6 +116,11 @@ class Fill:
     # and those are the same numbers at 1x and at 10x. One when nothing said,
     # which is the unlevered reading and the conservative one.
     leverage: float = 1.0
+    # Which segment's money bought this. Carried for the same reason `leverage` is:
+    # three segment bots share one spine since 2026-09-05, and the account that
+    # pays for a fill keeps one balance per segment. A fill states a price and a
+    # quantity, and those are the same whichever segment asked for them.
+    segment: str = ""
 
     @property
     def signed_quantity(self) -> float:
@@ -204,6 +209,13 @@ class OrderRequest:
     # the book filled at the live price, so every such trade opened six per cent
     # away from where it thought it was and its exits fired on arrival.
     decided_at_price: float = 0.0
+    # Which segment's money this order spends. Carried from the sizer to the fill
+    # (2026-09-05): the money mode, the capital bounds and the account balance are
+    # each published one per segment now, and an order that did not name its own
+    # would be routed against whichever segment's mode arrived last -- which, on a
+    # spine where one segment is live and another is on paper, is the one failure
+    # this whole block exists to prevent.
+    segment: str = ""
 
     @property
     def is_live_money(self) -> bool:
@@ -249,6 +261,15 @@ class Position:
     # formed and never again -- which is why the leverage has to travel with the
     # position rather than be looked up beside it.
     leverage: float | None = None
+    # Which segment's money is in this position. Travels with the position for
+    # exactly the reason the leverage does: the exits are placed long after the
+    # decision that opened it, and the parts that place them read one money mode
+    # per segment since 2026-09-05. A position restored from a checkpoint has no
+    # instrument choice behind it to ask, so an exit whose segment had to be
+    # looked up beside the position would be an exit with no mode -- and a part
+    # that cannot read the mode places no order, which leaves a real position
+    # with no stop.
+    segment: str = ""
 
     @property
     def direction(self) -> str:

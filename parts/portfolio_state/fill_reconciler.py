@@ -138,6 +138,12 @@ class FillReconciler:
                     # whose leverage nobody knows has no computable liquidation
                     # price, which stops new risk on its symbol.
                     "leverage": held.leverage,
+                    # And which segment's money it is. Without it a position that
+                    # survived a restart could not have an exit placed for it: the
+                    # exit parts read one money mode per segment, and a position
+                    # with no segment has no mode, and a part that cannot read the
+                    # mode places no order.
+                    "segment": held.segment,
                 }
                 for key, held in self._positions.items()
             },
@@ -162,6 +168,10 @@ class FillReconciler:
                 leverage=(
                     float(held["leverage"]) if held.get("leverage") is not None else None
                 ),
+                # Absent in a checkpoint written before positions carried it, and
+                # absent is the empty string -- the same "nobody said" this field
+                # means everywhere else, which the exit parts already handle.
+                segment=str(held.get("segment") or ""),
             )
             for text, held in (state.get("positions") or {}).items()
         }
@@ -191,6 +201,9 @@ class FillReconciler:
                 # Carried off the fill, which is the only place it survives the
                 # decision that chose it.
                 leverage=getattr(fill, "leverage", None),
+                # Off the fill for the same reason, and load-bearing for the same
+                # one: the exit parts read a money mode per segment.
+                segment=getattr(fill, "segment", ""),
             )
         else:
             position = self._apply(held, fill)
@@ -242,6 +255,14 @@ class FillReconciler:
             # is the leverage its margin was posted at.
             leverage=(
                 getattr(fill, "leverage", None) if held.quantity == 0 else held.leverage
+            ),
+            # A position reopened from flat takes the new fill's segment; one
+            # being added to or reduced keeps the segment it was opened in. Two
+            # segments cannot hold the same (venue, symbol) at once -- an
+            # underlying is claimed by one segment per instrument type -- so this
+            # is a carry, never a merge.
+            segment=(
+                getattr(fill, "segment", "") if held.quantity == 0 else held.segment
             ),
         )
 

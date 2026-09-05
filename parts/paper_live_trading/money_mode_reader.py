@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import built_segments
 from runtime.part_process import run_part
 from runtime.settings_reader import (
     SettingsParseRefused,
@@ -175,8 +176,47 @@ def describe_money_mode(reader: MoneyModeReader) -> dict:
     }
 
 
+class SegmentMoneyModes:
+    """One money-mode reader per segment this spine trades.
+
+    Whether money is real is a fact about a segment's own settings file, and three
+    segment bots run on one spine since 2026-09-05. `MoneyMode` already named the
+    segment it belongs to; what was missing was a producer that read more than one
+    file, so a spine trading three segments published one mode and every part
+    downstream applied it to all three -- including, in the worst direction, a
+    segment the operator had left on paper.
+    """
+
+    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns) -> None:
+        if not segments:
+            raise ValueError(
+                "a money-mode reader with no segment publishes nothing, and every part "
+                "that sends an order treats an absent mode as a reason to send none"
+            )
+        self.readers = tuple(
+            MoneyModeReader(segment=segment, now_ns=now_ns) for segment in segments
+        )
+
+    def read(self) -> tuple[MoneyMode, ...]:
+        return tuple(reader.read() for reader in self.readers)
+
+
+def describe_segment_money_modes(readers: SegmentMoneyModes) -> dict:
+    return {
+        "part_id": PART_ID,
+        "segments": [reader._segment for reader in readers.readers],
+        "live_segments": [
+            reader._segment for reader in readers.readers
+            if (mode := reader.current) is not None and mode.is_live
+        ],
+        "by_segment": {
+            reader._segment: describe_money_mode(reader) for reader in readers.readers
+        },
+    }
+
+
 def run_money_mode_reader(
-    reader: MoneyModeReader, control_socket, publish_mode,
+    reader: SegmentMoneyModes, control_socket, publish_mode,
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
@@ -189,7 +229,7 @@ def run_money_mode_reader(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_money_mode(reader),
+        read_standing=lambda: describe_segment_money_modes(reader),
     )
 
 
@@ -204,9 +244,9 @@ def start_part(context) -> int:
     publish_mode = context.bus.publisher_for("money-mode")
 
     return run_money_mode_reader(
-        reader=MoneyModeReader(segment=str(context.setting("segment_id").value)),
+        reader=SegmentMoneyModes(segments=built_segments(context)),
         control_socket=context.control_socket,
-        publish_mode=lambda mode: publish_mode([mode]),
+        publish_mode=lambda modes: publish_mode(list(modes)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

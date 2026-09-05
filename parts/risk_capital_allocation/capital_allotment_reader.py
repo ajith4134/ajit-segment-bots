@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import CapitalAllotment, TradeCapitalBounds
+from runtime.segment_settings import built_segments
 from runtime.settings_reader import (
     SettingsParseRefused,
     load_settings_document,
@@ -184,20 +185,77 @@ def describe_allotment(reader: CapitalAllotmentReader) -> dict:
     }
 
 
+
+class SegmentCapitalReaders:
+    """One reader per segment this spine trades, read together each tick.
+
+    Three segment bots run on one spine since 2026-09-05 and each has its own
+    allocated balance, its own per-trade bounds and its own leverage ceiling. The
+    payloads already carried the segment they belong to -- `CapitalAllotment` and
+    `TradeCapitalBounds` both name it -- so nothing downstream had to change shape;
+    what was missing was a producer that published more than one of them.
+
+    A segment whose file cannot be read publishes nothing while the others still
+    publish, which is the same rule one reader already applied to itself: there is
+    no default for how much money something may use, and one segment's unreadable
+    file is not a reason to stop the other two trading.
+    """
+
+    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns) -> None:
+        if not segments:
+            raise ValueError(
+                "a capital reader with no segment publishes no allocation at all, and "
+                "every part downstream that sizes a position would wait forever on a "
+                "level nothing produces"
+            )
+        self.readers = tuple(
+            CapitalAllotmentReader(segment=segment, now_ns=now_ns) for segment in segments
+        )
+        self.unreadable: dict[str, str] = {}
+
+    def read(self, main_account_maximum_capital_per_trade: float | None = None):
+        """Every segment's allotment that read cleanly, in the operator's order."""
+        allotments = []
+        for reader in self.readers:
+            try:
+                allotments.append(reader.read(main_account_maximum_capital_per_trade))
+                self.unreadable.pop(reader._segment, None)
+            except AllotmentUnreadable as refusal:
+                self.unreadable[reader._segment] = str(refusal)
+        return tuple(allotments)
+
+
+def describe_segment_capital(readers: SegmentCapitalReaders) -> dict:
+    """Every segment's standing, and which segments are publishing nothing.
+
+    `segments_publishing_nothing` is the counter that matters: a bot whose capital
+    file never read cleanly is a bot that will refuse every trade for a reason
+    stated three parts downstream, and this is where the cause is visible.
+    """
+    return {
+        "part_id": PART_ID,
+        "segments": [reader._segment for reader in readers.readers],
+        "segments_publishing_nothing": dict(sorted(readers.unreadable.items())),
+        "by_segment": {
+            reader._segment: describe_allotment(reader) for reader in readers.readers
+        },
+    }
+
+
 def run_capital_allotment_reader(
-    reader: CapitalAllotmentReader, control_socket, publish_allotment,
+    readers: SegmentCapitalReaders, control_socket, publish_allotment,
     health_interval_seconds: float, emit_health,
     read_main_account_maximum=lambda: None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        try:
-            publish_allotment(reader.read(read_main_account_maximum()))
-        except AllotmentUnreadable:
-            # Nothing is published. A segment that has never had readable capital
-            # settings must not appear downstream with any allocation at all.
-            pass
+        # A segment that has never had readable capital settings publishes nothing
+        # at all and does not stop the segments that have: there is no default for
+        # how much money something may use, and a part downstream receiving a guess
+        # would size a real position against it.
+        for allotment in readers.read(read_main_account_maximum()):
+            publish_allotment(allotment)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -207,7 +265,7 @@ def run_capital_allotment_reader(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_allotment(reader),
+        read_standing=lambda: describe_segment_capital(readers),
     )
 
 
@@ -247,7 +305,7 @@ def start_part(context) -> int:
         return None if setting is None else setting.maximum_capital_per_trade
 
     return run_capital_allotment_reader(
-        reader=CapitalAllotmentReader(segment=str(context.setting("segment_id").value)),
+        readers=SegmentCapitalReaders(segments=built_segments(context)),
         control_socket=context.control_socket,
         publish_allotment=publish_allotment,
         health_interval_seconds=context.health_interval_seconds,

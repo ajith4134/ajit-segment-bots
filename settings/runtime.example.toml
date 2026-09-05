@@ -4295,3 +4295,18 @@ note  = "Claude, 2026-09-05: what the broker charges per day on the part of an i
 value = 7200.0
 unit  = "seconds"
 note  = "Claude, 2026-09-05: how old a broker-margin-requirement may be before leverage-selector stops sizing against it. Two hours, twice margin_requote_interval_seconds (3600) -- the same one-missed-restatement-is-not-a-fault reasoning broker_instrument_listing_maximum_age carries against its own refresh interval. Bounded at all because an unbounded LatestByKey is the trap this project has fallen into repeatedly: on 2026-08-26 four parts read part-resource-usage with no bound and every part the governor had ever switched off still counted as running. Here the bound has teeth -- a permission the broker gave two hours ago and has not restated must expire into UNLEVERAGED_NO_BROKER_QUOTE rather than stand forever, because sizing against a stale grant is the same failure as sizing against one nobody gave."
+
+[built_segments]
+value = ["index-options", "stock-options", "cash-equity-intraday"]
+unit  = "segment"
+note  = "operator, 2026-09-05: every segment this spine trades at once, from the temporary goal in docs/goal.md -- three bots paper trading on live data by Monday 2026-09-07. `segment_id` above stays as the one whose settings stand in wherever a value is not keyed by segment yet; this is the list. A spine trading one segment states a one-item list rather than removing the setting. Order is the operator's and is kept: it is the order the instrument classifier reports claimants in, and nothing else depends on it. Adding a segment here is not enough to trade it -- segments/<id>.toml must exist and state its own capital, money mode, underlyings and instrument types."
+
+[capital_bounds_maximum_age_seconds]
+value = 120.0
+unit  = "seconds"
+note  = "Claude, 2026-09-05: how old a segment's trade-capital-bounds may be before trade-capital-bounds-gate stops binding orders against it. capital-allotment-reader re-reads and republishes every tick, so two minutes is many missed restatements and not one; the bound exists because the gate now keys bounds by segment (three segment bots on one spine) and an unbounded LatestByKey holds a key's last value forever -- the trap that on 2026-08-26 left every part the governor had switched off still counting as running. A segment whose capital settings stopped being read must stop having orders bound against the last figure it published: the gate refuses an order with no bounds by name, which is the honest answer, and binding a stale ceiling would be a silent one. Same figure and same reasoning as broker_subscription_universe_maximum_age."
+
+[money_mode_maximum_age_seconds]
+value = 120.0
+unit  = "seconds"
+note  = "Claude, 2026-09-05: how old a segment's money-mode may be before order-destination-router stops addressing orders with it. money-mode-reader re-reads and republishes every tick, so two minutes is many missed restatements. The bound exists because the router now keys the mode by segment -- three segment bots share one spine and one of them could be live while another is on paper -- and an unbounded LatestByKey holds a key's last value forever, which is what left every switched-off part counting as running on 2026-08-26. A segment whose mode stopped being read sends no order at all, which is what the router already does with an absent mode: paper would silently drop a live trade and live would spend real money on an unread setting."

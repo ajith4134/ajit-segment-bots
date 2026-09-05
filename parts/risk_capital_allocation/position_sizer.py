@@ -91,6 +91,14 @@ class SizedOrder:
     # order for one decision the same id, which is what makes a republished
     # intent one order rather than one order per tick.
     intent_id: str = ""
+    # Which segment's money this is. Three segment bots share one spine since
+    # 2026-09-05, and every part further along that holds money -- the capital
+    # bounds, the money mode, the account that pays for the fill -- publishes one
+    # level per segment. An order that did not carry its own would be matched
+    # against whichever segment's level arrived last, which is a wrong answer that
+    # reports nothing. Empty means the producer named no segment, which is what a
+    # spine trading one segment looked like before this.
+    segment: str = ""
 
     @property
     def is_tradeable(self) -> bool:
@@ -176,6 +184,7 @@ class PositionSizer:
         free_capital: float | None = None,
         intent_id: str = "",
         bound_by: str = "",
+        segment: str = "",
     ) -> SizedOrder:
         if risk_limit_fraction <= NO_RISK_ALLOWED:
             self.standing.refused_no_limit += 1
@@ -185,7 +194,7 @@ class PositionSizer:
             )
             return self._refusal(
                 venue_id, symbol, side, entry_price, stop_price, REFUSED_NO_LIMIT, leverage,
-                f"the binding risk limit allows nothing to be risked ({named})", intent_id,
+                f"the binding risk limit allows nothing to be risked ({named})", intent_id, segment,
             )
 
         if price_increment is None or price_increment <= 0:
@@ -195,7 +204,7 @@ class PositionSizer:
             self.standing.refused_no_increment += 1
             return self._refusal(
                 venue_id, symbol, side, entry_price, stop_price, REFUSED_NO_INCREMENT, leverage,
-                "no price increment is known for this symbol", intent_id,
+                "no price increment is known for this symbol", intent_id, segment,
             )
 
         entry = self._snap_price(entry_price, price_increment, side)
@@ -204,7 +213,7 @@ class PositionSizer:
             self.standing.refused_stop_invalid += 1
             return self._refusal(
                 venue_id, symbol, side, entry, stop, REFUSED_STOP_INVALID, leverage,
-                f"a {side} stop at {stop} is on the wrong side of an entry at {entry}", intent_id,
+                f"a {side} stop at {stop} is on the wrong side of an entry at {entry}", intent_id, segment,
             )
 
         # The loss per unit if the stop is hit, including the slippage past it
@@ -270,6 +279,7 @@ class PositionSizer:
                     f"{free_capital:,.2f} free at {leverage:g}x funds {affordable:g}, "
                     f"below the smallest tradeable size of {minimum_quantity:g}",
                     intent_id,
+                    segment,
                 )
             smallest_risk = minimum_quantity * loss_per_unit + self._fees_for(
                 minimum_quantity, entry, stop
@@ -280,6 +290,7 @@ class PositionSizer:
                 f"the smallest tradeable size of {minimum_quantity:g} would risk "
                 f"{smallest_risk:,.2f} against {risk_allowed:,.2f} allowed",
                 intent_id,
+                segment,
             )
 
         risk_at_stop = snapped * loss_per_unit + self._fees_for(snapped, entry, stop)
@@ -307,6 +318,7 @@ class PositionSizer:
             # drift with the market, and one standing AAVEUSDT decision became
             # seven orders and seven fills on the run of 12:08.
             intent_id=intent_id,
+            segment=segment,
             reason=(
                 f"{snapped:g} risks {risk_at_stop:,.2f} of {risk_allowed:,.2f} allowed, "
                 f"stopping {abs(entry - stop):g} away"
@@ -345,14 +357,15 @@ class PositionSizer:
         return round(math.floor(quantity / increment) * increment, 12)
 
     def _refusal(
-        self, venue_id, symbol, side, entry, stop, outcome, leverage, reason, intent_id=""
+        self, venue_id, symbol, side, entry, stop, outcome, leverage, reason,
+        intent_id="", segment="",
     ) -> SizedOrder:
         return SizedOrder(
             venue_id=venue_id, symbol=symbol, side=side, quantity=0.0,
             entry_price=entry, stop_price=stop, outcome=outcome,
             risk_allowed=0.0, risk_at_stop=0.0, fees_charged=0.0, notional=0.0,
             leverage=leverage, reason=reason, sized_at_ns=self._now_ns(),
-            intent_id=intent_id,
+            intent_id=intent_id, segment=segment,
         )
 
 
@@ -542,7 +555,17 @@ def start_part(context) -> int:
         )
 
     instruments = by_symbol("instrument-choice")
-    leverages = by_symbol("leverage-choice")
+    # Keyed by segment as well as symbol (2026-09-05). leverage-selector answers
+    # once per segment that trades the underlying, because an intent names an
+    # asset and not a contract: RELIANCE is unlevered as a stock option and up to
+    # 5x as a share bought intraday, and keying on the symbol alone would leave
+    # whichever answer arrived last standing for both.
+    leverages = LatestByKey(
+        read=context.bus.reader("leverage-choice"),
+        key_of=lambda choice: (
+            choice.venue_id, choice.symbol, getattr(choice, "segment", ""),
+        ),
+    )
     stop_plans = by_symbol("stop-target-plan")
     increments = by_symbol("price-increment")
     hints = by_symbol("size-hint")
@@ -639,7 +662,6 @@ def start_part(context) -> int:
         balance_by_segment = allotments.mapping()
         every_limit = limits.mapping()
 
-        balance = balance_by_segment.get(segment)
 
         def binding_limit_for(symbol: str | None) -> tuple[float, str] | None:
             """The smallest fraction any limiter allows for this symbol.
@@ -670,7 +692,6 @@ def start_part(context) -> int:
                 continue
             key = (intent.venue_id, intent.symbol)
             plan = plan_by_symbol.get(key)
-            leverage = leverage_by_symbol.get(key)
             hint = hint_by_symbol.get(key)
             increment = increment_by_symbol.get(key)
             instrument = instrument_by_symbol.get(key)
@@ -678,6 +699,16 @@ def start_part(context) -> int:
             entry_price = entry_price_for(plan, instrument)
             stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
             binding = binding_limit_for(intent.symbol)
+            # Whose account this order is sized against. The selector's choice is
+            # what names the segment -- a NIFTY option is an index-options order
+            # because that is the segment whose settings claim it -- and this part
+            # sizes for three segments since 2026-09-05. It read the spine's single
+            # `segment_id` until then, which was right for a spine trading one
+            # segment and would have sized a cash-equity order against the index
+            # bot's equity on a spine trading three.
+            order_segment = getattr(instrument, "chosen_segment", "") or segment
+            balance = balance_by_segment.get(order_segment)
+            leverage = leverage_by_symbol.get((*key, order_segment))
             sizer.standing.intents_seen += 1
             # Named one by one rather than as one condition: each is a different
             # part not producing, and which one it is decides what to go and look
@@ -744,6 +775,12 @@ def start_part(context) -> int:
                     # intent for three days without anything reporting it.
                     "size_multiple": hint.multiple_of_normal if hint is not None else None,
                     "free_capital": free_capital,
+                    # Whose money this is (2026-09-05). The selector chose the
+                    # instrument and therefore the segment; nothing downstream can
+                    # re-derive it, because an order states a symbol and a size and
+                    # a NIFTY option is only an index-options order because that is
+                    # the segment whose settings claim it.
+                    "segment": order_segment,
                 }
             )
         return tuple(sizable)

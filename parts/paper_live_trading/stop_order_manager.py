@@ -803,11 +803,21 @@ def start_part(context) -> int:
     an adjustment this part cannot read is counted and named rather than guessed
     at -- a misread stop price is a position protected at the wrong number.
     """
-    from runtime.input_assembly import Batch, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey
 
     adjustments = Batch(read=context.bus.reader("stop-adjustment"))
     positions = Batch(read=context.bus.reader("position"))
-    modes = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05), read for the segment the position
+    # belongs to. A stop is placed long after the decision that opened the
+    # position, so the segment travels on the position itself -- and this part
+    # sends no order at all without a mode, which for an exit means a real
+    # position left unprotected. That is why it is read per position rather than
+    # per spine.
+    modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     publish_orders = context.bus.publisher_for("order-request")
 
     # Positions seen flat since the last tick. Held here rather than asked of the
@@ -818,6 +828,10 @@ def start_part(context) -> int:
     # Which way each held position is held, beside how much of it. The resize
     # pass needs both to know which side an exit order sits on.
     held_direction: dict[tuple[str, str], str] = {}
+    # Which segment's money each held position is, so the exit reads that
+    # segment's mode. Kept beside the quantity for the same reason it is: the
+    # position stream is where this part learns what it protects.
+    held_segment: dict[tuple[str, str], str] = {}
     unreadable = {"count": 0, "last": None}
     # Adjustments read fine and deliberately not sent: a lock that decided to hold
     # the stop where it was. A different fact from one this part could not read,
@@ -839,7 +853,7 @@ def start_part(context) -> int:
     dropped = _Dropped()
 
     def read_adjustments():
-        mode = modes.value()
+        mode_by_segment = modes.mapping()
         for position in positions.payloads():
             key = (position.venue_id, position.symbol)
             was_held = held_quantity.get(key, 0.0)
@@ -848,9 +862,11 @@ def start_part(context) -> int:
                     gone_flat.append(key)
                 held_quantity.pop(key, None)
                 held_direction.pop(key, None)
+                held_segment.pop(key, None)
             else:
                 held_quantity[key] = position.quantity
                 held_direction[key] = position.direction
+                held_segment[key] = getattr(position, "segment", "")
 
         readable = []
         for adjustment in adjustments.payloads():
@@ -862,7 +878,9 @@ def start_part(context) -> int:
             if read is SKIP:
                 held_back["count"] += 1
                 continue
-            read["money_mode"] = mode
+            read["money_mode"] = mode_by_segment.get(
+                held_segment.get((adjustment.venue_id, adjustment.symbol), "")
+            )
             readable.append(read)
         return readable
 
@@ -885,13 +903,19 @@ def start_part(context) -> int:
         returns None for a position with no stop resting and for one already
         within a quantity step of its stop, which is every position almost always.
         """
-        mode = modes.value()
+        mode_by_segment = modes.mapping()
         # `Position.quantity` is signed -- negative is short -- and an order's
         # quantity is not. `read_adjustment` already takes the absolute value for
         # the same reason; a resize that forgot to would refuse every short as
         # having no position to protect.
         return tuple(
-            (venue_id, symbol, held_direction.get((venue_id, symbol), ""), abs(quantity), mode)
+            (
+                venue_id,
+                symbol,
+                held_direction.get((venue_id, symbol), ""),
+                abs(quantity),
+                mode_by_segment.get(held_segment.get((venue_id, symbol), "")),
+            )
             for (venue_id, symbol), quantity in held_quantity.items()
         )
 

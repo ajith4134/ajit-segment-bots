@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import built_segments, read_segment_setting
 from runtime.part_process import run_part
 from runtime.trading_types import BUY, LONG, SHORT, capital_committed_by, leverage_behind
 
@@ -326,26 +327,86 @@ def describe_paper_account(keeper: PaperAccountKeeper) -> dict:
     }
 
 
+class SegmentPaperAccounts:
+    """One paper account per segment this spine trades.
+
+    Three segment bots run on one spine since 2026-09-05 and each has its own
+    allocated balance. `AccountBalance` already named the segment it belonged to,
+    so nothing downstream had to change shape; what was missing was a keeper that
+    held more than one account. Sharing one account across three bots would let a
+    cash-equity loss shrink the index bot's risk budget, and every risk cap in a
+    segment is a fraction of its own equity.
+
+    A fill that names no segment is applied to no account and counted, rather than
+    applied to an arbitrary one: an unattributable fill is a defect upstream, and
+    charging it to whichever account happened to be first would hide it.
+    """
+
+    def __init__(self, keepers: dict) -> None:
+        if not keepers:
+            raise ValueError(
+                "a paper account keeper with no segment holds no money, and every "
+                "fill would be refused for insufficient cash while the settings said "
+                "the account was funded"
+            )
+        self.keepers = dict(keepers)
+        self.fills_without_a_segment = 0
+        self.fills_for_an_unknown_segment: dict[str, int] = {}
+
+    def keeper_for(self, fill):
+        segment = getattr(fill, "segment", "") or ""
+        if not segment:
+            self.fills_without_a_segment += 1
+            return None
+        keeper = self.keepers.get(segment)
+        if keeper is None:
+            self.fills_for_an_unknown_segment[segment] = (
+                self.fills_for_an_unknown_segment.get(segment, 0) + 1
+            )
+        return keeper
+
+
+def describe_segment_paper_accounts(accounts: SegmentPaperAccounts) -> dict:
+    return {
+        "part_id": PART_ID,
+        "segments": sorted(accounts.keepers),
+        # Both are defects upstream, not here, and both are silent without a
+        # counter: a fill charged to no account leaves the equity behind the
+        # positions the position keeper is holding.
+        "fills_without_a_segment": accounts.fills_without_a_segment,
+        "fills_for_an_unknown_segment": dict(
+            sorted(accounts.fills_for_an_unknown_segment.items())
+        ),
+        "by_segment": {
+            segment: describe_paper_account(keeper)
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
+    }
+
+
 def run_paper_account_keeper(
-    keeper: PaperAccountKeeper, control_socket, read_fills, publish_balance,
+    keeper: SegmentPaperAccounts, control_socket, read_fills, publish_balance,
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
     write_checkpoint=None,
 ) -> int:
     def tick() -> None:
-        applied = 0
+        applied: dict = {}
         for fill in read_fills(keeper):
-            if keeper.apply_fill(fill) == APPLIED:
-                applied += 1
-        if applied and write_checkpoint is not None:
-            # After the balance has changed and before anybody acts on it. A
-            # checkpoint written on a tick that changed nothing would rewrite the
-            # file at the fill stream's rate to record an account that had not
-            # moved -- the level-on-every-tick defect, one layer down in the
-            # filesystem.
-            write_checkpoint(keeper.standing.fills_applied)
-        publish_balance(keeper.read_balance())
+            one = keeper.keeper_for(fill)
+            if one is None:
+                continue
+            if one.apply_fill(fill) == APPLIED:
+                applied[one._segment] = applied.get(one._segment, 0) + 1
+        for segment in applied:
+            if write_checkpoint is not None:
+                # After the balance has changed and before anybody acts on it, and
+                # only for the account that moved. A checkpoint written on a tick
+                # that changed nothing would rewrite the file at the fill stream's
+                # rate to record an account that had not moved.
+                write_checkpoint(segment, keeper.keepers[segment].standing.fills_applied)
+        publish_balance([one.read_balance() for one in keeper.keepers.values()])
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -355,7 +416,7 @@ def run_paper_account_keeper(
         health_interval_seconds=health_interval_seconds,
         input_descriptors=input_descriptors,
         tick_floor_seconds=tick_floor_seconds,
-        read_standing=lambda: describe_paper_account(keeper),
+        read_standing=lambda: describe_segment_paper_accounts(keeper),
     )
 
 
@@ -379,20 +440,37 @@ def start_part(context) -> int:
         DurableStateStore,
         restore_and_arm_checkpoint,
     )
-    from runtime.input_assembly import Batch, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey
 
     fills = Batch(read=context.bus.reader("fill"))
-    allotments = LatestValue(read=context.bus.reader("capital-allotment"))
+    # One allotment per segment (2026-09-05). A LatestValue here would fund every
+    # account from whichever segment's allotment arrived last, and every risk cap
+    # in a segment is a fraction of its own equity. Age-bounded, because an
+    # allotment that stopped being restated must stop funding an account rather
+    # than standing forever (2026-08-26).
+    allotments = LatestByKey(
+        read=context.bus.reader("capital-allotment"),
+        key_of=lambda allotment: allotment.segment,
+        maximum_age_seconds=context.number("capital_bounds_maximum_age_seconds"),
+    )
     modes = Batch(read=context.bus.reader("money-mode"))
     rates = Batch(read=context.bus.reader("paper-currency-rate"))
     publish_balance = context.bus.publisher_for("account-balance")
-    segment = str(context.setting("segment_id").value)
-    keeper = PaperAccountKeeper(
-        segment=segment,
-        # The currency comes from that segment's own capital settings, which the
-        # context loaded beside the runtime scope. A currency in the runtime scope
-        # would be one currency for every segment.
-        currency=str(context.setting("quote_currency", scope=segment).value),
+
+    # The currency comes from each segment's own capital settings, read from the
+    # segment's file rather than through the context's loaded scope: the context
+    # loads one segment's scope (the spine's `segment_id`) and this part now keeps
+    # an account for every segment the spine trades.
+    accounts = SegmentPaperAccounts(
+        keepers={
+            segment: PaperAccountKeeper(
+                segment=segment,
+                currency=str(
+                    read_segment_setting(segment, "quote_currency").value
+                ),
+            )
+            for segment in built_segments(context)
+        }
     )
     # Restored before the allotment is applied, so `set_allotment` sees the
     # starting balance this account already had and adds nothing. Without the
@@ -409,32 +487,51 @@ def start_part(context) -> int:
         pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
     )
     store.root.mkdir(parents=True, exist_ok=True)
-    write_checkpoint = restore_and_arm_checkpoint(
-        store,
-        # Every fill, for the same reason the lot books use: a fill changes what
-        # the account holds and losing one costs a position its cash.
-        CheckpointSchedule(1),
-        PART_ID,
-        CHECKPOINT_COMPONENT,
-        keeper,
-        {},
-    )
-    funded_at = [None]
+    # One component per segment, because they are three separate accounts and one
+    # file holding whichever wrote last would be worse than none. The unsuffixed
+    # component this part wrote until 2026-09-05 is deliberately not migrated: it
+    # was read on the day of the change and held cash 0.0, no positions and 0
+    # fills applied, so there is nothing in it to carry forward -- index-options
+    # had never completed a paper trade.
+    writers = {
+        segment: restore_and_arm_checkpoint(
+            store,
+            # Every fill, for the same reason the lot books use: a fill changes
+            # what the account holds and losing one costs a position its cash.
+            CheckpointSchedule(1),
+            PART_ID,
+            f"{CHECKPOINT_COMPONENT}-{segment}",
+            keeper,
+            {},
+        )
+        for segment, keeper in accounts.keepers.items()
+    }
 
-    def read_fills(_keeper):
-        allotment = allotments.value()
-        if allotment is not None and allotment.allotted != funded_at[0]:
-            keeper.set_allotment(allotment.allotted)
-            funded_at[0] = allotment.allotted
+    def write_checkpoint(segment: str, observations: int) -> None:
+        writers[segment](observations)
+
+    funded_at: dict = {}
+
+    def read_fills(_accounts):
+        for segment, allotment in allotments.mapping().items():
+            keeper = accounts.keepers.get(segment)
+            if keeper is None:
+                # An allotment for a segment this spine does not trade. Not an
+                # error here: the reader publishes what the operator listed, and
+                # this part keeps accounts for what the spine actually runs.
+                continue
+            if allotment.allotted != funded_at.get(segment):
+                keeper.set_allotment(allotment.allotted)
+                funded_at[segment] = allotment.allotted
         modes.payloads()
         rates.payloads()
         return fills.payloads()
 
     return run_paper_account_keeper(
-        keeper=keeper,
+        keeper=accounts,
         control_socket=context.control_socket,
         read_fills=read_fills,
-        publish_balance=lambda balance: publish_balance([balance]),
+        publish_balance=publish_balance,
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,

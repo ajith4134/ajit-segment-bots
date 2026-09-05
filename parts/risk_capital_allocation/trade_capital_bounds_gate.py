@@ -84,6 +84,14 @@ class BoundedOrder:
     # and an order that dropped it would leave the account paying full notional
     # for a levered position.
     leverage: float = UNLEVERED
+    # Which segment's money this is. Three segment bots share one spine since
+    # 2026-09-05, and every part further along that holds money -- the capital
+    # bounds, the money mode, the account that pays for the fill -- publishes one
+    # level per segment. An order that did not carry its own would be matched
+    # against whichever segment's level arrived last, which is a wrong answer that
+    # reports nothing. Empty means the producer named no segment, which is what a
+    # spine trading one segment looked like before this.
+    segment: str = ""
 
     @property
     def may_be_sent(self) -> bool:
@@ -216,6 +224,11 @@ class TradeCapitalBoundsGate:
             # decision, and the id has to survive every step between the intent
             # and the venue or it stops being an identity.
             intent_id=getattr(sized_order, "intent_id", ""),
+            # Straight through for the same reason, and load-bearing beyond
+            # identity: the money mode and the account further along are one level
+            # per segment now, and an order that arrived there unnamed would be
+            # matched against whichever segment published last (2026-09-05).
+            segment=getattr(sized_order, "segment", ""),
         )
 
     def _refusal(self, sized_order, bounds, outcome, reason) -> BoundedOrder:
@@ -293,17 +306,31 @@ def start_part(context) -> int:
     refuses meanwhile. That is the correct direction to fail -- a bound checked
     against settings nobody verified is a bound with no authority behind it.
     """
-    from runtime.input_assembly import Batch, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
 
     sized = Batch(read=context.bus.reader("sized-order"))
-    bounds = LatestValue(read=context.bus.reader("trade-capital-bounds"))
+    # One bound per segment (2026-09-05). `capital-allotment-reader` publishes one
+    # `trade-capital-bounds` for every segment this spine trades, and a LatestValue
+    # here would hand every order whichever segment's bounds arrived last -- the
+    # index segment's Rs 100,000 ceiling applied to a cash-equity order, or the
+    # reverse, with nothing reporting it. Age-bounded, because bounds that stopped
+    # being restated must stop binding rather than stand forever (2026-08-26).
+    bounds = LatestByKey(
+        read=context.bus.reader("trade-capital-bounds"),
+        key_of=lambda bound: bound.segment,
+        maximum_age_seconds=context.number("capital_bounds_maximum_age_seconds"),
+    )
     verdicts = LatestValue(read=context.bus.reader("capital-settings-verdict"))
     publish_bounded_orders = context.bus.publisher_for("bounded-order")
 
     def read_sized_orders():
-        current_bounds = bounds.value()
+        bounds_by_segment = bounds.mapping()
+        permitted = does_verdict_permit_trading(verdicts.value())
         return tuple(
-            (order, current_bounds, does_verdict_permit_trading(verdicts.value()))
+            # An order whose segment has published no bounds gets None, which the
+            # gate already refuses by name: no bounds, no order. That is the same
+            # answer it gave before three segments ran, for the same reason.
+            (order, bounds_by_segment.get(getattr(order, "segment", "")), permitted)
             for order in sized.payloads()
         )
 

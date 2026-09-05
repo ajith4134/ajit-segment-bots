@@ -858,6 +858,7 @@ LIVE_SPINE = (
 PAPER = "paper"
 MONEY_MODE_SETTING = "money_mode"
 SEGMENT_ID_SETTING = "segment_id"
+BUILT_SEGMENTS_SETTING = "built_segments"
 
 
 def read_runtime_settings():
@@ -865,8 +866,12 @@ def read_runtime_settings():
 
 
 def refuse_unless_the_segment_is_on_paper(settings) -> tuple[str, str]:
-    """The segment this spine trades and the money mode it may run in, both
+    """Every segment this spine trades, and the money mode it may run in, both
     read from the operator's own files -- never a name fixed in this script.
+
+    Checks all of `built_segments` since 2026-09-05, not only `segment_id`.
+    Three segment bots run on this spine, and checking one of them would give
+    exactly the reassurance this refusal is for while two others could be live.
 
     Fixed as `TRADED_SEGMENT = "futures"` until 2026-09-02: runtime.toml's own
     segment_id had already been changed to "index-options" for the crypto-to-
@@ -884,18 +889,25 @@ def refuse_unless_the_segment_is_on_paper(settings) -> tuple[str, str]:
     who set this segment live and then started this spine gets a refusal instead
     of fourteen processes discovering it one at a time.
     """
-    segment = str(settings.read_value(SEGMENT_ID_SETTING))
-    document = load_settings_document(
-        settings_directory() / "segments" / f"{segment}.toml", segment
+    named = settings.entries.get(BUILT_SEGMENTS_SETTING)
+    listed = named.value if named is not None else None
+    segments = (
+        [str(segment) for segment in listed]
+        if isinstance(listed, (list, tuple)) and listed
+        else [str(settings.read_value(SEGMENT_ID_SETTING))]
     )
-    mode = str(document.read_value(MONEY_MODE_SETTING))
-    if mode != PAPER:
-        raise SystemExit(
-            f"{segment} says {MONEY_MODE_SETTING} = {mode!r}, and this spine starts the "
-            f"parts that place orders. Only {PAPER!r} may run here: RL-005 is paper first, with "
-            f"full experimentation and no restriction, and live only for what paper proved."
+    for segment in segments:
+        document = load_settings_document(
+            settings_directory() / "segments" / f"{segment}.toml", segment
         )
-    return segment, mode
+        mode = str(document.read_value(MONEY_MODE_SETTING))
+        if mode != PAPER:
+            raise SystemExit(
+                f"{segment} says {MONEY_MODE_SETTING} = {mode!r}, and this spine starts the "
+                f"parts that place orders. Only {PAPER!r} may run here: RL-005 is paper first, with "
+                f"full experimentation and no restriction, and live only for what paper proved."
+            )
+    return ", ".join(segments), PAPER
 
 
 def is_capture_script_running() -> list[str]:

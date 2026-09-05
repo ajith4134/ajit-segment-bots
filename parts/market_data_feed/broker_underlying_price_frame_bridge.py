@@ -119,12 +119,14 @@ def start_part(context) -> int:
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     publish_frames = context.bus.publisher_for("symbol-price-frame")
 
-    # This segment's underlyings, so a price frame follows segment_id rather
-    # than staying on the index chains whatever the spine was pointed at.
-    from runtime.segment_settings import underlyings_this_segment_trades
+    # Every built segment's underlyings (2026-09-05). This is the only producer
+    # of `symbol-price-frame` for a broker feed, and it is what the detectors
+    # consume -- a segment whose underlyings are missing here forms no opinion at
+    # all, which is how a bot can run healthy and never trade.
+    from runtime.segment_settings import underlyings_every_built_segment_trades
 
     bridge = BrokerUnderlyingPriceFrameBridge(
-        tracked_trading_symbols=underlyings_this_segment_trades(context)
+        tracked_trading_symbols=underlyings_every_built_segment_trades(context)
     )
 
     def tick() -> None:

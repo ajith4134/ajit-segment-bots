@@ -164,8 +164,8 @@ class PreExpiryPositionCloser:
         self._session_date = None
         self._session_is_open = None
 
-    def observe_money_mode(self, mode) -> None:
-        self._placer.observe_money_mode(mode)
+    def observe_money_mode(self, mode, segment: str = "") -> None:
+        self._placer.observe_money_mode(mode, segment)
 
     def observe_position(self, position) -> None:
         self._placer.observe_position(position)
@@ -279,7 +279,7 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     import zoneinfo
 
-    from runtime.input_assembly import Batch, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
     from runtime.market_conditions import EXCHANGE_TIMEZONE, read_clock_time
     from runtime.part_process import run_part
 
@@ -293,7 +293,13 @@ def start_part(context) -> int:
     session_maximum_age_ns = int(
         context.number("market_session_reading_maximum_age_seconds") * 1_000_000_000
     )
-    money_mode = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05): both options segments run on this
+    # spine and an expiry closes a position in whichever of them holds it.
+    money_modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     publish_orders = context.bus.publisher_for("order-request")
 
     closer = PreExpiryPositionCloser(
@@ -325,8 +331,8 @@ def start_part(context) -> int:
             closer.forget_the_session()
         else:
             closer.observe_session(current_session)
-        mode = money_mode.value()
-        closer.observe_money_mode(getattr(mode, "mode", None) if mode else None)
+        for segment, mode in money_modes.mapping().items():
+            closer.observe_money_mode(getattr(mode, "mode", None), segment)
 
         exits = closer.exits_to_place()
         if exits:

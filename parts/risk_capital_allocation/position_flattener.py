@@ -130,8 +130,8 @@ class PositionFlattener:
     def placer(self) -> PositionExitPlacer:
         return self._placer
 
-    def observe_money_mode(self, mode: str | None) -> None:
-        self._placer.observe_money_mode(mode)
+    def observe_money_mode(self, mode: str | None, segment: str = "") -> None:
+        self._placer.observe_money_mode(mode, segment)
 
     def observe_position(self, position) -> None:
         self._placer.observe_position(position)
@@ -273,12 +273,18 @@ def start_part(context) -> int:
         read=context.bus.reader("position"),
         key_of=lambda payload: (payload.venue_id, payload.symbol),
     )
-    modes = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05). A human override flattens what is
+    # held, and what is held on this spine belongs to three segments now.
+    modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     publish = context.bus.publisher_for("order-request")
 
     def read_inputs(flattener: PositionFlattener) -> None:
-        mode = modes.value()
-        flattener.observe_money_mode(getattr(mode, "mode", None))
+        for segment, mode in modes.mapping().items():
+            flattener.observe_money_mode(getattr(mode, "mode", None), segment)
         for position in positions.values():
             flattener.observe_position(position)
         override = overrides.value()

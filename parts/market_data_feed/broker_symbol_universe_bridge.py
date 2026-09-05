@@ -98,7 +98,7 @@ class BrokerSymbolUniverseBridge:
     def __init__(
         self,
         tracked_trading_symbols: tuple[str, ...],
-        option_contracts_per_underlying: int,
+        option_contracts_per_underlying: int | dict[str, int],
         now_ms=lambda: int(time.time() * 1000),
     ) -> None:
         if not tracked_trading_symbols:
@@ -108,14 +108,49 @@ class BrokerSymbolUniverseBridge:
                 "bridge -- which is exactly the state that left universal-symbol-sweeper "
                 "sweeping nothing for a day without anything reporting a fault"
             )
-        if option_contracts_per_underlying < 1:
-            raise ValueError(
-                f"option_contracts_per_underlying is {option_contracts_per_underlying}; a "
-                f"universe of underlyings with no chain cannot produce an option trade, "
-                f"and this segment trades options"
-            )
+        # One width, or one per underlying. Three segments on one spine want three
+        # different chains -- 50 contracts on an index, 20 on a single stock, and
+        # none at all on cash equity -- and one number for all of them would either
+        # truncate the index chain or spend the connection on stock strikes nothing
+        # trades (2026-09-05). An int means the same width for every underlying,
+        # which is what a one-segment spine states.
+        if isinstance(option_contracts_per_underlying, dict):
+            widths = {
+                str(symbol): int(width)
+                for symbol, width in option_contracts_per_underlying.items()
+            }
+            missing = sorted(set(tracked_trading_symbols) - set(widths))
+            if missing:
+                raise ValueError(
+                    f"no chain width is stated for {', '.join(missing)}; every tracked "
+                    f"underlying needs one, because an underlying whose width defaulted "
+                    f"would publish a chain nobody chose the size of (RL-061)"
+                )
+            # Zero is a real width here and not a refusal: a cash-equity underlying
+            # is tracked for its own price and no segment on this spine trades its
+            # options, so publishing a chain for it would spend the connection's
+            # instrument budget on contracts nothing can act on. A segment that DOES
+            # trade options cannot reach zero -- its width comes from its own
+            # settings file, which refuses to be missing.
+            negative = sorted(symbol for symbol, width in widths.items() if width < 0)
+            if negative:
+                raise ValueError(
+                    f"the chain width for {', '.join(negative)} is negative, which is "
+                    f"not a number of contracts"
+                )
+        else:
+            if option_contracts_per_underlying < 1:
+                raise ValueError(
+                    f"option_contracts_per_underlying is {option_contracts_per_underlying}; a "
+                    f"universe of underlyings with no chain cannot produce an option trade, "
+                    f"and this segment trades options"
+                )
+            widths = {
+                symbol: int(option_contracts_per_underlying)
+                for symbol in tracked_trading_symbols
+            }
         self._tracked = frozenset(tracked_trading_symbols)
-        self._contracts_per_underlying = option_contracts_per_underlying
+        self._contracts_per_underlying = widths
         self._now_ms = now_ms
         # The tracked underlyings, by the key the master gives them.
         self._underlying_by_key: dict[str, object] = {}
@@ -236,7 +271,16 @@ class BrokerSymbolUniverseBridge:
                 listing.instrument_key,
             )
         )
-        return tuple(on_the_chain[: self._contracts_per_underlying])
+        underlying = self._underlying_by_key.get(underlying_key)
+        width = self._contracts_per_underlying.get(
+            getattr(underlying, "trading_symbol", None)
+        )
+        if width is None:
+            # An underlying that is not tracked has no width and no chain. It
+            # cannot be reached from universe(), which iterates the tracked ones;
+            # returning nothing here says so rather than inventing a width.
+            return ()
+        return tuple(on_the_chain[:width])
 
     def universe(self) -> tuple[CapturableSymbol, ...]:
         """Every entry this segment's universe currently holds.
@@ -303,13 +347,16 @@ def start_part(context) -> int:
     # pointing this spine at stock-options would move the money and leave the
     # chains on NIFTY, BANKNIFTY and SENSEX -- healthy on every counter, and
     # trading the wrong segment.
+    # Every built segment's, not one segment's: three bots run on this spine
+    # (2026-09-05) and each underlying is subscribed once however many of them
+    # want it, with the chain width of whichever segment trades its options.
     from runtime.segment_settings import (
-        option_contracts_per_underlying, underlyings_this_segment_trades,
+        option_chain_width_by_underlying, underlyings_every_built_segment_trades,
     )
 
     bridge = BrokerSymbolUniverseBridge(
-        tracked_trading_symbols=underlyings_this_segment_trades(context),
-        option_contracts_per_underlying=option_contracts_per_underlying(context),
+        tracked_trading_symbols=underlyings_every_built_segment_trades(context),
+        option_contracts_per_underlying=option_chain_width_by_underlying(context),
     )
 
     # `symbol-universe` is a level: these are the symbols this system captures,

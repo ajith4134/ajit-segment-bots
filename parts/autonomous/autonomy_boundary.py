@@ -68,6 +68,9 @@ NARROWING_REASONS = (
 )
 
 PAPER = "paper"
+# Real money, named here for the same reason PAPER is: the strictest reading of
+# three segments' modes is what this boundary is granted against (2026-09-05).
+LIVE = "live"
 # The level a paper run is never issued below. Competence is measured from closed
 # trades and closed trades need trading, so on paper the evidence for acting can
 # only be gathered by acting: 49,908 envelopes issued on 2026-08-26, zero
@@ -353,6 +356,21 @@ def describe_boundary(boundary: AutonomyBoundary) -> dict:
     }
 
 
+def strictest_money_mode(modes) -> str | None:
+    """Live if any segment is live, None if none has been read, else paper.
+
+    None is not paper here: a floor granted because no mode could be read would
+    treat "we do not know" and "no money is at risk" as the same answer, and on a
+    spine trading three segments the one that matters is the riskiest.
+    """
+    names = [getattr(mode, "mode", None) for mode in modes]
+    if not names:
+        return None
+    if LIVE in names:
+        return LIVE
+    return PAPER if all(name == PAPER for name in names) else None
+
+
 def run_autonomy_boundary(
     boundary: AutonomyBoundary, control_socket, read_state, publish_envelopes,
     health_interval_seconds: float, emit_health,
@@ -396,7 +414,16 @@ def start_part(context) -> int:
         key_of=lambda maturity: (maturity.bot, maturity.regime),
     )
     modifications = Batch(read=context.bus.reader("modification-record"))
-    modes = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05), read as the strictest of them.
+    # This part grants autonomy over the whole spine and not over one segment, so
+    # any segment being live makes the spine live -- and any segment whose mode
+    # could not be read makes it unknown, which is not paper. Both readings are
+    # the conservative one, which is the direction this boundary must fail in.
+    modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     tiers = LatestValue(read=context.bus.reader("survival-tier"))
     publish_envelopes = context.bus.publisher_for("autonomy-envelope")
 
@@ -426,8 +453,7 @@ def start_part(context) -> int:
         tier = tiers.value()
         if tier is not None:
             boundary.observe_survival_tier(tier.tier)
-        mode = modes.value()
-        boundary.observe_money_mode(getattr(mode, "mode", None))
+        boundary.observe_money_mode(strictest_money_mode(modes.mapping().values()))
 
     return run_autonomy_boundary(
         boundary=boundary,

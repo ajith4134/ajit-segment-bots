@@ -90,6 +90,15 @@ class LeverageChoice:
     # never answered. None is not "no limit" -- see `choose`. Last and
     # defaulted so every existing construction of this payload still holds.
     broker_available_leverage: float | None = None
+    # Which segment this leverage is for. One underlying can belong to two
+    # segments at once -- RELIANCE is a stock option and a cash-equity share --
+    # and they do not share a ceiling: options are unlevered by construction and
+    # cash equity intraday borrows at up to 5x. Published one per segment since
+    # 2026-09-05, and position-sizer takes the one matching the segment the
+    # instrument choice landed in. Before this the ceiling came from the spine's
+    # single `segment_id`, so bot 3 would have been sized at the index segment's
+    # 1.0 while its own settings said five.
+    segment: str = ""
 
 
 @dataclass
@@ -136,6 +145,7 @@ class LeverageSelector:
         volatility_forecast: float | None,
         broker_available_leverage: float | None = None,
         a_broker_quote_is_required: bool = False,
+        segment: str = "",
     ) -> LeverageChoice:
         """Leverage for one trade. `volatility_forecast` is a fractional move per horizon.
 
@@ -163,6 +173,7 @@ class LeverageSelector:
                 volatility_forecast, None, None, 1.0, None,
                 "the broker has not said what it will lend against this instrument; "
                 "unlevered, because a leverage nobody granted is not one to size against",
+                segment,
             )
 
         if volatility_forecast is None or volatility_forecast <= 0:
@@ -173,6 +184,7 @@ class LeverageSelector:
                 self.carry_cost_per_day(broker_available_leverage), None, 1.0,
                 broker_available_leverage,
                 "no volatility forecast; unlevered is the only size that needs no forecast",
+                segment,
             )
 
         # The move the position must survive, and the leverage whose liquidation
@@ -217,6 +229,7 @@ class LeverageSelector:
                 f"; held at the {broker_available_leverage:.2f}x the broker lends"
                 if outcome == AT_BROKER_LIMIT else ""
             ),
+            segment,
         )
 
     def carry_cost_per_day(self, broker_available_leverage: float | None) -> float | None:
@@ -262,7 +275,7 @@ class LeverageSelector:
 
     def _choice(
         self, venue_id, symbol, leverage, outcome, ceiling, volatility, carry, implied,
-        penalty, broker_available, reason
+        penalty, broker_available, reason, segment=""
     ) -> LeverageChoice:
         return LeverageChoice(
             venue_id=venue_id,
@@ -277,6 +290,7 @@ class LeverageSelector:
             broker_available_leverage=broker_available,
             reason=reason,
             chosen_at_ns=self._now_ns(),
+            segment=segment,
         )
 
 
@@ -344,18 +358,24 @@ def start_part(context) -> int:
     )
     ceilings = LatestByKey(read=context.bus.reader("leverage-ceiling"), key_of=lambda a: a.segment)
     publish_choices = context.bus.publisher_for("leverage-choice")
-    segment = str(context.setting("segment_id").value)
     # A segment that squares off daily is one that borrows: its leverage is the
     # broker's to grant, so a missing quote must mean unlevered rather than the
     # ceiling. Silence means it does not borrow -- both options segments say
-    # nothing and buy contracts outright.
-    from runtime.segment_settings import SegmentSettingMissing, read_segment_setting
-    try:
-        a_broker_quote_is_required = bool(
-            read_segment_setting(segment, "positions_are_squared_off_daily").value
-        )
-    except (SegmentSettingMissing, OSError, ValueError):
-        a_broker_quote_is_required = False
+    # nothing and buy contracts outright. Read per segment since 2026-09-05,
+    # because all three run on this spine and only one of them borrows.
+    from runtime.segment_settings import (
+        SegmentSettingMissing, read_segment_setting, segments_trading_underlying,
+    )
+
+    def a_broker_quote_is_required_for(segment: str) -> bool:
+        try:
+            return bool(
+                read_segment_setting(segment, "positions_are_squared_off_daily").value
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            return False
+
+    borrows = {}
     selector = LeverageSelector(
         target_liquidation_distance=context.number("leverage_target_liquidation_distance"),
         volatility_horizons_to_survive=context.number("leverage_volatility_horizons_to_survive"),
@@ -365,26 +385,40 @@ def start_part(context) -> int:
     )
 
     def read_intents():
-        allotment = ceilings.mapping().get(segment)
+        ceiling_by_segment = ceilings.mapping()
         vol_by_symbol = volatility.mapping()
         requirement_by_symbol = requirements.mapping()
         requests = []
         for intent in intents.payloads():
-            if not intent.is_actionable or allotment is None:
+            if not intent.is_actionable:
                 continue
             key = (intent.venue_id, intent.symbol)
             forecast = vol_by_symbol.get(key)
             requirement = requirement_by_symbol.get(key)
-            requests.append({
-                "venue_id": intent.venue_id,
-                "symbol": intent.symbol,
-                "ceiling": allotment.leverage_ceiling,
-                "volatility_forecast": None if forecast is None else forecast.expected_volatility,
-                "broker_available_leverage": (
-                    None if requirement is None else requirement.leverage_available
-                ),
-                "a_broker_quote_is_required": a_broker_quote_is_required,
-            })
+            # One answer per segment that trades this underlying. An intent names
+            # an asset, not a contract, so which segment will carry it is not
+            # known yet -- RELIANCE could become a stock option or a share bought
+            # on margin, and those do not share a ceiling. The sizer takes the
+            # one matching the instrument the selector actually chose.
+            for segment in segments_trading_underlying(intent.symbol, context):
+                allotment = ceiling_by_segment.get(segment)
+                if allotment is None:
+                    continue
+                if segment not in borrows:
+                    borrows[segment] = a_broker_quote_is_required_for(segment)
+                requests.append({
+                    "venue_id": intent.venue_id,
+                    "symbol": intent.symbol,
+                    "segment": segment,
+                    "ceiling": allotment.leverage_ceiling,
+                    "volatility_forecast": (
+                        None if forecast is None else forecast.expected_volatility
+                    ),
+                    "broker_available_leverage": (
+                        None if requirement is None else requirement.leverage_available
+                    ),
+                    "a_broker_quote_is_required": borrows[segment],
+                })
         return tuple(requests)
 
     def publish(choices) -> None:

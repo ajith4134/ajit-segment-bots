@@ -94,6 +94,9 @@ class HeldPosition:
     symbol: str
     quantity: float
     direction: str
+    # Whose money it is, so the exit is sent where that segment's money mode says
+    # and the fill that closes it is charged to the right account (2026-09-05).
+    segment: str = ""
 
 
 class PositionExitPlacer:
@@ -125,7 +128,12 @@ class PositionExitPlacer:
         self._prefix = client_order_prefix
         self._now_ns = now_ns
         self._held: dict[tuple[str, str], HeldPosition] = {}
-        self._money_mode: str | None = None
+        # One money mode per segment (2026-09-05). Three segment bots share one
+        # spine and an exit is placed long after the decision that opened the
+        # position, so where it is sent is decided by the segment the position
+        # itself carries. The empty-string key is what a spine trading one
+        # segment produced before positions carried a segment at all.
+        self._money_mode_by_segment: dict[str, str] = {}
         self._sent_at_ns: dict[tuple[str, str], int] = {}
         # When this position's exit was first asked for, kept apart from the last
         # ask so a repeat does not reset the wait.
@@ -140,16 +148,27 @@ class PositionExitPlacer:
 
     # ---- what is open ------------------------------------------------------
 
-    def observe_money_mode(self, mode: str | None) -> None:
-        """Where an exit is sent. Never defaulted: paper and live are not
-        interchangeable, and guessing one is how a paper instruction reaches a
-        venue or a live book is closed on a simulator that owns nothing."""
+    def observe_money_mode(self, mode: str | None, segment: str = "") -> None:
+        """Where an exit is sent, for one segment. Never defaulted: paper and
+        live are not interchangeable, and guessing one is how a paper instruction
+        reaches a venue or a live book is closed on a simulator that owns
+        nothing."""
         if mode in (PAPER, LIVE):
-            self._money_mode = mode
+            self._money_mode_by_segment[segment] = mode
+
+    def money_mode_for(self, segment: str) -> str | None:
+        """The mode for one segment, or the spine-wide one a caller that names no
+        segment set. A position whose segment has no mode has no exit: this
+        returns None and `exits_for` refuses it by name."""
+        if segment in self._money_mode_by_segment:
+            return self._money_mode_by_segment[segment]
+        return self._money_mode_by_segment.get("")
 
     @property
     def money_mode(self) -> str | None:
-        return self._money_mode
+        """What a caller naming no segment set, kept for the parts and tests that
+        deal with one segment."""
+        return self._money_mode_by_segment.get("")
 
     def observe_position(self, position) -> None:
         key = (position.venue_id, position.symbol)
@@ -189,6 +208,7 @@ class PositionExitPlacer:
             symbol=position.symbol,
             quantity=position.quantity,
             direction=position.direction,
+            segment=getattr(position, "segment", ""),
         )
         self.standing.open_positions = len(self._held)
 
@@ -232,16 +252,18 @@ class PositionExitPlacer:
         the raw material every learner in this system trains on, and "a human
         said close" and "the contract expires today" must never read the same.
         """
-        if self._money_mode is None:
-            self.standing.refused_no_money_mode += 1
-            return ()
-
         now = self._now_ns()
         due = sorted(key for key in keys if key in self._held)
         exits = []
         at_the_cap = 0
         for key in due:
             held = self._held[key]
+            # Refused per position, not per tick: on a spine trading three
+            # segments one segment's mode being unreadable must not stop the
+            # other two closing what they hold.
+            if self.money_mode_for(held.segment) is None:
+                self.standing.refused_no_money_mode += 1
+                continue
             outstanding = self._outstanding.get(key, 0.0)
             allowance = abs(held.quantity) - outstanding
             # Below one order step there is nothing an order could sell, so an
@@ -302,7 +324,11 @@ class PositionExitPlacer:
         self._sequence += 1
         return OrderRequest(
             client_order_id=f"{self._prefix}-{held.venue_id}-{held.symbol}-{self._sequence}",
-            destination=PAPER_BOOK if self._money_mode == PAPER else LIVE_VENUE,
+            destination=(
+                PAPER_BOOK
+                if self.money_mode_for(held.segment) == PAPER
+                else LIVE_VENUE
+            ),
             venue_id=held.venue_id,
             symbol=held.symbol,
             side=SELL if held.direction == LONG else BUY,
@@ -313,6 +339,9 @@ class PositionExitPlacer:
             limit_price=0.0,
             stop_price=0.0,
             order_type=MARKET,
+            # The exit belongs to the segment the position does, so the fill that
+            # closes it reaches that segment's account.
+            segment=held.segment,
             slice_sequence=1,
             slice_count=1,
             at_second=0.0,

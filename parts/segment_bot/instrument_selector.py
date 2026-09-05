@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from runtime.price_frames import levels_in
 from runtime.quote_frames import quote_levels_in
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import built_segments
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
 from runtime.trading_types import (
@@ -69,21 +70,73 @@ PART_DECLARATION = PartDeclaration(
     skipped_tick_effect="delays",
 )
 
-# Which segment each instrument belongs to. The build order is futures first and
-# the other two are honestly empty, so this table is what lets the part say
-# "the right instrument is in a segment that is not built" instead of silently
-# choosing a different one.
-SEGMENT_OF = {
+# Which segment an instrument belongs to is a fact about the operator's settings,
+# not a table in this file. Until 2026-09-05 it was a table, and it mapped every
+# OPTION to "index-options" -- correct while that was the only options segment on
+# the spine and wrong the moment a second one started, because a RELIANCE call
+# would have been priced with the index segment's capital and counted against the
+# index segment's exposure while every counter read healthy.
+#
+# The pair (instrument kind, underlying) is what identifies a segment: index and
+# stock options are the same kind and differ only by underlying, and a stock's
+# share and its option are the same underlying and differ only by kind. Neither
+# half may be inferred from the other, so the resolver is handed both.
+UNKNOWN_SEGMENT = "unknown"
+
+# What a caller that states no resolver gets: the kind-only table this part used
+# until 2026-09-05. Kept because it is the only answer available without settings
+# -- a unit test constructing instruments by hand has no settings directory -- and
+# because it states the same thing it always did, that an instrument's kind alone
+# decides its segment. That is true of a spine trading one options segment and
+# false of one trading two, which is why start_part injects the settings resolver
+# instead of using this.
+SEGMENT_OF_KIND_ALONE = {
     PERPETUAL_FUTURE: "futures",
     DATED_FUTURE: "futures",
     SPOT: "spot",
-    # "index-options" (was "options", the retired crypto segment id) --
-    # Phase A is index options specifically (2026-09-01, options-segment-
-    # bots conversion). Otherwise every real option candidate would have
-    # been refused as an unbuilt-segment instrument, the same class of bug
-    # already fixed in cross-segment-signal-bridge/cross-segment-lesson-bridge.
     OPTION: "index-options",
 }
+
+
+def segment_resolver_from_settings(context, root=None):
+    """A callable naming the segment an instrument belongs to, from settings.
+
+    Built once when the part starts, because it reads every built segment's file
+    and the answer changes only when the operator edits one -- the same reasoning
+    `underlyings_this_segment_trades` records for reading the universe once.
+    """
+    from runtime.segment_settings import built_segments as listed_segments
+    from runtime.segment_settings import (
+        SegmentsOverlap, instrument_types_this_segment_trades, read_segment_symbols,
+    )
+
+    claims: dict[tuple[str, str], str] = {}
+    for segment in listed_segments(context):
+        # Deliberately not caught. A segment the operator listed whose file cannot
+        # be read is not a segment to skip: skipping it makes every one of its
+        # instruments read as belonging to an unbuilt segment, so that bot would
+        # run, report healthy and refuse every candidate for a reason naming the
+        # wrong cause. Failing to start says which file, once.
+        types = instrument_types_this_segment_trades(segment, root)
+        symbols = read_segment_symbols(
+            segment, "segment_underlying_trading_symbols", root
+        )
+        for instrument_type in types:
+            for symbol in symbols:
+                key = (instrument_type, symbol)
+                if key in claims and claims[key] != segment:
+                    raise SegmentsOverlap(
+                        f"{instrument_type} on {symbol} is claimed by {claims[key]} and "
+                        f"{segment}; whose capital buys it is undecidable"
+                    )
+                claims[key] = segment
+
+    def segment_of(instrument) -> str:
+        return claims.get(
+            (instrument.instrument_kind, instrument.symbol), UNKNOWN_SEGMENT
+        )
+
+    return segment_of
 
 # The broker this segment's instrument-selector prices options against.
 # Only ever Upstox until a second broker adapter exists (spec: Upstox is
@@ -149,10 +202,6 @@ class ListedInstrument:
     # before this needed the symmetric check supports_short already had.
     supports_long: bool = True
 
-    @property
-    def segment(self) -> str:
-        return SEGMENT_OF.get(self.instrument_kind, "unknown")
-
 
 @dataclass(frozen=True)
 class InstrumentChoice:
@@ -166,6 +215,14 @@ class InstrumentChoice:
     considered: int
     rejected: dict
     unbuilt_segment_would_have_won: str | None
+    # Which segment the chosen instrument belongs to, or None when nothing was
+    # chosen. Carried from here to the fill (2026-09-05): three segment bots share
+    # one spine, and the parts downstream that hold money -- the sizer, the
+    # capital bounds, the exposure limiter, the paper account -- each need to know
+    # whose capital this is. Before three segments ran they read one global
+    # `segment_id`, which was right for a spine trading one segment and silently
+    # wrong for a spine trading three.
+    chosen_segment: str | None
     state: str
     reason: str
     chosen_at_ns: int
@@ -247,6 +304,7 @@ class InstrumentSelector:
         self,
         built_segments: tuple,
         maximum_cost_fraction: float,
+        segment_of=None,
         round_trip_cost_fraction: float | None = None,
         price_staleness: PriceStalenessEstimator | None = None,
         now_ns=time.time_ns,
@@ -259,6 +317,16 @@ class InstrumentSelector:
         if not 0.0 < maximum_cost_fraction < 1.0:
             raise ValueError("the cost ceiling is a fraction of notional and must be inside (0, 1)")
         self._built_segments = tuple(built_segments)
+        # How an instrument names its segment. Injected, because the answer lives
+        # in the operator's settings files and a table in this module was wrong the
+        # moment a second options segment started (2026-09-05). A caller that
+        # states none falls back to the kind-only table, which is what this part
+        # did before settings could answer.
+        self._segment_of = segment_of or (
+            lambda instrument: SEGMENT_OF_KIND_ALONE.get(
+                instrument.instrument_kind, UNKNOWN_SEGMENT
+            )
+        )
         self._maximum_cost = maximum_cost_fraction
         # What a round trip costs on the perpetual this part registers from live
         # trades. None means it registers none, which is the right behaviour for a
@@ -760,23 +828,27 @@ class InstrumentSelector:
         # The best instrument may live in a segment this system has not built.
         # Saying so is the point: falling through to the futures instrument that
         # does exist would record a decision nobody made.
-        if best.segment not in self._built_segments:
-            self.standing.unbuilt_segment_wins[best.segment] = (
-                self.standing.unbuilt_segment_wins.get(best.segment, 0) + 1
+        best_segment = self._segment_of(best)
+        if best_segment not in self._built_segments:
+            self.standing.unbuilt_segment_wins[best_segment] = (
+                self.standing.unbuilt_segment_wins.get(best_segment, 0) + 1
             )
-            built = [entry for entry in priced if entry[2].segment in self._built_segments]
+            built = [
+                entry for entry in priced
+                if self._segment_of(entry[2]) in self._built_segments
+            ]
             if not built:
                 return self._choice(
-                    intent, None, None, None, len(listed), rejected, best.segment,
+                    intent, None, None, None, len(listed), rejected, best_segment,
                     BEST_IS_IN_AN_UNBUILT_SEGMENT,
                     f"the cheapest way to carry this intent is {best.contract_symbol} at "
-                    f"{best_cost:.3%}, and it is in the {best.segment} segment, which is not "
+                    f"{best_cost:.3%}, and it is in the {best_segment} segment, which is not "
                     f"built. Nothing in a built segment can express it, so this reports as "
                     f"unbuilt rather than choosing something else",
                 )
             best_cost, best_carry, best = built[0]
             unbuilt_note = (
-                f"; a cheaper instrument exists in the unbuilt {priced[0][2].segment} segment "
+                f"; a cheaper instrument exists in the unbuilt {self._segment_of(priced[0][2])} segment "
                 f"at {priced[0][0]:.3%}, which is the cost of the build order rather than of "
                 f"this decision"
             )
@@ -812,7 +884,11 @@ class InstrumentSelector:
 
         return self._choice(
             intent, best, best_cost, best_carry, len(listed), rejected,
-            priced[0][2].segment if priced[0][2].segment not in self._built_segments else None,
+            (
+                self._segment_of(priced[0][2])
+                if self._segment_of(priced[0][2]) not in self._built_segments
+                else None
+            ),
             CHOSEN,
             f"{best.contract_symbol} carries this intent at {best_cost:.3%} over its "
             f"{intent.horizon_seconds:.0f}s horizon "
@@ -1000,6 +1076,7 @@ class InstrumentSelector:
             considered=considered,
             rejected=dict(rejected),
             unbuilt_segment_would_have_won=unbuilt,
+            chosen_segment=None if chosen is None else self._segment_of(chosen),
             state=state,
             reason=reason,
             chosen_at_ns=self._now_ns(),
@@ -1149,7 +1226,11 @@ def start_part(context) -> int:
 
     return run_instrument_selector(
         selector=InstrumentSelector(
-            built_segments=(context.setting("segment_id").value,),
+            # Every segment this spine trades, and how an instrument names which
+            # one it belongs to (2026-09-05). A one-segment spine states a
+            # one-item list and behaves exactly as it did.
+            built_segments=built_segments(context),
+            segment_of=segment_resolver_from_settings(context),
             maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
             # A perpetual's round trip is two crossings of the spread at the taker
             # rate. The venue states what holding the contract costs; what

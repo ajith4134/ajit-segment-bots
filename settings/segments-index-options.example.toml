@@ -53,3 +53,8 @@ note  = "Claude, 2026-09-05: the underlyings this segment trades the option chai
 value = 50
 unit  = "option contracts per underlying per expiry"
 note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are published per underlying, nearest the money first. Fifty, the figure the operator's standing ruling on captured_symbol_count fixed on 2026-08-25 -- 'hold at 50 and stop walking' -- and for the reason in that note rather than by analogy: cointegration-pair-finder and spread-reversion-detector fail as the SQUARE of the universe, and at 205 symbols the pair finder had tested 3,277,888 pairs while the spread detector had dropped 332,858 inputs. Three indices at fifty is 150 contracts plus the underlyings, well inside the 2,000 a single Upstox connection carries."
+
+[segment_instrument_types]
+value = ["option"]
+unit  = "instrument type"
+note  = "operator, 2026-09-05: which instrument types this segment claims. index-options and stock-options both trade options and are told apart by their underlyings (NIFTY, BANKNIFTY, SENSEX here), so neither half of the pair may be inferred from the other -- segment_that_trades matches on both. An instrument matching no built segment is reported as belonging to a segment that is not built, never reassigned to the nearest one."

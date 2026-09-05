@@ -61,7 +61,7 @@ class IntradaySquareOffPlacer:
 
     def __init__(
         self,
-        segment_is_intraday: bool,
+        segments_squared_off_daily: frozenset,
         minutes_before_the_close: float,
         session_closes_at: datetime.time,
         timezone: datetime.tzinfo,
@@ -75,7 +75,13 @@ class IntradaySquareOffPlacer:
                 "the broker's own square-off starts earlier still; got "
                 f"{minutes_before_the_close!r} minutes"
             )
-        self._is_intraday = segment_is_intraday
+        # Which segments may not hold overnight, rather than whether this spine's
+        # one segment may (2026-09-05). Three segment bots run here and only cash
+        # equity intraday squares off: a boolean read from the spine's segment_id
+        # closed either everything or nothing, and with segment_id on
+        # index-options it was nothing -- the part ran, reported healthy, and the
+        # broker would have squared off bot 3's positions itself.
+        self._segments_squared_off_daily = frozenset(segments_squared_off_daily)
         self._minutes_before = minutes_before_the_close
         self._session_closes_at = session_closes_at
         self._timezone = timezone
@@ -88,6 +94,7 @@ class IntradaySquareOffPlacer:
         )
         self._session_date: datetime.date | None = None
         self.ticks_on_a_segment_that_may_hold = 0
+        self.positions_on_a_segment_that_may_hold = 0
         self.ticks_before_the_window = 0
         self.refused_no_session = 0
         self.session_readings_too_old = 0
@@ -111,17 +118,27 @@ class IntradaySquareOffPlacer:
             self.session_readings_too_old += 1
         self._session_date = None
 
-    def observe_money_mode(self, mode) -> None:
-        self._placer.observe_money_mode(mode)
+    def observe_money_mode(self, mode, segment: str = "") -> None:
+        self._placer.observe_money_mode(mode, segment)
 
     def observe_position(self, position) -> None:
+        """Only what a segment that squares off daily holds.
+
+        A position in a segment that may hold overnight is not this part's, and
+        observing it would put an option position on the list to be closed every
+        afternoon.
+        """
+        if getattr(position, "segment", "") not in self._segments_squared_off_daily:
+            self.positions_on_a_segment_that_may_hold += 1
+            return
         self._placer.observe_position(position)
 
     # ---- what it decides ---------------------------------------------------
 
     @property
     def is_intraday(self) -> bool:
-        return self._is_intraday
+        """Whether any segment on this spine squares off daily at all."""
+        return bool(self._segments_squared_off_daily)
 
     def is_inside_the_square_off_window(self, at_ns: int | None = None) -> bool:
         if self._session_date is None:
@@ -140,7 +157,7 @@ class IntradaySquareOffPlacer:
         they must not look the same: this segment may hold overnight, the window
         has not opened, and there is no session to judge against.
         """
-        if not self._is_intraday:
+        if not self._segments_squared_off_daily:
             self.ticks_on_a_segment_that_may_hold += 1
             return ()
         if self._session_date is None:
@@ -199,33 +216,46 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     import zoneinfo
 
-    from runtime.input_assembly import Batch, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue
     from runtime.market_conditions import EXCHANGE_TIMEZONE, read_clock_time
     from runtime.part_process import run_part
-    from runtime.segment_settings import SegmentSettingMissing, read_segment_setting
+    from runtime.segment_settings import (
+        SegmentSettingMissing, built_segments, read_segment_setting,
+    )
 
-    segment_id = str(context.setting("segment_id").value)
-    try:
-        may_not_hold_overnight = bool(
-            read_segment_setting(segment_id, "positions_are_squared_off_daily").value
-        )
-    except (SegmentSettingMissing, OSError, ValueError):
-        # A segment that says nothing holds its positions. The options segments
-        # say nothing and hold a bought contract to its own expiry, so silence
-        # has to mean "may hold" -- squaring those off daily would close every
-        # option position every afternoon.
-        may_not_hold_overnight = False
+    def _the_segment_squares_off_daily(segment: str) -> bool:
+        try:
+            return bool(
+                read_segment_setting(segment, "positions_are_squared_off_daily").value
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            return False
+
+    # Every segment this spine trades that may not hold overnight (2026-09-05).
+    # A segment that says nothing holds its positions: the options segments say
+    # nothing and hold a bought contract to its own expiry, so silence has to
+    # mean "may hold" -- squaring those off daily would close every option
+    # position every afternoon.
+    segments_squared_off_daily = frozenset(
+        segment
+        for segment in built_segments(context)
+        if _the_segment_squares_off_daily(segment)
+    )
 
     positions = Batch(read=context.bus.reader("position"))
     session = LatestValue(read=context.bus.reader("market-session-state"))
     session_maximum_age_ns = int(
         context.number("market_session_reading_maximum_age_seconds") * 1_000_000_000
     )
-    money_mode = LatestValue(read=context.bus.reader("money-mode"))
+    money_modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     publish_orders = context.bus.publisher_for("order-request")
 
     placer = IntradaySquareOffPlacer(
-        segment_is_intraday=may_not_hold_overnight,
+        segments_squared_off_daily=segments_squared_off_daily,
         minutes_before_the_close=context.number(
             "intraday_square_off_minutes_before_the_session_closes"
         ),
@@ -248,8 +278,8 @@ def start_part(context) -> int:
             placer.forget_the_session()
         else:
             placer.observe_session(current_session)
-        mode = money_mode.value()
-        placer.observe_money_mode(getattr(mode, "mode", None) if mode else None)
+        for segment, mode in money_modes.mapping().items():
+            placer.observe_money_mode(getattr(mode, "mode", None), segment)
 
         exits = placer.exits_to_place()
         if exits:

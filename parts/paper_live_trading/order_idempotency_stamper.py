@@ -67,6 +67,14 @@ class StampedOrder:
     # position ties up as its notional over this number and a fill states only a
     # price and a quantity, which are the same at 1x and at 10x.
     leverage: float = UNLEVERED
+    # Which segment's money this is. Three segment bots share one spine since
+    # 2026-09-05, and every part further along that holds money -- the capital
+    # bounds, the money mode, the account that pays for the fill -- publishes one
+    # level per segment. An order that did not carry its own would be matched
+    # against whichever segment's level arrived last, which is a wrong answer that
+    # reports nothing. Empty means the producer named no segment, which is what a
+    # spine trading one segment looked like before this.
+    segment: str = ""
 
 
 @dataclass
@@ -165,6 +173,11 @@ class OrderIdempotencyStamper:
             reason=reason,
             stamped_at_ns=self._now_ns(),
             leverage=leverage_behind(order),
+            # Straight through. Stamping is about identity and changes nothing
+            # about the order, and the segment has to survive every step between
+            # the sizer and the venue for the same reason the leverage does: the
+            # money mode the router reads is one level per segment (2026-09-05).
+            segment=getattr(order, "segment", ""),
         )
 
 

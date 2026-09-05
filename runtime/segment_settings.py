@@ -128,8 +128,213 @@ def option_contracts_per_underlying(context) -> int:
         return int(context.number("symbol_universe_option_contracts_per_underlying"))
 
 
+
+# Machine scope names which segments this spine actually trades. `segment_id` is
+# the one whose settings stand in wherever a value has not been keyed by segment
+# yet; `built_segments` is the list, and a spine running one segment states a
+# one-item list rather than a different shape (2026-09-05,
+# docs/proposals/three-segments-on-one-spine.md).
+BUILT_SEGMENTS_SETTING = "built_segments"
+SEGMENT_INSTRUMENT_TYPES_SETTING = "segment_instrument_types"
+
+
+class SegmentsOverlap(ValueError):
+    """Two built segments both claim the same instrument.
+
+    Never resolved by picking one. Which segment an instrument belongs to
+    decides whose money buys it, whose exposure it counts against and whose
+    money mode governs it, so a tie is a settings mistake with a wrong answer
+    behind it rather than a choice this code may make.
+    """
+
+
+def built_segments(context) -> tuple[str, ...]:
+    """Every segment this spine trades, in the order the operator listed them.
+
+    Falls back to the single `segment_id` when machine scope does not name the
+    list, which is what runtime.toml looked like before 2026-09-05. The fallback
+    keeps a one-segment spine starting without a settings edit; it is not a
+    default to keep, and a part relying on it says so on its own standing.
+    """
+    try:
+        listed = context.setting(BUILT_SEGMENTS_SETTING).value
+    except KeyError:
+        # SettingMissing is a KeyError. Machine scope not naming the list is the
+        # pre-2026-09-05 shape, and is the only absence this narrows to: a
+        # malformed value is not caught here, because a list the operator wrote
+        # and this code could not read must refuse rather than quietly become one
+        # segment.
+        listed = None
+    if isinstance(listed, (list, tuple)) and listed:
+        seen: dict[str, None] = {}
+        for segment in listed:
+            seen.setdefault(str(segment), None)
+        return tuple(seen)
+    return (str(context.setting("segment_id").value),)
+
+
+def underlyings_every_built_segment_trades(
+    context, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """The union of what every built segment trades, each underlying once.
+
+    The feed subscribes once per underlying however many segments want it:
+    RELIANCE is a stock-options underlying and a cash-equity-intraday one, and
+    subscribing twice would spend the broker's per-connection instrument budget
+    on a duplicate rather than on a symbol nothing is watching.
+    """
+    union: dict[str, None] = {}
+    for segment in built_segments(context):
+        try:
+            symbols = read_segment_symbols(
+                segment, "segment_underlying_trading_symbols", root
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        for symbol in symbols:
+            union.setdefault(symbol, None)
+    if union:
+        return tuple(union)
+    return underlyings_this_segment_trades(context)
+
+
+def instrument_types_this_segment_trades(
+    segment_id: str, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Which instrument types belong to one segment, from its own file.
+
+    Two segments can share an underlying and never share an instrument: RELIANCE
+    is stock-options as an option and cash-equity-intraday as spot. The pair is
+    what identifies a segment, so neither half may be inferred from the other.
+    """
+    entry = read_segment_setting(segment_id, SEGMENT_INSTRUMENT_TYPES_SETTING, root)
+    value = entry.value
+    if not isinstance(value, (list, tuple)) or not value:
+        raise SegmentSettingMissing(
+            f"the {segment_id} segment's '{SEGMENT_INSTRUMENT_TYPES_SETTING}' is not a "
+            f"non-empty list in {segment_settings_path(segment_id, root)}. A segment that "
+            f"states no instrument type claims nothing, and every instrument would read as "
+            f"belonging to a segment that is not built."
+        )
+    return tuple(str(instrument_type) for instrument_type in value)
+
+
+def segment_that_trades(
+    instrument_type: str,
+    underlying: str,
+    context,
+    root: pathlib.Path | None = None,
+) -> str | None:
+    """Which built segment an instrument belongs to, or None if none does.
+
+    None is the honest answer for an instrument in a segment this spine does not
+    trade -- the caller reports it as such rather than choosing the nearest
+    segment, which is the wrong-instrument failure this module exists around.
+    """
+    claimants = []
+    for segment in built_segments(context):
+        try:
+            types = instrument_types_this_segment_trades(segment, root)
+            symbols = read_segment_symbols(
+                segment, "segment_underlying_trading_symbols", root
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        if instrument_type in types and underlying in symbols:
+            claimants.append(segment)
+    if not claimants:
+        return None
+    if len(claimants) > 1:
+        raise SegmentsOverlap(
+            f"{instrument_type} on {underlying} is claimed by {', '.join(claimants)}. "
+            f"Both segments' files name that instrument type and that underlying, so whose "
+            f"capital buys it is undecidable -- narrow one file's "
+            f"'{SEGMENT_INSTRUMENT_TYPES_SETTING}' or its underlyings."
+        )
+    return claimants[0]
+
+
+def option_chain_width_by_underlying(
+    context, root: pathlib.Path | None = None,
+) -> dict[str, int]:
+    """How many option contracts to publish per underlying, per built segment.
+
+    Three segments want three different chains: 50 contracts on an index, 20 on a
+    single stock, and none at all on a cash-equity underlying, which is tracked
+    for its own price and whose options no segment here trades. One width for all
+    of them either truncates the index chain or fills the broker's instrument
+    budget with stock strikes nothing acts on.
+
+    Zero is a real answer, not a missing one. An underlying only ever claimed by a
+    segment that does not trade options has no chain on this spine, and the map
+    says so rather than leaving the width to a default.
+    """
+    from runtime.trading_types import OPTION
+
+    widths: dict[str, int] = {}
+    for segment in built_segments(context):
+        try:
+            symbols = read_segment_symbols(
+                segment, "segment_underlying_trading_symbols", root
+            )
+            types = instrument_types_this_segment_trades(segment, root)
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        trades_options = OPTION in types
+        width = 0
+        if trades_options:
+            width = int(
+                read_segment_setting(
+                    segment, "segment_option_contracts_per_underlying", root
+                ).value
+            )
+        for symbol in symbols:
+            # The widest chain any segment wants of that underlying. Two segments
+            # claiming one underlying's options is refused elsewhere; this is the
+            # ordinary case of an underlying tracked by an options segment and a
+            # cash one, where the options segment's width is the one that matters.
+            widths[symbol] = max(widths.get(symbol, 0), width)
+    return widths
+
+
+def segments_trading_underlying(
+    underlying: str, context, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Every built segment that trades this underlying, in the operator's order.
+
+    More than one is the ordinary case, not an error: RELIANCE is a stock-options
+    underlying and a cash-equity-intraday one, and a part reasoning about an
+    underlying before an instrument has been chosen -- `leverage-selector` reads
+    `trade-intent`, which names an asset and not a contract -- has to answer for
+    each of them. `segment_that_trades` is the narrower question, asked once the
+    instrument kind is known.
+    """
+    return tuple(
+        segment
+        for segment in built_segments(context)
+        if underlying in _underlyings_or_nothing(segment, root)
+    )
+
+
+def _underlyings_or_nothing(segment: str, root: pathlib.Path | None) -> tuple[str, ...]:
+    try:
+        return read_segment_symbols(
+            segment, "segment_underlying_trading_symbols", root
+        )
+    except (SegmentSettingMissing, OSError, ValueError):
+        return ()
+
 __all__ = [
+    "BUILT_SEGMENTS_SETTING",
+    "SEGMENT_INSTRUMENT_TYPES_SETTING",
     "SegmentSettingMissing",
+    "SegmentsOverlap",
+    "built_segments",
+    "instrument_types_this_segment_trades",
+    "option_chain_width_by_underlying",
+    "segment_that_trades",
+    "segments_trading_underlying",
+    "underlyings_every_built_segment_trades",
     "option_contracts_per_underlying",
     "read_segment_setting",
     "read_segment_symbols",

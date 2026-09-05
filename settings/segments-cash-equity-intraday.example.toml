@@ -54,3 +54,8 @@ note  = "Claude, 2026-09-05: the equities this segment trades. Every one verifie
 value = 1
 unit  = "option contracts per underlying per expiry"
 note  = "Claude, 2026-09-05: one, because this segment trades the equities themselves and not their option chains. The setting is read by broker-symbol-universe-bridge, which publishes underlyings plus a chain; it cannot be zero (the bridge refuses a universe of underlyings with no chain, since for an options segment that could never produce a trade), so it is the smallest value that says 'the chain is not what this segment is about'. If the bridge ever grows a mode for underlying-only universes this becomes that instead."
+
+[segment_instrument_types]
+value = ["spot"]
+unit  = "instrument type"
+note  = "operator, 2026-09-05: which instrument types this segment claims. Cash equity is the spot instrument type -- the share itself, bought on the broker's intraday leverage and squared off the same day (positions_are_squared_off_daily above). It shares every underlying with stock-options and claims none of its options, which is what keeps the two segments' capital and exposure separate while the feed subscribes each underlying once."

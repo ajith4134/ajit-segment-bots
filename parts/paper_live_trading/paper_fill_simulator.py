@@ -154,6 +154,10 @@ class RestingOrder:
     # resting order fills long after the message that placed it is gone, and the
     # fill it produces has to state the leverage the account will pay for it at.
     leverage: float = UNLEVERED
+    # Whose money placed it, held for the same reason the leverage is: a resting
+    # order fills long after the message that placed it is gone, and the fill it
+    # produces has to say which segment's account pays for it (2026-09-05).
+    segment: str = ""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -483,6 +487,7 @@ class PaperFillSimulator:
         maximum_decision_drift: float | None = None,
         leverage: float = UNLEVERED,
         price_fidelity=None,
+        segment: str = "",
     ) -> PaperFillResult:
         self.standing.orders_seen += 1
 
@@ -549,6 +554,7 @@ class PaperFillSimulator:
                 client_order_id=client_order_id, venue_id=venue_id, symbol=symbol, side=side,
                 quantity=quantity, order_type=order_type, limit_price=limit_price or None,
                 stop_price=stop_price, rested_at_ns=self._now_ns(), leverage=leverage,
+                segment=segment,
             )
             if self.may_fill and market_price is not None and self.is_triggered(
                 order_type, side, stop_price, market_price
@@ -580,7 +586,7 @@ class PaperFillSimulator:
                     client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
                     side=side, quantity=quantity, order_type=order_type,
                     limit_price=limit_price or None, stop_price=stop_price,
-                    rested_at_ns=self._now_ns(), leverage=leverage,
+                    rested_at_ns=self._now_ns(), leverage=leverage, segment=segment,
                 ),
                 RESTING_MARKET_CLOSED,
                 self._why_the_market_is_shut(),
@@ -773,7 +779,7 @@ class PaperFillSimulator:
                     symbol=order.symbol, side=order.side, quantity=order.quantity,
                     order_type=order.order_type, limit_price=order.limit_price,
                     stop_price=order.stop_price, rested_at_ns=order.rested_at_ns,
-                    leverage=order.leverage,
+                    leverage=order.leverage, segment=order.segment,
                 )
         self.standing.orders_on_the_book = len(self._resting)
 
@@ -793,6 +799,9 @@ class PaperFillSimulator:
             # at 1x and at 10x. What the position ties up is the notional over
             # this, and paper-account-keeper has no other source for it.
             leverage=order.leverage,
+            # And whose account that is. One paper account per segment since
+            # 2026-09-05, and a fill is the only thing that reaches the keeper.
+            segment=getattr(order, "segment", ""),
         )
         return self._result(
             client_order_id, order.venue_id, order.symbol, order.side, outcome, fill,
@@ -893,7 +902,15 @@ def start_part(context) -> int:
 
     requests = Batch(read=context.bus.reader("order-request"))
     trades = Batch(read=context.bus.reader("market-data"))
-    modes = LatestValue(read=context.bus.reader("money-mode"))
+    # One money mode per segment (2026-09-05), read for the segment the order
+    # names rather than for the spine. This part refuses anything that is not
+    # paper, so on a spine where one segment goes live it must be able to tell
+    # which order that is.
+    modes = LatestByKey(
+        read=context.bus.reader("money-mode"),
+        key_of=lambda mode: mode.segment,
+        maximum_age_seconds=context.number("money_mode_maximum_age_seconds"),
+    )
     # A level, per exchange segment, aged here as well as at its producer. The
     # bus sends each item of a level as its own message (runtime/bus.py
     # `publish`), so this arrives as one MarketSessionState rather than the
@@ -955,8 +972,7 @@ def start_part(context) -> int:
         costs.payloads()
         consolidated.payloads()
         estimate_by_symbol = prices.mapping()
-        mode = modes.value()
-        mode_name = getattr(mode, "mode", None)
+        mode_by_segment = modes.mapping()
 
         # What the latency simulator has decided about each order so far. It is a
         # different shape on a different wire: a DelayedOrderRequest names an
@@ -990,7 +1006,13 @@ def start_part(context) -> int:
             if withdraws:
                 waiting.pop(withdraws, None)
             key = (request.venue_id, request.symbol)
-            order = build_order(request, key, mode_name, estimate_by_symbol)
+            # None when this order's segment has published no mode, which this
+            # part refuses rather than treating as paper -- the same answer it
+            # gave for an absent mode before three segments ran.
+            mode = mode_by_segment.get(getattr(request, "segment", "") or "")
+            order = build_order(
+                request, key, getattr(mode, "mode", None), estimate_by_symbol
+            )
             if released_now.get(request.client_order_id) is not True:
                 # Held, and remembered: the release names the order and cannot
                 # re-send it, so whoever saw the order first has to keep it. A
@@ -1056,6 +1078,9 @@ def start_part(context) -> int:
             # None when the mode could not be read, which this part refuses
             # rather than treating as paper.
             "money_mode": mode_name,
+            # Carried from the order request through to the fill, so the account
+            # that pays knows which of the three it is (2026-09-05).
+            "segment": getattr(request, "segment", ""),
             "is_in_flight": False,
             "fill_price_estimate": estimate_by_symbol.get(key),
             "market_price": last_price.get(key),
