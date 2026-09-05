@@ -201,7 +201,7 @@ class SegmentCapitalReaders:
     file is not a reason to stop the other two trading.
     """
 
-    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns) -> None:
+    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns, settings_root=None) -> None:
         if not segments:
             raise ValueError(
                 "a capital reader with no segment publishes no allocation at all, and "
@@ -209,7 +209,15 @@ class SegmentCapitalReaders:
                 "level nothing produces"
             )
         self.readers = tuple(
-            CapitalAllotmentReader(segment=segment, now_ns=now_ns) for segment in segments
+            CapitalAllotmentReader(
+                segment=segment,
+                now_ns=now_ns,
+                settings_path=(
+                    None if settings_root is None
+                    else settings_root / "segments" / f"{segment}.toml"
+                ),
+            )
+            for segment in segments
         )
         self.unreadable: dict[str, str] = {}
 
@@ -305,7 +313,9 @@ def start_part(context) -> int:
         return None if setting is None else setting.maximum_capital_per_trade
 
     return run_capital_allotment_reader(
-        readers=SegmentCapitalReaders(segments=built_segments(context)),
+        readers=SegmentCapitalReaders(
+            segments=built_segments(context), settings_root=context.settings_root
+        ),
         control_socket=context.control_socket,
         publish_allotment=publish_allotment,
         health_interval_seconds=context.health_interval_seconds,

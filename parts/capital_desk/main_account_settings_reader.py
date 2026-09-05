@@ -192,7 +192,14 @@ def start_part(context) -> int:
     publish_setting = context.bus.publisher_for("main-account-setting")
 
     return run_main_account_settings_reader(
-        reader=MainAccountSettingsReader(),
+        reader=MainAccountSettingsReader(
+            # See PartContext.settings_root: the operator's file on the spine,
+            # the copy in a test, never whichever the global happens to resolve.
+            settings_path=(
+                None if context.settings_root is None
+                else context.settings_root / MAIN_ACCOUNT_FILE
+            ),
+        ),
         control_socket=context.control_socket,
         publish_setting=lambda setting: publish_setting([setting]),
         health_interval_seconds=context.health_interval_seconds,

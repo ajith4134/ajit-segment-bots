@@ -187,14 +187,27 @@ class SegmentMoneyModes:
     segment the operator had left on paper.
     """
 
-    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns) -> None:
+    def __init__(self, segments: tuple[str, ...], now_ns=time.time_ns, settings_root=None) -> None:
         if not segments:
             raise ValueError(
                 "a money-mode reader with no segment publishes nothing, and every part "
                 "that sends an order treats an absent mode as a reason to send none"
             )
         self.readers = tuple(
-            MoneyModeReader(segment=segment, now_ns=now_ns) for segment in segments
+            MoneyModeReader(
+                segment=segment,
+                now_ns=now_ns,
+                # From the directory this part's own settings came from, never
+                # settings_directory(): a part is launched against a directory the
+                # launcher chose, and a helper resolving the global reads the
+                # operator's segment file while every other number came from the
+                # copy. See PartContext.settings_root.
+                settings_path=(
+                    None if settings_root is None
+                    else settings_root / "segments" / f"{segment}.toml"
+                ),
+            )
+            for segment in segments
         )
 
     def read(self) -> tuple[MoneyMode, ...]:
@@ -244,7 +257,9 @@ def start_part(context) -> int:
     publish_mode = context.bus.publisher_for("money-mode")
 
     return run_money_mode_reader(
-        reader=SegmentMoneyModes(segments=built_segments(context)),
+        reader=SegmentMoneyModes(
+            segments=built_segments(context), settings_root=context.settings_root
+        ),
         control_socket=context.control_socket,
         publish_mode=lambda modes: publish_mode(list(modes)),
         health_interval_seconds=context.health_interval_seconds,

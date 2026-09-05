@@ -213,6 +213,37 @@ def isolated_settings(durable_tmp_path):
     # operator's own file: the pair (instrument kind, underlying) is what
     # identifies a segment, and a segment claiming neither claims nothing.
     segment_file = settings_root / "segments" / f"{TRADED_SEGMENT}.toml"
+    # This run's own capital, for the same reason it states its own segment. The
+    # operator's futures.toml is a retired crypto segment carrying a 50.00 maximum
+    # per trade, and 50 does not buy one increment of a BTCUSDT perpetual at six
+    # figures: trade-capital-bounds-gate snapped the capped quantity down to zero
+    # and, until 2026-09-05, called that "capped-at-maximum" -- so the router
+    # counted a zero-quantity order in routed_to_paper and the book dropped it
+    # before simulating, each part reporting nothing wrong while no order existed.
+    # The gate refuses that by name now, which is why this has to be stated: the
+    # bounds have to admit a tradeable size or the run proves only the refusal.
+    segment_capital = {
+        "allocated_balance": 100_000.0,
+        "minimum_capital_per_trade": 500.0,
+        "maximum_capital_per_trade": 5_000.0,
+    }
+    segment_lines = segment_file.read_text().splitlines()
+    in_setting = None
+    capital_rewritten = 0
+    for index, line in enumerate(segment_lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_setting = stripped[1:-1]
+        elif in_setting in segment_capital and line.startswith("value"):
+            segment_lines[index] = f"value = {segment_capital[in_setting]}"
+            capital_rewritten += 1
+            in_setting = None
+    assert capital_rewritten == len(segment_capital), (
+        f"rewrote {capital_rewritten} of {len(segment_capital)} capital settings in "
+        f"{segment_file}; this run must not size against the operator's own figures"
+    )
+    segment_file.write_text("\n".join(segment_lines) + "\n")
+
     segment_file.write_text(
         segment_file.read_text().rstrip()
         + "\n\n[segment_instrument_types]\n"
@@ -488,11 +519,31 @@ def test_an_intent_becomes_a_paper_fill(
         f"parts died: {sorted(set(TRADING_HALF) - set(still_running))}"
     )
     # What the book itself said it was doing, from its own standing counters.
-    book_said = {}
+    book_said = "no part-health from paper-fill-simulator arrived at all"
     for message in seen["part-health"]:
         if getattr(message.payload, "part_id", None) == "paper-fill-simulator":
-            book_said = {name: value for name, value in message.payload.standing if value}
+            moved = {name: value for name, value in message.payload.standing if value}
+            book_said = {
+                "counters": moved or "all zero",
+                "received": dict(message.payload.messages_received),
+                "lost": dict(message.payload.input_loss),
+            }
     counted["the paper book's own counters"] = book_said
+    counted["what the gate said"] = sorted(
+        {
+            (m.payload.outcome, round(m.payload.quantity, 6), m.payload.reason[:80])
+            for m in seen["bounded-order"]
+        }
+    )[:3]
+    counted["what the router said about each order"] = sorted(
+        {
+            (m.payload.outcome, m.payload.quantity > 0, m.payload.destination)
+            for m in seen["order-request"]
+        }
+    )
+    counted["parts heard from"] = sorted(
+        {getattr(m.payload, "part_id", "?") for m in seen["part-health"]}
+    )
 
     assert counted["bounded-order"] > 0, f"the bounds gate produced nothing: {counted}"
     assert counted["order-request"] > 0, f"the router produced nothing: {counted}"

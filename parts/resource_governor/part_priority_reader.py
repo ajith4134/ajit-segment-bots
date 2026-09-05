@@ -129,7 +129,13 @@ def start_part(context) -> int:
     consumer has to be able to tell them apart.
     """
     publish_priorities = context.bus.publisher_for("part-priority")
-    reader = PartPriorityReader()
+    reader = PartPriorityReader(
+        # See PartContext.settings_root.
+        priority_path=(
+            None if context.settings_root is None
+            else context.settings_root / PRIORITY_FILENAME
+        ),
+    )
 
     def publish_ranking(ranking: dict) -> None:
         publish_priorities(reader.rank(ranking.keys()))

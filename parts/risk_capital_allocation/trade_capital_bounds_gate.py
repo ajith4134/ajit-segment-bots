@@ -55,6 +55,14 @@ CAPPED_AT_MAXIMUM = "capped-at-maximum"
 REFUSED_SETTINGS_INVALID = "refused-capital-settings-invalid"
 REFUSED_BUMP_BREACHES_RISK = "refused-bump-would-breach-risk"
 REFUSED_NOT_TRADEABLE = "refused-order-not-tradeable"
+# The maximum this segment allows per trade will not buy one increment of this
+# instrument. Its own outcome and not a cap, because capping to nothing is a
+# refusal wearing a success label: on 2026-09-05 this produced a zero-quantity
+# order reported as "capped-at-maximum" with the reason "cut from 1,627.75 to the
+# 50.00 maximum", which order-destination-router then counted in routed_to_paper
+# and paper-fill-simulator dropped before it was ever simulated -- so the gate,
+# the router and the book each reported nothing wrong and no order existed.
+REFUSED_MAXIMUM_BUYS_NOTHING = "refused-the-maximum-cannot-buy-one-increment"
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,7 @@ class GateStanding:
     passed: int = 0
     bumped: int = 0
     capped: int = 0
+    refused_maximum_buys_nothing: int = 0
     refused_settings: int = 0
     refused_bump: int = 0
     refused_not_tradeable: int = 0
@@ -177,11 +186,21 @@ class TradeCapitalBoundsGate:
         )
 
     def _cap(self, sized_order, bounds, capital: float) -> BoundedOrder:
-        """Cut to the maximum. Never a refusal: the maximum is a tradeable size."""
+        """Cut to the maximum, unless the maximum does not reach one increment."""
         leverage = leverage_behind(sized_order)
         quantity = self._snap_down(
             quantity_for_capital(bounds.maximum_capital, sized_order.entry_price, leverage)
         )
+        if quantity <= 0:
+            # The maximum is smaller than one increment of this instrument at this
+            # price, so there is no size to cut to. Refused by name rather than
+            # emitted as a cap to zero: an order of nothing is not a smaller order.
+            self.standing.refused_maximum_buys_nothing += 1
+            return self._bounded(
+                sized_order, bounds, 0.0, 0.0, REFUSED_MAXIMUM_BUYS_NOTHING, 0.0,
+                f"the {bounds.maximum_capital:,.2f} maximum does not buy one "
+                f"{self._increment:g} increment at {sized_order.entry_price:,.2f}",
+            )
         capped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
         self.standing.capped += 1
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, capped_capital)
@@ -244,6 +263,7 @@ def describe_bounding(gate: TradeCapitalBoundsGate) -> dict:
         "refused_settings_invalid": gate.standing.refused_settings,
         "refused_bump_breaches_risk": gate.standing.refused_bump,
         "refused_not_tradeable": gate.standing.refused_not_tradeable,
+        "refused_maximum_buys_nothing": gate.standing.refused_maximum_buys_nothing,
         "largest_capital_used": gate.standing.largest_capital_used,
     }
 

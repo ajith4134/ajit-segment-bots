@@ -214,21 +214,16 @@ class FailingPartDetector:
             recent = list(durations.values)[-max(self._minimum_ticks // 2, 2) :]
             earlier = list(durations.values)[: max(self._minimum_ticks // 2, 2)]
             if earlier and recent:
-                # Medians, not means. A part that paces its own work -- the
-                # `is_due()` guard most periodic parts use -- has a bimodal tick
-                # time by design: cheap on most ticks, expensive on the one that
-                # rebuilds something. A mean over half a window then swings on
-                # whether that half happened to catch an expensive tick, and 3x
-                # is easy to clear on jitter alone. Measured on the live spine
-                # 2026-09-05: this fired 10,569 times in 35 minutes, on
-                # hog-detector, duty-cycle-planner and memory-pressure-forecaster
-                # among others, and every escalation the warden sent in that
-                # window was the correlated-failure guard tripping on the pile.
-                # The median of each half is unmoved by an occasional expensive
-                # tick and still moves when every tick is slower, which is the
-                # "structure being walked, not jitter" this rule is for.
-                baseline = statistics.median(earlier)
-                latest = statistics.median(recent)
+                # Mean, not median: tried the median on 2026-09-05 on the theory
+                # that parts pacing their work with `is_due()` have a bimodal tick
+                # time a half-window mean swings on. Measured at matched maturity
+                # it made no difference -- 10,569 faults at 1,182 ticks per part
+                # with the mean, 11,123 at 1,157 with the median -- so the theory
+                # is wrong and the mean stays. Why this fires on ~3% of all checks
+                # is still unexplained, and it is now the whole of the warden's
+                # remaining escalation volume.
+                baseline = statistics.mean(earlier)
+                latest = statistics.mean(recent)
                 if baseline > 0 and latest / baseline >= self._slowdown_ratio:
                     return self._fault(
                         part_id, GETTING_SLOWER, DEGRADED,
