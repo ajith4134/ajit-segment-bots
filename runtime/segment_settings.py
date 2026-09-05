@@ -240,18 +240,47 @@ def segment_that_trades(
     underlying: str,
     context,
     root: pathlib.Path | None = None,
+    derived_membership: Mapping[str, object] | None = None,
 ) -> str | None:
     """Which built segment an instrument belongs to, or None if none does.
 
     None is the honest answer for an instrument in a segment this spine does not
     trade -- the caller reports it as such rather than choosing the nearest
     segment, which is the wrong-instrument failure this module exists around.
+
+    A segment whose `segment_universe_selection` is not `"stated"` --
+    cash-equity-intraday's `"every-nse-share-without-a-derivative"`,
+    2026-09-05 -- does not claim from `segment_underlying_trading_symbols` at
+    all: that list is a 14-name legacy fallback, disconnected from the
+    2,444-share derived universe `broker-symbol-universe-bridge` actually
+    publishes. Its claim is asked of `derived_membership` instead --
+    `{segment_id: frozenset(symbols)}`, the day's `cash-equity-shortlist` for a
+    replay, or the live one for a caller with bus access. `derived_membership`
+    is None for a caller with none, and then a derived-selection segment claims
+    nothing -- the same honest "not built" answer an unresolvable segment
+    always got, never a silent fall-back to the stale static list.
     """
     claimants = []
     root = _root_of(context, root)
     for segment in built_segments(context):
         try:
             types = instrument_types_this_segment_trades(segment, root)
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        try:
+            selection = str(
+                read_segment_setting(segment, UNIVERSE_SELECTION_SETTING, root).value
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            selection = UNIVERSE_IS_STATED
+        if selection != UNIVERSE_IS_STATED:
+            if (
+                instrument_type in types and derived_membership is not None
+                and underlying in derived_membership.get(segment, frozenset())
+            ):
+                claimants.append(segment)
+            continue
+        try:
             symbols = read_segment_symbols(
                 segment, "segment_underlying_trading_symbols", root
             )

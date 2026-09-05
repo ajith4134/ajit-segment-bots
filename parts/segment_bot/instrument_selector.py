@@ -62,7 +62,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "trade-intent", "symbol-price-frame", "implied-vol-surface", "liquidity-grade", "timed-intent",
         "symbol-universe", "symbol-quote-frame", "broker-subscribed-instrument-listing", "broker-option-greeks",
-        "broker-market-data",
+        "broker-market-data", "cash-equity-shortlist",
     ),
     produces=("instrument-choice", "part-health"),
     resource_class="compute-bound",
@@ -98,19 +98,39 @@ SEGMENT_OF_KIND_ALONE = {
 }
 
 
-def segment_resolver_from_settings(context, root=None):
+def segment_resolver_from_settings(context, root=None, derived_membership=None):
     """A callable naming the segment an instrument belongs to, from settings.
 
     Built once when the part starts, because it reads every built segment's file
     and the answer changes only when the operator edits one -- the same reasoning
     `underlyings_this_segment_trades` records for reading the universe once.
+
+    A segment whose `segment_universe_selection` is not `"stated"` -- cash-
+    equity-intraday's `"every-nse-share-without-a-derivative"`, 2026-09-05 --
+    does not claim from a static list at all: `segment_underlying_trading_
+    symbols` for that segment is a 14-name legacy fallback, disconnected from
+    the 2,444-share derived universe `broker-symbol-universe-bridge` actually
+    publishes. Its claims are resolved live instead, against whatever
+    `derived_membership()` returns right now -- the day's `cash-equity-
+    shortlist`, threaded in by the caller that has bus access. `derived_
+    membership` is None for a caller with none (a unit test constructing
+    instruments by hand), and then a derived-selection segment claims nothing,
+    the same honest "not built" answer an unresolvable segment always got.
+
+    Only one derived-selection segment is assumed to exist at a time, because
+    only one such shortlist type is published (2026-09-05) -- a second one
+    would need its own membership source threaded in by name, not folded into
+    this one.
     """
     from runtime.segment_settings import built_segments as listed_segments
     from runtime.segment_settings import (
-        SegmentsOverlap, instrument_types_this_segment_trades, read_segment_symbols,
+        SegmentSettingMissing, SegmentsOverlap, UNIVERSE_IS_STATED,
+        UNIVERSE_SELECTION_SETTING, instrument_types_this_segment_trades,
+        read_segment_setting, read_segment_symbols,
     )
 
     claims: dict[tuple[str, str], str] = {}
+    derived_types_by_segment: dict[str, tuple[str, ...]] = {}
     for segment in listed_segments(context):
         # Deliberately not caught. A segment the operator listed whose file cannot
         # be read is not a segment to skip: skipping it makes every one of its
@@ -118,6 +138,15 @@ def segment_resolver_from_settings(context, root=None):
         # run, report healthy and refuse every candidate for a reason naming the
         # wrong cause. Failing to start says which file, once.
         types = instrument_types_this_segment_trades(segment, root)
+        try:
+            selection = str(
+                read_segment_setting(segment, UNIVERSE_SELECTION_SETTING, root).value
+            )
+        except SegmentSettingMissing:
+            selection = UNIVERSE_IS_STATED
+        if selection != UNIVERSE_IS_STATED:
+            derived_types_by_segment[segment] = types
+            continue
         symbols = read_segment_symbols(
             segment, "segment_underlying_trading_symbols", root
         )
@@ -132,9 +161,15 @@ def segment_resolver_from_settings(context, root=None):
                 claims[key] = segment
 
     def segment_of(instrument) -> str:
-        return claims.get(
-            (instrument.instrument_kind, instrument.symbol), UNKNOWN_SEGMENT
-        )
+        key = (instrument.instrument_kind, instrument.symbol)
+        if key in claims:
+            return claims[key]
+        if derived_membership is not None:
+            current = derived_membership()
+            for segment, types in derived_types_by_segment.items():
+                if instrument.instrument_kind in types and instrument.symbol in current:
+                    return segment
+        return UNKNOWN_SEGMENT
 
     return segment_of
 
@@ -1177,7 +1212,16 @@ def start_part(context) -> int:
     listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     greeks = Batch(read=context.bus.reader("broker-option-greeks"))
     option_prices = Batch(read=context.bus.reader("broker-market-data"))
+    shortlists = Batch(read=context.bus.reader("cash-equity-shortlist"))
     publish_choices = context.bus.publisher_for("instrument-choice")
+
+    # The current cash-equity-shortlist membership, read fresh by segment_of on
+    # every lookup rather than snapshotted once at start -- the shortlist is a
+    # level that changes through the day, and ownership must track it the same
+    # way the scanner does. Empty until the first shortlist arrives, which is
+    # the correct, honest answer for a derived-selection segment before then:
+    # not built yet, not "everything".
+    derived_membership_cell: list[frozenset] = [frozenset()]
 
     def read_intents_and_instruments(selector):
         # Everything that describes what could be traded arrives as its own type;
@@ -1187,6 +1231,8 @@ def start_part(context) -> int:
         # every catalogue read, so a funding rate that changed at settlement
         # arrives as a replacement for the instrument rather than as a second one:
         # `observe_listed_instrument` keys on the contract symbol and overwrites.
+        for shortlist in shortlists.payloads():
+            derived_membership_cell[0] = frozenset(shortlist.symbols)
         for listed in universe.payloads():
             selector.observe_listed_symbol(listed)
         for listing in listings.payloads():
@@ -1230,7 +1276,10 @@ def start_part(context) -> int:
             # one it belongs to (2026-09-05). A one-segment spine states a
             # one-item list and behaves exactly as it did.
             built_segments=built_segments(context),
-            segment_of=segment_resolver_from_settings(context, context.settings_root),
+            segment_of=segment_resolver_from_settings(
+                context, context.settings_root,
+                derived_membership=lambda: derived_membership_cell[0],
+            ),
             maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
             # A perpetual's round trip is two crossings of the spread at the taker
             # rate. The venue states what holding the contract costs; what

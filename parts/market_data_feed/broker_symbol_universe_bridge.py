@@ -70,7 +70,7 @@ OPTION_INSTRUMENT_TYPES = (CALL, PUT)
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-symbol-universe-bridge",
-    consumes=("broker-instrument-listing", "broker-price-frame"),
+    consumes=("broker-instrument-listing", "broker-price-frame", "cash-equity-shortlist"),
     produces=("symbol-universe", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -142,6 +142,14 @@ class BridgeStanding:
     # F&O name into the cash segment -- which is the double-exposure the rule
     # exists to prevent, and would last up to a full 30-minute catalogue cycle.
     equity_universe_is_waiting_for_a_full_catalogue_cycle: bool = True
+    # True while cash-equity-shortlist-ranker has never yet said anything.
+    # Publishing the whole excluded set while waiting would be exactly the
+    # 2,444-name, unranked, uncapped universe this shortlist exists to replace
+    # (2026-09-05) -- so nothing is published for the equity branch until a
+    # shortlist has been heard, the same reasoning the catalogue-cycle wait
+    # already uses one line above.
+    equity_universe_is_waiting_for_a_shortlist: bool = True
+    equities_outside_the_shortlist: int = 0
 
 
 class BrokerSymbolUniverseBridge:
@@ -214,6 +222,12 @@ class BrokerSymbolUniverseBridge:
         # None means this bridge publishes only what it was handed, which is what
         # a spine trading only derivatives states.
         self._equity_selection = equity_selection
+        # The most recent cash-equity-shortlist, or None while none has arrived
+        # yet. None while the equity_selection wants shares at all is what
+        # holds the equity branch back (see universe()) -- publishing every
+        # excluded share while waiting is exactly the unranked, uncapped
+        # universe the shortlist replaces (2026-09-05).
+        self._shortlist_symbols: frozenset[str] | None = None
         # Every NSE_EQ share the master has listed, by instrument_key.
         self._equity_by_key: dict[str, object] = {}
         # Every instrument_key the master has named as a derivative's underlying.
@@ -285,6 +299,12 @@ class BrokerSymbolUniverseBridge:
         for level in price_frame.levels:
             if level.instrument_key in self._underlying_by_key:
                 self._price_by_underlying_key[level.instrument_key] = level.price
+
+    def observe_shortlist(self, shortlist) -> None:
+        """The latest cash-equity-shortlist. Replaces the previous one whole --
+        this is a level, and yesterday's top 50 has no standing once today's
+        has arrived."""
+        self._shortlist_symbols = frozenset(shortlist.symbols)
 
     def nearest_expiry_for(self, underlying_key: str) -> int | None:
         """The soonest expiry on this underlying that has not already passed.
@@ -414,15 +434,25 @@ class BrokerSymbolUniverseBridge:
         # whole rule exists to prevent.
         waiting = self._catalogue_cycles_heard < 1
         self.standing.equity_universe_is_waiting_for_a_full_catalogue_cycle = waiting
-        covered = equities = 0
-        if self._equity_selection is not None and not waiting:
+        # Held back the same way the catalogue-cycle wait is: publishing every
+        # excluded share while no shortlist has ever arrived would be the
+        # 2,444-name, unranked, uncapped universe the shortlist exists to
+        # replace (2026-09-05), not a smaller version of the correct answer.
+        waiting_for_a_shortlist = self._shortlist_symbols is None
+        self.standing.equity_universe_is_waiting_for_a_shortlist = waiting_for_a_shortlist
+        covered = equities = outside_shortlist = 0
+        if self._equity_selection is not None and not waiting and not waiting_for_a_shortlist:
             for key, listing in sorted(self._equity_by_key.items()):
                 if key in self._derivative_underlying_keys:
                     covered += 1
                     continue
+                if listing.trading_symbol not in self._shortlist_symbols:
+                    outside_shortlist += 1
+                    continue
                 entries.append(self._entry_for_underlying(listing))
                 equities += 1
         self.standing.equities_covered_by_a_derivative = covered
+        self.standing.equities_outside_the_shortlist = outside_shortlist
         self.standing.equities_published = equities
 
         self.standing.underlyings_published = len(self._underlying_by_key)
@@ -445,6 +475,17 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
         "underlyings_without_a_price": bridge.standing.underlyings_without_a_price,
         "underlyings_with_no_live_expiry": bridge.standing.underlyings_with_no_live_expiry,
         "contracts_published": bridge.standing.contracts_published,
+        "catalogue_cycles_heard": bridge.standing.catalogue_cycles_heard,
+        "equities_listed": bridge.standing.equities_listed,
+        "equities_covered_by_a_derivative": bridge.standing.equities_covered_by_a_derivative,
+        "equities_outside_the_shortlist": bridge.standing.equities_outside_the_shortlist,
+        "equities_published": bridge.standing.equities_published,
+        "equity_universe_is_waiting_for_a_full_catalogue_cycle": (
+            bridge.standing.equity_universe_is_waiting_for_a_full_catalogue_cycle
+        ),
+        "equity_universe_is_waiting_for_a_shortlist": (
+            bridge.standing.equity_universe_is_waiting_for_a_shortlist
+        ),
     }
 
 
@@ -455,6 +496,7 @@ def start_part(context) -> int:
 
     listings = Batch(read=context.bus.reader("broker-instrument-listing"))
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
+    shortlists = Batch(read=context.bus.reader("cash-equity-shortlist"))
     publish_universe = context.bus.publisher_for("symbol-universe")
 
     # The segment's own universe, not the machine's. `segment_id` already
@@ -500,6 +542,8 @@ def start_part(context) -> int:
             bridge.observe_listing(listing)
         for price_frame in price_frames.payloads():
             bridge.observe_price_frame(price_frame)
+        for shortlist in shortlists.payloads():
+            bridge.observe_shortlist(shortlist)
         universe = bridge.universe()
         if universe:
             # An empty universe is never published: never read and lists nothing
@@ -523,6 +567,10 @@ __all__ = [
     "BridgeStanding",
     "BrokerSymbolUniverseBridge",
     "CALL",
+    "EquityWithoutADerivative",
+    "NSE_EQUITY_SEGMENT",
+    "ORDINARY_SECURITY",
+    "ORDINARY_SHARE",
     "OPTION_INSTRUMENT_TYPES",
     "PART_DECLARATION",
     "PART_ID",

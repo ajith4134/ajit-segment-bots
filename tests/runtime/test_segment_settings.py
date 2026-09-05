@@ -300,6 +300,73 @@ def test_a_segment_stating_no_instrument_type_is_refused_by_name(three_segments)
     assert "typeless" in str(refusal.value)
 
 
+# ---- a derived-selection segment's ownership tracks a live shortlist,
+# not its static list (2026-09-05) -----------------------------------------
+
+DERIVED_SEGMENTS = dict(THREE_SEGMENTS)
+
+
+@pytest.fixture
+def derived_cash_equity(tmp_path):
+    """The three segments, except cash-equity-intraday states the derived
+    selection -- its `segment_underlying_trading_symbols` becomes the 14-name
+    legacy fallback this fix is about, not the ownership list."""
+    (tmp_path / "segments").mkdir()
+    for segment, (types, symbols) in DERIVED_SEGMENTS.items():
+        extra = (
+            '[segment_universe_selection]\nvalue = "every-nse-share-without-a-derivative"\n'
+            'unit = "policy name"\nnote = "a test\'s own segment"\n'
+            if segment == "cash-equity-intraday" else ""
+        )
+        (tmp_path / "segments" / f"{segment}.toml").write_text(
+            f'[segment_instrument_types]\nvalue = {types}\nunit = "instrument type"\n'
+            f'note = "a test\'s own segment"\n\n'
+            f'[segment_underlying_trading_symbols]\nvalue = {symbols}\n'
+            f'unit = "trading symbol"\nnote = "a test\'s own segment"\n\n{extra}'
+        )
+    return tmp_path
+
+
+def test_a_derived_selection_segment_ignores_its_own_static_list(derived_cash_equity):
+    """RELIANCE is in cash-equity-intraday's static list, but that list is the
+    legacy fallback for a derived-selection segment -- it must not be read for
+    ownership any more."""
+    context = _MultiSegmentContext("index-options", list(DERIVED_SEGMENTS))
+
+    assert segment_that_trades("spot", "RELIANCE", context, derived_cash_equity) is None
+
+
+def test_a_derived_selection_segment_claims_what_the_shortlist_names(derived_cash_equity):
+    context = _MultiSegmentContext("index-options", list(DERIVED_SEGMENTS))
+
+    assert segment_that_trades(
+        "spot", "WIPRO", context, derived_cash_equity,
+        derived_membership={"cash-equity-intraday": frozenset({"WIPRO"})},
+    ) == "cash-equity-intraday"
+
+
+def test_a_derived_selection_segment_refuses_what_the_shortlist_does_not_name(
+    derived_cash_equity,
+):
+    context = _MultiSegmentContext("index-options", list(DERIVED_SEGMENTS))
+
+    assert segment_that_trades(
+        "spot", "WIPRO", context, derived_cash_equity,
+        derived_membership={"cash-equity-intraday": frozenset({"TCS"})},
+    ) is None
+
+
+def test_a_derived_selection_segment_does_not_disturb_a_stated_one(derived_cash_equity):
+    """stock-options is still 'stated' and must claim RELIANCE's option exactly
+    as it always did, whatever the cash-equity segment's shortlist says."""
+    context = _MultiSegmentContext("index-options", list(DERIVED_SEGMENTS))
+
+    assert segment_that_trades(
+        "option", "RELIANCE", context, derived_cash_equity,
+        derived_membership={"cash-equity-intraday": frozenset()},
+    ) == "stock-options"
+
+
 def test_the_operator_s_three_segments_claim_disjoint_instruments():
     """The real files on this machine: the three bots of the 2026-09-05
     temporary goal must not contend for one instrument."""

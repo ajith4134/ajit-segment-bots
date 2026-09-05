@@ -181,6 +181,33 @@ class SettingsContext:
         return entry
 
 
+def cash_equity_eligible_symbols(master: dict) -> frozenset[str]:
+    """Every ordinary NSE share no derivative in the real master is written on.
+
+    The same exclusion `broker-symbol-universe-bridge` applies live
+    (`EquityWithoutADerivative`, reused rather than restated -- T-6), replayed
+    against this day's real instrument master. `segment_that_trades` asks this
+    for cash-equity-intraday's membership because that segment's
+    `segment_underlying_trading_symbols` is a 14-name legacy fallback,
+    disconnected from the derived universe the bridge actually publishes
+    (2026-09-05) -- passing the static list here would reproduce the same gap
+    a replay exists to catch, not verify past it.
+    """
+    import types
+
+    from parts.market_data_feed.broker_symbol_universe_bridge import EquityWithoutADerivative
+
+    admits = EquityWithoutADerivative().admits
+    derivative_underlying_keys = {
+        row["underlying_key"] for row in master.values() if row.get("underlying_key")
+    }
+    return frozenset(
+        row["trading_symbol"]
+        for key, row in master.items()
+        if key not in derivative_underlying_keys and admits(types.SimpleNamespace(**row))
+    )
+
+
 def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) -> dict:
     """The busiest instruments each built segment actually owns, that day.
 
@@ -194,6 +221,7 @@ def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) 
 
     context = SettingsContext()
     master = instruments_by_key()
+    derived_membership = {"cash-equity-intraday": cash_equity_eligible_symbols(master)}
     wanted = {segment: [] for segment in built_segments(context)}
     skipped = collections.Counter()
 
@@ -210,7 +238,9 @@ def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) 
             continue
         underlying = row.get("underlying_symbol") or row.get("trading_symbol")
         try:
-            segment = segment_that_trades(kind, underlying, context)
+            segment = segment_that_trades(
+                kind, underlying, context, derived_membership=derived_membership
+            )
         except Exception as refusal:
             skipped[f"claim refused: {refusal}"] += 1
             continue

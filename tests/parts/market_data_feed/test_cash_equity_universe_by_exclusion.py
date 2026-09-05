@@ -52,12 +52,25 @@ def a_bridge():
     )
 
 
-def universe_after_a_full_cycle(bridge, listings):
+class Shortlist:
+    """A cash-equity-shortlist, as the bridge reads it -- only `.symbols` matters."""
+
+    def __init__(self, symbols):
+        self.symbols = tuple(symbols)
+
+
+def universe_after_a_full_cycle(bridge, listings, shortlist_symbols=None):
     """Every listing, then the first again -- which is how the bridge learns the
-    master has been heard through once."""
+    master has been heard through once. A shortlist naming every trading symbol
+    in the slice by default, since exclusion (not the shortlist cut) is what
+    most of these tests exercise -- the dedicated shortlist tests pass a
+    narrower one explicitly."""
     for listing in listings:
         bridge.observe_listing(listing)
     bridge.observe_listing(listings[0])
+    if shortlist_symbols is None:
+        shortlist_symbols = {listing.trading_symbol for listing in listings}
+    bridge.observe_shortlist(Shortlist(shortlist_symbols))
     return {entry.symbol for entry in bridge.universe()}
 
 
@@ -98,6 +111,49 @@ def test_nothing_is_published_until_the_master_has_been_heard_through(listings):
     assert bridge.standing.equities_published == 0
     assert symbols & COVERED_BY_DERIVATIVES == set()
     assert not symbols - {"NIFTY"}
+
+
+def test_nothing_is_published_until_a_shortlist_has_arrived(listings):
+    """A shortlist that has never spoken is not the same as an empty one.
+
+    Publishing every excluded share while waiting would be the unranked,
+    uncapped universe the shortlist exists to replace (2026-09-05).
+    """
+    bridge = a_bridge()
+    for listing in listings:
+        bridge.observe_listing(listing)
+    bridge.observe_listing(listings[0])
+
+    symbols = {entry.symbol for entry in bridge.universe()}
+
+    assert bridge.standing.equity_universe_is_waiting_for_a_shortlist
+    assert bridge.standing.equities_published == 0
+    assert not symbols - {"NIFTY"}
+
+
+def test_only_shortlisted_shares_are_published(listings):
+    """The shortlist narrows what exclusion already allowed -- it never widens it."""
+    bridge = a_bridge()
+    for listing in listings:
+        bridge.observe_listing(listing)
+    bridge.observe_listing(listings[0])
+    ordinary_shares = {
+        entry.symbol for entry in bridge.universe()
+    }  # empty: no shortlist yet
+    all_symbols = {listing.trading_symbol for listing in listings}
+
+    # A shortlist of everything: exclusion still applies, nothing more shows up
+    # than the by-exclusion test already expects.
+    bridge.observe_shortlist(Shortlist(all_symbols))
+    published_with_full_shortlist = {entry.symbol for entry in bridge.universe()}
+    assert bridge.standing.equities_published == 6
+
+    # A shortlist naming none of the ordinary shares: exclusion still holds,
+    # but nothing is published because the shortlist admits nothing.
+    bridge.observe_shortlist(Shortlist(COVERED_BY_DERIVATIVES))
+    published_with_narrow_shortlist = {entry.symbol for entry in bridge.universe()}
+    assert bridge.standing.equities_published == 0
+    assert bridge.standing.equities_outside_the_shortlist == 6
 
 
 def test_the_wait_ends_when_the_first_listing_comes_round_again(listings):
