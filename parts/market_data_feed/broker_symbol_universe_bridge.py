@@ -298,14 +298,18 @@ def start_part(context) -> int:
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     publish_universe = context.bus.publisher_for("symbol-universe")
 
+    # The segment's own universe, not the machine's. `segment_id` already
+    # decides which capital file is read, so a universe in machine scope meant
+    # pointing this spine at stock-options would move the money and leave the
+    # chains on NIFTY, BANKNIFTY and SENSEX -- healthy on every counter, and
+    # trading the wrong segment.
+    from runtime.segment_settings import (
+        option_contracts_per_underlying, underlyings_this_segment_trades,
+    )
+
     bridge = BrokerSymbolUniverseBridge(
-        tracked_trading_symbols=tuple(
-            str(symbol)
-            for symbol in context.setting("symbol_universe_index_trading_symbols").value
-        ),
-        option_contracts_per_underlying=int(
-            context.number("symbol_universe_option_contracts_per_underlying")
-        ),
+        tracked_trading_symbols=underlyings_this_segment_trades(context),
+        option_contracts_per_underlying=option_contracts_per_underlying(context),
     )
 
     # `symbol-universe` is a level: these are the symbols this system captures,

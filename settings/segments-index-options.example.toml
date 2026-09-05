@@ -43,3 +43,13 @@ note  = "operator, 2026-09-02: Phase A is buy-only index/stock options (goal.md)
 value = "INR"
 unit  = "currency"
 note  = "operator, 2026-09-02: NSE index options trade and settle in INR, not USDT -- the allotment, the bounds and every fill are in this currency. usdt-pnl-accountant's own quote_currency field is threaded through as INR for this segment (the '_usdt' suffix in that part's field names is a pre-existing crypto-era naming wart, not a currency assumption -- verified 2026-09-01)."
+
+[segment_underlying_trading_symbols]
+value = ["NIFTY", "BANKNIFTY", "SENSEX"]
+unit  = "trading symbol"
+note  = "Claude, 2026-09-05: the underlyings this segment trades the option chains of, moved here from machine scope (runtime.toml's underlying_price_bridge_index_trading_symbols and symbol_universe_index_trading_symbols, which stay for now and are read only when a segment states nothing). It belongs to the segment because segment_id already decides which capital file is read: with the universe in machine scope, pointing the spine at stock-options would have moved the money and left the universe on the three indices -- the bot would have run, reported healthy, and traded the wrong segment. The same three verified against Upstox's real instrument master 2026-09-01: NSE_INDEX|Nifty 50 (NIFTY), NSE_INDEX|Nifty Bank (BANKNIFTY), BSE_INDEX|SENSEX (SENSEX), each instrument_type INDEX. A trading_symbol rather than an instrument_key, because the key format is Upstox's own implementation detail the bridges resolve at runtime (T-4)."
+
+[segment_option_contracts_per_underlying]
+value = 50
+unit  = "option contracts per underlying per expiry"
+note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are published per underlying, nearest the money first. Fifty, the figure the operator's standing ruling on captured_symbol_count fixed on 2026-08-25 -- 'hold at 50 and stop walking' -- and for the reason in that note rather than by analogy: cointegration-pair-finder and spread-reversion-detector fail as the SQUARE of the universe, and at 205 symbols the pair finder had tested 3,277,888 pairs while the spread detector had dropped 332,858 inputs. Three indices at fifty is 150 contracts plus the underlyings, well inside the 2,000 a single Upstox connection carries."

@@ -1,0 +1,54 @@
+# ajit-segment-bots -- the stock-options segment's own settings.
+#
+# Phase A's second segment bot (docs/goal.md item 3): buy-only options on
+# single stocks. The parts are the same parts -- what changes per segment is
+# content, not shape (the options spec, section 1) -- so this file is most of
+# what makes this a different bot.
+#
+# Copy to ~/.config/ajit-segment-bots/settings/segments/stock-options.toml and
+# edit there. The live values live on the machine, outside every repository.
+#
+# ONE SPINE RUNS ONE SEGMENT. `segment_id` in runtime.toml decides which of
+# these files is read; it is not possible to run this segment and index-options
+# at the same time on this machine (measured 2026-09-05: one spine of 315 parts
+# is load 4.5 idle and 12.5 with live data, on twelve cores).
+
+[money_mode]
+value = "paper"
+unit  = "paper or live"
+note  = "operator, 2026-09-05: whether this segment's orders go to the paper book or to a venue with real money. RL-005 is paper first, live only for what paper proved. money-mode-reader refuses anything that is not exactly 'paper' or 'live' -- real money is never a default and never a typo. This segment has never traded at all, so it is paper by the only honest reading."
+
+[allocated_balance]
+value = 500000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: the balance this segment trades against, matching index-options.toml's starting figure so the two segments' first runs are comparable rather than differing by a dial nobody chose. Five lakh rupees. A stock option lot is a different size from a NIFTY lot -- RELIANCE, HDFCBANK and the rest each carry their own lot_size in the instrument master -- so the per-trade bounds below, not this, are what keeps one name from being the whole account."
+
+[minimum_capital_per_trade]
+value = 5000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: below this a trade is not placed at all. Kept at index-options.toml's figure: the reason there was that fees and the flat Rs20 brokerage dominate a smaller trade, and that reason is about the charge stack rather than about which underlying it is, so it transfers unchanged."
+
+[maximum_capital_per_trade]
+value = 100000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: the most one trade may commit, a fifth of the allocated balance, binding regardless of what the sizer computed -- trade-capital-bounds-gate refuses above it rather than trimming silently. A ceiling per trade is what keeps one sizing mistake from being the whole account, and it matters more here than on the index segment: a single stock's option chain is far thinner, so a size that is ordinary on NIFTY can be most of a strike's open interest on a single name."
+
+[leverage_ceiling]
+value = 1.0
+unit  = "multiple"
+note  = "operator, 2026-09-05: Phase A is buy-only options (goal.md) -- a bought option has no leverage dial and cannot be liquidated, so this is unlevered by construction, not a safety choice to loosen later. leverage-selector correctly does not run for this segment; position-sizer already defaults to 1.0x when no leverage-choice arrives."
+
+[quote_currency]
+value = "INR"
+unit  = "currency"
+note  = "operator, 2026-09-05: NSE stock options trade and settle in INR. The allotment, the bounds and every fill are in this currency."
+
+[segment_underlying_trading_symbols]
+value = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "AXISBANK", "ITC", "LT", "BHARTIARTL", "KOTAKBANK", "HINDUNILVR", "MARUTI", "TATASTEEL"]
+unit  = "trading symbol"
+note  = "Claude, 2026-09-05: the single-stock underlyings this segment trades the option chains of. Every one verified present in Upstox's real instrument master, fetched 2026-09-05, as an NSE_EQ underlying carrying a live option chain -- RELIANCE 190 contracts, TCS 204, MARUTI 236, ITC 200, ICICIBANK 189, HINDUNILVR 170, SBIN 169, BHARTIARTL 155, HDFCBANK 131, KOTAKBANK 128, TATASTEEL 122, LT 118, AXISBANK 110, INFY 94, each across 3 expiries. TATAMOTORS was checked and deliberately excluded: it carries no option chain in the master any more, having been demerged. THE ORDER AND MEMBERSHIP ARE NOT MEASURED, and that is stated rather than dressed up: the tape cannot yet rank stock underlyings by liquidity, because only 2,000 instruments were ever subscribed and the subscription prioritised the three index chains, so the tape's own top stock names for 2026-09-04 (OFSS, APLAPOLLO, CROMPTON) rank what happened to be subscribed rather than what trades. These fourteen are large-cap F&O names chosen for a first run; liquidity-grader does the real per-scan filtering, which is what the options spec section 2 says it is for. Re-rank from the tape once a session has actually subscribed stock chains."
+
+[segment_option_contracts_per_underlying]
+value = 20
+unit  = "option contracts per underlying per expiry"
+note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are published per underlying, nearest the money first. Twenty rather than index-options' fifty, and the arithmetic is the reason: fourteen underlyings at fifty is 700 contracts, and at twenty it is 280, against the 2,000 instruments one Upstox connection carries and which the index segment fills with three chains. Twenty each also keeps the pair scanner inside the bound the operator's captured_symbol_count ruling fixed for the same square-law reason. A stock chain is thinner than an index chain, so twenty nearest the money reaches further out of the money here than fifty does on NIFTY -- this is a dial to walk with measurement once the segment has completed a round trip, not before."

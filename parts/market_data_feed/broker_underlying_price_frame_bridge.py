@@ -119,11 +119,13 @@ def start_part(context) -> int:
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     publish_frames = context.bus.publisher_for("symbol-price-frame")
 
-    tracked = tuple(
-        str(symbol)
-        for symbol in context.setting("underlying_price_bridge_index_trading_symbols").value
+    # This segment's underlyings, so a price frame follows segment_id rather
+    # than staying on the index chains whatever the spine was pointed at.
+    from runtime.segment_settings import underlyings_this_segment_trades
+
+    bridge = BrokerUnderlyingPriceFrameBridge(
+        tracked_trading_symbols=underlyings_this_segment_trades(context)
     )
-    bridge = BrokerUnderlyingPriceFrameBridge(tracked_trading_symbols=tracked)
 
     def tick() -> None:
         for listing in listings.payloads():

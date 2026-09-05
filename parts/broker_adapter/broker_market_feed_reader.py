@@ -345,10 +345,12 @@ def start_part(context) -> int:
         key_of=lambda entry: (entry.venue_id, entry.symbol),
         maximum_age_seconds=context.number("broker_subscription_universe_maximum_age"),
     )
-    tracked_index_trading_symbols = tuple(
-        str(symbol)
-        for symbol in context.setting("underlying_price_bridge_index_trading_symbols").value
-    )
+    # Which underlyings' chains get subscription priority. The segment's own,
+    # so pointing this spine at stock-options subscribes stock chains rather
+    # than filling the connection with index contracts it will never trade.
+    from runtime.segment_settings import underlyings_this_segment_trades
+
+    tracked_index_trading_symbols = underlyings_this_segment_trades(context)
 
     publish_ltp = context.bus.publisher_for("broker-market-data")
     publish_candle = context.bus.publisher_for("broker-candle")
