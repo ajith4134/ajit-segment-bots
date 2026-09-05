@@ -8,6 +8,43 @@ made only when the user gives them.
 trading bot) is in git history — `git log -p docs/goal.md` — not deleted, not
 carried forward as a parallel track.
 
+## TEMPORARY GOAL — given 2026-09-05, read this first
+
+The user asked that this be read at the start of **every** session, so that
+reminding is not theirs to do. It sits on top of the standing goal below; it
+does not replace it.
+
+> "is te option index sement bot is completed fully and ready to start
+> pappertradin if so can me move on to build te option stock sement bot and
+> after tat full univers cas equity intrady wit 5x seent bot make tis te
+> temperary [goal] all tis 3 bots to be ready by monday to start pappertradin
+> on live market data and wit all parts connection wit consistensis wit only
+> creatin seperate partes wen tey are nessery"
+
+**Three segment bots, paper trading on live market data by Monday 2026-09-07**
+(NSE opens 09:15 IST / 03:45 UTC):
+
+1. **index options** — built, and as of 2026-09-05 it has never completed a
+   paper trade. Not proven; Monday's open is its first real test.
+2. **stock options**
+3. **cash equity intraday, full universe, 5x leverage**
+
+Every part connected and consistent, and **new parts created only where they are
+genuinely necessary** — the existing segment-generic parts are reused rather than
+cloned per segment.
+
+**Two conflicts with item 3 below, flagged rather than silently resolved:**
+
+- Item 3 (the user's own correction of 2026-09-01) puts cash equity intraday
+  with margin in **Phase B**, after both options bots are complete end-to-end.
+  This temporary goal pulls it forward.
+- The 5x-leverage equity bot needs machinery this project deliberately parked:
+  `leverage-selector`, `liquidation-price-tracker` and
+  `paper-liquidation-simulator` were each closed as "not a gap — does not apply
+  to buy-only options". For a leveraged equity segment they stop being
+  non-applicable and become real, unbuilt work, alongside SEBI intraday margin
+  and the broker's own auto-square-off.
+
 ## The goal in the user's words
 
 > Convert this project into a bot trading Indian stock market — segments: index

@@ -1,5 +1,21 @@
 # ajit-segment-bots
 
+## TEMPORARY GOAL — 2026-09-05, read before anything else
+
+Three segment bots paper trading on **live** market data by **Monday
+2026-09-07** (NSE opens 09:15 IST / 03:45 UTC): **index options**, **stock
+options**, then **cash equity intraday, full universe, 5x leverage**. Every part
+connected and consistent; a new part is created **only where one is genuinely
+necessary**, never cloned per segment.
+
+The user asked for this to be read at the start of every session so that
+reminding is not theirs to do. The full statement, in their own words, plus the
+two conflicts it has with the standing build order — Phase B being pulled
+forward, and the parked margin machinery a 5x equity bot actually needs — is at
+the top of `docs/goal.md`. **Index options has never completed a paper trade as
+of 2026-09-05**; Monday's open is its first real test, not a re-run of a proven
+one.
+
 `/home/anushadudekula71/ajit-segment-bots` is the home directory for this project.
 Everything built for it lives inside this directory. Claude Code starts here on
 this server by default (see *Startup* below).
