@@ -1934,3 +1934,72 @@ def test_a_symbols_own_cause_stacks_on_top_of_a_market_wide_one():
     btc = min(limit.fraction_of_allotment for limit in limits if limit.applies_to("BTCUSDT"))
     assert eth == pytest.approx(0.25), "the symbol's own cause did not stack on the market's"
     assert btc == pytest.approx(0.5)
+
+
+# ---- leverage-selector and the broker's own limit (2026-09-05) ---------------
+#
+# Bot 3's 5x had no source until broker-margin-quoter. The ceiling in the
+# segment file and the volatility-implied figure are both this system's
+# opinions; what the broker will lend is not, and an order above it is rejected
+# rather than trimmed.
+
+def test_the_broker_s_limit_binds_even_when_volatility_would_allow_more():
+    from parts.risk_capital_allocation.leverage_selector import AT_BROKER_LIMIT
+
+    subject = selector()
+    chosen = subject.choose(
+        venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
+        volatility_forecast=0.002, funding_forecast=0.0,
+        broker_available_leverage=3.2,
+    )
+
+    assert chosen.leverage == pytest.approx(3.2)
+    assert chosen.outcome == AT_BROKER_LIMIT
+    assert chosen.broker_available_leverage == pytest.approx(3.2)
+    assert "the broker lends" in chosen.reason
+
+
+def test_the_operator_ceiling_still_binds_when_it_is_the_smaller_of_the_two():
+    from parts.risk_capital_allocation.leverage_selector import AT_CEILING
+
+    subject = selector()
+    chosen = subject.choose(
+        venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
+        volatility_forecast=0.002, funding_forecast=0.0,
+        broker_available_leverage=20.0,
+    )
+
+    assert chosen.leverage == pytest.approx(5.0)
+    assert chosen.outcome == AT_CEILING
+
+
+def test_a_silent_broker_is_unlevered_and_never_the_ceiling():
+    """A margin endpoint that is down must not silently become 5x."""
+    from parts.risk_capital_allocation.leverage_selector import (
+        NO_LEVERAGE, UNLEVERAGED_NO_BROKER_QUOTE,
+    )
+
+    subject = selector()
+    chosen = subject.choose(
+        venue_id="upstox", symbol="RELIANCE", ceiling=5.0,
+        volatility_forecast=0.002, funding_forecast=0.0,
+        broker_available_leverage=None, a_broker_quote_is_required=True,
+    )
+
+    assert chosen.leverage == NO_LEVERAGE
+    assert chosen.outcome == UNLEVERAGED_NO_BROKER_QUOTE
+    assert subject.standing.unleveraged_for_want_of_a_broker_quote == 1
+
+
+def test_a_segment_that_does_not_borrow_needs_no_broker_quote():
+    """A bought option has no margin to quote, and its absence is correct
+    rather than missing -- the same not-a-gap reading three audits reached."""
+    subject = selector()
+    chosen = subject.choose(
+        venue_id="upstox", symbol="NIFTY 24150 CE", ceiling=1.0,
+        volatility_forecast=0.002, funding_forecast=0.0,
+        broker_available_leverage=None, a_broker_quote_is_required=False,
+    )
+
+    assert chosen.leverage > 0
+    assert subject.standing.unleveraged_for_want_of_a_broker_quote == 0

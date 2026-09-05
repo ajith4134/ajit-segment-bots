@@ -172,6 +172,12 @@ LIVE_SPINE = (
     # reading order; it takes its underlyings' prices from broker-price-frame,
     # which broker-price-level-sampler above already publishes.
     "broker-symbol-universe-bridge",
+    # What the broker will lend against each instrument in that universe, after
+    # the bridge that publishes it and after the feed that prices it. Bot 3's
+    # leverage has no other source: `intraday_margin` is absent from every one
+    # of the 102,940 rows of Upstox's instrument master, so the only place that
+    # knows is the margin endpoint, and it has to be asked.
+    "broker-margin-quoter",
     # Whether the market is open, before the one part whose whole behaviour
     # turns on that answer. It sat forty lines further down until 2026-09-05,
     # so broker-history-reader started with no market-session-state at all and

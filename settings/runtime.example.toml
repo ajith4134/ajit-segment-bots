@@ -4270,3 +4270,13 @@ note  = "Claude, 2026-09-05: how old a market-session-state reading may be befor
 value = 25.0
 unit  = "minutes"
 note  = "Claude, 2026-09-05: how long before the session closes intraday-square-off-placer stops holding an intraday segment's positions and closes them at market. Sized against the BROKER's deadline rather than the exchange's: Upstox squares off open MIS equity positions itself from roughly 15:15 IST, fifteen minutes before the 15:30 close, so a square-off that merely beat the close would be racing an exit the broker had already started. Twenty-five minutes opens the window at 15:05 and leaves ten clear minutes before the broker acts, which at order_latency_maximum (5.0 s) is 120 ask-and-answer rounds -- an exit repeats no sooner than that and only once the previous ask was answered by the position shrinking. Deliberately wider than close_out_minutes_before_the_expiry_session_closes (15.0), which only has to beat the exchange's own close. THE 15:15 FIGURE IS BROKER POLICY AND IS NOT VERIFIED HERE: it is not in Upstox's instrument master and this project has never placed a live MIS order. Confirm it against Upstox's own published square-off timing before this segment ever runs in live mode; the mechanism -- finish before the broker starts -- is what fixes the shape of this number, and only the deadline itself is assumed."
+
+[margin_quote_instruments_per_call]
+value = 20
+unit  = "instruments per margin call"
+note  = "Claude, 2026-09-05: how many instruments broker-margin-quoter prices in one call to Upstox's margin endpoint. Twenty, which is Upstox's own documented cap and is already stated in the adapter as MAXIMUM_MARGIN_QUOTE_INSTRUMENTS -- the adapter raises rather than truncates above it, so this is the cap and not a choice around it. At twenty, cash-equity-intraday's fourteen underlyings are priced in a single call."
+
+[margin_requote_interval_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "Claude, 2026-09-05: how long a broker margin quote stands before the instrument is asked about again. An hour. The requirement is set from SEBI VAR+ELM margins that are revised daily rather than intraday, so an hour re-reads it several times a session without spending the rate limit the trade path needs; the whole reason this is quoted per instrument on an interval rather than per order is that the requirement scales with quantity and the ratio does not. Shorten it only on evidence that a limit moved inside a session -- broker-margin-quoter's own leverage_available is what would show it -- and never below what leaves headroom for the order calls themselves."

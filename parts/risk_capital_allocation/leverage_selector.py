@@ -29,7 +29,14 @@ PART_ID = "leverage-selector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="leverage-selector",
-    consumes=("trade-intent", "volatility-forecast", "funding-forecast", "leverage-ceiling"),
+    consumes=(
+        "trade-intent", "volatility-forecast", "funding-forecast", "leverage-ceiling",
+        # What the broker will actually lend against this instrument. A hard cap,
+        # not a preference: the operator's ceiling and the volatility-implied
+        # leverage are both this system's opinions, and the broker's limit is
+        # not -- an order above it is rejected, not trimmed.
+        "broker-margin-requirement",
+    ),
     produces=("leverage-choice", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -39,6 +46,12 @@ PART_DECLARATION = PartDeclaration(
 CHOSEN = "chosen"
 AT_CEILING = "held-at-operator-ceiling"
 AT_FLOOR = "held-at-floor"
+# The broker lends less than this system would have used. Distinct from
+# AT_CEILING, which is the operator's own limit: one is a policy this project
+# chose and the other is a fact about the account, and a board that showed them
+# as one number could not tell you which to change.
+AT_BROKER_LIMIT = "held-at-broker-limit"
+UNLEVERAGED_NO_BROKER_QUOTE = "unleveraged-no-broker-margin-quote"
 UNLEVERAGED_NO_FORECAST = "unleveraged-no-volatility-forecast"
 
 # The smallest leverage there is. Unlevered is always available and always safe,
@@ -61,12 +74,18 @@ class LeverageChoice:
     funding_penalty: float
     reason: str
     chosen_at_ns: int
+    # What the broker said it would lend, or None where it was never asked or
+    # never answered. None is not "no limit" -- see `choose`. Last and
+    # defaulted so every existing construction of this payload still holds.
+    broker_available_leverage: float | None = None
 
 
 @dataclass
 class SelectorStanding:
     choices: int = 0
     held_at_ceiling: int = 0
+    held_at_broker_limit: int = 0
+    unleveraged_for_want_of_a_broker_quote: int = 0
     unleveraged_for_want_of_a_forecast: int = 0
     funding_reduced: int = 0
     highest_chosen: float = 0.0
@@ -102,16 +121,43 @@ class LeverageSelector:
         ceiling: float,
         volatility_forecast: float | None,
         funding_forecast: float | None = None,
+        broker_available_leverage: float | None = None,
+        a_broker_quote_is_required: bool = False,
     ) -> LeverageChoice:
-        """Leverage for one trade. `volatility_forecast` is a fractional move per horizon."""
+        """Leverage for one trade. `volatility_forecast` is a fractional move per horizon.
+
+        `broker_available_leverage` is what the broker said it would lend against
+        this instrument, from `broker-margin-requirement`. It is a **hard cap**
+        and never a preference: the ceiling and the volatility-implied figure are
+        both this system's opinions, and an order above what the broker allows is
+        rejected outright rather than trimmed.
+
+        `a_broker_quote_is_required` says whether this segment's leverage is the
+        broker's to grant at all. On a segment that borrows -- cash equity
+        intraday -- a missing quote means unlevered, because the alternative is
+        sizing against a permission nobody gave. On a segment that does not
+        borrow, a bought option has no margin to quote and its absence is
+        correct rather than missing, which is the same not-a-gap reading three
+        audits already reached about this part.
+        """
         self.standing.choices += 1
         ceiling = max(NO_LEVERAGE, ceiling)
+
+        if a_broker_quote_is_required and broker_available_leverage is None:
+            self.standing.unleveraged_for_want_of_a_broker_quote += 1
+            return self._choice(
+                venue_id, symbol, NO_LEVERAGE, UNLEVERAGED_NO_BROKER_QUOTE, ceiling,
+                volatility_forecast, funding_forecast, None, 1.0, None,
+                "the broker has not said what it will lend against this instrument; "
+                "unlevered, because a leverage nobody granted is not one to size against",
+            )
 
         if volatility_forecast is None or volatility_forecast <= 0:
             self.standing.unleveraged_for_want_of_a_forecast += 1
             return self._choice(
                 venue_id, symbol, NO_LEVERAGE, UNLEVERAGED_NO_FORECAST, ceiling,
                 volatility_forecast, funding_forecast, None, 1.0,
+                broker_available_leverage,
                 "no volatility forecast; unlevered is the only size that needs no forecast",
             )
 
@@ -131,6 +177,13 @@ class LeverageSelector:
             chosen = ceiling
             outcome = AT_CEILING
             self.standing.held_at_ceiling += 1
+        # The broker's limit is applied after the operator's, so whichever is
+        # smaller is the one that shows in the outcome -- and a board can tell
+        # a policy this project chose from a fact about the account.
+        if broker_available_leverage is not None and chosen > broker_available_leverage:
+            chosen = max(NO_LEVERAGE, broker_available_leverage)
+            outcome = AT_BROKER_LIMIT
+            self.standing.held_at_broker_limit += 1
         if chosen <= NO_LEVERAGE:
             chosen = NO_LEVERAGE
             outcome = AT_FLOOR
@@ -140,11 +193,15 @@ class LeverageSelector:
 
         return self._choice(
             venue_id, symbol, chosen, outcome, ceiling, volatility_forecast, funding_forecast,
-            implied, penalty,
+            implied, penalty, broker_available_leverage,
             f"volatility {volatility_forecast:.2%} over {self._horizons:g} horizon(s) implies "
             f"{implied:.1f}x for a {self._target_distance:.1%} cushion"
             + (f", cut to {penalty:.2f} of it by funding" if penalty < 1.0 else "")
-            + (f"; held at the {ceiling:g}x ceiling" if outcome == AT_CEILING else ""),
+            + (f"; held at the {ceiling:g}x ceiling" if outcome == AT_CEILING else "")
+            + (
+                f"; held at the {broker_available_leverage:.2f}x the broker lends"
+                if outcome == AT_BROKER_LIMIT else ""
+            ),
         )
 
     def _funding_penalty(self, funding_forecast: float | None) -> float:
@@ -162,7 +219,8 @@ class LeverageSelector:
         return min(1.0, self._funding_tolerance / daily)
 
     def _choice(
-        self, venue_id, symbol, leverage, outcome, ceiling, volatility, funding, implied, penalty, reason
+        self, venue_id, symbol, leverage, outcome, ceiling, volatility, funding, implied,
+        penalty, broker_available, reason
     ) -> LeverageChoice:
         return LeverageChoice(
             venue_id=venue_id,
@@ -174,6 +232,7 @@ class LeverageSelector:
             funding_forecast=funding,
             volatility_implied_leverage=implied,
             funding_penalty=penalty,
+            broker_available_leverage=broker_available,
             reason=reason,
             chosen_at_ns=self._now_ns(),
         )
