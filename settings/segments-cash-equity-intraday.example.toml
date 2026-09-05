@@ -1,0 +1,56 @@
+# ajit-segment-bots -- the cash-equity-intraday segment's own settings.
+#
+# Phase A's third bot in the temporary goal of 2026-09-05 (docs/goal.md, top):
+# full-universe cash equity, intraday, using the broker's intraday leverage.
+# The standing build order in item 3 puts this in Phase B, after both options
+# bots are complete; the temporary goal pulls it forward, and that conflict is
+# written down rather than resolved silently.
+#
+# ONE SPINE RUNS ONE SEGMENT. `segment_id` in runtime.toml decides which of
+# these files is read. This segment cannot run at the same time as
+# index-options or stock-options on this machine.
+
+[money_mode]
+value = "paper"
+unit  = "paper or live"
+note  = "operator, 2026-09-05: whether this segment's orders go to the paper book or to a venue with real money. RL-005 is paper first. This segment has never traded, and it is the only one of the three that can lose more than it committed -- a leveraged intraday position is not a bought option whose worst case is the premium -- so paper is not a formality here."
+
+[allocated_balance]
+value = 500000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: the balance this segment trades against, matching the two options segments so the three are comparable rather than differing by a dial nobody chose. Five lakh rupees. Note this is the OWN capital, not the buying power: at the intraday leverage this segment is for, the position sizer may commit a multiple of it, which is exactly why maximum_capital_per_trade below is expressed against this figure and not against the leveraged amount."
+
+[minimum_capital_per_trade]
+value = 5000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: below this a trade is not placed at all, kept at the options segments' figure. The reason there was that fees and the flat brokerage dominate a smaller trade, and that reason is about the charge stack rather than the instrument, so it transfers."
+
+[maximum_capital_per_trade]
+value = 50000.0
+unit  = "INR"
+note  = "operator, 2026-09-05: the most one trade may commit of this segment's OWN capital -- a tenth of the allocated balance, deliberately half the fraction the options segments use. The asymmetry is the leverage: a fifth of the account in a bought option risks a fifth of the account, and the same fraction at 5x intraday controls a position five times larger whose loss is not bounded by a premium. trade-capital-bounds-gate refuses above this rather than trimming silently."
+
+[leverage_ceiling]
+value = 5.0
+unit  = "multiple"
+note  = "operator, 2026-09-05: the most leverage this segment may ask for, as the user stated it -- 'full univers cas equity intrady wit 5x'. IT IS A CEILING THIS PROJECT IMPOSES, NOT A LIMIT IT HAS VERIFIED: the real per-stock intraday limit is the broker's, set from SEBI VAR+ELM margins that differ by name and change daily, and it is always the smaller of the two that binds. It cannot be read from Upstox's instrument master -- measured 2026-09-05, `intraday_margin` appears in ZERO of the 102,789 rows in the real file, so InstrumentListing.intraday_margin_percent is always None. The real source is Upstox's per-order margin endpoint (UpstoxAdapter.margin_endpoint_url / read_margin_quotes), which prices a specific candidate order; until a part asks it, this ceiling is the only bound and no order should be sized against it in live mode."
+
+[quote_currency]
+value = "INR"
+unit  = "currency"
+note  = "operator, 2026-09-05: NSE cash equity trades and settles in INR."
+
+[positions_are_squared_off_daily]
+value = true
+unit  = "true or false"
+note  = "Claude, 2026-09-05: whether a position in this segment may be carried overnight. True here and absent for the two options segments, which hold a bought contract to its own expiry. This is what intraday-square-off-placer reads to decide the segment must be flat before the session ends: an intraday (MIS) position left open is squared off by the broker itself at whatever price the book offers, or converted to delivery with a margin call behind it, and neither is an exit this system chose or can learn from."
+
+[segment_underlying_trading_symbols]
+value = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "AXISBANK", "ITC", "LT", "BHARTIARTL", "KOTAKBANK", "HINDUNILVR", "MARUTI", "TATASTEEL"]
+unit  = "trading symbol"
+note  = "Claude, 2026-09-05: the equities this segment trades. Every one verified present in Upstox's real instrument master fetched that day as an NSE_EQ instrument. THE USER ASKED FOR THE FULL UNIVERSE and this is not it: the full NSE cash universe is 2,655 NSE_EQ instruments in the same master, and docs/goal.md item 4 records that the ~2000-symbol universe is a planned upgrade rather than current scope, for a measured reason -- cointegration-pair-finder and spread-reversion-detector fail as the SQUARE of the universe, and at 205 symbols the pair finder had already tested 3,277,888 pairs while the spread detector dropped 332,858 inputs. Widening this is a real piece of work on those two parts, not an edit to this list, and it is named here so the gap is visible rather than forgotten."
+
+[segment_option_contracts_per_underlying]
+value = 1
+unit  = "option contracts per underlying per expiry"
+note  = "Claude, 2026-09-05: one, because this segment trades the equities themselves and not their option chains. The setting is read by broker-symbol-universe-bridge, which publishes underlyings plus a chain; it cannot be zero (the bridge refuses a universe of underlyings with no chain, since for an options segment that could never produce a trade), so it is the smallest value that says 'the chain is not what this segment is about'. If the bridge ever grows a mode for underlying-only universes this becomes that instead."

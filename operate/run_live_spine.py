@@ -706,6 +706,13 @@ LIVE_SPINE = (
     # so a bought call still open at expiry becomes a delivery obligation for
     # strike x lot size rather than a premium that expires worthless.
     "pre-expiry-position-closer",
+    # The third of the three exits this system places on its own initiative, and
+    # the one that does nothing at all on the segment running today: it closes
+    # everything only when the segment's own settings say it may not hold
+    # overnight, which cash-equity-intraday says and both options segments do
+    # not. On an options spine it reports is_intraday 0 and holds still, which
+    # is the correct board for it rather than a part that failed to run.
+    "intraday-square-off-placer",
     "event-risk-limiter",
     # Knowledge, phase 13's unblocked half: the three tiers of memory. None of
     # these needs a provider key -- the parts that do are llm-foundation's, and
