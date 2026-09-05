@@ -87,6 +87,17 @@ class PartHealth:
     # `messages_published`, which until 2026-09-02 counted these as publishes and so
     # showed a part sending into the void as one doing its job.
     messages_not_delivered: tuple[tuple[str, int], ...] = ()
+    # What this part's work is made of, copied from its own declaration. Carried
+    # because failing-part-detector's SUSPICIOUSLY_PERFECT rule reasons about
+    # whether zero errors is suspicious, and that is only true of a part that
+    # talks to something which can fail -- "in a system that talks to venues,
+    # zero errors over a long run means errors are being swallowed". For a
+    # compute-bound part zero errors is simply what working looks like, and until
+    # 2026-09-05 the rule fired on all 229 of them: 16,877 of Friday's 48,084
+    # escalations were this fault restated about parts that cannot have the
+    # problem it describes. The detector reads part-health and had no other way
+    # to know, so the fact travels with the health it is judged from.
+    resource_class: str = ""
 
 
 def compute_tick_interval(health_interval_seconds: float, rate_ratio: float) -> float:
@@ -333,6 +344,7 @@ def run_part(
                     observed_at_ns=time.time_ns(),
                     refused_control_frame=refused_control_frame,
                     standing=countable_standing(read_standing() if read_standing else None),
+                    resource_class=str(declaration.resource_class),
                 )
             )
             last_health_at = now

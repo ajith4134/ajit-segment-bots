@@ -190,6 +190,12 @@ class SimulatorStanding:
     # still there and fills at the open. A count that climbs during Indian
     # market hours is a session reading that is wrong, not a quiet market.
     rested_market_closed: int = 0
+    # More than one exchange segment's session was standing at once, so this part
+    # could not tell which one an order belonged to and refused to guess. Counted
+    # rather than logged because it is a standing condition, not an event: while
+    # it is above zero nothing fills, and the number says how many ticks that has
+    # been true for.
+    sessions_too_many_to_choose: int = 0
     fees_charged: float = 0.0
     worst_slippage_fraction: float = 0.0
     # The paper book itself: how many orders are on it now, how many stops it has
@@ -841,6 +847,15 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "refused_feed_jump": simulator.standing.refused_feed_jump,
         "feed_jumps_cleared": simulator.standing.feed_jumps_cleared,
         "refused_no_price": simulator.standing.refused_no_price,
+        # The three below were counted and never published until 2026-09-05, which
+        # is why 325 orders were refused on 2026-09-04 with nothing on any board
+        # saying so. A refusal nobody can read is the same as a silent one: the
+        # part knew exactly why it was not filling and had no way to say it.
+        "market_orders_waiting_for_a_first_price": (
+            simulator.standing.market_orders_waiting_for_a_first_price
+        ),
+        "rested_market_closed": simulator.standing.rested_market_closed,
+        "sessions_too_many_to_choose": simulator.standing.sessions_too_many_to_choose,
         "refused_already_filled": simulator.standing.refused_already_filled,
         "fees_charged": simulator.standing.fees_charged,
         "worst_slippage_fraction": simulator.standing.worst_slippage_fraction,
@@ -954,8 +969,24 @@ def start_part(context) -> int:
         # holding the last "open" after the calendar stopped saying so is how a
         # dead sensor keeps a door open. One segment is read because this part
         # fills for one segment; a second would need its own simulator.
+        # One session is all this part can answer for. The calendar publishes the
+        # single segment `market_session_segment` names ("FO"), while an order
+        # names its bot segment ("index-options"), so the two cannot be matched
+        # here and no mapping between them exists to read. While exactly one
+        # session stands, it is the one every order is judged against and that is
+        # right. If a second ever stands -- a second calendar, or three segment
+        # bots each with their own -- this part can no longer tell which order
+        # belongs to which, and taking whichever the mapping happened to yield
+        # first would apply one exchange's holiday to another exchange's orders,
+        # silently and differently on each restart. So it refuses to choose, which
+        # reads as no session measured and does not fill (Rule 8).
         standing_sessions = sessions.values()
-        simulator.observe_session(standing_sessions[0] if standing_sessions else None)
+        if len(standing_sessions) == 1:
+            simulator.observe_session(standing_sessions[0])
+        else:
+            if len(standing_sessions) > 1:
+                simulator.standing.sessions_too_many_to_choose += 1
+            simulator.observe_session(None)
         for trade in trades_in(trades.payloads()):
             last_price[(trade.venue_id, trade.symbol)] = trade.price
             last_price_fidelity[(trade.venue_id, trade.symbol)] = getattr(

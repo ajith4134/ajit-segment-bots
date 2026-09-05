@@ -213,11 +213,12 @@ def a_detector(window=10, minimum=4, stuck=3, slowdown=3.0, perfect=20):
 
 
 def _tick(detector, part_id="p-1", count=5, produced=1, errors=1, digest=None,
-          seconds=0.1):
+          seconds=0.1, resource_class="io-bound"):
     for index in range(count):
         detector.observe_health(
             part_id, tick_seconds=seconds, produced=produced, errors=errors,
             output_digest=digest if digest is not None else f"d-{index}",
+            resource_class=resource_class,
         )
 
 
@@ -248,8 +249,27 @@ def test_a_part_getting_slower_against_its_own_baseline_is_flagged():
 def test_a_part_with_no_errors_at_all_is_suspect():
     """Zero errors in a system that talks to venues means they are being swallowed."""
     subject = a_detector(perfect=10, slowdown=100.0)
-    _tick(subject, count=12, errors=0)
+    _tick(subject, count=12, errors=0, resource_class="io-bound")
     assert subject.check("p-1").state == SUSPICIOUSLY_PERFECT
+
+
+def test_a_compute_bound_part_is_never_suspiciously_perfect():
+    """The rule is about swallowed errors, and a computation has none to swallow.
+
+    Applied to every class it was true of 229 parts permanently and stayed true,
+    which is what put 16,877 escalations of it into one trading day on 2026-09-04
+    and buried the faults that meant something.
+    """
+    subject = a_detector(perfect=10, slowdown=100.0)
+    _tick(subject, count=12, errors=0, resource_class="compute-bound")
+    assert subject.check("p-1").state == HEALTHY
+
+
+def test_a_part_whose_class_never_arrived_is_not_judged_by_the_perfect_run_rule():
+    """Unknown is not io-bound. Guessing restores the false positives."""
+    subject = a_detector(perfect=10, slowdown=100.0)
+    _tick(subject, count=12, errors=0, resource_class="")
+    assert subject.check("p-1").state == HEALTHY
 
 
 def test_a_crash_is_fatal_and_a_restart_is_the_treatment():

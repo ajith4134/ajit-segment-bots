@@ -20,6 +20,8 @@ phase cannot recover from.
 
 from __future__ import annotations
 
+import datetime
+
 import dataclasses
 import json
 import os
@@ -37,6 +39,7 @@ from parts.market_data_feed.symbol_catalogue_reader import (
 from parts.ledger.trade_lifecycle_recorder import LIFECYCLE_STAGES
 from runtime.bus import Inbox, Publisher
 from runtime.learned_estimator import Estimate
+from runtime.market_conditions import MarketSessionState, SessionKind
 from runtime.part_launcher import PartLauncher
 from runtime.trade_intent import OPEN, SOLE_OPINION, TradeIntent
 from runtime.trading_types import BUY
@@ -57,6 +60,29 @@ WARM_UP_SECONDS = 5.0
 PUBLISH_INTERVAL_SECONDS = 0.25
 # How long the record is given to catch up with the fill it records.
 RECORD_SETTLE_SECONDS = 20.0
+
+# A trading session, stated rather than measured, because the calendar that
+# measures one reads NSE over the network. `segment` is what the calendar would
+# have published, not what the order names -- paper-fill-simulator asks only
+# whether a session is tradeable, and cannot match a bot segment to an exchange
+# one because no mapping between them exists (see its own read_orders).
+def an_open_session_now() -> MarketSessionState:
+    """Built fresh at each publish, for the same reason `arriving_now` restamps.
+
+    A session is a level and its reader bounds the age of one
+    (`market_condition_level_maximum_age_seconds`, 180s), so a session stamped
+    once is expired by the time the run needs it and reads as no session at all
+    -- which does not fill. Stamped at epoch it is expired on arrival, which is
+    how the first version of this fixture reproduced the exact failure it was
+    written to remove.
+    """
+    return MarketSessionState(
+        segment="FO",
+        kind=SessionKind.OPEN,
+        as_of_date=datetime.date(2026, 9, 4),
+        reason="stated by the test; the calendar reads NSE and a test may not",
+        observed_at_ns=time.time_ns(),
+    )
 
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
@@ -331,6 +357,13 @@ def test_an_intent_becomes_a_paper_fill(
         "order-request": watch("order-state-poller", "order-request"),
         "fill": watch("position-close-detector", "fill"),
         "journal-entry": watch("journal-integrity-checker", "journal-entry"),
+        # The book counts every branch it takes and says so on its health. Watched
+        # here so a run that produces no fill can say which refusal produced none,
+        # instead of only that none happened. On 2026-09-04 the live spine routed
+        # 325 orders and filled nothing, and the reason existed as a counter the
+        # whole time with nothing reading it -- this is that lesson applied to the
+        # test that was supposed to catch it.
+        "part-health": watch("failing-part-detector", "part-health"),
     }
     seen = {data_type: [] for data_type in watched}
 
@@ -347,6 +380,24 @@ def test_an_intent_becomes_a_paper_fill(
     brain = Publisher(
         part_id="opinion-arbiter",
         outbound=wiring["opinion-arbiter"].outbound,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
+    # The paper book fills nothing outside a trading session (2026-09-02), and
+    # market-session-calendar is the only producer of that level. It is not in
+    # TRADING_HALF and must not be: it reads NSE's holiday master over the
+    # network, which a test may not depend on. So the session is stated here,
+    # the way test_an_options_position_opens_and_closes states its own.
+    #
+    # Without it this test failed with bounded-order 24, order-request 24, fill 0
+    # -- the whole chain working and the book refusing every order for a session
+    # nobody had measured. That is the correct refusal on the part's side and a
+    # missing input on the test's, and it hid a real defect for a day: the same
+    # zero-fill shape was happening on the live spine for an entirely different
+    # reason (the governor shedding the decision chain), and a red test that was
+    # red for its own reason is a test nobody can read an outage from.
+    calendar = Publisher(
+        part_id="market-session-calendar",
+        outbound=wiring["market-session-calendar"].outbound,
         maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
     )
 
@@ -370,6 +421,7 @@ def test_an_intent_becomes_a_paper_fill(
         warm_up_ends = time.monotonic() + WARM_UP_SECONDS
         while time.monotonic() < warm_up_ends:
             catalogue.publish("symbol-universe", captured_universe)
+            calendar.publish("market-session-state", (an_open_session_now(),))
             feed.publish("market-data", arriving_now(real_prices[-40:]))
             time.sleep(PUBLISH_INTERVAL_SECONDS)
 
@@ -388,6 +440,7 @@ def test_an_intent_becomes_a_paper_fill(
         deadline = time.monotonic() + PATIENCE_SECONDS
         while time.monotonic() < deadline and not seen["fill"]:
             catalogue.publish("symbol-universe", captured_universe)
+            calendar.publish("market-session-state", (an_open_session_now(),))
             feed.publish("market-data", arriving_now(real_prices[-40:]))
             brain.publish("trade-intent", [intent])
             time.sleep(PUBLISH_INTERVAL_SECONDS)
@@ -404,6 +457,7 @@ def test_an_intent_becomes_a_paper_fill(
         while time.monotonic() < settled_by and not any(
             message.payload.kind == "fill" for message in seen["journal-entry"]
         ):
+            calendar.publish("market-session-state", (an_open_session_now(),))
             feed.publish("market-data", arriving_now(real_prices[-40:]))
             time.sleep(PUBLISH_INTERVAL_SECONDS)
             for data_type, inbox in watched.items():
@@ -417,6 +471,7 @@ def test_an_intent_becomes_a_paper_fill(
         feed.close()
         catalogue.close()
         brain.close()
+        calendar.close()
 
     # Each recorder writes its own file beside the base the settings name, because
     # a chain is a property of one writer and two recorders appending to one path
@@ -432,6 +487,13 @@ def test_an_intent_becomes_a_paper_fill(
     assert still_running == list(TRADING_HALF), (
         f"parts died: {sorted(set(TRADING_HALF) - set(still_running))}"
     )
+    # What the book itself said it was doing, from its own standing counters.
+    book_said = {}
+    for message in seen["part-health"]:
+        if getattr(message.payload, "part_id", None) == "paper-fill-simulator":
+            book_said = {name: value for name, value in message.payload.standing if value}
+    counted["the paper book's own counters"] = book_said
+
     assert counted["bounded-order"] > 0, f"the bounds gate produced nothing: {counted}"
     assert counted["order-request"] > 0, f"the router produced nothing: {counted}"
     assert counted["fill"] > 0, f"no fill: {counted}"

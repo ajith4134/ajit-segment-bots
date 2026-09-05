@@ -130,3 +130,101 @@
 #                              shed. It costs nothing when idle: with no override
 #                              present it publishes no order at all.
 "position-flattener" = 30
+
+#   Ranks 31 to 68 added by Claude 2026-09-05: the path from a price to a routed
+#   order, and back out of the position again. Measured, which is why it exists.
+#
+#   On 2026-09-04 the bots routed 325 orders to the paper book and it filled none.
+#   The book was not at fault -- handed one of those orders and that contract's own
+#   price it fills. Every order was refused for being priced at a market that had
+#   gone, and it had: the decision each order carried was a median 1,055 seconds
+#   old by the time it was routed. Reading the governor's own switch records for
+#   that day says why:
+#
+#       position-sizer          switched off 06:50:28, never restored -- 4h 09m
+#       bull-feature-builder    7 offs, 36m total, longest 11m03s
+#       bear-conviction-model   4 offs, 32m total, longest  9m10s
+#       opinion-arbiter         4 offs, 15m total, longest  7m49s
+#       ...every part on the decision chain, 8-12 minute outages each
+#
+#   Those outages are the staleness. A candidate took a median 918 seconds to
+#   become an intent because the parts that turn one into the other kept being
+#   shed, and the price the decision was made at aged the whole time.
+#
+#   The incoherence this fixes: paper-fill-simulator is rank 7, protected and
+#   reserved, while every part that produces an order for it to fill was the
+#   unstated middle and sheddable. Protecting the venue stand-in and shedding the
+#   sizer that feeds it is how 325 orders reached a book that could have filled
+#   them all.
+#
+#   It costs almost nothing, which is the other half of the argument. Sampled off
+#   /proc on the live spine 2026-09-05, these 38 parts together draw 17.64% of one
+#   core -- 1.47% of the twelve. position-sizer, shed as a hog, was 4.65% of one
+#   core. The governor keeps ~280 other parts to shed and every one of its own
+#   instruments; what it may no longer do is switch off the reason the machine is
+#   running. That is the position-flattener argument at rank 30 one step further
+#   out: a machine must not be able to switch off the part that does its job.
+#
+#   Not given a resource floor -- that stops at reservation_priority_ceiling (10)
+#   and a floor costs capacity nothing else may use. These are simply never shed.
+
+#   the two detectors that actually produced candidates on 2026-09-04
+#   (spread-reversion 1,330 of them, mean-reversion 375); shed 17 times that day.
+"spread-reversion-detector" = 31
+"mean-reversion-detector" = 32
+
+#   the bull opinion chain. bull-conviction-model is already rank 8 for its
+#   learning; these are the parts that feed and finish its opinion.
+"bull-setup-filter" = 33
+"bull-feature-builder" = 34
+"bull-outlier-rejector" = 35
+"bull-conviction-calibrator" = 36
+"bull-entry-timer" = 37
+"bull-exit-plan-proposer" = 38
+"bull-opinion-composer" = 39
+
+#   the bear chain, whole: it contributed to 35 intents on 2026-09-04 and its
+#   conviction model has no rank of its own the way the bull's does.
+"bear-setup-filter" = 40
+"bear-feature-builder" = 41
+"bear-outlier-rejector" = 42
+"bear-conviction-model" = 43
+"bear-conviction-calibrator" = 44
+"bear-entry-timer" = 45
+"bear-exit-plan-proposer" = 46
+"bear-opinion-composer" = 47
+
+#   where the opinions become one decision.
+"setup-second-opinion-reasoner" = 48
+"opinion-arbiter" = 49
+"intent-timing-gate" = 50
+
+#   the decision becoming an order. Everything from here to the router ran in
+#   0.01s on 2026-09-04 when it ran at all, so what these cost is availability.
+"instrument-selector" = 51
+"tick-size-resolver" = 52
+"stop-target-placer" = 53
+"exposure-limiter" = 54
+"position-sizer" = 55
+"trade-capital-bounds-gate" = 56
+"order-idempotency-stamper" = 57
+"order-destination-router" = 58
+
+#   the levels the sizer and the gate refuse an order without. Each is a level
+#   held by its reader, so shedding the producer does not fail loudly -- it lets
+#   the last value age until the age bound expires it and orders stop.
+"main-account-settings-reader" = 59
+"capital-settings-validator" = 60
+"capital-allotment-reader" = 61
+"money-mode-reader" = 62
+
+#   getting back out. A position that opens and cannot close is not a completed
+#   paper trade, and these are what carry a fill through to flat -- the same
+#   argument as paper-fill-simulator's own rank 7, which says a venue stand-in
+#   shed mid-trade stops resting stops triggering while positions stay open.
+"fill-reconciler" = 63
+"cost-basis-tracker" = 64
+"peak-excursion-tracker" = 65
+"exit-order-chainer" = 66
+"stop-order-manager" = 67
+"position-close-detector" = 68

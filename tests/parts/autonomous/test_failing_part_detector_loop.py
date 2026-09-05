@@ -62,11 +62,17 @@ def _detector() -> FailingPartDetector:
     )
 
 
-def _report(part_id: str) -> dict:
-    """One health report in the shape start_part builds from a live part-health."""
+def _report(part_id: str, resource_class: str = "io-bound") -> dict:
+    """One health report in the shape start_part builds from a live part-health.
+
+    io-bound by default because these tests are about the perfect-run fault, and
+    that rule only asks the question of a part that talks to something able to
+    fail (CAN_SWALLOW_AN_ERROR). A compute-bound part reports no fault at all,
+    which is the point of test_a_compute_bound_part_is_never_suspiciously_perfect.
+    """
     return {
         "part_id": part_id, "tick_seconds": 1.0, "produced": 1,
-        "errors": 0, "output_digest": None,
+        "errors": 0, "output_digest": None, "resource_class": resource_class,
     }
 
 

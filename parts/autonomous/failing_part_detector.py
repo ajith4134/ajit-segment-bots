@@ -55,6 +55,16 @@ STOPPED_PRODUCING = "alive-but-producing-nothing"
 STUCK_ON_ONE_ANSWER = "producing-the-same-answer-every-time"
 GETTING_SLOWER = "taking-longer-every-tick"
 SUSPICIOUSLY_PERFECT = "reporting-no-error-at-all-over-a-long-run"
+# The resource classes the perfect-run rule means something for. Its own
+# reasoning is "in a system that talks to venues, zero errors over a long run
+# means errors are being swallowed rather than not happening" -- which is a
+# statement about parts that talk to something able to fail. A compute-bound
+# part has nothing to swallow an error from, so zero errors is what working
+# looks like, not evidence of anything. Applied to all three classes the rule
+# was true of 229 parts permanently: 16,877 of the 48,084 escalations on
+# 2026-09-04 were this fault restated about parts that cannot have the problem
+# it describes, and a real fault had to be found inside that.
+CAN_SWALLOW_AN_ERROR = ("io-bound", "bandwidth-bound")
 
 FAULT_KINDS = (
     CRASHED, STOPPED_PRODUCING, STUCK_ON_ONE_ANSWER, GETTING_SLOWER,
@@ -130,13 +140,18 @@ class FailingPartDetector:
         self._produced: dict[str, int] = {}
         self._ticks: dict[str, int] = {}
         self._errors: dict[str, int] = {}
+        # What each part's work is made of, as its own declaration states it.
+        # Absent until that part's first health arrives, and a part whose class
+        # is unknown is not judged by the perfect-run rule: guessing would put
+        # back exactly the false positives the rule's scope exists to remove.
+        self._resource_class: dict[str, str] = {}
         self._crashed: dict[str, str] = {}
         self._first_seen: dict[str, int] = {}
         self.standing = DetectorStanding()
 
     def observe_health(
         self, part_id: str, tick_seconds: float, produced: int, errors: int,
-        output_digest: str | None = None,
+        output_digest: str | None = None, resource_class: str = "",
     ) -> None:
         if part_id not in self._ticks:
             self.standing.parts_watched += 1
@@ -144,6 +159,8 @@ class FailingPartDetector:
         self._ticks[part_id] = self._ticks.get(part_id, 0) + 1
         self._produced[part_id] = self._produced.get(part_id, 0) + produced
         self._errors[part_id] = self._errors.get(part_id, 0) + errors
+        if resource_class:
+            self._resource_class[part_id] = resource_class
         self._durations.setdefault(part_id, RollingWindow(self._window)).observe(tick_seconds)
         if output_digest is not None:
             digests = self._outputs.setdefault(part_id, [])
@@ -197,8 +214,21 @@ class FailingPartDetector:
             recent = list(durations.values)[-max(self._minimum_ticks // 2, 2) :]
             earlier = list(durations.values)[: max(self._minimum_ticks // 2, 2)]
             if earlier and recent:
-                baseline = statistics.mean(earlier)
-                latest = statistics.mean(recent)
+                # Medians, not means. A part that paces its own work -- the
+                # `is_due()` guard most periodic parts use -- has a bimodal tick
+                # time by design: cheap on most ticks, expensive on the one that
+                # rebuilds something. A mean over half a window then swings on
+                # whether that half happened to catch an expensive tick, and 3x
+                # is easy to clear on jitter alone. Measured on the live spine
+                # 2026-09-05: this fired 10,569 times in 35 minutes, on
+                # hog-detector, duty-cycle-planner and memory-pressure-forecaster
+                # among others, and every escalation the warden sent in that
+                # window was the correlated-failure guard tripping on the pile.
+                # The median of each half is unmoved by an occasional expensive
+                # tick and still moves when every tick is slower, which is the
+                # "structure being walked, not jitter" this rule is for.
+                baseline = statistics.median(earlier)
+                latest = statistics.median(recent)
                 if baseline > 0 and latest / baseline >= self._slowdown_ratio:
                     return self._fault(
                         part_id, GETTING_SLOWER, DEGRADED,
@@ -209,8 +239,13 @@ class FailingPartDetector:
                     )
 
         # Too healthy: in a system that talks to venues, zero errors over a long run
-        # means errors are being swallowed rather than not happening.
-        if ticks >= self._perfect_run_ticks and self._errors.get(part_id, 0) == 0:
+        # means errors are being swallowed rather than not happening. Only asked of
+        # a part that talks to something able to fail -- see CAN_SWALLOW_AN_ERROR.
+        if (
+            ticks >= self._perfect_run_ticks
+            and self._errors.get(part_id, 0) == 0
+            and self._resource_class.get(part_id) in CAN_SWALLOW_AN_ERROR
+        ):
             return self._fault(
                 part_id, SUSPICIOUSLY_PERFECT, SUSPECT,
                 f"{ticks} tick(s) with no error of any kind", ticks, True,
@@ -411,6 +446,7 @@ def start_part(context) -> int:
                     "errors": newly_lost
                     + (1 if report.refused_control_frame else 0),
                     "output_digest": None,
+                    "resource_class": report.resource_class,
                 }
             )
         return tuple(reports)

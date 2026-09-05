@@ -161,3 +161,37 @@ def arriving_now():
         ]
 
     return restamp
+
+
+def most_recent_day_the_tape_holds(venue_ids, tape_root=None) -> str | None:
+    """The latest day these venues actually recorded, or None if they never did.
+
+    Three integration tests read "today's" trades, which was right while the tape
+    was being written around the clock: a crypto venue prints every day and today
+    always existed. It stopped being right on 2026-09-01, when the goal pivoted to
+    Indian markets and the crypto spine went inactive. From then on those tests
+    errored on every run -- "the tape holds only 0 trades for <today>" -- six of
+    them, permanently, which is a red suite that says nothing about the code and
+    buries the failures that do.
+
+    The day is only which prints to read. `arriving_now` restamps them to now, so
+    the age a part judges is unaffected and RL-063 still holds: these are the
+    venue's own prints, in the venue's own order, at the venue's own spacing.
+
+    Returns None rather than guessing when no venue has a single recorded day, so
+    a caller can skip with that as the stated reason instead of failing on an
+    assertion about a tape that was never going to be there.
+    """
+    import pathlib
+
+    root = tape_root or pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
+    days = set()
+    for venue_id in venue_ids:
+        venue_root = root / venue_id
+        if not venue_root.is_dir():
+            continue
+        for symbol_directory in venue_root.iterdir():
+            for index_path in symbol_directory.glob("*.index"):
+                if index_path.stat().st_size > 0:
+                    days.add(index_path.stem.split(".")[0])
+    return max(days) if days else None

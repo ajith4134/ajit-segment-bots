@@ -28,6 +28,8 @@ import time
 
 import pytest
 
+from tests.conftest import most_recent_day_the_tape_holds
+
 from runtime.bus import Inbox, Publisher
 from runtime.part_launcher import PartLauncher
 from runtime.tape import read_payload, read_tape_index
@@ -35,6 +37,11 @@ from runtime.venues.adapter_registry import load_venue_adapter
 from runtime.wiring_plan import derive_wiring
 
 TAPE_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
+# The venues whose captured prints this test replays. Still the crypto pair: the
+# chain under test is venue-agnostic (T-4) and these are the only tapes with the
+# trade-by-trade depth it needs. Porting to the Upstox broker tape is real work
+# and outstanding -- it is a different tape shape with no VenueAdapter behind it.
+CAPTURED_VENUES = ("binance-usdm", "bybit-linear")
 THREAD_CEILING = 1
 PLACEMENT_DEADLINE_SECONDS = 0.5
 PLACEMENT_POLL_SECONDS = 0.002
@@ -96,9 +103,20 @@ def busiest_symbols(venue_id: str, day: str, count: int) -> list[str]:
 
 @pytest.fixture(scope="module")
 def todays_trades():
-    day = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    # The latest day the tape actually holds, not today. The crypto spine went
+    # inactive on 2026-09-01 with the pivot to Indian markets, so "today" has had
+    # no prints since and these tests errored on every run. See
+    # most_recent_day_the_tape_holds for why the day may move without weakening
+    # what is proved.
+    day = most_recent_day_the_tape_holds(CAPTURED_VENUES)
+    if day is None:
+        pytest.skip(
+            "no captured tape for any of "
+            f"{CAPTURED_VENUES}; these tests replay real venue prints (RL-063) "
+            "and there are none on this machine to replay"
+        )
     merged = []
-    for venue_id in ("binance-usdm", "bybit-linear"):
+    for venue_id in CAPTURED_VENUES:
         adapter = load_venue_adapter(venue_id)
         for symbol in busiest_symbols(venue_id, day, SYMBOLS_PER_VENUE):
             index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
