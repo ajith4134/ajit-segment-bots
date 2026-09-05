@@ -36,6 +36,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.indian_equity_fee_model import upstox_equity_intraday_order_cost
 from runtime.indian_options_fee_model import upstox_options_order_cost
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -45,6 +46,8 @@ from runtime.trading_types import (
     LIMIT,
     MARKET,
     SELL,
+    OPTION,
+    SPOT,
     STOP_MARKET,
     TAKE_PROFIT_MARKET,
     TRIGGERED_ORDER_TYPES,
@@ -185,6 +188,14 @@ class SimulatorStanding:
     # too is a symbol nothing is trading, which is a fact about the symbol.
     market_orders_waiting_for_a_first_price: int = 0
     refused_already_filled: int = 0
+    # Which of Upstox's two charge stacks each fill was priced by. Counted
+    # rather than assumed, because the wrong one is not visibly wrong: an
+    # equity fill charged the options stack still produces a plausible
+    # number. A cash-equity segment trading while `fills_priced_as_equity`
+    # stays at zero is the defect this counter exists to make visible.
+    fills_priced_as_options: int = 0
+    fills_priced_as_equity: int = 0
+    fills_priced_by_the_fallback_stack: int = 0
     # Orders put on the book because the market is not in a trading session, or
     # because no session has been measured at all. Not a refusal: the order is
     # still there and fills at the open. A count that climbs during Indian
@@ -227,6 +238,9 @@ class PaperFillSimulator:
         options_exchange_transaction_charge_rate: float, options_ipft_charge_rate: float,
         options_stamp_duty_buy_rate: float, options_gst_rate: float,
         now_ns=time.time_ns,
+        equity_intraday_rates: dict | None = None,
+        instrument_kind_of=None,
+        kinds_by_segment: dict | None = None,
     ) -> None:
         if taker_fee_rate < 0 or maker_fee_rate < 0:
             raise ValueError("a fee rate cannot be negative")
@@ -243,6 +257,25 @@ class PaperFillSimulator:
         self._options_ipft_charge_rate = options_ipft_charge_rate
         self._options_stamp_duty_buy_rate = options_stamp_duty_buy_rate
         self._options_gst_rate = options_gst_rate
+        # Upstox's Equity Intraday stack, which is a different stack and not a
+        # different number: STT is 0.025% of turnover where the options rate is
+        # 0.1% of premium, the exchange transaction charge is 0.00297% against
+        # 0.03503%, and brokerage is min(Rs20, 0.1%) rather than a flat Rs20.
+        # See runtime/indian_equity_fee_model.py. None means the caller stated
+        # no equity rates, and this part does not invent them (RL-061) -- it
+        # counts the fills it could not price that way instead.
+        self._equity_intraday_rates = dict(equity_intraday_rates or {})
+        # How a symbol says which stack it belongs to. Injected for the same
+        # reason instrument-selector injects `segment_of`: the answer lives in
+        # the instrument master and the operator's settings, and a table in this
+        # module would be wrong the moment a segment traded something new.
+        # An OrderRequest does not carry the instrument kind, so without this
+        # there is nothing to read it from.
+        self._instrument_kind_of = instrument_kind_of
+        # segment id -> the one instrument kind that segment trades, read from
+        # the operator's segment files. Empty means nothing stated it, and the
+        # fallback below answers for that rather than this module guessing.
+        self._kinds_by_segment = dict(kinds_by_segment or {})
         self._now_ns = now_ns
         # None until market-session-calendar says otherwise, and None does not
         # fill: see `may_fill`.
@@ -254,6 +287,64 @@ class PaperFillSimulator:
         # holds an order under, and it is what a cancel names.
         self._resting: dict[str, RestingOrder] = {}
         self.standing = SimulatorStanding()
+
+    def _upstox_fee_for(self, order, turnover: float) -> float:
+        """Which of Upstox's two charge stacks this fill pays, and what it costs.
+
+        The instrument decides, not the venue. A bought option pays a flat
+        brokerage and five percentage-of-premium components; a share bought
+        intraday pays min(Rs20, 0.1%) and six percentage-of-turnover ones, at
+        rates that are not the same rates. Charging one for the other is wrong
+        in the base as well as in the number.
+
+        Falls back to the options stack when nothing can say what the instrument
+        is, because that is what every Upstox fill was charged before this
+        existed and a silent change of cost for the two options segments -- the
+        only ones that have ever traded -- would be a worse surprise than the
+        fallback. The fallback is counted rather than hidden: a run whose
+        `fills_priced_by_the_fallback_stack` is climbing while a cash-equity
+        segment is trading is a run reporting fees it did not really compute.
+        """
+        # The order already says whose money is buying it, and a segment's own
+        # settings say what that segment trades -- so the kind is derivable from
+        # what is in hand, with no lookup against an instrument master in the
+        # fill path. `segment` is carried on OrderRequest for the neighbouring
+        # reason that three segments share one spine and each keeps its own
+        # balance; this reads the same field rather than adding another.
+        kind = self._kinds_by_segment.get(order.segment)
+
+        if kind is None and self._instrument_kind_of is not None:
+            try:
+                kind = self._instrument_kind_of(order.venue_id, order.symbol)
+            except Exception:
+                # A resolver that raises must not stop a fill. It means the kind
+                # is unknown, which the fallback below already answers for.
+                kind = None
+
+        if kind == SPOT and self._equity_intraday_rates:
+            self.standing.fills_priced_as_equity += 1
+            return upstox_equity_intraday_order_cost(
+                turnover, order.side, **self._equity_intraday_rates
+            ).total
+
+        if kind == OPTION:
+            self.standing.fills_priced_as_options += 1
+        else:
+            # Either nothing resolved the kind, or it resolved to one this has
+            # no rates for. Both are "priced by the fallback", and the counter
+            # says so rather than letting an options-priced share pass as
+            # measured (Rule 8).
+            self.standing.fills_priced_by_the_fallback_stack += 1
+
+        return upstox_options_order_cost(
+            turnover, order.side,
+            flat_brokerage=self._options_flat_brokerage,
+            stt_sell_rate=self._options_stt_sell_rate,
+            exchange_transaction_charge_rate=self._options_exchange_transaction_charge_rate,
+            ipft_charge_rate=self._options_ipft_charge_rate,
+            stamp_duty_buy_rate=self._options_stamp_duty_buy_rate,
+            gst_rate=self._options_gst_rate,
+        ).total
 
     def observe_session(self, session) -> None:
         """Which session the market is in. Never inferred from a price arriving:
@@ -626,6 +717,7 @@ class PaperFillSimulator:
                             side=side, quantity=quantity, order_type=LIMIT,
                             limit_price=limit_price, stop_price=None,
                             rested_at_ns=self._now_ns(), leverage=leverage,
+                            segment=segment,
                         ),
                         RESTING,
                         f"a {side} limit at {limit_price:g} is on the book; no price has arrived "
@@ -658,6 +750,7 @@ class PaperFillSimulator:
                             side=side, quantity=quantity, order_type=MARKET,
                             limit_price=None, stop_price=None,
                             rested_at_ns=self._now_ns(), leverage=leverage,
+                            segment=segment,
                         ),
                         RESTING_UNPRICED,
                         f"a {side} market order is on the book; no price has arrived for this "
@@ -684,7 +777,7 @@ class PaperFillSimulator:
                         client_order_id=client_order_id, venue_id=venue_id, symbol=symbol,
                         side=side, quantity=quantity, order_type=LIMIT,
                         limit_price=limit_price, stop_price=None, rested_at_ns=self._now_ns(),
-                        leverage=leverage,
+                        leverage=leverage, segment=segment,
                     ),
                     RESTING,
                     f"the market is at {price:g} and the limit is {limit_price:g}; a real order "
@@ -700,6 +793,7 @@ class PaperFillSimulator:
                 client_order_id=client_order_id, venue_id=venue_id, symbol=symbol, side=side,
                 quantity=quantity, order_type=order_type, limit_price=limit_price,
                 stop_price=None, rested_at_ns=self._now_ns(), leverage=leverage,
+                segment=segment,
             ),
             price, fillable=fillable, is_taker=is_taker, slippage=slippage, note=None,
         )
@@ -751,15 +845,13 @@ class PaperFillSimulator:
             # is_taker plays no part: none of Upstox's six components read
             # whether the fill crossed the spread, only the order's side and
             # the premium it traded.
-            fee = upstox_options_order_cost(
-                fillable * price, order.side,
-                flat_brokerage=self._options_flat_brokerage,
-                stt_sell_rate=self._options_stt_sell_rate,
-                exchange_transaction_charge_rate=self._options_exchange_transaction_charge_rate,
-                ipft_charge_rate=self._options_ipft_charge_rate,
-                stamp_duty_buy_rate=self._options_stamp_duty_buy_rate,
-                gst_rate=self._options_gst_rate,
-            ).total
+            #
+            # Which of Upstox's two stacks applies is decided by the instrument,
+            # not by the venue. Until 2026-09-05 every Upstox fill was charged
+            # the options stack, so a cash-equity intraday trade paid 0.1% STT
+            # on premium where it really owes 0.025% on turnover, and a
+            # transaction charge an order of magnitude too large.
+            fee = self._upstox_fee_for(order, fillable * price)
         else:
             fee_rate = self._taker_fee if is_taker else self._maker_fee
             fee = fillable * price * fee_rate
@@ -858,8 +950,48 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "sessions_too_many_to_choose": simulator.standing.sessions_too_many_to_choose,
         "refused_already_filled": simulator.standing.refused_already_filled,
         "fees_charged": simulator.standing.fees_charged,
+        # Which of Upstox's two charge stacks priced the fills, published because
+        # the wrong one is not visibly wrong -- an equity fill charged the
+        # options stack still produces a plausible number, twice the real one.
+        # `fills_priced_by_the_fallback_stack` climbing is the only outward sign
+        # that a fill was priced by a stack nothing confirmed applied to it.
+        "fills_priced_as_options": simulator.standing.fills_priced_as_options,
+        "fills_priced_as_equity": simulator.standing.fills_priced_as_equity,
+        "fills_priced_by_the_fallback_stack": (
+            simulator.standing.fills_priced_by_the_fallback_stack
+        ),
         "worst_slippage_fraction": simulator.standing.worst_slippage_fraction,
     }
+
+
+def one_kind_per_segment(context) -> dict:
+    """Each built segment, and the single instrument kind it trades.
+
+    This is what lets a fill be charged the right stack without a lookup against
+    the instrument master in the fill path: the order already names the segment
+    whose money is buying it, and the segment's own settings name what it
+    trades. Two settings already in hand, no third source.
+
+    A segment stating more than one kind is left out rather than reduced to its
+    first -- which stack such an order paid would then depend on the order of a
+    list in a settings file, and "priced by the fallback" is the honest answer
+    to a question the settings did not decide. None of the three segments built
+    for 2026-09-07 states more than one.
+    """
+    from runtime.segment_settings import (
+        built_segments,
+        instrument_types_this_segment_trades,
+    )
+
+    kinds: dict[str, str] = {}
+    for segment in built_segments(context):
+        try:
+            types = instrument_types_this_segment_trades(segment)
+        except Exception:
+            continue
+        if len(types) == 1:
+            kinds[segment] = types[0]
+    return kinds
 
 
 def run_paper_fill_simulator(
@@ -1166,6 +1298,19 @@ def start_part(context) -> int:
             options_ipft_charge_rate=context.number("options_ipft_charge_rate"),
             options_stamp_duty_buy_rate=context.number("options_stamp_duty_buy_rate"),
             options_gst_rate=context.number("options_gst_rate"),
+            equity_intraday_rates={
+                "flat_brokerage": context.number("equity_intraday_flat_brokerage"),
+                "brokerage_rate": context.number("equity_intraday_brokerage_rate"),
+                "stt_sell_rate": context.number("equity_intraday_stt_sell_rate"),
+                "exchange_transaction_charge_rate": context.number(
+                    "equity_intraday_exchange_transaction_charge_rate"
+                ),
+                "ipft_charge_rate": context.number("equity_intraday_ipft_charge_rate"),
+                "stamp_duty_buy_rate": context.number("equity_intraday_stamp_duty_buy_rate"),
+                "sebi_charge_rate": context.number("equity_intraday_sebi_charge_rate"),
+                "gst_rate": context.number("equity_intraday_gst_rate"),
+            },
+            kinds_by_segment=one_kind_per_segment(context),
         ),
         control_socket=context.control_socket,
         read_orders=read_orders,
