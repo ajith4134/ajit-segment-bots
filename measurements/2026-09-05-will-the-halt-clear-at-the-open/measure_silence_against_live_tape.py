@@ -71,6 +71,25 @@ def print_times_for(symbol_dir: pathlib.Path, day: str) -> numpy.ndarray:
     return numpy.asarray(records["received_at_ns"])
 
 
+def stamp(at_ns: int) -> str:
+    return datetime.datetime.fromtimestamp(at_ns / 1e9, tz=IST).strftime("%H:%M:%S")
+
+
+def earliest_print_ns(day: str) -> int | None:
+    """When this day's feed first printed anything at all, across every symbol."""
+    earliest = None
+    for symbol_dir in TAPE_ROOT.iterdir():
+        if not symbol_dir.is_dir():
+            continue
+        times = print_times_for(symbol_dir, day)
+        if len(times) == 0:
+            continue
+        first = int(times[0])
+        if earliest is None or first < earliest:
+            earliest = first
+    return earliest
+
+
 def measure(day: str) -> None:
     floor_seconds = setting("anomaly_feed_silent_after_seconds")
     patience = setting("anomaly_feed_silence_patience_multiple")
@@ -81,13 +100,25 @@ def measure(day: str) -> None:
     print(f"floor {floor_seconds:.0f}s   patience {patience}x p99   "
           f"gaps needed {gaps_needed}\n")
 
-    # Judged at four moments through the session, because "does the halt clear"
-    # is a different answer at 09:20 than at 14:00.
+    # Anchored to when the feed itself was alive, not to the exchange's clock.
+    # On both recorded sessions the feed's first print was hours after the open
+    # -- 14:07 IST on 2026-09-02, 10:33 on 2026-09-04 -- because the instrument
+    # master was reaching broker-market-feed-reader 532 rows at a time until
+    # a8bdbb0 fixed it that night. Judging the silence rule against the session
+    # clock therefore measures that outage and calls it a silent symbol, which
+    # is the wrong question: what Monday needs to know is what the rule does
+    # once data is flowing.
+    feed_alive_from = earliest_print_ns(day)
+    if feed_alive_from is None:
+        print("  no prints at all on this day\n")
+        return
+    print(f"feed's first print {stamp(feed_alive_from)} IST -- checkpoints are "
+          f"measured from there, not from the open\n")
     checkpoints = {
-        "09:20 (5 min in)": open_ns + 5 * 60 * 10**9,
-        "10:15 (1 hour in)": open_ns + 60 * 60 * 10**9,
-        "12:00 (midday)": open_ns + int(2.75 * 3600 * 10**9),
-        "15:00 (late)": open_ns + int(5.75 * 3600 * 10**9),
+        "+5 min of live feed": feed_alive_from + 5 * 60 * 10**9,
+        "+1 hour of live feed": feed_alive_from + 3600 * 10**9,
+        "+2 hours of live feed": feed_alive_from + 2 * 3600 * 10**9,
+        "+4 hours of live feed": feed_alive_from + 4 * 3600 * 10**9,
     }
     verdicts = {name: collections.Counter() for name in checkpoints}
     bounds_seen = {name: [] for name in checkpoints}
