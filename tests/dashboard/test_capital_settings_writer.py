@@ -21,6 +21,8 @@ from dashboard.capital_settings_writer import (
     REFUSED_UNCHANGED,
     AttemptLimiter,
     find_contradictions,
+    measure_over_allocation,
+    REFUSED_DEEPENS_OVER_ALLOCATION,
     judge_change,
     read_number,
     write_setting,
@@ -328,3 +330,103 @@ def test_the_next_section_is_not_swallowed_onto_the_note(tmp_path, monkeypatch):
     assert document.entries["allocated_balance"].value == 5_000.0
     assert document.entries["minimum_capital_per_trade"].value == 10.0
     assert len(document.entries) == 2
+
+
+# ---- more allocated than the account holds ----------------------------------
+#
+# One number cannot be in two places. Each segment's file can be individually
+# coherent while the set of them is not: on 2026-09-05 all three segments were
+# allocated 500,000 INR against a main_balance of 500,000, every per-segment
+# check passed, and allocation-conservation-checker reported a 1,000,000 overrun
+# on 2,543 of 2,547 checks.
+
+THREE_SEGMENTS = {
+    ("main-account", "main_balance"): 500_000.0,
+    ("index-options", "allocated_balance"): 500_000.0,
+    ("stock-options", "allocated_balance"): 500_000.0,
+    ("cash-equity-intraday", "allocated_balance"): 500_000.0,
+}
+
+
+def test_the_overrun_is_the_sum_against_the_balance():
+    assert measure_over_allocation(THREE_SEGMENTS) == 1_000_000.0
+
+
+def test_allocations_that_fit_have_no_overrun():
+    assert measure_over_allocation({
+        ("main-account", "main_balance"): 500_000.0,
+        ("index-options", "allocated_balance"): 200_000.0,
+        ("stock-options", "allocated_balance"): 200_000.0,
+    }) == 0.0
+
+
+def test_an_unmeasurable_overrun_is_never_reported_as_one():
+    """No balance to compare with is not the same fact as fitting inside it."""
+    assert measure_over_allocation({("index-options", "allocated_balance"): 9e9}) == 0.0
+
+
+# Each segment individually well inside the balance, and over-allocated as a set.
+# Deliberately not THREE_SEGMENTS, where every allocation equals the balance: any
+# rise there is caught by the per-segment "the money is not there" check first,
+# which would let this test pass without the sum guard existing at all.
+THREE_SMALL_SEGMENTS = {
+    ("main-account", "main_balance"): 500_000.0,
+    ("index-options", "allocated_balance"): 200_000.0,
+    ("stock-options", "allocated_balance"): 200_000.0,
+    ("cash-equity-intraday", "allocated_balance"): 200_000.0,
+}
+
+
+def test_a_change_that_deepens_the_over_allocation_is_refused():
+    verdict = judge_change(
+        "stock-options", "allocated_balance", 300_000.0, THREE_SMALL_SEGMENTS
+    )
+
+    assert not verdict.is_accepted
+    assert verdict.reason == REFUSED_DEEPENS_OVER_ALLOCATION
+
+
+def test_that_same_change_passes_every_per_segment_check():
+    """Proves the guard above is the sum's and not another check's."""
+    proposed = dict(THREE_SMALL_SEGMENTS)
+    proposed[("stock-options", "allocated_balance")] = 300_000.0
+
+    assert find_contradictions(proposed) == []
+
+
+def test_lowering_an_allocation_is_accepted_even_while_over_allocated():
+    """The guard must not stop the operator repairing what it complains about."""
+    verdict = judge_change(
+        "stock-options", "allocated_balance", 100_000.0, THREE_SEGMENTS
+    )
+
+    assert verdict.is_accepted, verdict.reason
+
+
+def test_raising_the_balance_to_cover_the_segments_is_accepted():
+    verdict = judge_change(
+        "main-account", "main_balance", 1_500_000.0, THREE_SEGMENTS
+    )
+
+    assert verdict.is_accepted, verdict.reason
+
+
+def test_a_contradiction_in_one_segment_is_named_with_that_segment():
+    """Three segments now, so a fault that named none of them was unactionable."""
+    faults = find_contradictions({
+        ("stock-options", "minimum_capital_per_trade"): 900.0,
+        ("stock-options", "maximum_capital_per_trade"): 100.0,
+    })
+
+    assert faults and all("stock-options" in fault for fault in faults)
+
+
+def test_a_fault_in_one_segment_does_not_go_unnoticed_because_another_is_clean():
+    faults = find_contradictions({
+        ("index-options", "minimum_capital_per_trade"): 10.0,
+        ("index-options", "maximum_capital_per_trade"): 1_000.0,
+        ("cash-equity-intraday", "minimum_capital_per_trade"): 900.0,
+        ("cash-equity-intraday", "maximum_capital_per_trade"): 100.0,
+    })
+
+    assert faults and all("cash-equity-intraday" in fault for fault in faults)

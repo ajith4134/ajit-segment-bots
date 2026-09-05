@@ -85,33 +85,48 @@ MAIN_ACCOUNT_EDITABLE = (
 
 
 def segment_scope_name() -> str:
-    """Which segment's capital the board may edit, as `segment_id` names it."""
+    """Which segment's settings stand in for the machine, as `segment_id` names it."""
     from dashboard.capital_settings_view import segment_scope_name as named
 
     return named()
 
 
+def built_segment_names() -> tuple[str, ...]:
+    """Every segment the board may edit the capital of.
+
+    `built_segments`, not `segment_id`. Three segment bots run on one spine since
+    2026-09-05 and `capital-allotment-reader` already publishes an allotment for
+    each, but this allowlist named only one of them -- so an edit to either of the
+    other two was refused as "not editable from the board", and the only place
+    RL-051 says these are edited could not reach two thirds of the capital that
+    was actually being traded against.
+    """
+    from dashboard.capital_settings_view import built_segment_names as named
+
+    return named()
+
+
 def editable_settings() -> dict:
-    """The allowlist, against the segment that is actually trading."""
-    segment = segment_scope_name()
+    """The allowlist, against every segment that is actually trading."""
     allowed = {("main-account", name): float for name in MAIN_ACCOUNT_EDITABLE}
-    allowed.update({(segment, name): float for name in SEGMENT_EDITABLE})
+    for segment in built_segment_names():
+        allowed.update({(segment, name): float for name in SEGMENT_EDITABLE})
     return allowed
 
 
 def scope_files() -> dict:
     """Which file each scope is written to."""
-    segment = segment_scope_name()
-    return {
-        "main-account": "main-account.toml",
-        segment: f"segments/{segment}.toml",
-    }
+    files = {"main-account": "main-account.toml"}
+    for segment in built_segment_names():
+        files[segment] = f"segments/{segment}.toml"
+    return files
 
 ACCEPTED = "accepted"
 REFUSED_NOT_EDITABLE = "this setting is not editable from the board"
 REFUSED_REAL_MONEY = "this setting decides whether real money moves"
 REFUSED_NOT_A_NUMBER = "the value is not a number"
 REFUSED_CONTRADICTS = "the settings would contradict each other"
+REFUSED_DEEPENS_OVER_ALLOCATION = "this would allocate more money than the account holds"
 REFUSED_UNCHANGED = "the value is already that"
 
 
@@ -207,6 +222,21 @@ def judge_change(scope: str, name: str, new_value, current: dict) -> WriteVerdic
     if faults:
         return WriteVerdict(False, REFUSED_CONTRADICTS, tuple(faults))
 
+    # Judged as a change rather than as a state, so an operator can always climb
+    # out of an over-allocation the board did not cause. See
+    # `measure_over_allocation` for why this is not one of the faults above.
+    was = measure_over_allocation(current)
+    now = measure_over_allocation(proposed)
+    if now > was:
+        return WriteVerdict(False, REFUSED_DEEPENS_OVER_ALLOCATION, (
+            f"the segments would be allocated {now:,.2f} more than the main balance "
+            f"holds, up from {was:,.2f}. One number cannot be in two places: "
+            f"allocation-conservation-checker already reports this account as "
+            f"over-allocated, and this change makes it worse. Lower another "
+            f"segment's allocation or raise main_balance first -- both are still "
+            f"accepted from here",
+        ))
+
     if read_number(current.get((scope, name))) == number:
         return WriteVerdict(False, REFUSED_UNCHANGED)
 
@@ -223,31 +253,76 @@ def find_contradictions(values: dict) -> list[str]:
     faults: list[str] = []
     get = lambda scope, name: read_number(values.get((scope, name)))  # noqa: E731
 
-    segment = segment_scope_name()
-    minimum = get(segment, "minimum_capital_per_trade")
-    maximum = get(segment, "maximum_capital_per_trade")
-    allocated = get(segment, "allocated_balance")
     balance = get("main-account", "main_balance")
 
-    if minimum is not None and maximum is not None and minimum > maximum:
-        faults.append(
-            f"a minimum of {minimum:,.2f} is above the maximum of {maximum:,.2f}; "
-            f"no order size satisfies both"
-        )
-    if maximum is not None and allocated is not None and allocated > 0 and maximum > allocated:
-        faults.append(
-            f"one trade may use {maximum:,.2f} of an allocation of {allocated:,.2f}"
-        )
-    if allocated is not None and balance is not None and allocated > balance:
-        faults.append(
-            f"this segment is allocated {allocated:,.2f} of a main balance of "
-            f"{balance:,.2f}; the money is not there"
-        )
-    for scope in ("main-account", segment):
+    # Every segment present in the values, not `segment_id` alone. Read off the
+    # keys rather than from settings, so this judges exactly the set it was
+    # handed: three segment bots run on one spine since 2026-09-05, and a check
+    # that looked at one of them would have passed a change that made another
+    # incoherent -- which is the same shape of miss as the board only ever
+    # showing one of the three.
+    for segment in segments_named_in(values):
+        minimum = get(segment, "minimum_capital_per_trade")
+        maximum = get(segment, "maximum_capital_per_trade")
+        allocated = get(segment, "allocated_balance")
+
+        if minimum is not None and maximum is not None and minimum > maximum:
+            faults.append(
+                f"{segment}: a minimum of {minimum:,.2f} is above the maximum of "
+                f"{maximum:,.2f}; no order size satisfies both"
+            )
+        if maximum is not None and allocated is not None and allocated > 0 and maximum > allocated:
+            faults.append(
+                f"{segment}: one trade may use {maximum:,.2f} of an allocation of {allocated:,.2f}"
+            )
+        if allocated is not None and balance is not None and allocated > balance:
+            faults.append(
+                f"{segment} is allocated {allocated:,.2f} of a main balance of "
+                f"{balance:,.2f}; the money is not there"
+            )
+
+    for scope in ("main-account", *segments_named_in(values)):
         ceiling = get(scope, "leverage_ceiling")
         if ceiling is not None and ceiling < 1.0:
             faults.append(f"a {scope} ceiling of {ceiling} is below unlevered; 1.0 is the floor")
     return faults
+
+
+def segments_named_in(values: dict) -> tuple[str, ...]:
+    """Every segment scope the values mention, in a stable order."""
+    return tuple(sorted({scope for scope, _ in values if scope != "main-account"}))
+
+
+def measure_over_allocation(values: dict) -> float:
+    """How much more is allocated across every segment than the account holds.
+
+    `allocation-conservation-checker`'s rule, restated here for the same reason
+    `find_contradictions` restates the validator's -- the board is off-diagram
+    substrate and importing a part would wire it into the circuit (T-4).
+
+    It is separate from `find_contradictions` on purpose, and the reason is a
+    lockout this would otherwise cause. The per-segment checks judge a settings
+    set as right or wrong; this one cannot, because the operator's files were
+    *already* over-allocated when it was written -- 1,500,000 across three
+    segments against a 500,000 balance on 2026-09-05. Folding it in as a fault
+    would have refused every edit made from the board, including the two edits
+    that fix it: lowering an allocation and raising the balance. A guard that
+    stops the operator repairing the thing it is complaining about is worse than
+    no guard.
+
+    So `judge_change` refuses only a change that makes the overrun *deeper*.
+    Zero when the allocations fit, or when there is no balance to compare with --
+    an unmeasurable overrun is never reported as a growing one.
+    """
+    balance = read_number(values.get(("main-account", "main_balance")))
+    if balance is None:
+        return 0.0
+    total = 0.0
+    for segment in segments_named_in(values):
+        allocated = read_number(values.get((segment, "allocated_balance")))
+        if allocated is not None:
+            total += allocated
+    return max(0.0, total - balance)
 
 
 def write_setting(scope: str, name: str, new_value: float, changed_by: str = "the board") -> pathlib.Path:

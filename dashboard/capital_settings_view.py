@@ -63,6 +63,11 @@ SEGMENT_SETTINGS = (
     "maximum_capital_per_trade",
     "leverage_ceiling",
     "quote_currency",
+    # Only cash-equity-intraday carries this, and a segment that does not is not
+    # a segment missing a setting: a bought option is held to its own expiry and
+    # has nothing to square off. Absent entries are skipped rather than rendered
+    # empty, so naming it here costs the two options segments nothing.
+    "positions_are_squared_off_daily",
 )
 
 # Settings that decide whether real money can move. Marked so the board can treat
@@ -179,9 +184,53 @@ def segment_scope_name() -> str:
     return str(document.read_value("segment_id"))
 
 
-def segment_settings_path() -> str:
+def built_segment_names() -> tuple[str, ...]:
+    """Every segment this spine trades, in the order the operator listed them.
+
+    `segment_id` names *one* segment -- the one whose settings stand in wherever
+    a value is not keyed by segment yet -- and this board showed only that one
+    until 2026-09-05, while `built_segments` had named three since the temporary
+    goal in `docs/goal.md`. The two segments it left out were not unbuilt: their
+    files carried a full set of capital settings, `capital-allotment-reader` was
+    already publishing an allotment for each of them, and neither was visible or
+    editable from the only place RL-051 says these are edited.
+
+    That is worse than a blank panel, because the page did not say it was showing
+    one of three. An operator reading it saw a complete account.
+
+    Falls back to `segment_id` alone when machine scope does not name the list,
+    which is the pre-2026-09-05 shape. A malformed list is *not* narrowed to one
+    segment: it raises, because silently trading one segment's capital settings
+    for three is the failure this whole function exists to end.
+    """
+    from runtime.part_context import RUNTIME_SCOPE
+    from runtime.settings_reader import load_settings_document, settings_directory
+
+    document = load_settings_document(
+        settings_directory() / "runtime.toml", RUNTIME_SCOPE
+    )
+    entry = document.entries.get("built_segments")
+    if entry is None:
+        return (segment_scope_name(),)
+    listed = entry.value
+    if not isinstance(listed, (list, tuple)) or not listed:
+        raise ValueError(
+            f"built_segments is {listed!r}, which is not a non-empty list of "
+            f"segment names; refusing to fall back to segment_id, because showing "
+            f"one segment's capital where the operator named several is the "
+            f"failure this board already had"
+        )
+    # Duplicates collapse, order kept: it is the operator's order and the same
+    # one instrument-selector reports claimants in.
+    seen: dict[str, None] = {}
+    for segment in listed:
+        seen.setdefault(str(segment), None)
+    return tuple(seen)
+
+
+def segment_settings_path(segment: str | None = None) -> str:
     """The segment file's path relative to the settings directory."""
-    return f"segments/{segment_scope_name()}.toml"
+    return f"segments/{segment or segment_scope_name()}.toml"
 
 
 def read_settings_documents() -> tuple[dict, dict]:
@@ -192,10 +241,11 @@ def read_settings_documents() -> tuple[dict, dict]:
     documents: dict[str, object] = {}
     problems: dict[str, str] = {}
 
-    for scope, relative in (
-        ("main-account", "main-account.toml"),
-        (segment_scope_name(), segment_settings_path()),
-    ):
+    wanted = [("main-account", "main-account.toml")]
+    wanted += [
+        (segment, segment_settings_path(segment)) for segment in built_segment_names()
+    ]
+    for scope, relative in wanted:
         try:
             documents[scope] = load_settings_document(root / relative, scope)
         except Exception as refusal:
@@ -208,11 +258,12 @@ def build_capital_settings_view() -> dict:
     history, journal_provenance = read_settings_journal()
     documents, problems = read_settings_documents()
 
+    active = segment_scope_name()
+    asked = [("main-account", MAIN_ACCOUNT_SETTINGS)]
+    asked += [(segment, SEGMENT_SETTINGS) for segment in built_segment_names()]
+
     scopes = []
-    for scope, wanted in (
-        ("main-account", MAIN_ACCOUNT_SETTINGS),
-        (segment_scope_name(), SEGMENT_SETTINGS),
-    ):
+    for scope, wanted in asked:
         document = documents.get(scope)
         if document is None:
             scopes.append({
@@ -220,6 +271,8 @@ def build_capital_settings_view() -> dict:
                 "ok": False,
                 "proof": problems.get(scope, "the settings file could not be read"),
                 "settings": [],
+                "is_main_account": scope == "main-account",
+                "is_the_standing_in_segment": scope == active,
             })
             continue
 
@@ -250,16 +303,112 @@ def build_capital_settings_view() -> dict:
                 not_editable_reason=reason_not_editable(scope, name),
             ).as_dict())
 
-        scopes.append({"scope": scope, "ok": True, "proof": f"{root_of(document)}", "settings": views})
+        scopes.append({
+            "scope": scope,
+            "ok": True,
+            "proof": f"{root_of(document)}",
+            "settings": views,
+            "is_main_account": scope == "main-account",
+            # Which of the segments `segment_id` names. Said on the panel because
+            # it is not cosmetic: every value not yet keyed by segment is read
+            # from this one, so an operator changing a number on another panel
+            # needs to know it does not stand in for the machine-scope default.
+            "is_the_standing_in_segment": scope == active,
+        })
 
     return {
         "scopes": scopes,
+        "allocation": measure_allocation_against_the_balance(documents),
+        "standing_in_segment": active,
         "journal": journal_provenance,
         "editable": True,
         "editable_reason": (
             "a change is password-gated, rate-limited, checked against the same "
             "contradictions capital-settings-validator refuses to trade under, and "
             "journalled by capital-settings-change-recorder on its next read"
+        ),
+    }
+
+
+def measure_allocation_against_the_balance(documents: dict) -> dict:
+    """What every segment is allocated together, against the balance behind it.
+
+    The per-segment panels cannot answer this and never could: one number cannot
+    be in two places, and each segment's own file is individually coherent while
+    the set of them is not. On 2026-09-05 all three segments were allocated
+    500,000 INR against a `main_balance` of 500,000 -- `capital-settings-validator`
+    judged the settings CONSISTENT on 1,272 of 1,272 judgements, because its
+    allocation check is per segment and 500,000 is not above 500,000, while
+    `allocation-conservation-checker` had raised OVER_ALLOCATED on 2,543 of 2,547
+    checks with a worst overrun of exactly 1,000,000.
+
+    A board showing three green panels beside that is Rule 8's failure in its
+    purest form -- the reassuring display is the wrong one. So the sum is
+    computed here and stated as its own tile.
+
+    This restates `allocation-conservation-checker`'s rule rather than importing
+    it, for the same reason `find_contradictions` restates the validator's: the
+    board is off-diagram substrate and a board that imported a part would be
+    wiring itself into the circuit (T-4). The part stays the authority the bots
+    act on; this is only what the operator is shown.
+    """
+    balance_document = documents.get("main-account")
+    balance = None
+    if balance_document is not None:
+        entry = balance_document.entries.get("main_balance")
+        if entry is not None and isinstance(entry.value, (int, float)):
+            balance = float(entry.value)
+
+    by_segment: dict[str, float] = {}
+    unreadable: list[str] = []
+    for scope, document in documents.items():
+        if scope == "main-account":
+            continue
+        entry = document.entries.get("allocated_balance")
+        if entry is None or not isinstance(entry.value, (int, float)):
+            unreadable.append(scope)
+            continue
+        by_segment[scope] = float(entry.value)
+
+    total = sum(by_segment.values())
+
+    if balance is None:
+        return {
+            "is_measured": False,
+            "state": NOT_MEASURED,
+            "proof": (
+                "main-account.toml carries no readable main_balance, so what the "
+                "segments are allocated cannot be compared with anything -- which "
+                "is a different fact from the allocations being within it"
+            ),
+            "by_segment": by_segment,
+            "total_allocated": total,
+            "main_balance": None,
+            "segments_not_read": unreadable,
+        }
+
+    over = total - balance
+    return {
+        "is_measured": True,
+        "state": "OVER ALLOCATED" if over > 0 else "WITHIN THE BALANCE",
+        "is_over_allocated": over > 0,
+        "main_balance": balance,
+        "total_allocated": total,
+        "overrun": max(0.0, over),
+        "unallocated": max(0.0, -over),
+        "by_segment": by_segment,
+        "segments_not_read": unreadable,
+        "proof": (
+            f"{total:,.2f} allocated across {len(by_segment)} segment(s) "
+            f"({', '.join(f'{name} {value:,.0f}' for name, value in by_segment.items()) or 'none'}) "
+            f"against a main_balance of {balance:,.2f}"
+            + (
+                f" -- {over:,.2f} more than the account holds. Each segment's own "
+                f"file is individually coherent, which is why no per-segment check "
+                f"refuses it and allocation-conservation-checker is the part that does"
+                if over > 0 else
+                f" -- {-over:,.2f} unallocated"
+            )
         ),
     }
 

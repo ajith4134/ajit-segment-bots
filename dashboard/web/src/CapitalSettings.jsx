@@ -70,6 +70,65 @@ function whenChanged(setting) {
 
 const READABLE = (name) => name.replace(/_/g, ' ')
 
+const MONEY = (value) =>
+  typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'
+
+// What every segment is allocated together, against the balance behind it.
+//
+// This panel exists because the per-segment ones cannot answer it and reading
+// them in a row suggests otherwise. Each segment's file can be individually
+// coherent while the set of them is not: on 2026-09-05 all three were allocated
+// 500,000 INR against a main_balance of 500,000, capital-settings-validator
+// judged that CONSISTENT on every one of 1,272 judgements, and
+// allocation-conservation-checker was reporting a 1,000,000 overrun the whole
+// time. Three green panels beside a running over-allocation is the reassuring
+// display being the wrong one (Rule 8).
+function AllocationSummary({ allocation }) {
+  if (!allocation) return null
+
+  if (!allocation.is_measured) {
+    return (
+      <div className="banner warn">
+        <b>{allocation.state}</b> — what the segments are allocated together.
+        <div className="mono faint">{allocation.proof}</div>
+      </div>
+    )
+  }
+
+  const over = allocation.is_over_allocated
+  return (
+    <div className={`banner${over ? ' warn' : ''}`}>
+      <b>
+        {allocation.state} — {MONEY(allocation.total_allocated)} allocated across{' '}
+        {Object.keys(allocation.by_segment).length} segment(s) against a balance of{' '}
+        {MONEY(allocation.main_balance)}
+      </b>
+      {over ? (
+        <>
+          <div>
+            {MONEY(allocation.overrun)} more than the account holds. One number cannot
+            be in two places: every panel below can be individually coherent while the
+            set of them is not, which is why no per-segment check refuses this and{' '}
+            <code>allocation-conservation-checker</code> is the part that does.
+          </div>
+          <div className="mono faint">
+            Fix it by lowering a segment&rsquo;s allocated balance or raising{' '}
+            <code>main_balance</code> — both are still accepted from here. A change that
+            makes the overrun deeper is refused.
+          </div>
+        </>
+      ) : (
+        <div className="mono faint">{MONEY(allocation.unallocated)} unallocated</div>
+      )}
+      {allocation.segments_not_read?.length > 0 && (
+        <div className="mono faint">
+          not counted, no readable allocated_balance: {allocation.segments_not_read.join(', ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ValueCell({ setting, password, onChanged }) {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -178,10 +237,22 @@ export default function CapitalSettings({ settings, settingsError, reloadSetting
         </span>
       </div>
 
+      <AllocationSummary allocation={settings.allocation} />
+
       {settings.scopes.map((scope) => (
         <div className="trade-panel" key={scope.scope}>
           <div className="trade-panel-head">
-            <h3>{scope.scope === 'main-account' ? 'Main account' : `Segment — ${scope.scope}`}</h3>
+            <h3>
+              {scope.is_main_account ? 'Main account' : `Segment — ${scope.scope}`}
+              {scope.is_the_standing_in_segment && (
+                <span
+                  className="chip-standing-in"
+                  title="segment_id names this one: every value not yet keyed by segment is read from this file, so it stands in for the machine as well as for itself"
+                >
+                  stands in for the machine
+                </span>
+              )}
+            </h3>
             <div className="trade-panel-figures mono">
               <span>{scope.settings.length} setting(s)</span>
               <span className="sep">·</span>

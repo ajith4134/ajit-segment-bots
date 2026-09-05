@@ -333,6 +333,15 @@ footer { border-top: 1px solid var(--border); padding-top: 12px; color: var(--fa
   color: #D48A54; border: 1px solid #D48A54; text-transform: uppercase;
 }
 
+/* Which segment `segment_id` names. Deliberately quieter than .chip-real-money:
+   it is a fact about where the machine's fallbacks are read from, not a warning,
+   and a board where every marker shouts has no way left to raise its voice. */
+.chip-standing-in {
+  margin-left: 8px; padding: 1px 5px; border-radius: 3px;
+  font: 500 8.5px/1.5 "IBM Plex Mono", monospace; letter-spacing: 0.05em;
+  color: var(--muted); border: 1px solid var(--border); text-transform: uppercase;
+}
+
 /* The edit path. Held apart visually from everything else on the board, because
    everything else only reports and this one changes what the bot does. */
 .password-bar {
