@@ -1,6 +1,23 @@
 # ajit-segment-bots
 
-## TEMPORARY GOAL — 2026-09-05, read before anything else
+## TEMPORARY GOAL (second, active) — 2026-09-05, read before anything else
+
+**A systematic audit of all 29 foundational features (`docs/features.json`
+categories) one at a time, each covering every part inside it**: verify data is
+actually flowing on every consumed and produced connection (measured, not
+inferred from the declared contract); find every part still shaped like
+crypto rather than Indian stocks and convert or replace it with the real
+Indian-market equivalent, never just delete it; decide whether 29 foundational
+features is enough or more are needed; decide whether any of the 29 is missing
+a part it needs to do its job fully.
+
+**The user asked this stay active across every session until it is achieved
+completely** — it is not a one-session task, and multi-session persistence is
+the point, not an afterthought. The full statement, in the user's own words, is
+in `docs/goal.md`'s second TEMPORARY GOAL section (2026-09-05). It does not
+replace the first temporary goal below; both are active.
+
+## TEMPORARY GOAL (first, still active underneath) — 2026-09-05
 
 Three segment bots paper trading on **live** market data by **Monday
 2026-09-07** (NSE opens 09:15 IST / 03:45 UTC): **index options**, **stock
@@ -12,9 +29,12 @@ The user asked for this to be read at the start of every session so that
 reminding is not theirs to do. The full statement, in their own words, plus the
 two conflicts it has with the standing build order — Phase B being pulled
 forward, and the parked margin machinery a 5x equity bot actually needs — is at
-the top of `docs/goal.md`. **Index options has never completed a paper trade as
-of 2026-09-05**; Monday's open is its first real test, not a re-run of a proven
-one.
+the top of `docs/goal.md`. **Index options has never completed a paper trade
+live as of 2026-09-05**; Monday's open is its first real test. All three
+segments were verified opening and closing a trade together on the real
+captured tape that day (index-options 500 tried/343 opened/216 closed,
+stock-options 254/80/13, cash-equity-intraday's real top-50 shortlist 50/49/23)
+— replay, not live, per RL-071; Monday's live open is still unproven.
 
 `/home/anushadudekula71/ajit-segment-bots` is the home directory for this project.
 Everything built for it lives inside this directory. Claude Code starts here on

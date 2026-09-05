@@ -8,11 +8,61 @@ made only when the user gives them.
 trading bot) is in git history — `git log -p docs/goal.md` — not deleted, not
 carried forward as a parallel track.
 
-## TEMPORARY GOAL — given 2026-09-05, read this first
+## TEMPORARY GOAL — given 2026-09-05 (second), read this first
+
+The user asked that this be read at the start of **every** session, so that
+reminding is not theirs to do, and asked explicitly that it **stay active
+across every session until it is achieved completely** — it is not a
+one-session task and is not done until every part of it below is.
+
+> "I need you to create and save the new temporary goal on checking all the 29
+> foundational features one by one including all its internal parts to see if
+> the data is flowing to its connection output and input and find all the
+> parts that still are or works on crypto and after finding convet or replace
+> it with it's similar version for the Indian stocks and find if we need any
+> extra foundational features aside 29 and in any foundational feature If need
+> new or more parts"
+>
+> "And make this temporary goal to be active across all the sessions until we
+> achieve the goal completely"
+
+**A systematic audit of all 29 foundational features (`docs/features.json`
+categories), one at a time, each covering every part inside it:**
+
+1. **Data-flow verification, per part, both directions.** For every part in the
+   category: is data actually arriving on each `consumes` type, and is data
+   actually leaving on each `produces` type — measured, not inferred from the
+   contract declaration. `dashboard/check_contracts.py` already proves the
+   wiring is *declared* correctly (R-01); this goal proves messages actually
+   *move* across each wire, the same distinction RL-072 draws between "wired
+   up" and "carrying."
+2. **Find every part still crypto-shaped.** Anything still reasoning in
+   crypto's vocabulary or against crypto's venues (funding rate, USDT
+   notional, a Binance/Bybit adapter call, a crypto-only data type) rather
+   than the Indian-market equivalent, in a part that is supposed to be live
+   for this project's actual goal.
+3. **Convert or replace, never leave in place.** Each crypto-shaped part found
+   gets converted to its Indian-stock analogue or replaced by one, the same
+   standing instruction the crypto retirement has followed throughout: replace
+   with the real Indian-market equivalent, never just delete and leave a gap.
+4. **Whether 29 is enough.** Once every existing foundational feature has been
+   walked, name any foundational feature this project needs that does not
+   exist yet among the 29.
+5. **Whether each existing foundational feature is complete.** For every one
+   of the 29, name any part it is missing to do its job fully — not just
+   "does it run," but "does it have every part its own role needs."
+
+This is a large, multi-session undertaking by its own description (29
+categories, each walked in full) — it is not expected to finish in one
+sitting, which is exactly why the user asked for it to persist across
+sessions rather than be re-explained each time.
+
+## TEMPORARY GOAL — given 2026-09-05 (first), still standing underneath the one above
 
 The user asked that this be read at the start of **every** session, so that
 reminding is not theirs to do. It sits on top of the standing goal below; it
-does not replace it.
+does not replace it, and the goal above does not replace this one either —
+both are active until each is achieved.
 
 > "is te option index sement bot is completed fully and ready to start
 > pappertradin if so can me move on to build te option stock sement bot and
@@ -32,6 +82,23 @@ does not replace it.
 Every part connected and consistent, and **new parts created only where they are
 genuinely necessary** — the existing segment-generic parts are reused rather than
 cloned per segment.
+
+**Progress, 2026-09-05:** all three segments verified opening AND closing a
+trade together on the real captured tape (`operate/replay_a_captured_session.py`,
+2026-09-04), not inferred — `index-options 500 tried/343 opened/216 closed,
+stock-options 254/80/13, cash-equity-intraday 50/49/23, "Segments that opened
+AND closed a trade: 3 of 3"`. Cash-equity's 50 there is a real top-50 shortlist
+built from live Upstox 52-week/ATR history plus the tape's own real momentum
+and gap for that day (`equity-opportunity-profiler`,
+`cash-equity-shortlist-ranker`), not the full unranked universe and not the
+old static 14-name list. Fixed the same day: `segment_underlying_trading_symbols`
+was disconnected from the derived 2,444-share universe, so only 14 names could
+ever be attributed to cash-equity's capital regardless of what the scanner saw
+— `segment_that_trades` and `instrument-selector`'s
+`segment_resolver_from_settings` now resolve a derived-selection segment's
+ownership against the live shortlist instead. **This is still replay, not
+live paper trading** (RL-071) — Monday's open on real live data is still the
+first real test this goal names.
 
 **Two conflicts with item 3 below, flagged rather than silently resolved:**
 
