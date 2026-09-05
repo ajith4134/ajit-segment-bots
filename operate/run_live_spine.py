@@ -170,7 +170,11 @@ LIVE_SPINE = (
     # bull-side-candidate, no feature vector, no conviction, no intent, no
     # order. It is placed after broker-underlying-price-frame-bridge only for
     # reading order; it takes its underlyings' prices from broker-price-frame,
-    # which broker-price-level-sampler above already publishes.
+    # which broker-price-level-sampler above already publishes. Its equity
+    # branch is held back until cash-equity-shortlist-ranker above has spoken
+    # at least once (2026-09-05) -- publishing all 2,444 eligible shares while
+    # waiting would be exactly the uncapped universe the shortlist exists to
+    # replace.
     "broker-symbol-universe-bridge",
     # What the broker will lend against each instrument in that universe, after
     # the bridge that publishes it and after the feed that prices it. Bot 3's
@@ -192,6 +196,23 @@ LIVE_SPINE = (
     # `market-data` and deliberately not `broker-candle`, so the tape stays a
     # record of live capture only.
     "broker-history-reader",
+    # Cash-equity's real top-50 shortlist (2026-09-05): the operator asked for
+    # the day's actual opportunities -- momentum, volume, 52-week range, gap,
+    # VWAP deviation, ATR-normalised move -- instead of the bridge above
+    # publishing all 2,444 eligible ordinary shares unranked and uncapped.
+    # equity-opportunity-profiler fetches each candidate's own 52-week/ATR/
+    # volume history from Upstox (needs the token and the catalogue above);
+    # cash-equity-shortlist-ranker blends that with what liquidity-grader,
+    # broker-price-level-sampler and broker-candle-bridge already publish.
+    # Placed after broker-history-reader specifically: both read `candle`,
+    # which broker-candle-bridge and broker-history-reader both produce, and
+    # the two bridges/feed/ranker/bridge already sit in one cyclic component
+    # (broker-market-feed-reader <-> subscribed-instrument-listing-filter and
+    # the bridges beside it) where the ordering rule does not apply between
+    # members -- broker-history-reader is the one `candle` producer outside
+    # that cycle, so this is the position that satisfies it.
+    "equity-opportunity-profiler",
+    "cash-equity-shortlist-ranker",
     # The hard channel of stock-market-news-data (2026-09-02): the facts a part
     # refuses on rather than weighs, read from NSE's own public files. The two
     # readers come before the parts that hold their levels, so the first level
