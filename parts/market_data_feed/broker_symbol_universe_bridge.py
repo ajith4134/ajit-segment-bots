@@ -78,6 +78,45 @@ PART_DECLARATION = PartDeclaration(
 )
 
 
+# What an ordinary NSE share looks like in the broker's own master, and nothing
+# else does. Measured on the real file 2026-09-05: of 9,724 NSE_EQ rows only
+# 2,655 are instrument_type EQ -- the rest are sovereign gold bonds (4,311),
+# government securities, treasury bills, NCDs, SME listings and 242 BE-series
+# shares, which are trade-for-trade and cannot be traded intraday at all. An
+# intraday bot that treated any of those as an ordinary share would place orders
+# the exchange rejects.
+NSE_EQUITY_SEGMENT = "NSE_EQ"
+ORDINARY_SHARE = "EQ"
+ORDINARY_SECURITY = "NORMAL"
+
+
+class EquityWithoutADerivative:
+    """Which shares the cash-equity segment may trade, by exclusion.
+
+    The operator's instruction, 2026-09-05: every NSE share the derivatives
+    segments do not already cover, so the bots never hold the same underlying at
+    once. Two segments holding one name is exposure nothing bounds -- each stays
+    inside its own risk limits while the machine as a whole is twice as long as
+    either believes.
+
+    Stated as a rule rather than a list of symbols. A list of 2,444 names typed
+    into a settings file is fiction the day NSE adds an F&O name, and it cannot
+    be audited; this is one sentence, evaluated against the broker's own master
+    every time it is restated.
+
+    `admits` answers only the first half -- is this an ordinary share -- because
+    the second half needs the whole master: an equity is excluded when some
+    contract is written on it, and that contract may not have been spoken yet.
+    """
+
+    def admits(self, listing) -> bool:
+        return (
+            getattr(listing, "segment", None) == NSE_EQUITY_SEGMENT
+            and getattr(listing, "instrument_type", None) == ORDINARY_SHARE
+            and getattr(listing, "security_type", None) == ORDINARY_SECURITY
+        )
+
+
 @dataclass
 class BridgeStanding:
     listings_seen: int = 0
@@ -90,6 +129,19 @@ class BridgeStanding:
     contracts_published: int = 0
     underlyings_published: int = 0
     nearest_expiry_ms: dict = field(default_factory=dict)
+    # The derived cash-equity universe (2026-09-05). Every one of these is a
+    # count of something measured off the broker's own master, and the first two
+    # together are what says whether the exclusion has anything to exclude yet.
+    catalogue_cycles_heard: int = 0
+    derivative_underlyings_known: int = 0
+    equities_listed: int = 0
+    equities_covered_by_a_derivative: int = 0
+    equities_published: int = 0
+    # True while the master has not been heard through once. The exclusion set is
+    # incomplete until then, so nothing is published rather than publishing an
+    # F&O name into the cash segment -- which is the double-exposure the rule
+    # exists to prevent, and would last up to a full 30-minute catalogue cycle.
+    equity_universe_is_waiting_for_a_full_catalogue_cycle: bool = True
 
 
 class BrokerSymbolUniverseBridge:
@@ -100,6 +152,7 @@ class BrokerSymbolUniverseBridge:
         tracked_trading_symbols: tuple[str, ...],
         option_contracts_per_underlying: int | dict[str, int],
         now_ms=lambda: int(time.time() * 1000),
+        equity_selection=None,
     ) -> None:
         if not tracked_trading_symbols:
             raise ValueError(
@@ -151,6 +204,33 @@ class BrokerSymbolUniverseBridge:
             }
         self._tracked = frozenset(tracked_trading_symbols)
         self._contracts_per_underlying = widths
+        # How the cash-equity universe is decided: by exclusion, from the
+        # broker's own master, rather than by a list somebody typed. The
+        # operator's instruction (2026-09-05) is every NSE share the derivatives
+        # segments do not already cover, so the two never hold the same
+        # underlying at once -- separate segments have separate risk limits, and
+        # one name held in both is exposure nothing bounds.
+        #
+        # None means this bridge publishes only what it was handed, which is what
+        # a spine trading only derivatives states.
+        self._equity_selection = equity_selection
+        # Every NSE_EQ share the master has listed, by instrument_key.
+        self._equity_by_key: dict[str, object] = {}
+        # Every instrument_key the master has named as a derivative's underlying.
+        # An equity in here is covered by the F&O segments and is not this
+        # segment's. Measured on the real master 2026-09-05: 210 stock
+        # underlyings and 6 index ones, and each of the 210 is exactly an NSE_EQ
+        # instrument_key, so the exclusion is a set difference and never a
+        # symbol-string match.
+        self._derivative_underlying_keys: set[str] = set()
+        # The master is spoken over a 30-minute cycle, not handed over at once,
+        # so the exclusion set is incomplete until a full cycle has been heard --
+        # and publishing early would put an F&O name in the equity universe for
+        # up to half an hour, which is the double-exposure this rule exists to
+        # prevent. A cycle is complete when the first listing ever seen comes
+        # round again: the conveyor restates the table in order, forever.
+        self._first_listing_key: str | None = None
+        self._catalogue_cycles_heard = 0
         self._now_ms = now_ms
         # The tracked underlyings, by the key the master gives them.
         self._underlying_by_key: dict[str, object] = {}
@@ -163,6 +243,23 @@ class BrokerSymbolUniverseBridge:
     def observe_listing(self, listing) -> None:
         """One instrument listing: a tracked underlying, one of its contracts, or neither."""
         self.standing.listings_seen += 1
+
+        if self._first_listing_key is None:
+            self._first_listing_key = listing.instrument_key
+        elif listing.instrument_key == self._first_listing_key:
+            self._catalogue_cycles_heard += 1
+            self.standing.catalogue_cycles_heard = self._catalogue_cycles_heard
+
+        # Learned from every derivative, option or future alike: what matters is
+        # that some contract is written on this underlying, not which kind.
+        if listing.underlying_key is not None:
+            self._derivative_underlying_keys.add(listing.underlying_key)
+            self.standing.derivative_underlyings_known = len(
+                self._derivative_underlying_keys
+            )
+        elif self._equity_selection is not None and self._equity_selection.admits(listing):
+            self._equity_by_key[listing.instrument_key] = listing
+            self.standing.equities_listed = len(self._equity_by_key)
 
         if listing.trading_symbol in self._tracked and listing.underlying_key is None:
             if listing.instrument_key not in self._underlying_by_key:
@@ -310,6 +407,24 @@ class BrokerSymbolUniverseBridge:
                 contracts += 1
             self.standing.nearest_expiry_ms[listing.trading_symbol] = self.nearest_expiry_for(key)
 
+        # The derived cash-equity universe: every ordinary share no derivative is
+        # written on. Held back until the master has been heard through once,
+        # because a share whose options have not been spoken yet reads as having
+        # none -- and publishing an F&O name here is the double-exposure this
+        # whole rule exists to prevent.
+        waiting = self._catalogue_cycles_heard < 1
+        self.standing.equity_universe_is_waiting_for_a_full_catalogue_cycle = waiting
+        covered = equities = 0
+        if self._equity_selection is not None and not waiting:
+            for key, listing in sorted(self._equity_by_key.items()):
+                if key in self._derivative_underlying_keys:
+                    covered += 1
+                    continue
+                entries.append(self._entry_for_underlying(listing))
+                equities += 1
+        self.standing.equities_covered_by_a_derivative = covered
+        self.standing.equities_published = equities
+
         self.standing.underlyings_published = len(self._underlying_by_key)
         self.standing.underlyings_priced = priced
         self.standing.underlyings_without_a_price = without_price
@@ -351,12 +466,23 @@ def start_part(context) -> int:
     # (2026-09-05) and each underlying is subscribed once however many of them
     # want it, with the chain width of whichever segment trades its options.
     from runtime.segment_settings import (
-        option_chain_width_by_underlying, underlyings_every_built_segment_trades,
+        any_segment_takes_shares_without_a_derivative,
+        option_chain_width_by_underlying,
+        underlyings_every_built_segment_trades,
     )
 
     bridge = BrokerSymbolUniverseBridge(
         tracked_trading_symbols=underlyings_every_built_segment_trades(context),
         option_contracts_per_underlying=option_chain_width_by_underlying(context),
+        # The cash-equity segment takes every ordinary NSE share the derivatives
+        # segments do not cover, derived from the master rather than listed
+        # (2026-09-05). None when no segment on this spine asks for it, and then
+        # this bridge publishes only what it was handed.
+        equity_selection=(
+            EquityWithoutADerivative()
+            if any_segment_takes_shares_without_a_derivative(context)
+            else None
+        ),
     )
 
     # `symbol-universe` is a level: these are the symbols this system captures,

@@ -58,3 +58,8 @@ note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are publ
 value = ["option"]
 unit  = "instrument type"
 note  = "operator, 2026-09-05: which instrument types this segment claims. index-options and stock-options both trade options and are told apart by their underlyings (NIFTY, BANKNIFTY, SENSEX here), so neither half of the pair may be inferred from the other -- segment_that_trades matches on both. An instrument matching no built segment is reported as belonging to a segment that is not built, never reassigned to the nearest one."
+
+[segment_universe_selection]
+value = "stated"
+unit  = "selection rule"
+note  = "operator, 2026-09-05: this segment trades exactly the underlyings segment_underlying_trading_symbols names, and no rule derives more. The alternative, \"every-nse-share-without-a-derivative\", is what cash-equity-intraday states -- it is the segment that takes what the derivatives segments do not cover, so the derivatives segments are the ones that must be stated."

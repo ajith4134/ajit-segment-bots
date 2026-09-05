@@ -89,7 +89,19 @@ def read_segment_symbols(
     return symbols
 
 
-def underlyings_this_segment_trades(context) -> tuple[str, ...]:
+def _root_of(context, root: pathlib.Path | None):
+    """The settings directory a context's own files came from.
+
+    An explicit root wins, then the context's own, then the operator's. A helper
+    reading the operator's directory while every other number came from a copy is
+    the defect this exists to close (2026-09-05).
+    """
+    if root is not None:
+        return root
+    return getattr(context, "settings_root", None)
+
+
+def underlyings_this_segment_trades(context, root: pathlib.Path | None = None) -> tuple[str, ...]:
     """The underlyings whose option chains this spine's segment trades.
 
     Read from the segment's own file, and from machine scope only when the
@@ -105,7 +117,9 @@ def underlyings_this_segment_trades(context) -> tuple[str, ...]:
     """
     segment_id = str(context.setting("segment_id").value)
     try:
-        return read_segment_symbols(segment_id, "segment_underlying_trading_symbols")
+        return read_segment_symbols(
+            segment_id, "segment_underlying_trading_symbols", _root_of(context, root)
+        )
     except (SegmentSettingMissing, OSError, ValueError):
         return tuple(
             str(symbol)
@@ -115,13 +129,15 @@ def underlyings_this_segment_trades(context) -> tuple[str, ...]:
         )
 
 
-def option_contracts_per_underlying(context) -> int:
+def option_contracts_per_underlying(context, root: pathlib.Path | None = None) -> int:
     """How wide a chain this segment publishes per underlying, same fallback."""
     segment_id = str(context.setting("segment_id").value)
     try:
         return int(
             read_segment_setting(
-                segment_id, "segment_option_contracts_per_underlying"
+                segment_id,
+                "segment_option_contracts_per_underlying",
+                _root_of(context, root),
             ).value
         )
     except (SegmentSettingMissing, OSError, ValueError):
@@ -187,7 +203,7 @@ def underlyings_every_built_segment_trades(
     for segment in built_segments(context):
         try:
             symbols = read_segment_symbols(
-                segment, "segment_underlying_trading_symbols", root
+                segment, "segment_underlying_trading_symbols", _root_of(context, root)
             )
         except (SegmentSettingMissing, OSError, ValueError):
             continue
@@ -195,7 +211,7 @@ def underlyings_every_built_segment_trades(
             union.setdefault(symbol, None)
     if union:
         return tuple(union)
-    return underlyings_this_segment_trades(context)
+    return underlyings_this_segment_trades(context, root)
 
 
 def instrument_types_this_segment_trades(
@@ -232,6 +248,7 @@ def segment_that_trades(
     segment, which is the wrong-instrument failure this module exists around.
     """
     claimants = []
+    root = _root_of(context, root)
     for segment in built_segments(context):
         try:
             types = instrument_types_this_segment_trades(segment, root)
@@ -272,6 +289,7 @@ def option_chain_width_by_underlying(
     from runtime.trading_types import OPTION
 
     widths: dict[str, int] = {}
+    root = _root_of(context, root)
     for segment in built_segments(context):
         try:
             symbols = read_segment_symbols(
@@ -309,6 +327,7 @@ def segments_trading_underlying(
     each of them. `segment_that_trades` is the narrower question, asked once the
     instrument kind is known.
     """
+    root = _root_of(context, root)
     return tuple(
         segment
         for segment in built_segments(context)
@@ -324,11 +343,46 @@ def _underlyings_or_nothing(segment: str, root: pathlib.Path | None) -> tuple[st
     except (SegmentSettingMissing, OSError, ValueError):
         return ()
 
+
+# How a segment's universe is decided. Two values, and a segment that names
+# neither is read as stating its own symbols -- which is what every segment file
+# looked like before 2026-09-05.
+UNIVERSE_SELECTION_SETTING = "segment_universe_selection"
+UNIVERSE_IS_STATED = "stated"
+UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE = "every-nse-share-without-a-derivative"
+
+
+def any_segment_takes_shares_without_a_derivative(
+    context, root: pathlib.Path | None = None,
+) -> bool:
+    """Whether some segment on this spine wants the derived cash-equity universe.
+
+    Asked of the spine rather than of one segment because the universe bridge
+    publishes one universe for all of them: the feed subscribes each instrument
+    once however many segments want it, and which segment may trade a share is
+    decided later, by the pair (instrument kind, underlying), where it belongs.
+    """
+    root = _root_of(context, root)
+    for segment in built_segments(context):
+        try:
+            selection = str(
+                read_segment_setting(segment, UNIVERSE_SELECTION_SETTING, root).value
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        if selection == UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE:
+            return True
+    return False
+
 __all__ = [
     "BUILT_SEGMENTS_SETTING",
     "SEGMENT_INSTRUMENT_TYPES_SETTING",
     "SegmentSettingMissing",
     "SegmentsOverlap",
+    "UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE",
+    "UNIVERSE_IS_STATED",
+    "UNIVERSE_SELECTION_SETTING",
+    "any_segment_takes_shares_without_a_derivative",
     "built_segments",
     "instrument_types_this_segment_trades",
     "option_chain_width_by_underlying",

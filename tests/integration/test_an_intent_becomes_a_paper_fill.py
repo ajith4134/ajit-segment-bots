@@ -60,6 +60,11 @@ RECORD_SETTLE_SECONDS = 20.0
 
 VENUE = "binance-usdm"
 SYMBOL = "BTCUSDT"
+# Which segment this run trades. The captured prices are a perpetual's, so the
+# segment claiming perpetuals is the one this chain belongs to -- and it is
+# stated in this run's own copied settings rather than borrowed from the
+# operator's, whose three segments are Indian and claim no perpetual at all.
+TRADED_SEGMENT = "futures"
 
 # The stop the bot's exit plan would have proposed, as a fraction below entry. Half
 # a percent is inside the measured range this symbol moves in a minute, so the
@@ -140,20 +145,59 @@ def isolated_settings(durable_tmp_path):
     runtime_settings = settings_root / "runtime.toml"
     lines = runtime_settings.read_text().splitlines()
     in_journal_setting = False
+    in_built_segments = False
     rewritten = 0
+    segments_rewritten = 0
     for index, line in enumerate(lines):
         if line.strip() == "[journal_path]":
             in_journal_setting = True
+            in_built_segments = False
+        elif line.strip() == "[built_segments]":
+            in_built_segments = True
+            in_journal_setting = False
         elif line.startswith("["):
             in_journal_setting = False
+            in_built_segments = False
         elif in_journal_setting and line.startswith("value"):
             lines[index] = f'value = "{journal_path}"'
             rewritten += 1
+        elif in_built_segments and line.startswith("value"):
+            # The segment this run trades, stated rather than inherited. The
+            # instrument below is a binance-usdm perpetual and the operator's own
+            # three segments are Indian, so on their settings this chain refuses
+            # every intent correctly -- `instrument-selector` reports the best
+            # instrument as belonging to a segment that is not built, and nothing
+            # downstream ever sees an order. That refusal is the machinery
+            # working (2026-09-05): which segment an instrument belongs to is a
+            # fact about the operator's settings now, not a table in the code.
+            lines[index] = f'value = ["{TRADED_SEGMENT}"]'
+            segments_rewritten += 1
     assert rewritten == 1, (
         f"journal_path was rewritten {rewritten} times in the copied settings; this test "
         f"must not be able to write into the operator's own ledger"
     )
+    assert segments_rewritten == 1, (
+        f"built_segments was rewritten {segments_rewritten} times; without it this run "
+        f"trades the operator's Indian segments and its own perpetual belongs to none "
+        f"of them"
+    )
     runtime_settings.write_text("\n".join(lines) + "\n")
+
+    # What that segment claims. Written here rather than assumed of the
+    # operator's own file: the pair (instrument kind, underlying) is what
+    # identifies a segment, and a segment claiming neither claims nothing.
+    segment_file = settings_root / "segments" / f"{TRADED_SEGMENT}.toml"
+    segment_file.write_text(
+        segment_file.read_text().rstrip()
+        + "\n\n[segment_instrument_types]\n"
+        + 'value = ["perpetual-future", "dated-future"]\n'
+        + 'unit  = "instrument type"\n'
+        + 'note  = "this test\'s own segment: what it trades"\n\n'
+        + "[segment_underlying_trading_symbols]\n"
+        + f'value = ["{SYMBOL}"]\n'
+        + 'unit  = "trading symbol"\n'
+        + 'note  = "this test\'s own segment: the symbol its captured prices are for"\n'
+    )
 
     return SettingsForThisRun(directory=settings_root, journal_path=journal_path)
 

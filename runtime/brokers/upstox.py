@@ -240,6 +240,10 @@ class UpstoxAdapter(BrokerAdapter):
                     underlying_key=row.get("underlying_key"),
                     intraday_margin_percent=row.get("intraday_margin"),
                     intraday_leverage=row.get("intraday_leverage"),
+                    # NORMAL, SME, PCA, IPO or RELIST in Upstox's own master.
+                    # Measured on the real file 2026-09-05: 9,126 NORMAL, 558
+                    # SME, 36 PCA, 3 IPO, 1 RELIST across 9,724 NSE_EQ rows.
+                    security_type=row.get("security_type"),
                 )
             )
         return tuple(listings)

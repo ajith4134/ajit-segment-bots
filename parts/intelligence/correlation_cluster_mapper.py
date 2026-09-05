@@ -22,6 +22,26 @@ The measurement decisions that matter:
 - **A pair with too little shared history is unmeasured, never zero.** Treating
   it as uncorrelated is how a book becomes concentrated in exactly the symbols
   nobody has data on.
+- **Every pair is measured, but not every pair on every pass.** Pairs grow with
+  the square of the universe and the answer does not. Measured on this box
+  2026-09-05: one pair costs 128 microseconds, or 76 with each symbol's returns
+  computed once per pass instead of once per pair. At the 2,444-share cash-equity
+  universe that is 2,985,346 pairs and 228 seconds of CPU for one pass, against a
+  15-second remap interval -- fifteen cores, continuously, for a statistic whose
+  own window is an hour long.
+
+  So a pass measures a **budget** of pairs and resumes where the last one
+  stopped, and the budget is derived rather than chosen: enough that one full
+  sweep of every pair completes inside one correlation window. The statistic
+  cannot move faster than its own window, so a sweep that finishes inside one is
+  not a slower answer -- it is the same answer, computed once instead of 240
+  times.
+
+  What that costs in honesty is stated on every cluster and counted on the
+  standing: `all_pairs_measured` was already there for pairs with too little
+  history, and a pair not yet reached in this sweep is counted apart from one
+  that cannot be measured at all. The two are different facts and only one of
+  them is about the market.
 """
 
 from __future__ import annotations
@@ -32,9 +52,16 @@ from dataclasses import dataclass, field
 from runtime.price_frames import levels_in
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.pair_sweep import pairs_after
 from runtime.rolling_statistics import RollingWindow, correlation
 
 PART_ID = "correlation-cluster-mapper"
+
+# This part's symbols are all one book's, so the sweep has one group. The shared
+# walk takes groups because `cointegration-pair-finder` sweeps per venue: two
+# symbols on different venues are not a pair, because their prices did not
+# arrive from the same book.
+ONE_GROUP = ""
 
 PART_DECLARATION = PartDeclaration(
     part_id="correlation-cluster-mapper",
@@ -80,6 +107,19 @@ class MapperStanding:
     # symbols and one that jumps once at start is a universe that outlived its
     # venue.
     symbols_forgotten_silent: int = 0
+    # The pair budget (2026-09-05). `pairs_total` is every pair the universe
+    # implies; `pairs_measured_this_pass` is what this pass could afford;
+    # `pairs_not_reached_this_pass` is the rest -- counted apart from
+    # `unmeasured_pairs`, which is pairs that cannot be measured at all for want
+    # of shared history. One is about the machine, the other about the market.
+    pairs_total: int = 0
+    pairs_measured_this_pass: int = 0
+    pairs_not_reached_this_pass: int = 0
+    pairs_measured_this_sweep: int = 0
+    passes_per_sweep: int = 1
+    sweeps_completed: int = 0
+    strong_pairs_remembered: int = 0
+    strong_pairs_evicted: int = 0
 
 
 class CorrelationClusterMapper:
@@ -93,6 +133,9 @@ class CorrelationClusterMapper:
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
         now_ns=time.time_ns,
+        maximum_pairs_per_pass: int | None = None,
+        passes_per_sweep_ceiling: int | None = None,
+        remembered_pairs_maximum: int | None = None,
     ) -> None:
         if not 0.0 < cluster_threshold <= 1.0:
             raise ValueError(
@@ -111,6 +154,32 @@ class CorrelationClusterMapper:
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
+        # How many pair correlations one pass may compute. None means every pair,
+        # every pass, which is what a universe small enough for that states -- and
+        # what this part did until 2026-09-05.
+        self._maximum_pairs_per_pass = maximum_pairs_per_pass
+        # The most passes a full sweep of every pair may take. The budget is
+        # raised above `maximum_pairs_per_pass` for nothing; this is the other
+        # end, and it is what ties the budget to the statistic rather than to a
+        # CPU wish: a sweep that finishes inside one correlation window measures
+        # every pair at least once per window turnover.
+        self._passes_per_sweep_ceiling = passes_per_sweep_ceiling
+        # How many measured pairs may be carried between passes. Clusters are
+        # built from the whole sweep, not from one pass's slice, so the pairs have
+        # to be remembered -- and remembering all of them at 2,444 symbols is
+        # three million entries. Only pairs at or above the cluster threshold are
+        # kept, because those are the only ones union-find acts on.
+        self._remembered_pairs_maximum = remembered_pairs_maximum
+        # Where the next pass resumes, as the pair itself rather than an index:
+        # the symbol list changes between passes and an index into it would point
+        # somewhere else.
+        self._resume_after: tuple[str, str] | None = None
+        # How many pairs this sweep has measured so far. A sweep is not one pass:
+        # it is however many passes it takes to reach every pair once, and it is
+        # the unit the budget is derived from.
+        self._measured_this_sweep = 0
+        # Pairs measured at or above the threshold, carried across passes.
+        self._strong_pairs: dict[tuple[str, str], float] = {}
         self._prices: dict[str, RollingWindow] = {}
         # When this part last received anything about a symbol, on its own clock
         # rather than the venue's -- see `runtime.rolling_statistics.subjects_gone_quiet`
@@ -173,6 +242,53 @@ class CorrelationClusterMapper:
         self.standing.symbols_tracked = len(self._prices)
         return gone
 
+    def budget_for(self, pair_count: int) -> int | None:
+        """How many pairs this pass may measure, or None for all of them.
+
+        Derived, not chosen: enough that a full sweep finishes inside the ceiling
+        the caller states, and never above the caller's own per-pass maximum. A
+        caller stating neither gets every pair, which is what a universe small
+        enough for that means.
+        """
+        budget = None
+        if self._passes_per_sweep_ceiling:
+            budget = -(-pair_count // self._passes_per_sweep_ceiling)
+        if self._maximum_pairs_per_pass is not None:
+            budget = (
+                self._maximum_pairs_per_pass
+                if budget is None
+                else min(budget, self._maximum_pairs_per_pass)
+            )
+        return budget
+
+    def _pairs_from_the_cursor(self, symbols: list):
+        """Every pair, starting after the one the last pass stopped on.
+
+        Lazily, and never as a list: the whole point of the budget is that the
+        pair count is enormous, and building 2,985,346 tuples to look at 12,439
+        of them costs more than the correlations it saves (measured 2026-09-05:
+        252 MB and a quarter of a second). `runtime.pair_sweep` is the shared
+        walk, because `cointegration-pair-finder` sweeps the same pairs for a
+        different measurement and two copies of a cursor this subtle is how one
+        of them ends up skipping a pair forever.
+        """
+        resume = None
+        if self._resume_after is not None:
+            resume = (ONE_GROUP, *self._resume_after)
+        for _, left, right in pairs_after({ONE_GROUP: symbols}, resume):
+            yield left, right
+
+    def _remember(self, pair: tuple[str, str], value: float) -> None:
+        """Keep a cluster-forming pair, evicting the weakest when full."""
+        self._strong_pairs[pair] = value
+        if (
+            self._remembered_pairs_maximum is not None
+            and len(self._strong_pairs) > self._remembered_pairs_maximum
+        ):
+            weakest = min(self._strong_pairs, key=lambda key: abs(self._strong_pairs[key]))
+            del self._strong_pairs[weakest]
+            self.standing.strong_pairs_evicted += 1
+
     def map(self) -> tuple[CorrelationCluster, ...]:
         self.standing.mappings += 1
         self.forget_silent_symbols()
@@ -181,7 +297,6 @@ class CorrelationClusterMapper:
             return ()
 
         parent = {symbol: symbol for symbol in symbols}
-        pair_correlations: dict[tuple[str, str], float] = {}
         unmeasured = 0
 
         def find(symbol):
@@ -190,22 +305,73 @@ class CorrelationClusterMapper:
                 symbol = parent[symbol]
             return symbol
 
-        for index, left in enumerate(symbols):
-            for right in symbols[index + 1 :]:
-                value, observations = self.correlation_between(left, right)
-                if value is None:
-                    # Unmeasured, never zero: treating it as uncorrelated is how
-                    # a book concentrates in the symbols nobody has data on.
-                    unmeasured += 1
-                    continue
-                pair_correlations[(left, right)] = value
-                if abs(value) >= self._threshold:
-                    parent[find(left)] = find(right)
-                    if (
-                        self.standing.strongest_correlation_seen is None
-                        or abs(value) > self.standing.strongest_correlation_seen
-                    ):
-                        self.standing.strongest_correlation_seen = abs(value)
+        pair_count = len(symbols) * (len(symbols) - 1) // 2
+        budget = self.budget_for(pair_count)
+        self.standing.pairs_total = pair_count
+        self.standing.passes_per_sweep = (
+            1 if budget is None else max(1, -(-pair_count // budget))
+        )
+
+        # Each symbol's returns once per pass rather than once per pair. Measured
+        # 2026-09-05: 128 microseconds a pair recomputed, 76 with this -- the
+        # returns are O(window) and were being rebuilt n-1 times per symbol.
+        living = {symbol: self._prices[symbol].returns() for symbol in symbols}
+
+        measured = 0
+        last_pair = None
+        for left, right in self._pairs_from_the_cursor(symbols):
+            if budget is not None and measured >= budget:
+                break
+            last_pair = (left, right)
+            left_returns = living[left]
+            right_returns = living[right]
+            length = min(len(left_returns), len(right_returns))
+            if length < self._minimum:
+                # Unmeasured, never zero: treating it as uncorrelated is how a
+                # book concentrates in the symbols nobody has data on.
+                unmeasured += 1
+                measured += 1
+                self._strong_pairs.pop((left, right), None)
+                continue
+            value = correlation(left_returns[-length:], right_returns[-length:])
+            measured += 1
+            if abs(value) >= self._threshold:
+                self._remember((left, right), value)
+                if (
+                    self.standing.strongest_correlation_seen is None
+                    or abs(value) > self.standing.strongest_correlation_seen
+                ):
+                    self.standing.strongest_correlation_seen = abs(value)
+            else:
+                # It was strong and is not any more. Forgetting it here is what
+                # stops a cluster outliving the correlation that formed it.
+                self._strong_pairs.pop((left, right), None)
+
+        self._measured_this_sweep += measured
+        if budget is None or self._measured_this_sweep >= pair_count:
+            # Every pair has been reached once. The next pass starts a new sweep
+            # from the top, so a correlation is never older than one sweep.
+            self.standing.sweeps_completed += 1
+            self._measured_this_sweep = 0
+            self._resume_after = None
+        else:
+            self._resume_after = last_pair
+        self.standing.pairs_measured_this_pass = measured
+        self.standing.pairs_measured_this_sweep = self._measured_this_sweep
+        self.standing.pairs_not_reached_this_pass = max(0, pair_count - measured)
+        self.standing.strong_pairs_remembered = len(self._strong_pairs)
+
+        # Clusters are formed from the whole sweep, not from this pass's slice: a
+        # pair measured three passes ago is still the best answer there is about
+        # it, and rebuilding union-find from one slice would break a cluster apart
+        # every pass and put it back together the next.
+        pair_correlations = {
+            pair: value
+            for pair, value in self._strong_pairs.items()
+            if pair[0] in parent and pair[1] in parent
+        }
+        for (left, right) in pair_correlations:
+            parent[find(left)] = find(right)
 
         self.standing.unmeasured_pairs = unmeasured
 
@@ -383,8 +549,21 @@ def start_part(context) -> int:
         window_length=int(context.number("correlation_window_length")),
         minimum_shared_observations=int(context.number("correlation_minimum_shared_observations")),
         cluster_threshold=context.number("correlation_cluster_threshold"),
-            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
-            gap_patience_multiple=context.number("price_gap_patience_multiple"),
+        maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
+        gap_patience_multiple=context.number("price_gap_patience_multiple"),
+        # The pair budget (2026-09-05). The ceiling on passes is what ties it to
+        # the statistic: a sweep of every pair finishes inside one correlation
+        # window, so no correlation is ever older than the window it describes.
+        # The per-pass maximum is the machine's side of the same bargain.
+        passes_per_sweep_ceiling=int(
+            context.number("correlation_passes_per_sweep_ceiling")
+        ),
+        maximum_pairs_per_pass=int(
+            context.number("correlation_maximum_pairs_per_pass")
+        ),
+        remembered_pairs_maximum=int(
+            context.number("correlation_remembered_pairs_maximum")
+        ),
     )
 
     def read_prices(_mapper) -> None:

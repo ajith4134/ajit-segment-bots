@@ -357,6 +357,12 @@ class SegmentPaperAccounts:
     def keeper_for(self, fill):
         segment = getattr(fill, "segment", "") or ""
         if not segment:
+            # One account and an unattributed fill is not ambiguous: it can only
+            # be that account's. Two or more and it is, so it is counted rather
+            # than charged to whichever came first -- the rule
+            # `runtime.input_assembly.level_for_segment` states.
+            if len(self.keepers) == 1:
+                return next(iter(self.keepers.values()))
             self.fills_without_a_segment += 1
             return None
         keeper = self.keepers.get(segment)
@@ -505,7 +511,9 @@ def start_part(context) -> int:
             segment: PaperAccountKeeper(
                 segment=segment,
                 currency=str(
-                    read_segment_setting(segment, "quote_currency").value
+                    read_segment_setting(
+                        segment, "quote_currency", context.settings_root
+                    ).value
                 ),
             )
             for segment in built_segments(context)
@@ -549,10 +557,36 @@ def start_part(context) -> int:
     def write_checkpoint(segment: str, observations: int) -> None:
         writers[segment](observations)
 
+    def record_the_funding(segment: str) -> None:
+        """Write this account down the moment it is funded.
+
+        Not through the fill-counted writer: that one is due every fill, and
+        funding happens at zero fills -- `CheckpointSchedule.is_due` compares
+        against the count at the last write, so the arm-time write at zero makes
+        the funding write not due. The result was a file saying `starting` 0.0
+        for an account funded minutes earlier, and every board reading it showing
+        a bot with no capital (Rule 8).
+        """
+        store.save(
+            PART_ID,
+            f"{CHECKPOINT_COMPONENT}-{segment}",
+            accounts.keepers[segment].read_checkpoint_state(),
+            {},
+        )
+
     funded_at: dict = {}
 
     def read_fills(_accounts):
-        fund_each_account_from_its_allotment(accounts, allotments.mapping(), funded_at)
+        # Funding is a change to the account, so it is checkpointed like one.
+        # Without this the file said `starting` 0.0 for an account that had been
+        # funded minutes earlier -- the checkpoint was written once at arm time,
+        # before the allotment arrived, and again only on a fill. Every board
+        # reading it (Rule 8: a display shows measured state) would have shown
+        # three bots with no capital while all three were funded and trading.
+        for segment in fund_each_account_from_its_allotment(
+            accounts, allotments.mapping(), funded_at
+        ):
+            record_the_funding(segment)
         modes.payloads()
         rates.payloads()
         return fills.payloads()

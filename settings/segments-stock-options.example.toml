@@ -57,3 +57,8 @@ note  = "Claude, 2026-09-05: how many of the nearest expiry's contracts are publ
 value = ["option"]
 unit  = "instrument type"
 note  = "operator, 2026-09-05: which instrument types this segment claims. The same type as index-options, told apart by the underlyings above -- RELIANCE and the rest are single stocks. RELIANCE is also a cash-equity-intraday underlying and that is not an overlap: that segment claims spot, this one claims the option on it, and the pair (type, underlying) is what identifies a segment."
+
+[segment_universe_selection]
+value = "stated"
+unit  = "selection rule"
+note  = "operator, 2026-09-05: this segment trades exactly the underlyings segment_underlying_trading_symbols names, and no rule derives more. The alternative, \"every-nse-share-without-a-derivative\", is what cash-equity-intraday states -- it is the segment that takes what the derivatives segments do not cover, so the derivatives segments are the ones that must be stated."

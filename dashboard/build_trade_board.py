@@ -749,26 +749,58 @@ def read_tape_last_write_seconds() -> float | None:
     return max(0.0, datetime.now(timezone.utc).timestamp() - newest)
 
 
-def read_money_mode() -> tuple[str | None, str]:
-    """The segment's money mode and the file that said so."""
+def read_money_mode() -> tuple[dict[str, str | None], str]:
+    """Every segment bot's money mode, and the files that said so.
+
+    All of them since 2026-09-05, not only `segment_id`'s: three bots share this
+    spine, and a tile reading one of them says "paper" while another could be
+    live -- which is the single most expensive thing this board could get wrong.
+    """
     runtime = load_settings_document(settings_directory() / "runtime.toml", "runtime")
-    segment = str(runtime.read_value("segment_id"))
-    path = settings_directory() / "segments" / f"{segment}.toml"
-    if not path.exists():
-        return None, f"{path} does not exist"
-    document = load_settings_document(path, segment)
-    return str(document.read_value("money_mode")), str(path)
+    listed = runtime.entries.get("built_segments")
+    segments = (
+        [str(segment) for segment in listed.value]
+        if listed is not None and isinstance(listed.value, (list, tuple)) and listed.value
+        else [str(runtime.read_value("segment_id"))]
+    )
+    modes: dict[str, str | None] = {}
+    proofs = []
+    for segment in segments:
+        path = settings_directory() / "segments" / f"{segment}.toml"
+        if not path.exists():
+            modes[segment] = None
+            proofs.append(f"{path} does not exist")
+            continue
+        document = load_settings_document(path, segment)
+        modes[segment] = str(document.read_value("money_mode"))
+        proofs.append(f"{path} says money_mode = {modes[segment]!r}")
+    return modes, "; ".join(proofs)
 
 
 def probe_money_mode() -> ProbeResult:
-    mode, proof = read_money_mode()
-    if mode is None:
-        return ProbeResult("Money mode", UNMEASURED, "no segment settings file", proof)
-    if mode != "paper":
+    modes, proof = read_money_mode()
+    if not modes:
+        return ProbeResult("Money mode", UNMEASURED, "no segment is listed", proof)
+    unreadable = sorted(segment for segment, mode in modes.items() if mode is None)
+    if unreadable:
         return ProbeResult(
-            "Money mode", FAILING, f"{mode} — real money", f"{proof} says money_mode = {mode!r}"
+            "Money mode", UNMEASURED,
+            f"{len(unreadable)} of {len(modes)} unreadable",
+            proof,
         )
-    return ProbeResult("Money mode", OK, "paper", f"{proof} says money_mode = 'paper'")
+    live = sorted(segment for segment, mode in modes.items() if mode != "paper")
+    if live:
+        # Named, because which bot is live is the whole question. One tile saying
+        # "live" over three bots when one of them is would be a true statement
+        # that answers nothing.
+        return ProbeResult(
+            "Money mode", FAILING,
+            f"real money: {', '.join(live)}",
+            proof,
+        )
+    return ProbeResult(
+        "Money mode", OK, f"paper — all {len(modes)} bot(s)", proof
+    )
 
 
 def probe_trading_half(running: dict[str, int]) -> ProbeResult:

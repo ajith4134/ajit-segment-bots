@@ -1230,7 +1230,7 @@ def start_part(context) -> int:
             # one it belongs to (2026-09-05). A one-segment spine states a
             # one-item list and behaves exactly as it did.
             built_segments=built_segments(context),
-            segment_of=segment_resolver_from_settings(context),
+            segment_of=segment_resolver_from_settings(context, context.settings_root),
             maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
             # A perpetual's round trip is two crossings of the spread at the taker
             # rate. The venue states what holding the contract costs; what

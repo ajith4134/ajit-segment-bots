@@ -238,7 +238,7 @@ def start_part(context) -> int:
     The money mode is a level: it is what the operator set, until they set something
     else. Orders are events.
     """
-    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue, level_for_segment
 
     stamped = Batch(read=context.bus.reader("stamped-order"))
     # One money mode per segment (2026-09-05). money-mode-reader publishes one for
@@ -266,7 +266,7 @@ def start_part(context) -> int:
         return tuple(
             (
                 order,
-                mode_by_segment.get(getattr(order, "segment", "")),
+                level_for_segment(mode_by_segment, getattr(order, "segment", "")),
                 schedule_by_symbol.get((order.venue_id, order.symbol)),
             )
             for order in stamped.payloads()

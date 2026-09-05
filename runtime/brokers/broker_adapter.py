@@ -141,6 +141,13 @@ class InstrumentListing:
     # for a listing read from a file that doesn't carry it, never zero.
     intraday_margin_percent: float | None
     intraday_leverage: float | None
+    # What kind of security this is, as the broker's own master states it, and
+    # None where a master does not say. Read since 2026-09-05 because the cash
+    # equity universe is derived by exclusion rather than listed by hand, and
+    # this is the field that separates an ordinary share from an SME listing, a
+    # company under a post-closing-auction regime, or a fresh IPO -- none of
+    # which an intraday bot may treat as an ordinary share.
+    security_type: str | None = None
 
 
 class SubscriptionMode(enum.StrEnum):

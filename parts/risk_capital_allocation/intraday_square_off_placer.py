@@ -226,7 +226,11 @@ def start_part(context) -> int:
     def _the_segment_squares_off_daily(segment: str) -> bool:
         try:
             return bool(
-                read_segment_setting(segment, "positions_are_squared_off_daily").value
+                read_segment_setting(
+                    segment,
+                    "positions_are_squared_off_daily",
+                    context.settings_root,
+                ).value
             )
         except (SegmentSettingMissing, OSError, ValueError):
             return False

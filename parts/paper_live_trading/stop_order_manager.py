@@ -803,7 +803,7 @@ def start_part(context) -> int:
     an adjustment this part cannot read is counted and named rather than guessed
     at -- a misread stop price is a position protected at the wrong number.
     """
-    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.input_assembly import Batch, LatestByKey, level_for_segment
 
     adjustments = Batch(read=context.bus.reader("stop-adjustment"))
     positions = Batch(read=context.bus.reader("position"))
@@ -878,8 +878,9 @@ def start_part(context) -> int:
             if read is SKIP:
                 held_back["count"] += 1
                 continue
-            read["money_mode"] = mode_by_segment.get(
-                held_segment.get((adjustment.venue_id, adjustment.symbol), "")
+            read["money_mode"] = level_for_segment(
+                mode_by_segment,
+                held_segment.get((adjustment.venue_id, adjustment.symbol), ""),
             )
             readable.append(read)
         return readable
@@ -914,7 +915,9 @@ def start_part(context) -> int:
                 symbol,
                 held_direction.get((venue_id, symbol), ""),
                 abs(quantity),
-                mode_by_segment.get(held_segment.get((venue_id, symbol), "")),
+                level_for_segment(
+                    mode_by_segment, held_segment.get((venue_id, symbol), "")
+                ),
             )
             for (venue_id, symbol), quantity in held_quantity.items()
         )

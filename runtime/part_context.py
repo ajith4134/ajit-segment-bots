@@ -99,6 +99,29 @@ class PartContext:
         return value
 
     @property
+    def settings_root(self) -> pathlib.Path | None:
+        """The directory this part's own settings were loaded from.
+
+        Not `settings_directory()`: a part is launched against a directory the
+        launcher chose, which is the operator's on the live spine and a copy in a
+        test. Anything reading a settings file this context did not load -- a
+        segment's own file, say -- has to read it from the same place, or it
+        reads the operator's while every other number came from the copy.
+
+        Measured 2026-09-05: the end-to-end paper-fill test copies the settings
+        and points the launcher at the copy, and a segment helper calling
+        `settings_directory()` read the operator's `segments/futures.toml`
+        instead -- so the run refused with a message naming a file the test had
+        never been given the chance to write.
+
+        None when the runtime scope carries no source path, which no real context
+        does; a caller then falls back to `settings_directory()` as before.
+        """
+        document = self.settings.get(RUNTIME_SCOPE)
+        source = getattr(document, "source_path", None)
+        return None if source is None else pathlib.Path(source).parent
+
+    @property
     def input_descriptors(self) -> tuple[int, ...]:
         """What `run_part` waits on, so the part wakes on data and not only on time."""
         return self.bus.input_descriptors

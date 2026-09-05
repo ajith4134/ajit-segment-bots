@@ -468,3 +468,35 @@ class Batch:
     @property
     def messages_seen(self) -> int:
         return self._messages_seen
+
+def level_for_segment(mapping: dict, segment: str | None):
+    """The level published for one segment, or the only one there is.
+
+    Three segment bots share one spine since 2026-09-05, so every level about
+    money -- the capital bounds, the money mode, the account balance, the
+    leverage ceiling -- is published one per segment and read by the segment the
+    order or position names. Two things then need saying, and they are opposite:
+
+      * A payload that names its segment gets that segment's level and no other.
+        Falling back to another segment's would size one bot's order against
+        another bot's account, which is the whole reason the levels were split.
+
+      * A payload that names **no** segment gets the level only when there is
+        exactly one, because then there is nothing to be wrong about. That is
+        what a spine trading one segment looks like, and it is what every part
+        that has not yet been taught to stamp its segment produces. Refusing it
+        outright stopped a real paper fill: measured 2026-09-05, an end-to-end
+        run reached `bounded-order` 0, `order-request` 0, `fill` 0 with every
+        part alive and nothing reporting a fault, because one unstamped order
+        met three published bounds and matched none of them.
+
+    With more than one level published and no segment named, this returns None
+    and the caller refuses by its own name -- the ambiguity is real and guessing
+    is exactly the failure the split exists to prevent.
+    """
+    if segment:
+        return mapping.get(segment)
+    if len(mapping) == 1:
+        return next(iter(mapping.values()))
+    return None
+

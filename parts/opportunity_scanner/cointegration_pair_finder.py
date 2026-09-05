@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from runtime.price_frames import levels_in
 from runtime.durable_state import RESTORED
+from runtime.pair_sweep import pairs_after
 from runtime.part_declaration import PartDeclaration
 from runtime.lot_book_checkpoint import book_key_of, book_key_text
 from runtime.part_process import run_part
@@ -404,8 +405,7 @@ def start_part(context) -> int:
     A part that read the symbol universe to decide what to pair would be consuming
     a data type it does not declare, and the blueprint is what decides that.
     """
-    import itertools
-
+    
     from runtime.input_assembly import Batch
 
     trades = Batch(read=context.bus.reader("symbol-price-frame"))
@@ -450,8 +450,10 @@ def start_part(context) -> int:
 
     pairs_per_tick = int(context.number("cointegration_pairs_tested_per_tick"))
     symbols_by_venue: dict[str, set[str]] = {}
-    rotation: list[tuple[str, str, str]] = []
-    rotation_position = [0]
+    # Where the last tick stopped, as the pair itself. Not an index: the symbol
+    # list changes as the feed does, and an index into yesterday's list points at
+    # a different pair today.
+    resume_after: list[tuple[str, str, str] | None] = [None]
 
     def read_prices_and_pairs(_finder):
         for trade in levels_in(trades.payloads()):
@@ -464,21 +466,22 @@ def start_part(context) -> int:
         # regime-independent, and saying so is better than implying otherwise.
         regimes.payloads()
 
-        every_pair = [
-            (venue_id, left, right)
+        # Walked lazily, never built. This list was materialised every tick until
+        # 2026-09-05, which was affordable at 30 captured symbols a venue and is
+        # not at the cash-equity universe: measured on this box, 2,444 symbols
+        # make 2,985,346 pairs costing 252 MB and a quarter of a second to build
+        # -- every tick, to test a few hundred of them.
+        groups = {
+            venue_id: sorted(symbols)
             for venue_id, symbols in sorted(symbols_by_venue.items())
-            for left, right in itertools.combinations(sorted(symbols), 2)
-        ]
-        if every_pair != rotation:
-            rotation[:] = every_pair
-            rotation_position[0] = min(rotation_position[0], len(rotation))
-        if not rotation:
-            return ()
-        start = rotation_position[0] % len(rotation)
-        taken = rotation[start : start + pairs_per_tick]
-        if len(taken) < pairs_per_tick:
-            taken += rotation[: pairs_per_tick - len(taken)]
-        rotation_position[0] = (start + len(taken)) % len(rotation)
+        }
+        taken = []
+        for pair in pairs_after(groups, resume_after[0]):
+            if len(taken) >= pairs_per_tick:
+                break
+            taken.append(pair)
+        if taken:
+            resume_after[0] = taken[-1]
         return tuple(taken)
 
     return run_cointegration_pair_finder(

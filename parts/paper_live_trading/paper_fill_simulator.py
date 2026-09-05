@@ -898,7 +898,7 @@ def start_part(context) -> int:
     # the wire holds only what it happens to want -- a part that dies on an
     # unexpected shape is a part the wiring can kill.
     from runtime.market_data_stream import trades_in
-    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue, level_for_segment
 
     requests = Batch(read=context.bus.reader("order-request"))
     trades = Batch(read=context.bus.reader("market-data"))
@@ -1009,7 +1009,9 @@ def start_part(context) -> int:
             # None when this order's segment has published no mode, which this
             # part refuses rather than treating as paper -- the same answer it
             # gave for an absent mode before three segments ran.
-            mode = mode_by_segment.get(getattr(request, "segment", "") or "")
+            mode = level_for_segment(
+                mode_by_segment, getattr(request, "segment", "") or ""
+            )
             order = build_order(
                 request, key, getattr(mode, "mode", None), estimate_by_symbol
             )

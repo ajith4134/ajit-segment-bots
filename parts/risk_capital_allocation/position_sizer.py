@@ -510,7 +510,9 @@ def start_part(context) -> int:
     the system: every venue publishes a per-symbol lot size and nothing consumes it
     yet. It is named as temporary where it is set.
     """
-    from runtime.input_assembly import Batch, LatestByKey, LatestStatementBySource
+    from runtime.input_assembly import (
+        Batch, LatestByKey, LatestStatementBySource, level_for_segment,
+    )
     from runtime.level_publishing import LevelPublisherByKey
 
     intents = Batch(read=context.bus.reader("trade-intent"))
@@ -713,9 +715,19 @@ def start_part(context) -> int:
             # `segment_id` until then, which was right for a spine trading one
             # segment and would have sized a cash-equity order against the index
             # bot's equity on a spine trading three.
-            order_segment = getattr(instrument, "chosen_segment", "") or segment
-            balance = balance_by_segment.get(order_segment)
-            leverage = leverage_by_symbol.get((*key, order_segment))
+            order_segment = getattr(instrument, "chosen_segment", "") or ""
+            balance = level_for_segment(balance_by_segment, order_segment)
+            # The leverage for this symbol in this segment, or the only answer
+            # there is when the order names no segment -- same rule, same reason.
+            leverage = level_for_segment(
+                {
+                    choice_segment: choice
+                    for (venue, symbol, choice_segment), choice
+                    in leverage_by_symbol.items()
+                    if (venue, symbol) == key
+                },
+                order_segment,
+            )
             binding = binding_limit_for(intent.symbol, order_segment)
             sizer.standing.intents_seen += 1
             # Named one by one rather than as one condition: each is a different

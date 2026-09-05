@@ -4310,3 +4310,18 @@ note  = "Claude, 2026-09-05: how old a segment's trade-capital-bounds may be bef
 value = 120.0
 unit  = "seconds"
 note  = "Claude, 2026-09-05: how old a segment's money-mode may be before order-destination-router stops addressing orders with it. money-mode-reader re-reads and republishes every tick, so two minutes is many missed restatements. The bound exists because the router now keys the mode by segment -- three segment bots share one spine and one of them could be live while another is on paper -- and an unbounded LatestByKey holds a key's last value forever, which is what left every switched-off part counting as running on 2026-08-26. A segment whose mode stopped being read sends no order at all, which is what the router already does with an absent mode: paper would silently drop a live trade and live would spend real money on an unread setting."
+
+[correlation_passes_per_sweep_ceiling]
+value = 240
+unit  = "passes"
+note  = "Claude, 2026-09-05: the most passes correlation-cluster-mapper may take to measure every pair once. It is what makes the pair budget derived rather than chosen -- the budget is the pair count divided by this, so one full sweep finishes inside one correlation window and no correlation is ever older than the window it describes. 240 is correlation_window_length (256 observations, about an hour at the feed's sampled rate) divided by correlation_remap_interval_seconds (15 s): 240 remaps per hour. Measured on this box the same day: one pair costs 76 microseconds with each symbol's returns computed once per pass, so the 2,444-share cash-equity universe's 2,985,346 pairs come to 12,439 per pass and 0.95 s of CPU every 15 s -- 6% of a core. Without it the same universe is 228 seconds of CPU per 15-second pass, fifteen cores continuously, for a statistic whose own window is an hour long."
+
+[correlation_maximum_pairs_per_pass]
+value = 20000
+unit  = "pairs"
+note  = "Claude, 2026-09-05: the hard ceiling on one pass, whatever the sweep ceiling derives. 20,000 pairs is 1.5 s of CPU at the measured 76 microseconds a pair, or 10% of a core at the 15-second remap interval -- and a pass is one uninterrupted stretch of work, so this is also how long the part may take to answer its control socket. It binds only if the universe grows past about 3.1 million pairs (2,490 symbols), at which point a sweep starts taking longer than one window and the standing says so: sweeps_completed stops climbing once per window."
+
+[correlation_remembered_pairs_maximum]
+value = 100000
+unit  = "pairs"
+note  = "Claude, 2026-09-05: how many cluster-forming pairs are carried between passes. Clusters are built from a whole sweep rather than from one pass's slice -- a pair measured three passes ago is still the best answer there is about it -- so the measurements have to be remembered, and remembering all of them at 2,444 symbols is three million entries. Only pairs at or above correlation_cluster_threshold are kept, because those are the only ones union-find acts on, and a pair that falls below it is forgotten the moment it is remeasured. 100,000 bounds this at tens of megabytes; strong_pairs_evicted on the standing is what says the bound was reached, and a number climbing there means the threshold is too low for this universe rather than that the memory is too small."

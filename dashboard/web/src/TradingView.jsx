@@ -35,6 +35,81 @@ function Pnl({ value, digits = 3 }) {
   return <span style={{ color: pnlColour(value) }}>{formatMoney(value, digits)}</span>
 }
 
+
+// SegmentBots — one row per segment bot, because three of them share this spine.
+//
+// Each bot has its own allocated balance, so a single equity figure is one bot's
+// shown as the system's. Every number here is read from the file that bot's own
+// account keeper restores from, never a second count kept for this page.
+//
+// A bot whose keeper has never written a checkpoint renders NOT MEASURED, which
+// is a different fact from an account holding nothing.
+function SegmentBots({ bots }) {
+  if (!bots) return null
+  const { rows, provenance, positions_naming_no_bot, closed_trades_naming_no_bot } = bots
+
+  return (
+    <section className="panel">
+      <header className="panel-head">
+        <h2>Segment bots</h2>
+        <span className="provenance mono">{provenance?.proof}</span>
+      </header>
+
+      {!rows?.length ? (
+        <div className="empty">
+          <b>NOT MEASURED.</b> No segment is listed in <code>built_segments</code>.
+        </div>
+      ) : (
+        <table className="rows">
+          <thead>
+            <tr>
+              <th>bot</th>
+              <th className="right">allocated</th>
+              <th className="right">cash</th>
+              <th className="right">realised</th>
+              <th className="right">fees</th>
+              <th className="right">fills</th>
+              <th className="right">open</th>
+              <th className="right">closed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((bot) => (
+              <tr key={bot.segment} title={bot.proof}>
+                <td className="mono">{bot.segment}</td>
+                {bot.state !== 'MEASURED' ? (
+                  <td className="right" colSpan={7}>
+                    <em className="unmeasured">NOT MEASURED — no account checkpoint</em>
+                  </td>
+                ) : (
+                  <>
+                    <td className="right">{formatMoney(bot.starting_balance, 2)}</td>
+                    <td className="right">{formatMoney(bot.cash, 2)}</td>
+                    <td className="right"><Pnl value={bot.realised_total} digits={2} /></td>
+                    <td className="right">{formatMoney(bot.fees_total, 2)}</td>
+                    <td className="right">{bot.fills_applied}</td>
+                    <td className="right">{bot.open_positions_recorded}</td>
+                    <td className="right">{bot.closed_trades_recorded}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {(positions_naming_no_bot > 0 || closed_trades_naming_no_bot > 0) && (
+        <div className="banner warn">
+          <b>Rows that name no bot.</b> {positions_naming_no_bot} open and{' '}
+          {closed_trades_naming_no_bot} closed. A position recorded before a segment
+          travelled with it names none — it is counted here rather than added to
+          whichever bot came first.
+        </div>
+      )}
+    </section>
+  )
+}
+
 function OpenPositions({ open }) {
   const { positions, provenance } = open
 
@@ -525,6 +600,7 @@ export default function TradingView({ trades, tradesError }) {
           <div className="banner-sub mono">{tradesError}</div>
         </div>
       )}
+      <SegmentBots bots={trades.bots} />
       <OpenPositions open={trades.open} />
       <ClosedTrades closed={trades.closed} />
     </>

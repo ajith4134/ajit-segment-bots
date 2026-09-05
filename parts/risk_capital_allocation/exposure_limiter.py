@@ -338,6 +338,9 @@ class SegmentExposureLimiters:
         self.positions_for_a_segment_not_traded: dict[str, int] = {}
 
     def limiter_for(self, segment: str):
+        if not segment and len(self.limiters) == 1:
+            # One segment and an unattributed position can only be its own.
+            return next(iter(self.limiters.values()))
         limiter = self.limiters.get(segment)
         if limiter is None and segment:
             self.positions_for_a_segment_not_traded[segment] = (

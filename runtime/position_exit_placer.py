@@ -157,11 +157,19 @@ class PositionExitPlacer:
             self._money_mode_by_segment[segment] = mode
 
     def money_mode_for(self, segment: str) -> str | None:
-        """The mode for one segment, or the spine-wide one a caller that names no
-        segment set. A position whose segment has no mode has no exit: this
-        returns None and `exits_for` refuses it by name."""
+        """The mode for one segment, or the only one there is.
+
+        A position whose segment has a mode uses it and no other. One naming no
+        segment takes the only mode set, and only when there is exactly one --
+        the rule `runtime.input_assembly.level_for_segment` states, applied to
+        modes a caller pushed in rather than a level read off the bus. A
+        position with no mode has no exit: this returns None and `exits_for`
+        refuses it by name.
+        """
         if segment in self._money_mode_by_segment:
             return self._money_mode_by_segment[segment]
+        if not segment and len(self._money_mode_by_segment) == 1:
+            return next(iter(self._money_mode_by_segment.values()))
         return self._money_mode_by_segment.get("")
 
     @property

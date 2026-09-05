@@ -1040,8 +1040,34 @@ def build_trade_activity(with_prices: bool = True) -> dict:
     for position in positions:
         position.pop("held_lots", None)
     closed, closed_provenance = read_closed_trades()
+    bots, bots_provenance = read_segment_bots()
     return {
         "generated_at_ns": time.time_ns(),
+        # One row per segment bot (2026-09-05). Three of them share this spine and
+        # each has its own account, so a single equity figure is one bot's shown as
+        # the system's. The counts beside each are of that bot's own rows.
+        "bots": {
+            "rows": [
+                dict(
+                    bot,
+                    open_positions_recorded=sum(
+                        1 for position in positions
+                        if segment_of(position) == bot["segment"]
+                    ),
+                    closed_trades_recorded=sum(
+                        1 for trade in closed if segment_of(trade) == bot["segment"]
+                    ),
+                )
+                for bot in bots
+            ],
+            "positions_naming_no_bot": sum(
+                1 for position in positions if segment_of(position) is None
+            ),
+            "closed_trades_naming_no_bot": sum(
+                1 for trade in closed if segment_of(trade) is None
+            ),
+            "provenance": bots_provenance,
+        },
         "open": {
             "positions": positions,
             "count": len(positions),
@@ -1089,3 +1115,98 @@ if __name__ == "__main__":
     for trade in closed_side["trades"][:8]:
         print(f"  {trade['symbol']:<14} {trade['direction'] or '?':<6} "
               f"net {trade['net_pnl']:>8.3f}  held {trade['holding_seconds'] or 0:>7.1f}s")
+
+# ---- one bot per segment (2026-09-05) ---------------------------------------
+
+
+def read_segment_bots() -> tuple[list[dict], dict]:
+    """Each segment bot's own account, from the file its keeper restores from.
+
+    Three segment bots share one spine since 2026-09-05 and each has its own
+    allocated balance, so a board showing one equity figure is showing one bot's
+    and calling it the system's. Every row here is read from
+    `paper-account-keeper.paper-account-<segment>.json` under
+    `position_state_root` -- the same file the keeper restores from, never a
+    second count kept for the board, which would be free to disagree with the one
+    the bot acts on.
+
+    A segment the operator listed whose keeper has never written a checkpoint
+    renders as `NOT MEASURED`, not as zero: a bot that has never run and a bot
+    holding nothing are different facts (Rule 8).
+    """
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        settings_root = settings_directory()
+        document = load_settings_document(settings_root / "runtime.toml", "runtime")
+        root = pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+        listed = document.entries.get("built_segments")
+        segments = (
+            [str(segment) for segment in listed.value]
+            if listed is not None and isinstance(listed.value, (list, tuple))
+            else [str(document.read_value("segment_id"))]
+        )
+    except Exception as refusal:
+        return [], {
+            "ok": False,
+            "proof": f"settings refused built_segments or position_state_root ({refusal})",
+        }
+
+    rows = []
+    measured = 0
+    for segment in segments:
+        path = root / f"paper-account-keeper.paper-account-{segment}.json"
+        row = {
+            "segment": segment,
+            "state": "NOT MEASURED",
+            "starting_balance": None,
+            "cash": None,
+            "fills_applied": None,
+            "open_positions": None,
+            "realised_total": None,
+            "fees_total": None,
+            "saved_at_ns": None,
+            "proof": (
+                f"no checkpoint at {path}: this bot's account keeper has not written "
+                f"one, which is a different fact from an account holding nothing"
+            ),
+        }
+        if path.exists():
+            try:
+                held = json.loads(path.read_text(encoding="utf-8"))
+                state = held.get("state") or {}
+                row.update(
+                    state="MEASURED",
+                    starting_balance=float(state.get("starting") or 0.0),
+                    cash=float(state.get("cash") or 0.0),
+                    fills_applied=int(state.get("fills_applied") or 0),
+                    open_positions=len(state.get("positions") or {}),
+                    realised_total=float(state.get("realised_total") or 0.0),
+                    fees_total=float(state.get("fees_total") or 0.0),
+                    saved_at_ns=held.get("saved_at_ns"),
+                    proof=(
+                        f"{path}, the same file paper-account-keeper restores from"
+                    ),
+                )
+                measured += 1
+            except (OSError, ValueError) as failure:
+                row["proof"] = f"{path} could not be read: {failure}"
+        rows.append(row)
+
+    return rows, {
+        "ok": measured > 0,
+        "segments_listed": len(segments),
+        "segments_measured": measured,
+        "proof": (
+            f"{measured} of {len(segments)} segment bot(s) have written an account "
+            f"checkpoint under {root}"
+        ),
+    }
+
+
+def segment_of(payload: dict) -> str | None:
+    """Which bot a recorded position or trade belongs to, or None if it predates
+    the field. None renders as its own state and never as one of the segments."""
+    named = payload.get("segment")
+    return str(named) if named else None
+

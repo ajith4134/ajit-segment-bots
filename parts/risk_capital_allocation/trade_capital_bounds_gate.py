@@ -306,7 +306,7 @@ def start_part(context) -> int:
     refuses meanwhile. That is the correct direction to fail -- a bound checked
     against settings nobody verified is a bound with no authority behind it.
     """
-    from runtime.input_assembly import Batch, LatestByKey, LatestValue
+    from runtime.input_assembly import Batch, LatestByKey, LatestValue, level_for_segment
 
     sized = Batch(read=context.bus.reader("sized-order"))
     # One bound per segment (2026-09-05). `capital-allotment-reader` publishes one
@@ -328,9 +328,14 @@ def start_part(context) -> int:
         permitted = does_verdict_permit_trading(verdicts.value())
         return tuple(
             # An order whose segment has published no bounds gets None, which the
-            # gate already refuses by name: no bounds, no order. That is the same
-            # answer it gave before three segments ran, for the same reason.
-            (order, bounds_by_segment.get(getattr(order, "segment", "")), permitted)
+            # gate already refuses by name: no bounds, no order. An order naming
+            # no segment at all takes the only bounds published, and only when
+            # there is exactly one -- see `level_for_segment`.
+            (
+                order,
+                level_for_segment(bounds_by_segment, getattr(order, "segment", "")),
+                permitted,
+            )
             for order in sized.payloads()
         )
 
