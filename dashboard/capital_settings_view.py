@@ -387,7 +387,10 @@ def measure_allocation_against_the_balance(documents: dict) -> dict:
             "segments_not_read": unreadable,
         }
 
+    # `total - balance` on equal floats is -0.0, which formats as "-0.00" and
+    # reads as a deficit on a board whose whole job is to be read literally.
     over = total - balance
+    unallocated = max(0.0, balance - total)
     return {
         "is_measured": True,
         "state": "OVER ALLOCATED" if over > 0 else "WITHIN THE BALANCE",
@@ -395,7 +398,7 @@ def measure_allocation_against_the_balance(documents: dict) -> dict:
         "main_balance": balance,
         "total_allocated": total,
         "overrun": max(0.0, over),
-        "unallocated": max(0.0, -over),
+        "unallocated": unallocated,
         "by_segment": by_segment,
         "segments_not_read": unreadable,
         "proof": (
@@ -407,7 +410,7 @@ def measure_allocation_against_the_balance(documents: dict) -> dict:
                 f"file is individually coherent, which is why no per-segment check "
                 f"refuses it and allocation-conservation-checker is the part that does"
                 if over > 0 else
-                f" -- {-over:,.2f} unallocated"
+                f" -- {unallocated:,.2f} unallocated"
             )
         ),
     }
