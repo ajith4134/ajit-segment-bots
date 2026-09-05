@@ -114,6 +114,25 @@ class CorporateAction:
     observed_at_ns: int
 
 
+# The exchange every segment here trades on. A string rather than a setting: it
+# is a property of NSE and BSE, not a dial -- an operator who changed it would be
+# saying this project trades a different country's market.
+EXCHANGE_TIMEZONE = "Asia/Kolkata"
+
+
+def read_clock_time(stated: str) -> datetime.time:
+    """"09:15" as NSE publishes it, from a setting rather than a literal.
+
+    Lives here rather than in market-session-calendar because a second part now
+    needs the session's own close: pre-expiry-position-closer decides how long
+    before it a contract expiring today must be out. A part may not import
+    another part (T-4), and the two must read the same clock or one would close
+    positions against a session boundary the other does not agree on.
+    """
+    hour, _, minute = stated.partition(":")
+    return datetime.time(int(hour), int(minute))
+
+
 @dataclass(frozen=True)
 class MarketSessionState:
     """Which session one exchange segment is in right now."""
@@ -130,10 +149,12 @@ class MarketSessionState:
 
 
 __all__ = [
+    "EXCHANGE_TIMEZONE",
     "NSE_DATE_FORMAT",
     "CorporateAction",
     "CorporateActionReport",
     "InstrumentRestriction",
+    "read_clock_time",
     "InstrumentRestrictionReport",
     "MarketSessionState",
     "RestrictionKind",

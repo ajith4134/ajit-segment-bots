@@ -698,6 +698,14 @@ LIVE_SPINE = (
     # out a human's instruction must not be switched off by the machine the
     # human is instructing.
     "position-flattener",
+    # The exit nobody was placing: a contract that expires today, closed before
+    # the session ends rather than held to settlement. Beside the flattener
+    # because they share the placing (runtime/position_exit_placer.py) and
+    # differ only in why a position must go. It matters most for Phase A's
+    # second segment bot -- Indian single-stock options are physically settled,
+    # so a bought call still open at expiry becomes a delivery obligation for
+    # strike x lot size rather than a premium that expires worthless.
+    "pre-expiry-position-closer",
     "event-risk-limiter",
     # Knowledge, phase 13's unblocked half: the three tiers of memory. None of
     # these needs a provider key -- the parts that do are llm-foundation's, and

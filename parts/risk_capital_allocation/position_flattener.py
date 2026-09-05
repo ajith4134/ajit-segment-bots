@@ -40,16 +40,7 @@ from dataclasses import dataclass
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import (
-    BUY,
-    LIVE_VENUE,
-    LONG,
-    MARKET,
-    PAPER_BOOK,
-    ROUTED,
-    SELL,
-    OrderRequest,
-)
+from runtime.position_exit_placer import PositionExitPlacer
 
 PART_ID = "position-flattener"
 
@@ -71,58 +62,54 @@ PAPER = "paper"
 LIVE = "live"
 
 
-@dataclass
 class FlattenerStanding:
-    overrides_read: int = 0
-    # Ticks on which the door held nothing. Counted separately, because
-    # `overrides_read` climbing once a second on an empty door would report that
-    # an instruction was read when none was written -- and the two states must
-    # not look the same on a board (Rule 8). With no override this is the counter
-    # that moves and every other one holds still.
-    reads_with_no_override: int = 0
-    # Instructions this part deliberately did nothing about. Counted, because
-    # "the override said stop-trading" and "no override arrived" are different
-    # facts and a board that showed neither would look identical in both.
-    instructions_not_about_the_book: int = 0
-    open_positions: int = 0
-    exits_placed: int = 0
-    exits_repeated: int = 0
-    waiting_for_a_fill: int = 0
-    positions_closed_since_the_instruction: int = 0
-    refused_no_money_mode: int = 0
-    instructions_acted_on: int = 0
-    # Positions still open whose allowance is spent -- the whole of what they
-    # were seen holding has already been asked for. This is a fault and not
-    # progress: something downstream is not filling or not reporting, and asking
-    # again would sell a position the bot no longer has. Counted so it is
-    # visible, because the alternative to counting it was overshooting.
-    positions_at_the_cap: int = 0
-    # How much more has been asked for than was ever held, summed over positions.
-    # It must stay at zero. It is reported rather than asserted, because the
-    # whole reason this counter exists is that it did not stay at zero and
-    # nothing anywhere said so.
-    quantity_asked_beyond_the_position: float = 0.0
-    # How long the oldest unfilled exit has been asked for. An exit is repeated
-    # for as long as the position is open, which is right for an order lost in
-    # transit and wrong to leave silent: measured 2026-08-27, STORJUSDT was
-    # refused 114 times for having no price, because the contract settled on the
-    # venue the day before and no market exists to close it into. A number that
-    # climbs says that; a repeat counter alone reads like progress.
-    longest_wait_seconds: float = 0.0
+    """What this part decided, and what the placer did about it.
 
+    The placer's counters are forwarded rather than copied. They were this
+    part's own fields until the placing was extracted for
+    `pre-expiry-position-closer` to share, and they are read by the board, the
+    part monitor and this part's own tests -- a counter that changes its name is
+    a tile that goes blank without anything having gone wrong, and a counter
+    copied on write is one free to disagree with the thing it describes.
+    """
 
-@dataclass(frozen=True)
-class HeldPosition:
-    """One open position, as much of it as closing it needs."""
+    def __init__(self, placer_standing) -> None:
+        self._placer = placer_standing
+        self.overrides_read = 0
+        # Ticks on which the door held nothing. Counted separately, because
+        # `overrides_read` climbing once a second on an empty door would report
+        # that an instruction was read when none was written -- and the two
+        # states must not look the same on a board (Rule 8).
+        self.reads_with_no_override = 0
+        # Instructions this part deliberately did nothing about. Counted,
+        # because "the override said stop-trading" and "no override arrived" are
+        # different facts and a board showing neither would look identical.
+        self.instructions_not_about_the_book = 0
+        self.instructions_acted_on = 0
 
-    venue_id: str
-    symbol: str
-    quantity: float
-    direction: str
+    positions_closed_since_the_instruction = property(
+        lambda self: self._placer.positions_closed_since_forgetting
+    )
+    open_positions = property(lambda self: self._placer.open_positions)
+    exits_placed = property(lambda self: self._placer.exits_placed)
+    exits_repeated = property(lambda self: self._placer.exits_repeated)
+    waiting_for_a_fill = property(lambda self: self._placer.waiting_for_a_fill)
+    positions_at_the_cap = property(lambda self: self._placer.positions_at_the_cap)
+    refused_no_money_mode = property(lambda self: self._placer.refused_no_money_mode)
+    longest_wait_seconds = property(lambda self: self._placer.longest_wait_seconds)
+    quantity_asked_beyond_the_position = property(
+        lambda self: self._placer.quantity_asked_beyond_the_position
+    )
 
 
 class PositionFlattener:
-    """Turns a human's close-positions into one market exit per open position."""
+    """Turns a human's close-positions into one market exit per open position.
+
+    The exits themselves are placed by `runtime.position_exit_placer`, which
+    carries the bound that stops a repeat from selling a position twice. This
+    class owns only the instruction's lifecycle: when a flattening starts, and
+    when what was sent under it is forgotten.
+    """
 
     def __init__(
         self,
@@ -130,88 +117,24 @@ class PositionFlattener:
         quantity_increment: float,
         now_ns=time.time_ns,
     ) -> None:
-        if repeat_after_seconds <= 0:
-            raise ValueError(
-                "an exit repeated after no wait at all is two closes racing for one position"
-            )
-        if quantity_increment <= 0:
-            raise ValueError(
-                "a quantity step of zero leaves no floor under the unsold remainder, so a "
-                "position rounded to nothing would be asked for forever"
-            )
-        self._repeat_after_ns = int(repeat_after_seconds * 1_000_000_000)
-        self._quantity_increment = quantity_increment
-        self._now_ns = now_ns
-        self._held: dict[tuple[str, str], HeldPosition] = {}
-        self._money_mode: str | None = None
-        # The instruction being acted on, and what has been sent under it.
+        self._placer = PositionExitPlacer(
+            repeat_after_seconds=repeat_after_seconds,
+            quantity_increment=quantity_increment,
+            client_order_prefix="flatten",
+            now_ns=now_ns,
+        )
         self._acting_on: str | None = None
-        self._sent_at_ns: dict[tuple[str, str], int] = {}
-        # When this position's exit was first asked for under this instruction,
-        # kept apart from the last ask so a repeat does not reset the wait.
-        self._first_asked_at_ns: dict[tuple[str, str], int] = {}
-        self._closed_under_this_instruction: set[tuple[str, str]] = set()
-        # How much of this position has been asked for and not yet answered, and
-        # what it was last seen holding so a fill can be told from a fresh entry.
-        # Together they are the only thing that stops a repeat from selling the
-        # position twice -- see `exits_to_place`.
-        self._outstanding: dict[tuple[str, str], float] = {}
-        self._last_seen_quantity: dict[tuple[str, str], float] = {}
-        self._quantity_asked_for: dict[tuple[str, str], float] = {}
-        self._quantity_seen_filled: dict[tuple[str, str], float] = {}
-        self._sequence = 0
-        self.standing = FlattenerStanding()
+        self.standing = FlattenerStanding(self._placer.standing)
+
+    @property
+    def placer(self) -> PositionExitPlacer:
+        return self._placer
 
     def observe_money_mode(self, mode: str | None) -> None:
-        """Where an exit is sent. Never defaulted: paper and live are not
-        interchangeable, and guessing one is how a paper instruction reaches a
-        venue or a live book is closed on a simulator that owns nothing."""
-        if mode in (PAPER, LIVE):
-            self._money_mode = mode
+        self._placer.observe_money_mode(mode)
 
     def observe_position(self, position) -> None:
-        key = (position.venue_id, position.symbol)
-        # A position that shrank was filled into, and that fill answered part of
-        # what is outstanding. This is the only evidence this part has that an
-        # ask was taken -- it produces `order-request` and consumes `position`,
-        # so a fill reaches it as the position getting smaller and in no other
-        # way. Growing is a fresh entry, not an answer, and leaves the
-        # outstanding ask exactly where it was.
-        #
-        # Counted before the flat case returns, never inside the branch below.
-        # The last fill on a position is the one that closes it, and skipping
-        # that one leaves the whole closed quantity looking like quantity nobody
-        # accounted for: measured live 2026-08-30, 35 positions closed correctly
-        # while `quantity_asked_beyond_the_position` read 1,904,948 -- a counter
-        # calling a clean flatten an overshoot. A number that reads as a fault
-        # when there is none costs the same as one that reads healthy when there
-        # is (Rule 8).
-        was = self._last_seen_quantity.get(key)
-        now_held = abs(position.quantity)
-        if was is not None and now_held < was:
-            filled = was - now_held
-            self._quantity_seen_filled[key] = (
-                self._quantity_seen_filled.get(key, 0.0) + filled
-            )
-            self._outstanding[key] = max(0.0, self._outstanding.get(key, 0.0) - filled)
-        self._last_seen_quantity[key] = now_held
-        if position.is_flat:
-            if key in self._held:
-                del self._held[key]
-                if self._acting_on is not None and key in self._sent_at_ns:
-                    self._closed_under_this_instruction.add(key)
-            self.standing.open_positions = len(self._held)
-            self.standing.positions_closed_since_the_instruction = len(
-                self._closed_under_this_instruction
-            )
-            return
-        self._held[key] = HeldPosition(
-            venue_id=position.venue_id,
-            symbol=position.symbol,
-            quantity=position.quantity,
-            direction=position.direction,
-        )
-        self.standing.open_positions = len(self._held)
+        self._placer.observe_position(position)
 
     def observe_override(self, override) -> None:
         """The instruction, as the reader publishes it.
@@ -245,18 +168,7 @@ class PositionFlattener:
 
     def _forget_the_instruction(self) -> None:
         self._acting_on = None
-        self._sent_at_ns.clear()
-        self._first_asked_at_ns.clear()
-        self._closed_under_this_instruction.clear()
-        self._outstanding.clear()
-        self._last_seen_quantity.clear()
-        self._quantity_asked_for.clear()
-        self._quantity_seen_filled.clear()
-        self.standing.waiting_for_a_fill = 0
-        self.standing.longest_wait_seconds = 0.0
-        self.standing.positions_closed_since_the_instruction = 0
-        self.standing.positions_at_the_cap = 0
-        self.standing.quantity_asked_beyond_the_position = 0.0
+        self._placer.forget()
 
     @property
     def is_flattening(self) -> bool:
@@ -266,146 +178,32 @@ class PositionFlattener:
         """One market exit per open position, or nothing at all.
 
         Nothing at all is the answer in every ordinary tick: no instruction, or
-        an instruction whose exits are already in flight.
-
-        **A position of size Q never has more than Q asked for at one time.**
-        That invariant was missing until 2026-08-30 and the absence of it turned
-        this part into the opposite of what it is for. The repeat fired on a
-        timer alone, with no account of what was already asked and unanswered,
-        and every repeat carried a fresh `client_order_id` -- so
-        `paper-fill-simulator`'s duplicate guard, which keys on that id, could
-        never refuse one. The repeats did not replace each other, they
-        accumulated: measured on the live spine, `exits_placed` reached 426 with
-        `exits_repeated` 411 against `open_positions` 2, and the book held 2,199
-        of them in flight. They then filled, all of them.
-
-            flatten sell TURBOUSDT  13,020,303  against ~8,500,000 held
-                                                -> a NEW 4,457,934 short
-            flatten sell VETUSDT     5,915,542  against    731,927 held
-            1,048,525 USDT of flatten notional against a 190,900 USDT book
-
-        A close that overshoots does not stop at flat, it reverses -- the failure
-        `OrderRequest.cancels_client_order_id` was written for, in its own words:
-        "a stop that triggers on nothing opens the opposite position".
-
-        **The bound is outstanding quantity, not a repeat timer, and not
-        cancel-replace either.** Withdrawing the previous ask would also bound
-        it, and that was the first fix written here -- but it only holds while
-        cancels land, and the live book reported `cancels_for_an_unknown_order`
-        360 times against market orders it had already passed on. A bound that
-        depends on a cancel arriving is not a bound. So:
-
-            allowance = what is held now - what is already asked and unanswered
-
-        and an ask is only ever answered by evidence: the position getting
-        smaller, which is the only way a fill reaches a part that produces
-        `order-request` and consumes `position`. An unanswered ask therefore
-        keeps its allowance spent for as long as it stays unanswered, and the
-        timer decides *when* it is worth looking again, never *how much*.
-
-        The consequence is deliberate: an exit that is genuinely lost is not
-        re-sent. That is the right trade here, because the 411 repeats were not
-        lost -- they were slow, and every one of them was eventually taken. A
-        position still open with its allowance spent is a fault to report, and
-        it is counted in `positions_at_the_cap` rather than acted on.
+        an instruction whose exits are already in flight. The bound that keeps a
+        repeat from overselling is the placer's, and its reasoning -- the
+        2026-08-30 incident that put 1,048,525 USDT of flatten notional against a
+        190,900 USDT book -- is written there.
         """
         if self._acting_on is None:
             return ()
-        if self._money_mode is None:
-            self.standing.refused_no_money_mode += 1
-            return ()
 
-        now = self._now_ns()
-        exits = []
-        at_the_cap = 0
-        for key, held in sorted(self._held.items()):
-            outstanding = self._outstanding.get(key, 0.0)
-            allowance = abs(held.quantity) - outstanding
-            # Below one order step there is nothing an order could sell, so an
-            # allowance that small is spent rather than nearly spent.
-            if allowance < self._quantity_increment:
-                if outstanding > 0:
-                    at_the_cap += 1
-                continue
-            sent_at = self._sent_at_ns.get(key)
-            if sent_at is not None and now - sent_at < self._repeat_after_ns:
-                continue
-            # Only what is not already asked for. Never the whole position again.
-            quantity = allowance
-            if sent_at is not None:
-                self.standing.exits_repeated += 1
-            self._sent_at_ns[key] = now
-            self._first_asked_at_ns.setdefault(key, now)
-            self._quantity_asked_for[key] = (
-                self._quantity_asked_for.get(key, 0.0) + quantity
-            )
-            self._outstanding[key] = outstanding + quantity
-            self.standing.exits_placed += 1
-            exits.append(
-                self._exit_for(
-                    held, quantity=quantity, repeated=sent_at is not None, at_ns=now
-                )
-            )
-        self.standing.positions_at_the_cap = at_the_cap
-        # What has been asked for beyond what was ever there to sell: everything
-        # asked, less everything a fill accounted for, less what each position
-        # still holds. It must stay at zero, and it is reported rather than
-        # asserted because the whole reason it exists is that it did not.
-        self.standing.quantity_asked_beyond_the_position = sum(
-            max(
-                0.0,
-                asked
-                - self._quantity_seen_filled.get(key, 0.0)
-                - abs(self._held[key].quantity if key in self._held else 0.0),
-            )
-            for key, asked in self._quantity_asked_for.items()
-        )
-
-        waiting = [self._sent_at_ns[key] for key in self._sent_at_ns if key in self._held]
-        self.standing.waiting_for_a_fill = len(waiting)
-        self.standing.longest_wait_seconds = (
-            (now - min(self._first_asked_at_ns[key] for key in self._sent_at_ns if key in self._held))
-            / 1_000_000_000
-            if waiting
-            else 0.0
-        )
-        return tuple(exits)
-
-    def _exit_for(
-        self, held: HeldPosition, quantity: float, repeated: bool, at_ns: int
-    ) -> OrderRequest:
-        self._sequence += 1
-        side = SELL if held.direction == LONG else BUY
-        again = " again" if repeated else ""
-        return OrderRequest(
-            client_order_id=f"flatten-{held.venue_id}-{held.symbol}-{self._sequence}",
-            destination=PAPER_BOOK if self._money_mode == PAPER else LIVE_VENUE,
-            venue_id=held.venue_id,
-            symbol=held.symbol,
-            side=side,
-            quantity=quantity,
-            # A market order carries neither: an instruction to close now is not
-            # an instruction to wait for a price, and a limit here would be a
-            # position left open at the first tick that did not reach it.
-            limit_price=0.0,
-            stop_price=0.0,
-            order_type=MARKET,
-            slice_sequence=1,
-            slice_count=1,
-            at_second=0.0,
-            outcome=ROUTED,
-            reason=(
+        def why(held, quantity, repeated):
+            again = " again" if repeated else ""
+            return (
                 f"a human override said {CLOSE_POSITIONS}; closing {held.direction} "
                 f"{quantity:g} of {abs(held.quantity):g} {held.symbol} at market{again}"
-            ),
-            routed_at_ns=at_ns,
-            # An exit returns whatever the position committed, which the account
-            # already knows -- the same reading stop-order-manager takes.
-            leverage=1.0,
-        )
+            )
+
+        return self._placer.exits_for(self._placer.held.keys(), reason_for=why)
 
 
 def describe_flattening(flattener: PositionFlattener) -> dict:
+    """The instruction's own counters, and the placer's beside them.
+
+    Kept under the same names they had before the placer was extracted: these
+    are what the board and the part monitor read, and a counter that changes its
+    name is a tile that goes blank without anything having gone wrong.
+    """
+    placer = flattener.placer.standing
     return {
         "part_id": PART_ID,
         "is_flattening": 1.0 if flattener.is_flattening else 0.0,
@@ -413,19 +211,17 @@ def describe_flattening(flattener: PositionFlattener) -> dict:
         "reads_with_no_override": flattener.standing.reads_with_no_override,
         "instructions_acted_on": flattener.standing.instructions_acted_on,
         "instructions_not_about_the_book": flattener.standing.instructions_not_about_the_book,
-        "open_positions": flattener.standing.open_positions,
-        "exits_placed": flattener.standing.exits_placed,
-        "exits_repeated": flattener.standing.exits_repeated,
-        "waiting_for_a_fill": flattener.standing.waiting_for_a_fill,
-        "positions_at_the_cap": flattener.standing.positions_at_the_cap,
-        "quantity_asked_beyond_the_position": (
-            flattener.standing.quantity_asked_beyond_the_position
-        ),
+        "open_positions": placer.open_positions,
+        "exits_placed": placer.exits_placed,
+        "exits_repeated": placer.exits_repeated,
+        "waiting_for_a_fill": placer.waiting_for_a_fill,
+        "positions_at_the_cap": placer.positions_at_the_cap,
+        "quantity_asked_beyond_the_position": placer.quantity_asked_beyond_the_position,
         "positions_closed_since_the_instruction": (
-            flattener.standing.positions_closed_since_the_instruction
+            flattener.placer.positions_closed_since_forgetting
         ),
-        "refused_no_money_mode": flattener.standing.refused_no_money_mode,
-        "longest_wait_seconds": flattener.standing.longest_wait_seconds,
+        "refused_no_money_mode": placer.refused_no_money_mode,
+        "longest_wait_seconds": placer.longest_wait_seconds,
     }
 
 

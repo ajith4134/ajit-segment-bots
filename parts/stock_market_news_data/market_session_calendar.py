@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import datetime
 
-from runtime.market_conditions import MarketSessionState, SessionKind, read_nse_date
+from runtime.market_conditions import (
+    EXCHANGE_TIMEZONE, MarketSessionState, SessionKind, read_clock_time, read_nse_date,
+)
 from runtime.nse_public_data import NSE_API_HOST
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -46,16 +48,9 @@ PART_DECLARATION = PartDeclaration(
 )
 
 HOLIDAY_URL = f"{NSE_API_HOST}/api/holiday-master?type=trading"
-EXCHANGE_TIMEZONE = "Asia/Kolkata"
 SATURDAY = 5
 NO_HOLIDAY_LIST = "no holiday list has been read yet"
 NANOSECONDS_PER_SECOND = 1_000_000_000
-
-
-def read_clock_time(stated: str) -> datetime.time:
-    """"09:15" as NSE publishes it, from a setting rather than a literal."""
-    hour, _, minute = stated.partition(":")
-    return datetime.time(int(hour), int(minute))
 
 
 class MarketSessionCalendar:
