@@ -296,7 +296,24 @@ def run_pnl_attributor(
     def tick() -> None:
         for trade_id, closed_trade in read_closed_trades():
             outcome = attributor.attribute(trade_id, closed_trade)
-            publish_attributions(outcome.attribution)
+            # Only a usable attribution goes on the wire, the same guard
+            # entry-quality-scorer has always had. A refused one is not empty --
+            # it carries every component at 0.0, `unexplained` holding the whole
+            # realised PnL, and **`reconciles=True`**, because unexplained
+            # absorbs everything and the reconciliation then trivially holds. A
+            # consumer cannot tell that from a measured attribution: it states a
+            # PnL, it says it reconciles, and its residual is a number.
+            # trade-episode-encoder reads `cost_share` and `residual` off it and
+            # its own comment is "only measured values go into conditions: this
+            # is what a model reads". Encoding one produces an episode that
+            # looks complete and every statistic over it silently includes a
+            # fabricated field -- which is the encoder's own stated reason for
+            # refusing an incomplete episode, defeated by handing it a complete-
+            # looking one instead. Withheld, the encoder correctly reports
+            # INCOMPLETE and names what has not landed (2026-09-06, found
+            # driving a real replayed closed trade through the chain).
+            if outcome.is_usable:
+                publish_attributions(outcome.attribution)
 
     return run_part(
         declaration=PART_DECLARATION,

@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **4 of 29** |
+| features walked | **5 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -57,7 +57,7 @@ come before the ones that learn from a trade that has not happened yet.
 | 2 | `broker-adapter` | **walked 2026-09-06** — every Upstox REST call in the project was Cloudflare-blocked; 3 parts fixed, feature now fully carrying |
 | 3 | `execution-venue-adapter` | **walked 2026-09-06** — 9 of 11 are the crypto real-money path, correctly off for paper trading; no Indian equivalent exists yet |
 | 4 | `paper-live-trading` | **walked 2026-09-06** — chain is idle-because-no-trade, not broken; `implied-vol-reader` converted off crypto |
-| 5 | `opportunity-scanner` | not walked |
+| 5 | `opportunity-scanner` | **walked 2026-09-06** — a fourth checker built (declared inputs nothing reads); the learning chain proved end to end on a real replayed trade |
 | 6 | `segment-bot` | not walked |
 | 7 | `risk-capital-allocation` | not walked |
 | 8 | `portfolio-state` | not walked |
@@ -538,3 +538,123 @@ priced. Downstream, on a closed market:
 `reads_too_thin_for_a_surface: 173` of 263 is the honest weekend answer — few
 contracts carry a two-sided quote when the market is shut — and it is the state
 the reader is built to report rather than smooth over.
+
+---
+
+## 5. `opportunity-scanner` — walked 2026-09-06 (market closed)
+
+11 parts, 10 running, 10 launchable. 153 wires carrying, 59 idle, 26 not
+measured. `news-catalyst-detector` is the one part here with no `start_part` at
+all — it consumes `news-item` and `news-impact-forecast` from
+`stock-market-news-data`, 24 of whose 29 parts have no code, so it is blocked on
+a whole unbuilt feature rather than on anything in this one.
+
+### A fourth class of defect, and the checker that ends it
+
+`expiry-day-zero-to-hero-detector` declared `broker-price-frame` and the type
+appeared **exactly once in its entire source** — in the `PART_DECLARATION`
+consumes tuple — and nowhere else. `broker-price-level-sampler` was publishing
+5,868 price frames at the time, so the audit board showed a wire whose producer
+was healthy and whose consumer received nothing: indistinguishable from a real
+delivery fault until somebody opens the file.
+
+None of the three existing checkers can see this. `check_contracts.py` checks
+the blueprint against itself and never opens a part's source; the other two
+check the code against the declaration for types the code *does* read. Nothing
+checked the declaration against the code for a type the code reads **not at
+all**. That costs more than a stray tuple entry: R-01 computes every edge from
+consumes/produces, so a declared-and-unread input is a wire on every diagram, a
+row in the wiring explorer, and a permanent `NOT CARRYING` line blamed on a
+working producer. RL-067 in the direction nothing was enforcing.
+
+A scan of all 348 launchable parts found **six**. Five resolved by asking what
+each part actually needs:
+
+| part | dropped | because |
+|---|---|---|
+| `expiry-day-zero-to-hero-detector` | `broker-price-frame` | judges moneyness from Upstox's own delta, never from spot |
+| `bull-feature-builder` | `symbol-universe` | one vector per candidate; the universe is what the scanner sweeps |
+| `bear-feature-builder` | `symbol-universe` | same |
+| `venue-trade-stream-reader` | `venue-standing` | crypto part being retired, and its producer is off too |
+| `venue-quote-stream-reader` | `venue-standing` | same |
+
+`dashboard/check_declared_inputs.py` stops the class recurring. **14 parts bind
+readers dynamically** (`context.bus.reader(data_type)` in a loop over their own
+consumed types) and are reported as *not statically checkable* rather than as
+clean — counting those as passing would be the green-that-means-nothing this
+project keeps finding.
+
+### The sixth, and where it led
+
+`opinion-arbiter` declares `bot-maturity` and binds no reader. Not a stray line:
+how proven a bot is, is exactly what an arbiter should weigh. The operator chose
+to **fix the source rather than the declaration**, and the source turned out not
+to be broken.
+
+`edge-graduation-gate` had `recv {}` on all seven inputs and `judgements 0`, and
+all seven of its producers were running and publishing nothing. Tracing them,
+every one waits on `closed-trade` — and **no trade has ever closed on a live
+run**. `trade-cluster-detector` is the proof it is not a wiring fault: it was
+receiving 119,888 correlation-clusters and still published nothing, because its
+other input is `closed-trade`.
+
+**The replay never tested any of it.** `operate/replay_a_captured_session.py`
+imports seven parts — the fill simulator, stop manager, cost-basis tracker, fill
+reconciler, excursion tracker, close detector, exit chainer — and mentions the
+learning chain **zero** times. The 2026-09-04 replay closed 252 trades and not
+one reached `pnl-attributor`. So the replay proved the *trading* half and the
+*learning* half had never run on a real trade at all, which is worth saying
+plainly because `docs/goal.md` records that replay as the evidence the three
+segments work.
+
+### The learning chain, driven with a real replayed trade
+
+Rather than assume, the chain was driven end to end with a real closed trade
+from that replay (`tests/integration/test_a_closed_trade_becomes_a_bot_maturity.py`):
+
+    closed-trade -> pnl-attributor        pnl-attribution        usable
+                 -> entry-quality-scorer  entry-quality          usable
+                 -> luck-skill-separator  outcome-significance   usable
+                 -> trade-episode-encoder trade-episode          encoded
+                 -> bot-scorekeeper       bot-scorecard          1 trade recorded
+                 -> edge-graduation-gate  bot-maturity           graduated, may_trade_live
+
+**The subsystem works. It has simply never been fed.** That is the answer to
+"why has `bot-maturity` never been produced", and it means `opinion-arbiter`'s
+declaration is a live intent waiting on the first closed trade rather than a
+dead line — so it stays, and the new checker stays an audit instrument rather
+than a commit gate until it does.
+
+### Two defects that could only ever appear on the first closed trade
+
+Found the first time the chain was driven, both now guarded in the parts:
+
+- **`pnl-attributor` published a refused attribution.** When it cannot attribute
+  (`no-fill-was-recorded-for-this-trade`) it still built a `PnlAttribution` with
+  every component at `0.0`, `unexplained` holding the **whole** realised PnL,
+  and **`reconciles=True`** — because unexplained absorbs everything, so the
+  reconciliation trivially holds. A consumer cannot tell that from a measured
+  attribution: it states a PnL, it says it reconciles, and its residual is a
+  number. `trade-episode-encoder` reads `cost_share` and `residual` off it and
+  its own comment is *"only measured values go into conditions: this is what a
+  model reads"*. Its refusal-on-incomplete would have been defeated by a
+  complete-looking fabrication.
+- **`luck-skill-separator` published a refused significance**, carrying
+  `standardised=None` and `is_measurable=False`, straight into those same model
+  conditions.
+
+`entry-quality-scorer` already had the `if scored.is_usable` guard; the other
+two now match it. Withheld, the encoder correctly reports `INCOMPLETE` and names
+what has not landed, which is what it was built to do.
+
+### What this feature is measurably missing
+
+- **The replay does not exercise the learning half.** It stops at
+  `position-close-detector`. Extending it to run the closed-trade chain would
+  turn 252 real closed trades into 252 real episodes and scorecards, and is the
+  cheapest way to have the learning loop proven before it matters.
+- **`stop-placement-audit` has no producer at all** — it is an optional piece of
+  a trade episode that nothing in the blueprint writes.
+- The instruction loop remains dark: `instruction-writer` has had 0 requests, so
+  `watch-condition-compiler` compiles nothing and `universal-symbol-sweeper` has
+  swept 3,202 times against zero conditions.

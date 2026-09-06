@@ -23,7 +23,7 @@ what it is still missing. Read it before walking anything and append to it;
 without it every session re-walks what the last one already did. The instrument
 is `python3 dashboard/audit_feature_dataflow.py [feature-id]`, which reads each
 part's own bus counters per declared wire and keeps "nothing has travelled
-here" apart from "nobody has looked here". **4 of 29 walked** as of 2026-09-06
+here" apart from "nobody has looked here". **5 of 29 walked** as of 2026-09-06
 (`market-data-feed`: four defects fixed — the three broker bridges had never
 published a single message — and one genuinely missing part,
 `broker-quote-bridge`, built. `broker-adapter`: every Upstox REST call in the
@@ -36,7 +36,11 @@ because no trade has opened, not broken; `implied-vol-reader` converted off its
 crypto stub, and the feed's 2,000-instrument subscription — which was 1,707
 options on silver, gold and currency pairs with only 26 of their underlyings
 priced — now carries only what the segments trade, 588 of 588 with their
-underlying subscribed).
+underlying subscribed. `opportunity-scanner`: a fourth checker,
+`dashboard/check_declared_inputs.py`, for inputs a part declares and never
+reads — six found, five dropped; and the learning chain from a closed trade to a
+`bot-maturity` proved end to end on a real replayed trade, which the replay
+itself has never exercised).
 
 ## TEMPORARY GOAL (first, still active underneath) — 2026-09-05
 

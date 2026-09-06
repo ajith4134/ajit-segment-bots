@@ -234,7 +234,15 @@ def run_luck_skill_separator(
     def tick() -> None:
         for trade_id, closed_trade in read_closed_trades():
             outcome = separator.assess(trade_id, closed_trade)
-            publish_significance(outcome.significance)
+            # The same guard, for the same reason. A refused assessment carries
+            # `standardised=None` and `is_measurable=False`, which is honest in
+            # itself, but trade-episode-encoder puts `standardised` straight
+            # into the conditions a model reads and treats the piece's presence
+            # as evidence it landed. "This symbol's volatility has never been
+            # measured" is a reason to have no significance yet, not a
+            # significance (2026-09-06).
+            if outcome.is_usable:
+                publish_significance(outcome.significance)
 
     return run_part(
         declaration=PART_DECLARATION,
