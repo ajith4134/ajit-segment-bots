@@ -32,11 +32,13 @@ import time
 
 import pytest
 
-from tests.conftest import most_recent_day_the_tape_holds
+from tests.conftest import (
+    busiest_upstox_instruments, most_recent_upstox_trading_day, upstox_trades_for,
+)
 
 from runtime.bus import Inbox, Publisher
+from runtime.market_conditions import MarketSessionState, SessionKind
 from runtime.part_launcher import PartLauncher
-from runtime.tape import read_payload, read_tape_index
 from runtime.trading_types import (
     BUY,
     MARKET,
@@ -46,15 +48,20 @@ from runtime.trading_types import (
     Fill,
     OrderRequest,
 )
-from runtime.venues.adapter_registry import load_venue_adapter
 from runtime.wiring_plan import derive_wiring
 
-TAPE_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
-# The venues whose captured prints this test replays. Still the crypto pair: the
-# chain under test is venue-agnostic (T-4) and these are the only tapes with the
-# trade-by-trade depth it needs. Porting to the Upstox broker tape is real work
-# and outstanding -- it is a different tape shape with no VenueAdapter behind it.
-CAPTURED_VENUES = ("binance-usdm", "bybit-linear")
+# Ported to the Upstox tape on 2026-09-06. It replayed binance-usdm and
+# bybit-linear until then, with a comment saying the port was "real work and
+# outstanding" -- and the crypto spine has been inactive since 2026-09-01, so
+# the prints it replayed were a frozen artefact of a retired venue. The
+# temporary goal of 2026-09-05 says convert or replace every crypto-shaped part
+# with the Indian-market equivalent, and a test is a part of the system too:
+# one that can only be exercised by a venue this project no longer trades
+# proves nothing about the bots that exist.
+#
+# `tests/conftest.upstox_trades_for` runs the captured Upstox prints through
+# `broker-market-data-bridge` -- the part the live spine uses -- so what is
+# replayed here is what the running system would actually have seen.
 THREAD_CEILING = 1
 PLACEMENT_DEADLINE_SECONDS = 0.5
 PLACEMENT_POLL_SECONDS = 0.002
@@ -96,50 +103,64 @@ EXIT_INSIDE_THE_RUN_S_RANGE = 0.5
 # six keeps the read bounded while giving the choice something to choose between.
 SYMBOLS_CONSIDERED = 6
 
-# The smallest rise, as a fraction of the first trade, this test will accept from
-# the symbol it replays. The exits sit at half of the run's own range, so a symbol
+# Whose money this run spends. The NIFTY contracts it replays are index options,
+# and the segment has to be named: money-mode is published one per segment since
+# three bots began sharing one spine, and an order that names none is refused.
+SEGMENT_TRADED = "index-options"
+
+# The smallest rise, as a fraction of the first print, this test will accept from
+# the contract it replays. The exits sit at half of the run's own range, so one
 # that moved less than this leaves a target inside the tick size and the test
 # proves only that nothing happened -- which is how it failed on 2026-08-26, on
-# SKHYNIXUSDT, whose whole replay rose 0.0025% (1214.16 to 1214.19).
+# the crypto perpetual SKHYNIXUSDT, whose whole replay rose 0.0025% (1214.16 to
+# 1214.19). An option has far more room: measured on the captured Upstox tape of
+# 2026-09-04, the five busiest NIFTY puts rose between 16.3% and 29.7% across
+# 4,000 prints, so this bound is comfortable rather than marginal here.
 SMALLEST_USABLE_RISE = 0.001
 
 
-def busiest_symbols_today(venue_id: str) -> tuple[tuple[str, ...], str]:
-    """The symbols with most of today on the tape, busiest first, and today's date."""
-    # The latest day the tape actually holds, not today. The crypto spine went
-    # inactive on 2026-09-01 with the pivot to Indian markets, so "today" has had
-    # no prints since and these tests errored on every run. See
-    # most_recent_day_the_tape_holds for why the day may move without weakening
-    # what is proved.
-    day = most_recent_day_the_tape_holds(CAPTURED_VENUES)
+def busiest_contracts_today() -> tuple[tuple[str, ...], str]:
+    """The instrument keys with most of a real session on the tape, busiest first.
+
+    The newest day the Upstox tape holds enough prints on, which is not simply
+    the newest day: the market is shut at weekends and the feed keeps its
+    connection open, so a Sunday holds a handful of records restating Friday's
+    last price.
+    """
+    day = most_recent_upstox_trading_day(minimum_prints=TRADES_PER_SYMBOL,
+                                         instruments=SYMBOLS_CONSIDERED)
     if day is None:
         pytest.skip(
-            "no captured tape for any of "
-            f"{CAPTURED_VENUES}; these tests replay real venue prints (RL-063) "
-            "and there are none on this machine to replay"
+            "no captured Upstox day holds enough prints to replay; this test "
+            "replays real broker prints (RL-063) and there are none on this "
+            "machine with a session's worth of depth"
         )
-    venue_root = TAPE_ROOT / venue_id
-    if not venue_root.is_dir():
-        return (), day
-    sized = []
-    for symbol_directory in venue_root.iterdir():
-        index_path = symbol_directory / f"{day}.index"
-        if index_path.exists() and index_path.stat().st_size > 0:
-            sized.append((index_path.stat().st_size, symbol_directory.name))
-    sized.sort(reverse=True)
-    return tuple(name for _, name in sized), day
+    return tuple(busiest_upstox_instruments(day, SYMBOLS_CONSIDERED)), day
 
 
-def todays_trades_of(venue_id: str, symbol: str, day: str) -> list:
-    adapter = load_venue_adapter(venue_id)
-    index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
-    blob_path = TAPE_ROOT / venue_id / symbol / f"{day}.blob"
-    trades = []
-    for record in read_tape_index(index_path):
-        trades.extend(adapter.read_trades(read_payload(blob_path, record)))
-        if len(trades) >= TRADES_PER_SYMBOL:
-            break
-    return trades
+def todays_trades_of(instrument_key: str, day: str) -> list:
+    return upstox_trades_for(day, [instrument_key], TRADES_PER_SYMBOL)
+
+
+def book_counters(health_messages) -> str:
+    """paper-fill-simulator's own standing, from the health it published.
+
+    "Nothing filled" is not a diagnosis: the book counts *why* separately --
+    refused for no price, held in flight, resting because the market is not
+    open -- and those counters are the difference between a broken chain and a
+    correctly cautious one. They ride on health, which this test already
+    watches, so reading them costs nothing and guessing costs a run.
+    """
+    latest = None
+    for message in health_messages:
+        payload = message.payload
+        if getattr(payload, "part_id", None) == "paper-fill-simulator":
+            latest = payload
+    if latest is None:
+        return "paper-fill-simulator published no health at all."
+    standing = dict(getattr(latest, "standing", ()) or ())
+    moved = {name: value for name, value in standing.items() if value}
+    return f"paper-fill-simulator standing: {moved or 'every counter at zero'}."
 
 
 def rise_within(trades: list) -> float:
@@ -162,28 +183,27 @@ def real_trades_of_one_symbol():
     test needs a symbol whose replay crosses a target after the exits are on the
     book. So the busiest few are read and the one that rose most is replayed.
     """
-    venue_id = "binance-usdm"
-    candidates, day = busiest_symbols_today(venue_id)
+    candidates, day = busiest_contracts_today()
     assert candidates, (
-        f"no tape for {venue_id} today. This test replays what the venue actually sent, so "
-        f"there is no fixture to fall back on (RL-063) -- start the capture and try again."
+        f"no Upstox tape for {day}. This test replays what the broker actually sent, so "
+        f"there is no fixture to fall back on (RL-063) -- start the spine and try again."
     )
     considered = []
-    for symbol in candidates[:SYMBOLS_CONSIDERED]:
-        trades = todays_trades_of(venue_id, symbol, day)
+    for instrument_key in candidates[:SYMBOLS_CONSIDERED]:
+        trades = todays_trades_of(instrument_key, day)
         if len(trades) >= 500:
-            considered.append((rise_within(trades), symbol, trades))
+            considered.append((rise_within(trades), trades[0].symbol, trades))
     assert considered, (
-        f"none of the {SYMBOLS_CONSIDERED} busiest symbols on {venue_id} has 500 trades on "
-        f"today's tape yet"
+        f"none of the {SYMBOLS_CONSIDERED} busiest Upstox contracts has 500 prints on "
+        f"the tape for {day}"
     )
     considered.sort(key=lambda entry: entry[0], reverse=True)
     rise, symbol, trades = considered[0]
     assert rise >= SMALLEST_USABLE_RISE, (
-        f"the best of today's {len(considered)} busiest symbols is {symbol}, which rose "
-        f"{rise:.4%} across {len(trades):,} trades -- below the {SMALLEST_USABLE_RISE:.2%} this "
+        f"the best of {day}'s {len(considered)} busiest contracts is {symbol}, which rose "
+        f"{rise:.4%} across {len(trades):,} prints -- below the {SMALLEST_USABLE_RISE:.2%} this "
         f"test needs for a target to be reachable. Nothing is wrong with the code: the market "
-        f"has not moved enough today for this replay to prove anything"
+        f"did not move enough that session for this replay to prove anything"
     )
     return trades
 
@@ -272,7 +292,18 @@ def watch_at(wiring, owner: str, data_type: str) -> Inbox:
 
 
 def an_entry_order(venue_id: str, symbol: str, price: float, quantity: float) -> OrderRequest:
-    """The market order the router sends to open a position (operator, 2026-08-23)."""
+    """The market order the router sends to open a position (operator, 2026-08-23).
+
+    **It names its segment**, and has had to since 2026-09-05. Three segment bots
+    share one spine, so `money-mode` is published one per segment, and
+    `level_for_segment` hands an unstamped payload a level only when there is
+    exactly one -- correctly refusing to guess when there are four. Left
+    unstamped, `paper-fill-simulator` saw the order, resolved no mode, and
+    refused it as a live order; the entry crossed the bus, nothing filled, no
+    exit was ever chained, and the position read as naked. That refusal was the
+    one on that part with no counter behind it, so the standing showed
+    `orders_seen` climbing beside a row of zeroes (both fixed 2026-09-06).
+    """
     return OrderRequest(
         client_order_id="closing-chain-entry",
         destination=PAPER_BOOK,
@@ -289,6 +320,7 @@ def an_entry_order(venue_id: str, symbol: str, price: float, quantity: float) ->
         outcome=ROUTED,
         reason="this test stands in for the decision half, which is proven separately",
         routed_at_ns=time.time_ns(),
+        segment=SEGMENT_TRADED,
     )
 
 
@@ -369,6 +401,17 @@ def test_a_position_opens_and_closes_across_nine_processes(
         outbound=wiring["order-destination-router"].outbound,
         maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
     )
+    # The Indian market has session hours and crypto did not, so
+    # paper-fill-simulator has consumed `market-session-state` since 2026-09-05
+    # and parks an order until a session has been *measured* -- never inferring
+    # one from a price arriving. Without this the entry order-request crosses the
+    # bus, is held, never fills, and no exit is ever chained: the exact failure
+    # this test reported until 2026-09-06.
+    calendar = Publisher(
+        part_id="market-session-calendar",
+        outbound=wiring["market-session-calendar"].outbound,
+        maximum_message_bytes=MAXIMUM_MESSAGE_BYTES,
+    )
     placer = Publisher(
         part_id="stop-target-placer",
         outbound=wiring["stop-target-placer"].outbound,
@@ -395,8 +438,30 @@ def test_a_position_opens_and_closes_across_nine_processes(
 
         # Only the opening price is fed while the position is opened, so the
         # market cannot run past the exits before they exist.
+        # Stated open, and the captured prints are themselves the evidence it
+        # was: a print exists only because the market traded. The same reasoning
+        # operate/replay_a_captured_session.py already applies, and the date is
+        # the session being replayed rather than today.
+        def session_now() -> MarketSessionState:
+            """Stamped now, every time it is published.
+
+            `paper-fill-simulator` reads sessions through a `LatestByKey` bounded
+            by `market_condition_level_maximum_age_seconds`, so a session stamped
+            0 is older than the bound the moment it arrives and expires before it
+            can be used -- and an expired session is an unmeasured one, which is
+            not an open one (Rule 8). The part is right; a fixed stamp was wrong.
+            """
+            return MarketSessionState(
+                segment="NSE_FO",
+                kind=SessionKind.OPEN,
+                as_of_date=datetime.date.today(),
+                reason="replaying captured Upstox prints, which exist because it traded",
+                observed_at_ns=time.time_ns(),
+            )
+
         warm_up_ends = time.monotonic() + 4.0
         while time.monotonic() < warm_up_ends:
+            calendar.publish("market-session-state", [session_now()])
             placer.publish("stop-target-plan", [plan])
             feed.publish("market-data", opening)
             time.sleep(REPLAY_PAUSE_SECONDS)
@@ -407,6 +472,7 @@ def test_a_position_opens_and_closes_across_nine_processes(
         # then the run keeps feeding the opening price, which no exit reacts to.
         exits_placed_by = time.monotonic() + 60.0
         while time.monotonic() < exits_placed_by and len(seen["order-request"]) < 3:
+            calendar.publish("market-session-state", [session_now()])
             placer.publish("stop-target-plan", [plan])
             feed.publish("market-data", opening)
             time.sleep(REPLAY_PAUSE_SECONDS)
@@ -415,7 +481,15 @@ def test_a_position_opens_and_closes_across_nine_processes(
         assert len(seen["order-request"]) >= 3, (
             f"the entry and both exits should have crossed the bus; saw "
             f"{len(seen['order-request'])} order-request(s), so the position is naked and "
-            f"nothing further this test asserts would mean anything"
+            f"nothing further this test asserts would mean anything. What did cross: "
+            + ", ".join(
+                f"{data_type} {len(messages)}"
+                for data_type, messages in sorted(seen.items())
+                if data_type != "part-health"
+            )
+            + ". A refused fill, a resting order and one held in flight are three "
+            "different failures, and this line is where the difference shows. "
+            + book_counters(seen["part-health"])
         )
 
         deadline = time.monotonic() + PATIENCE_SECONDS
@@ -442,6 +516,7 @@ def test_a_position_opens_and_closes_across_nine_processes(
             inbox.close()
         feed.close()
         router.close()
+        calendar.close()
         placer.close()
 
     counted = {data_type: len(messages) for data_type, messages in seen.items()}

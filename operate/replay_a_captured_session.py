@@ -93,6 +93,10 @@ REPLAY_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/replay"
 TAPE = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape/upstox"
 VENUE = "upstox"
 
+# The operator's own settings, which is where every segment states what it
+# trades. Read rather than restated, for the same reason SettingsContext exists.
+SETTINGS_ROOT = settings_directory()
+
 # Prints in a full NSE session, used to scale a contract's own per-print
 # volatility up to the daily figure luck-skill-separator compares against. The
 # session is 09:15-15:30 IST; the count is the contract's own, so a thin
@@ -245,6 +249,172 @@ def cash_equity_eligible_symbols(master: dict) -> frozenset[str]:
         for key, row in master.items()
         if key not in derivative_underlying_keys and admits(types.SimpleNamespace(**row))
     )
+
+
+def the_market_is_open_now() -> bool | None:
+    """Whether NSE is in a trading session right now, asked of the calendar part.
+
+    `market-session-calendar` is the live spine's own answer to this, so a replay
+    that reimplemented the hours could disagree with the bot about whether the
+    market was open -- which is the difference between "replay history" and
+    "trade live". Holidays are not fetched here: this is asked to choose a data
+    source, and a holiday shows up as a day with no prints, which the source
+    then skips on its own evidence.
+
+    None when it cannot be asked at all, which is a different answer from
+    "closed" and is treated as closed by the caller -- an unmeasured session is
+    not an open one (Rule 8).
+    """
+    import zoneinfo
+
+    from parts.stock_market_news_data.market_session_calendar import (
+        EXCHANGE_TIMEZONE, MarketSessionCalendar, read_clock_time,
+    )
+
+    context = SettingsContext()
+    try:
+        timezone = zoneinfo.ZoneInfo(EXCHANGE_TIMEZONE)
+        calendar = MarketSessionCalendar(
+            segment=str(context.setting("market_session_segment").value),
+            opens_at=read_clock_time(str(context.setting("market_session_opens_at_ist").value)),
+            closes_at=read_clock_time(str(context.setting("market_session_closes_at_ist").value)),
+            timezone=timezone,
+        )
+        return calendar.session_at(datetime.datetime.now(timezone)).is_tradeable
+    except Exception:
+        return None
+
+
+def the_most_recent_weekday_before_today() -> str:
+    """The last day NSE could have traded, as a date.
+
+    Could, not did: a holiday is still returned, and the history fetch then finds
+    no prints for it and says so. Guessing which holidays exist here would be a
+    second calendar to disagree with the real one.
+    """
+    day = datetime.date.today() - datetime.timedelta(days=1)
+    while day.weekday() >= 5:  # Saturday, Sunday
+        day -= datetime.timedelta(days=1)
+    return day.isoformat()
+
+
+def contracts_from_history(from_date: str, to_date: str, per_segment: int,
+                           minimum_prints: int) -> tuple[dict, collections.Counter]:
+    """Each built segment's own instruments, priced from the broker's history.
+
+    The tape is three days deep and holds only what the feed was subscribed to.
+    Upstox serves one-minute bars from January 2022 for equities, indices and
+    every currently listed option, so this is what lets a replay run on a session
+    the tape never covered -- the operator's own suggestion, 2026-09-06.
+
+    **What each segment trades is asked of the segment, never chosen here.**
+    Every segment declares `segment_underlying_trading_symbols`, and for the two
+    options segments the contracts are that underlying's nearest *unexpired*
+    expiry, at the strikes closest to where the underlying actually closed on the
+    day being replayed -- fetched, not assumed. A strike far from the money has
+    no history because nobody traded it, and replaying one would be replaying an
+    empty series.
+    """
+    from runtime.segment_settings import built_segments, read_segment_symbols
+
+    from operate.historical_prints import historical_prints, upstox_access_token
+
+    token = upstox_access_token()
+    context = SettingsContext()
+    master = instruments_by_key()
+    by_symbol = {}
+    for row in master.values():
+        symbol = row.get("trading_symbol")
+        if symbol and row.get("instrument_type") in ("EQ", "INDEX"):
+            by_symbol.setdefault(symbol, row)
+
+    day_ms = int(datetime.date.fromisoformat(to_date).strftime("%s")) * 1000
+    wanted: dict[str, list] = {}
+    skipped: collections.Counter = collections.Counter()
+
+    for segment in built_segments(context):
+        try:
+            underlyings = read_segment_symbols(
+                segment, "segment_underlying_trading_symbols", SETTINGS_ROOT,
+            )
+        except Exception:
+            skipped[f"{segment} declares no underlyings"] += 1
+            continue
+        chosen: list = []
+        for underlying in underlyings:
+            if len(chosen) >= per_segment:
+                break
+            row = by_symbol.get(underlying)
+            if row is None:
+                skipped[f"no master row for {underlying}"] += 1
+                continue
+            spot = historical_prints(row["instrument_key"], from_date, to_date, token)
+            if len(spot) < minimum_prints:
+                skipped[f"{underlying} has no history for {to_date}"] += 1
+                continue
+            if segment_trades_the_underlying_itself(segment):
+                chosen.append((row["instrument_key"], row, spot))
+                continue
+            # An options segment: the nearest unexpired expiry, at the strikes
+            # closest to where the underlying actually closed that day.
+            close = spot[-1][1]
+            for contract in contracts_nearest_the_money(master, underlying, close, day_ms):
+                if len(chosen) >= per_segment:
+                    break
+                prints = historical_prints(
+                    contract["instrument_key"], from_date, to_date, token,
+                )
+                if len(prints) < minimum_prints:
+                    skipped[f"{contract.get('trading_symbol')} never traded that day"] += 1
+                    continue
+                chosen.append((contract["instrument_key"], contract, prints))
+        if chosen:
+            wanted[segment] = chosen
+    return wanted, skipped
+
+
+def segment_trades_the_underlying_itself(segment: str) -> bool:
+    """Whether this segment trades the share itself rather than an option on it.
+
+    Asked of the segment's own declared instrument types rather than of its name,
+    so a segment renamed or added does not need this function edited. Those types
+    are this project's own vocabulary -- "option", "spot", "dated-future" -- not
+    the broker's CE/PE codes, which is the distinction that made the first
+    version of this hand an options segment its own underlying to replay.
+    """
+    from runtime.segment_settings import instrument_types_this_segment_trades
+    from runtime.trading_types import OPTION
+
+    try:
+        types = instrument_types_this_segment_trades(segment, SETTINGS_ROOT)
+    except Exception:
+        # A segment that will not say what it trades gets its underlying, which
+        # is the reading that replays something real rather than nothing.
+        return True
+    return OPTION not in types
+
+
+def contracts_nearest_the_money(master: dict, underlying: str, close: float,
+                                day_ms: int) -> list:
+    """That underlying's nearest unexpired chain, strikes closest to `close` first.
+
+    Nearest expiry because that is where the volume is, and unexpired *as of the
+    day being replayed* rather than as of today: replaying 2025 with today's
+    nearest expiry would ask for a contract that did not exist yet.
+    """
+    chain = [
+        row for row in master.values()
+        if row.get("underlying_symbol") == underlying
+        and row.get("instrument_type") in ("CE", "PE")
+        and row.get("expiry") and row["expiry"] > day_ms
+        and row.get("strike_price")
+    ]
+    if not chain:
+        return []
+    nearest = min(row["expiry"] for row in chain)
+    at_that_expiry = [row for row in chain if row["expiry"] == nearest]
+    at_that_expiry.sort(key=lambda row: abs(row["strike_price"] - close))
+    return at_that_expiry
 
 
 def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) -> dict:
@@ -814,7 +984,7 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--day", default=time.strftime("%Y-%m-%d"),
+    parser.add_argument("--day", default=None,
                         help="the captured day to replay, YYYY-MM-DD")
     parser.add_argument("--per-segment", type=int, default=8,
                         help="how many of each segment's busiest instruments to replay")
@@ -824,15 +994,63 @@ def main() -> int:
                         help="stop distance, in multiples of the instrument's own typical move")
     parser.add_argument("--target-multiple", type=float, default=12.0,
                         help="target distance, in the same units")
+    parser.add_argument(
+        "--from-history", metavar="YYYY-MM-DD", default=None,
+        help=(
+            "replay a past session from Upstox's own one-minute history instead of "
+            "from the captured tape. The tape is three days deep and holds only "
+            "what the feed was subscribed to; Upstox serves minute bars from "
+            "January 2022. A bar close is one price a minute, not every print, so "
+            "the tape stays the finer evidence where it exists"
+        ),
+    )
     arguments = parser.parse_args()
+    # Whether the operator asked for a tape day, as opposed to the default that
+    # is filled in below. Without this, "no flags" and "--day today" would be
+    # indistinguishable and the market-closed rule could never fire.
+    arguments.day_was_given = arguments.day is not None
+    if arguments.day is None:
+        arguments.day = time.strftime("%Y-%m-%d")
 
     settings = load_settings_document(settings_directory() / "runtime.toml", "runtime")
-    by_segment, skipped = contracts_for_each_segment(
-        arguments.day, arguments.per_segment, arguments.minimum_prints)
 
-    print(f"Replaying the captured tape for {arguments.day}, one bot per segment.")
-    print("Which segment owns an instrument is asked of segment_that_trades -- the "
-          "live spine's own classifier, not a copy of the rule.\n")
+    # **History is the default whenever the market is shut** (operator,
+    # 2026-09-06). The tape holds only the days this machine happened to be
+    # capturing, and outside market hours there is nothing live to replay
+    # either -- so a run started on a weekend or an evening would otherwise
+    # replay a snapshot of a closed market and prove nothing. Asked of
+    # `market-session-calendar`, the live spine's own answer, and an unmeasured
+    # session counts as shut (Rule 8).
+    from_history = arguments.from_history
+    if from_history is None and not arguments.day_was_given:
+        if the_market_is_open_now() is not True:
+            from_history = the_most_recent_weekday_before_today()
+            print(
+                "The market is not open, so this replays real history rather than a "
+                f"captured snapshot of a shut market: {from_history}.\n"
+                "Pass --day to replay the tape instead.\n"
+            )
+
+    if from_history:
+        replayed_day = from_history
+        by_segment, skipped = contracts_from_history(
+            replayed_day, replayed_day, arguments.per_segment, arguments.minimum_prints)
+        print(f"Replaying {replayed_day} from Upstox's own one-minute history, "
+              "one bot per segment.")
+        print("What each segment trades is asked of the segment's own "
+              "segment_underlying_trading_symbols; the option contracts are its "
+              "underlying's nearest unexpired expiry at the strikes closest to "
+              "where that underlying actually closed.")
+        print("A bar close is one price a minute, not every print -- so a stop and a "
+              "target inside one minute's range both look reachable and only the "
+              "close decides. The tape is the finer evidence where it exists.\n")
+    else:
+        replayed_day = arguments.day
+        by_segment, skipped = contracts_for_each_segment(
+            replayed_day, arguments.per_segment, arguments.minimum_prints)
+        print(f"Replaying the captured tape for {replayed_day}, one bot per segment.")
+        print("Which segment owns an instrument is asked of segment_that_trades -- the "
+              "live spine's own classifier, not a copy of the rule.\n")
 
     # One learning chain across every segment, because a scorecard is about a
     # bot and the bot is the same one whichever segment's instrument it traded.
@@ -856,7 +1074,7 @@ def main() -> int:
             try:
                 replayed = replay_one_contract(
                     name, prints, settings, lot_size,
-                    arguments.stop_multiple, arguments.target_multiple, arguments.day,
+                    arguments.stop_multiple, arguments.target_multiple, replayed_day,
                     segment=segment,
                     kind=KIND_OF_INSTRUMENT_TYPE.get(row.get("instrument_type"), OPTION),
                     quantity=quantity, learning=learning)
@@ -938,9 +1156,9 @@ def main() -> int:
             print(f"   {count:>6}  {reason}")
 
     REPLAY_ROOT.mkdir(parents=True, exist_ok=True)
-    written = REPLAY_ROOT / f"{arguments.day}.by-segment.json"
+    written = REPLAY_ROOT / f"{replayed_day}.by-segment.json"
     written.write_text(json.dumps({
-        "replayed_day": arguments.day,
+        "replayed_day": replayed_day,
         "is_a_replay": True,
         "source": "captured Upstox tape, instruments resolved against Upstox's real master",
         "stop_multiple_of_typical_move": arguments.stop_multiple,

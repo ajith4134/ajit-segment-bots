@@ -181,6 +181,15 @@ class SimulatorStanding:
     # defect returning: the break is seen and the recovery is not.
     feed_jumps_cleared: int = 0
     refused_no_price: int = 0
+    # Orders refused because the mode this order's segment published was not
+    # "paper" -- including the case where it published none at all, which
+    # arrives here as None and is correctly not treated as paper. Every other
+    # refusal on this part was counted and this one was not, so a book that
+    # refused every order it ever saw reported `orders_seen` climbing beside a
+    # row of zeroes and no way to tell why (measured 2026-09-06, diagnosing the
+    # closing-chain test: two orders seen, every other counter at zero, and the
+    # reason invisible).
+    refused_live_order: int = 0
     # Market orders put on the book because no price had arrived for their symbol
     # yet. They are not refusals and must not be counted as one: a refusal is an
     # order that is gone, this is an order that has not filled yet. Read beside
@@ -611,6 +620,7 @@ class PaperFillSimulator:
                 )
 
         if money_mode != "paper":
+            self.standing.refused_live_order += 1
             return self._result(
                 client_order_id, venue_id, symbol, side, REFUSED_LIVE_ORDER, None, 0.0, quantity,
                 None, 0.0, None, "a live order is filled by the venue, not simulated here",
@@ -939,6 +949,7 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "refused_feed_jump": simulator.standing.refused_feed_jump,
         "feed_jumps_cleared": simulator.standing.feed_jumps_cleared,
         "refused_no_price": simulator.standing.refused_no_price,
+        "refused_live_order": simulator.standing.refused_live_order,
         # The three below were counted and never published until 2026-09-05, which
         # is why 325 orders were refused on 2026-09-04 with nothing on any board
         # saying so. A refusal nobody can read is the same as a silent one: the

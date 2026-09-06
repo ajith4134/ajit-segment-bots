@@ -28,20 +28,26 @@ import time
 
 import pytest
 
-from tests.conftest import most_recent_day_the_tape_holds
+from tests.conftest import (
+    busiest_upstox_option_chain, most_recent_upstox_trading_day, upstox_trades_for,
+)
 
 from runtime.bus import Inbox, Publisher
 from runtime.part_launcher import PartLauncher
-from runtime.tape import read_payload, read_tape_index
-from runtime.venues.adapter_registry import load_venue_adapter
 from runtime.wiring_plan import derive_wiring
 
-TAPE_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
-# The venues whose captured prints this test replays. Still the crypto pair: the
-# chain under test is venue-agnostic (T-4) and these are the only tapes with the
-# trade-by-trade depth it needs. Porting to the Upstox broker tape is real work
-# and outstanding -- it is a different tape shape with no VenueAdapter behind it.
-CAPTURED_VENUES = ("binance-usdm", "bybit-linear")
+# Ported to the Upstox tape on 2026-09-06. It replayed binance-usdm and
+# bybit-linear until then, with a comment saying the port was "real work and
+# outstanding" -- and the crypto spine has been inactive since 2026-09-01, so
+# the prints it replayed were a frozen artefact of a retired venue. The
+# temporary goal of 2026-09-05 says convert or replace every crypto-shaped part
+# with the Indian-market equivalent, and a test is a part of the system too:
+# one that can only be exercised by a venue this project no longer trades
+# proves nothing about the bots that exist.
+#
+# `tests/conftest.upstox_trades_for` runs the captured Upstox prints through
+# `broker-market-data-bridge` -- the part the live spine uses -- so what is
+# replayed here is what the running system would actually have seen.
 THREAD_CEILING = 1
 PLACEMENT_DEADLINE_SECONDS = 0.5
 PLACEMENT_POLL_SECONDS = 0.002
@@ -71,7 +77,14 @@ BULL = (
     "bull-opinion-composer",
 )
 
-SYMBOLS_PER_VENUE = 6
+# How many of the busiest chain's contracts to replay. Twelve, which is what the
+# crypto version replayed in total (six symbols on each of two venues) and is
+# what the scanner's windows need: an observation is a sampled level at 4 Hz, so
+# 256 of them is 64 seconds of replay per symbol. Measured on the captured tape
+# of 2026-09-04 -- six NIFTY contracts carry 28,931 prints and the windows do not
+# fill in the time that replays for; twelve carry 68,609, against the 72,000 the
+# crypto pair supplied.
+INSTRUMENTS_REPLAYED = 12
 # The scanner fills 256-observation windows, and since 2026-08-24 an observation
 # is a sampled level, not a print: frames arrive four times a second whatever the
 # replay's print rate, so the windows fill with wall time. 256 observations at
@@ -88,48 +101,35 @@ REPLAY_PAUSE_SECONDS = 0.02
 PATIENCE_SECONDS = 240.0
 
 
-def busiest_symbols(venue_id: str, day: str, count: int) -> list[str]:
-    venue_root = TAPE_ROOT / venue_id
-    if not venue_root.is_dir():
-        return []
-    sized = []
-    for symbol_directory in venue_root.iterdir():
-        index_path = symbol_directory / f"{day}.index"
-        if index_path.exists() and index_path.stat().st_size > 0:
-            sized.append((index_path.stat().st_size, symbol_directory.name))
-    sized.sort(reverse=True)
-    return [symbol for _size, symbol in sized[:count]]
-
-
 @pytest.fixture(scope="module")
 def todays_trades():
-    # The latest day the tape actually holds, not today. The crypto spine went
-    # inactive on 2026-09-01 with the pivot to Indian markets, so "today" has had
-    # no prints since and these tests errored on every run. See
-    # most_recent_day_the_tape_holds for why the day may move without weakening
-    # what is proved.
-    day = most_recent_day_the_tape_holds(CAPTURED_VENUES)
+    """Real captured Upstox prints, as `market-data`.
+
+    The newest day the tape holds enough prints on, which is not simply the
+    newest day: the Indian market is shut at weekends and the feed keeps its
+    connection open through them, so a Sunday holds a handful of records
+    restating Friday's last price. Measured 2026-09-06, the six busiest NSE_FO
+    contracts held 42 records of which 7 carried a real price, against 34,688
+    on Friday the 4th.
+    """
+    day = most_recent_upstox_trading_day(minimum_prints=TRADES_PER_SYMBOL,
+                                         instruments=INSTRUMENTS_REPLAYED)
     if day is None:
         pytest.skip(
-            "no captured tape for any of "
-            f"{CAPTURED_VENUES}; these tests replay real venue prints (RL-063) "
-            "and there are none on this machine to replay"
+            "no captured Upstox day holds enough prints to replay; this test "
+            "replays real broker prints (RL-063) and there are none on this "
+            "machine with a session's worth of depth"
         )
-    merged = []
-    for venue_id in CAPTURED_VENUES:
-        adapter = load_venue_adapter(venue_id)
-        for symbol in busiest_symbols(venue_id, day, SYMBOLS_PER_VENUE):
-            index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
-            blob_path = TAPE_ROOT / venue_id / symbol / f"{day}.blob"
-            read = 0
-            for record in read_tape_index(index_path):
-                for trade in adapter.read_trades(read_payload(blob_path, record)):
-                    merged.append(trade)
-                    read += 1
-                if read >= TRADES_PER_SYMBOL:
-                    break
-    merged.sort(key=lambda trade: trade.venue_time_ns)
-    assert len(merged) > TRADES_PER_SYMBOL, "the tape holds too little of today to run this"
+    # One underlying's chain, not the busiest contracts outright: two options on
+    # different underlyings have no reason to move together, and the scanner in
+    # front of this test is a pair finder. Measured 2026-09-04 -- the six busiest
+    # NSE_FO contracts spanned four underlyings and cointegrated 0 pairs, the six
+    # busiest NIFTY contracts cointegrated 6.
+    instruments = busiest_upstox_option_chain(day, INSTRUMENTS_REPLAYED)
+    merged = upstox_trades_for(day, instruments, TRADES_PER_SYMBOL)
+    assert len(merged) > TRADES_PER_SYMBOL, (
+        f"the Upstox tape holds only {len(merged)} replayable prints for {day}"
+    )
     return merged
 
 

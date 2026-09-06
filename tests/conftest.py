@@ -195,3 +195,179 @@ def most_recent_day_the_tape_holds(venue_ids, tape_root=None) -> str | None:
                 if index_path.stat().st_size > 0:
                     days.add(index_path.stem.split(".")[0])
     return max(days) if days else None
+
+
+# --- the Upstox tape, for tests that used to replay the crypto pair -----------
+
+UPSTOX_VENUE = "upstox"
+UPSTOX_INSTRUMENT_MASTER = (
+    pathlib.Path.home()
+    / ".local/share/ajit-segment-bots/instrument-master/complete.json.gz"
+)
+
+
+def upstox_days_newest_first(tape_root=None) -> list[str]:
+    """Every day the Upstox tape holds an index for, newest first."""
+    root = (tape_root or pathlib.Path.home() / ".local/share/ajit-segment-bots/tape") / UPSTOX_VENUE
+    if not root.is_dir():
+        return []
+    days = set()
+    for instrument_directory in root.iterdir():
+        for index_path in instrument_directory.glob("*.index"):
+            if index_path.stat().st_size > 0:
+                days.add(index_path.stem.split(".")[0])
+    return sorted(days, reverse=True)
+
+
+def most_recent_upstox_trading_day(minimum_prints: int, instruments: int = 6,
+                                   tape_root=None) -> str | None:
+    """The newest day the tape holds enough real prints on to replay.
+
+    **Not simply the newest day.** The Indian market is shut at weekends and the
+    feed keeps its connection open through them, so a Saturday or Sunday holds a
+    handful of records restating Friday's last price -- measured 2026-09-06, the
+    six busiest NSE_FO instruments held 42 records of which 7 carried a real
+    price, against 34,688 on Friday the 4th. A replay of the weekend is a replay
+    of nothing, and it would fail as though the chain were broken.
+
+    Returns None rather than guessing when no day qualifies, so a caller can skip
+    with that as the stated reason -- the same contract
+    `most_recent_day_the_tape_holds` already has.
+    """
+    for day in upstox_days_newest_first(tape_root=tape_root):
+        keys = busiest_upstox_instruments(day, instruments, tape_root=tape_root)
+        if not keys:
+            continue
+        if len(upstox_trades_for(day, keys, minimum_prints, tape_root=tape_root)) >= minimum_prints:
+            return day
+    return None
+
+
+def upstox_listings_by_key(master_path=None) -> dict:
+    """Upstox's own instrument master, parsed by Upstox's own adapter.
+
+    Parsed rather than restated: `read_instrument_listings` is where paise become
+    rupees and where every field this project reads gets its name, and a test that
+    built `InstrumentListing` by hand would be testing a second implementation of
+    the thing under test.
+    """
+    import gzip
+    import json as _json
+
+    from runtime.brokers.upstox import UpstoxAdapter
+
+    path = master_path or UPSTOX_INSTRUMENT_MASTER
+    if not path.exists():
+        return {}
+    rows = _json.loads(gzip.open(path, "rt", encoding="utf-8").read())
+    return {
+        listing.instrument_key: listing
+        for listing in UpstoxAdapter().read_instrument_listings(rows)
+    }
+
+
+def busiest_upstox_instruments(day: str, count: int, segments=("NSE_FO",), tape_root=None) -> list:
+    """The instrument keys with the most captured prints that day, by segment.
+
+    Segment-filtered because the subscription carries plenty a segment bot does
+    not trade, and a test that replayed a currency-derivative chain would prove
+    nothing about the bots that exist.
+    """
+    root = (tape_root or pathlib.Path.home() / ".local/share/ajit-segment-bots/tape") / UPSTOX_VENUE
+    if not root.is_dir():
+        return []
+    sized = []
+    for instrument_directory in root.iterdir():
+        if segments and not instrument_directory.name.split("|")[0] in segments:
+            continue
+        index_path = instrument_directory / f"{day}.index"
+        if index_path.exists() and index_path.stat().st_size > 0:
+            sized.append((index_path.stat().st_size, instrument_directory.name))
+    sized.sort(reverse=True)
+    return [key for _size, key in sized[:count]]
+
+
+def busiest_upstox_option_chain(day: str, count: int, tape_root=None) -> list[str]:
+    """The day's busiest contracts that share ONE underlying, as a real chain.
+
+    Selecting the busiest contracts outright picks them across unrelated
+    underlyings, and two options on different underlyings have no reason to move
+    together. `cointegration-pair-finder` then finds nothing and every part
+    behind it correctly raises nothing -- which reads as a broken scanner and is
+    not one.
+
+    Measured on the captured tape of 2026-09-04: the six busiest NSE_FO
+    contracts spanned four underlyings and produced **0 cointegrated pairs**,
+    while the six busiest NIFTY contracts produced **6 tradeable ones**. An
+    option chain is also what the index-options bot actually trades, so this is
+    the shape the test should have been using.
+    """
+    listings = upstox_listings_by_key()
+    ranked = busiest_upstox_instruments(day, count * 20, tape_root=tape_root)
+    by_underlying: dict[str, list[str]] = {}
+    for key in ranked:
+        listing = listings.get(key)
+        underlying = getattr(listing, "underlying_symbol", None) if listing else None
+        if underlying:
+            by_underlying.setdefault(underlying, []).append(key)
+    if not by_underlying:
+        return []
+    # The chain with the most captured contracts, in the order they were ranked,
+    # so what is replayed is the busiest part of the busiest chain.
+    busiest = max(by_underlying.values(), key=len)
+    return busiest[:count]
+
+
+def upstox_trades_for(day, instrument_keys, trades_per_instrument, tape_root=None) -> list:
+    """Real captured Upstox prints, as `market-data`, oldest first.
+
+    Runs the prints through `BrokerMarketDataBridge` -- the part the live spine
+    uses -- rather than building `NormalisedTrade` here, so a test replays what
+    the running system would actually have seen. That is also what carries the
+    2026-09-06 correction: Upstox states no size on about three quarters of its
+    LTP updates and none at all on an index, and the bridge passes those through
+    with `quantity=None` instead of dropping them.
+    """
+    import json as _json
+
+    from parts.market_data_feed.broker_market_data_bridge import BrokerMarketDataBridge
+    from runtime.brokers.broker_adapter import LtpUpdate
+    from runtime.tape import read_payload, read_tape_index
+
+    root = (tape_root or pathlib.Path.home() / ".local/share/ajit-segment-bots/tape") / UPSTOX_VENUE
+    listings = upstox_listings_by_key()
+    bridge = BrokerMarketDataBridge(held_instrument_limit=max(1, len(instrument_keys)))
+    for key in instrument_keys:
+        listing = listings.get(key)
+        if listing is not None:
+            bridge.observe_listing(listing)
+
+    merged = []
+    for key in instrument_keys:
+        index_path = root / key / f"{day}.index"
+        blob_path = root / key / f"{day}.blob"
+        if not index_path.exists():
+            continue
+        read = 0
+        for record in read_tape_index(index_path):
+            payload = _json.loads(read_payload(blob_path, record))
+            update = LtpUpdate(
+                instrument_key=payload["instrument_key"],
+                last_traded_price=payload["last_traded_price"],
+                last_traded_quantity=payload.get("last_traded_quantity"),
+                last_traded_time_ms=payload["last_traded_time_ms"],
+                close_price=payload.get("close_price"),
+                broker_time_ns=payload["broker_time_ns"],
+            )
+            trade = bridge.trade_for(update)
+            # A record with no price and no venue time is the shut market's own
+            # restatement, not a print: the feed holds its connection through a
+            # weekend and Upstox answers with zeroes. Replaying those as trades
+            # would put a price of 0.00 in front of every part downstream.
+            if trade is not None and trade.price > 0 and trade.venue_time_ns > 0:
+                merged.append(trade)
+                read += 1
+            if read >= trades_per_instrument:
+                break
+    merged.sort(key=lambda trade: trade.venue_time_ns)
+    return merged

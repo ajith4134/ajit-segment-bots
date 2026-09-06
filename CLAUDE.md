@@ -17,6 +17,41 @@ the point, not an afterthought. The full statement, in the user's own words, is
 in `docs/goal.md`'s second TEMPORARY GOAL section (2026-09-05). It does not
 replace the first temporary goal below; both are active.
 
+**When the market is shut, replay real history — never a snapshot of a shut
+market.** Standing instruction from the operator, 2026-09-06:
+
+    python3 operate/replay_a_captured_session.py          # history by default when shut
+    python3 operate/replay_a_captured_session.py --day 2026-09-04   # the tape instead
+
+The tape is only a few days deep and holds only what the feed was subscribed to;
+Upstox serves one-minute bars from **January 2022** for equities, indices and
+every currently listed option, so there is always a real session to replay. The
+replay asks `market-session-calendar` — the live spine's own answer — and an
+unmeasured session counts as shut. A bar close is one price a minute rather than
+every print, so the tape stays the finer evidence where it exists.
+
+**The historical quota is real and it is not per-second.** After a day of
+fetching, Upstox answers HTTP 429 and keeps refusing through four backoffs
+totalling 200 seconds. Fetched ranges are cached under
+`~/.local/share/ajit-segment-bots/history/` because a past session never
+changes — a replay of a given day is then free to repeat, which is what makes
+history usable as the default rather than as a one-shot.
+
+**Run `python3 dashboard/measure_objectives.py` before deciding what to work
+on.** It states both temporary goals as measured numbers — whether any segment
+bot has actually traded (`fills_applied` per paper account), how many of the 29
+features are walked, how much of the diagram carries, and **how many files still
+name a crypto venue**. That last number is a drift guard with a reason: on
+2026-09-06 a session spent its effort working out which Binance symbols happened
+to cointegrate, tuning a crypto test, when the standing instruction was to
+replace it with the Indian-market equivalent. Nothing objected because nothing
+was counting. It counts **code**, not comments — a file ported to Upstox keeps
+a note saying what it was ported from, and that is history rather than drift;
+counting both together gives a figure that never falls however much is
+converted. Baseline 2026-09-06 after the first two integration tests were
+ported: **107 files** (parts 14, runtime 1, tests 82, operate 1, dashboard 9).
+If that number is not falling, the audit is not doing what it was asked to do.
+
 **`docs/feature-audit.md` is the ledger this goal is walked with** — which of
 the 29 has been walked, what was measured in it, what was found and fixed, and
 what it is still missing. Read it before walking anything and append to it;

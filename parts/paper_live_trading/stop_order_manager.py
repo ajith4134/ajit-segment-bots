@@ -100,6 +100,16 @@ class StopOrderAction:
     previous_stop_price: float | None
     reason: str
     decided_at_ns: int
+    # Whose money this exit spends, carried for exactly the reason
+    # `Position.segment` is: the exits are placed long after the decision that
+    # opened the position, and every part that reads money reads one level per
+    # segment since 2026-09-05. An exit that named no segment was handed no
+    # money mode by `level_for_segment` -- correctly, because with three
+    # segments built there is nothing to fall back to -- and
+    # paper-fill-simulator then refused it as a live order. Measured 2026-09-06:
+    # the entry filled, both exits were refused, and the position was left with
+    # no stop and no target on it.
+    segment: str = ""
 
     @property
     def is_actionable(self) -> bool:
@@ -181,6 +191,8 @@ class StopOrderManager:
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
         self._resting: dict[tuple[str, str], _RestingStop] = {}
+        # Whose money is in each held position, so its exits can name it.
+        self._segment_of: dict[tuple[str, str], str] = {}
         self._sequence = 0
         self.standing = ManagerStanding()
 
@@ -550,6 +562,21 @@ class StopOrderManager:
         held = self._resting.get((venue_id, symbol))
         return held.target_quantity if held else None
 
+    def observe_segment(self, venue_id: str, symbol: str, segment: str) -> None:
+        """Whose money is in this position, so its exits can name it.
+
+        Held here rather than beside the manager because every action it
+        produces needs it and there are fifteen places that produce one: a map
+        kept alongside would be a second source of the same fact, free to
+        disagree with this one.
+        """
+        if segment:
+            self._segment_of[(venue_id, symbol)] = segment
+
+    def forget_segment(self, venue_id: str, symbol: str) -> None:
+        """Dropped when the position is gone, so the map cannot grow forever."""
+        self._segment_of.pop((venue_id, symbol), None)
+
     def _action(
         self, venue_id, symbol, action, destination, place_id, cancel_id,
         side, quantity, stop_price, previous, reason
@@ -559,6 +586,7 @@ class StopOrderManager:
             place_order_id=place_id, cancel_order_id=cancel_id, side=side,
             quantity=quantity, stop_price=stop_price, previous_stop_price=previous,
             reason=reason, decided_at_ns=self._now_ns(),
+            segment=self._segment_of.get((venue_id, symbol), ""),
         )
 
 
@@ -863,10 +891,14 @@ def start_part(context) -> int:
                 held_quantity.pop(key, None)
                 held_direction.pop(key, None)
                 held_segment.pop(key, None)
+                manager.forget_segment(*key)
             else:
                 held_quantity[key] = position.quantity
                 held_direction[key] = position.direction
                 held_segment[key] = getattr(position, "segment", "")
+                # The manager stamps every action it produces with this, so the
+                # exit order names whose money closes the position.
+                manager.observe_segment(*key, getattr(position, "segment", ""))
 
         readable = []
         for adjustment in adjustments.payloads():
@@ -1013,4 +1045,8 @@ def as_order_request(action: StopOrderAction):
         reason=action.reason,
         routed_at_ns=action.decided_at_ns,
         cancels_client_order_id=action.cancel_order_id,
+        # Whose money closes this position. Without it the book resolves no
+        # money mode on a spine with more than one segment and refuses the exit
+        # as a live order, which leaves a real position with no stop.
+        segment=action.segment,
     )
