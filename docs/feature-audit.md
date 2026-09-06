@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **12 of 29** |
+| features walked | **14 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -66,8 +66,8 @@ come before the ones that learn from a trade that has not happened yet.
 | 11 | `bear-bot` | **walked 2026-09-06** — identical shape to bull, 129 carrying / 75 idle |
 | 12 | `profit-tailgating-bot` | **walked 2026-09-06** — same funnel; peers stay isolated (R-03 holds) |
 | 13 | `prediction` | not walked |
-| 14 | `ledger` | not walked |
-| 15 | `observability` | not walked |
+| 14 | `ledger` | **walked 2026-09-06** — 5 of 6 running, every idle wire downstream of a trade; the off part is crypto funding |
+| 15 | `observability` | **walked 2026-09-06** — 755 wires carrying, the most of any feature; `clock-skew-monitor` converted off crypto and switched back on |
 | 16 | `resource-governor` | not walked |
 | 17 | `closed-trade-decoding` | not walked |
 | 18 | `learning-loop` | not walked |
@@ -910,3 +910,51 @@ Two changes, both measured on the live spine:
    fault about its neighbours. The treatment caused the disease. It is still
    escalated (129 escalations), so nothing is hidden, and the ceiling stays for
    the crashes it was meant for.
+
+---
+
+## 14 and 15 — `ledger` and `observability`, walked 2026-09-06
+
+`observability` carries **755 wires**, more than any other feature, and 9 of 10
+parts run. `ledger` is 5 of 6, with every idle wire downstream of a trade that
+has not happened — the recorders are waiting for `fill`, `closed-trade` and
+`journal-entry`, which is correct.
+
+Each has exactly one off part, and they are opposite cases.
+`funding-settlement-recorder` is crypto perpetual funding: correctly off, no
+Indian equivalent needed, an Indian option has no funding leg.
+`clock-skew-monitor` was not.
+
+### The part that would notice this machine's clock drifting had never run
+
+It consumed exactly one type, `raw-venue-order-status`, whose only producers are
+`ccxt-order-router` and `order-state-poller` — both crypto, both off. So it was
+taken off the spine with that group, and the note explaining why is still in
+`run_live_spine.py`.
+
+Its own docstring says what that costs: *"the failure is quiet at first — an
+occasional rejection that looks like bad luck — and then total: once drift passes
+the window, every private order fails and the system is unable to trade while
+appearing entirely healthy."*
+
+**Half of it was never crypto.** `observe_venue_time(venue_id, venue_time_ns,
+local_time_ns)` takes any stamped message and records the offset. Only the input
+was crypto-shaped, and `broker-market-data` carries Upstox's own
+`broker_time_ns` on every LTP update.
+
+The motivation is not hypothetical. **Two timestamp traps were found by hand on
+this one day**: Upstox's historical rows are `+05:30`, and NSE's intraday chart
+writes IST wall-clock as though it were an epoch (3.88% disagreement against
+this project's own tape read as UTC, 0.30% shifted back). Neither would have
+been caught by anything running.
+
+Rewired to read both — the rejection half is kept, not deleted, because a venue
+saying "your timestamp is wrong" is the sharpest signal there is the day a real
+order path exists — and switched back on. 324 parts reporting, up from 323.
+
+**Not yet measuring, and the reason is the market.** `broker-market-data`
+published **0 messages in 30 seconds** while this was checked: the feed sends
+its snapshot at connect and then goes quiet on a shut exchange, and the monitor
+starts after the feed so it missed that burst. Its standing reads
+`venues_watched: 0`, which is the honest state rather than a healthy-looking
+zero. Monday's first tick is what makes it measure.

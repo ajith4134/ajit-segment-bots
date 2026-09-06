@@ -895,6 +895,7 @@
         "board-link",
         "board-snapshot",
         "broker-account-funds",
+        "broker-market-data",
         "capital-allotment",
         "capital-settings-verdict",
         "capital-utilisation",
@@ -934,9 +935,9 @@
       "scope": "global",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-06",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -8549,6 +8550,7 @@
       "role": "raise an alert when timestamp-drift rejections recur, before every private order starts failing",
       "category": "observability",
       "consumes": [
+        "broker-market-data",
         "raw-venue-order-status"
       ],
       "produces": [
@@ -8565,7 +8567,13 @@
       "evidence": "docs/research/repo-harvest/ccxt.md binance -1021 InvalidNonce",
       "resource_class": "io-bound",
       "rate_risk": "latency-only",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/clock-skew-monitor-watches-the-broker-clock.md"
+        }
+      ]
     },
     {
       "id": "intra-bar-fill-sequencer",
@@ -14724,6 +14732,14 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_declared_inputs_that_were_never_read.py",
     "proposal": [
       "docs/proposals/a-declared-input-must-actually-be-read.md"
+    ]
+  },
+  "_proposal_2026-09-06_clock_skew_watches_the_broker": {
+    "what": "clock-skew-monitor reads broker-market-data's own broker_time_ns beside the crypto order-status stream it had, so the offset between this machine and the broker is measured continuously instead of never. Two timestamp traps were found by hand on this one day -- Upstox's +05:30 historical rows and NSE's IST-as-epoch intraday chart -- and nothing running would have caught either. The rejection half is kept rather than deleted: a venue saying 'your timestamp is wrong' is the sharpest signal there is, the day a real order path exists.",
+    "origin": "found by Claude walking observability, feature 15 of the 29 under the audit temporary goal of 2026-09-05 (docs/feature-audit.md); item 3 is convert or replace, never leave in place",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_clock_skew_watches_the_broker.py",
+    "proposal": [
+      "docs/proposals/clock-skew-monitor-watches-the-broker-clock.md"
     ]
   }
 }

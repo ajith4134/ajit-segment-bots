@@ -23,10 +23,14 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
 PART_ID = "clock-skew-monitor"
+# The venue whose clock this watches by default. Named rather than taken from a
+# message, so a reading is attributable to a broker even when the offset is what
+# is wrong with it.
+BROKER_VENUE_ID = "upstox"
 
 PART_DECLARATION = PartDeclaration(
     part_id="clock-skew-monitor",
-    consumes=("raw-venue-order-status",),
+    consumes=("broker-market-data", "raw-venue-order-status"),
     produces=("alert", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -229,13 +233,28 @@ def run_clock_skew_monitor(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    A raw venue status that carries the venue's server time is a clock
-    reading against the time it was received; a status whose reason is a
-    timestamp rejection is counted as one. No venue socket is held in phase 1,
-    so nothing arrives and nothing is alerted -- the readings say so.
+    Two readings, and they answer different halves of the same question.
+
+    **The broker's own stamp on every price**, which is the one that carries
+    today: `broker-market-data` arrives thousands of times a second with
+    `broker_time_ns` on it, and the distance between that and this machine's
+    clock is the offset. Added 2026-09-06 -- until then this part consumed only
+    `raw-venue-order-status`, whose producers are both crypto and both off, so
+    the one thing that would notice this clock drifting had never run. Two
+    timestamp traps were found by hand that same day (Upstox's +05:30 historical
+    rows, NSE's IST-written-as-an-epoch intraday chart) and nothing running would
+    have caught either.
+
+    **A venue saying the timestamp is wrong**, which is sharper and carries
+    nothing yet. `raw-venue-order-status` is kept rather than dropped: a
+    rejection naming a clock is the strongest evidence there is, the day a real
+    order path exists.
     """
+    import time as _time
+
     from runtime.input_assembly import Batch
 
+    prices = Batch(read=context.bus.reader("broker-market-data"))
     statuses = Batch(read=context.bus.reader("raw-venue-order-status"))
     publish_alerts = context.bus.publisher_for("alert")
     monitor = ClockSkewMonitor(
@@ -245,6 +264,15 @@ def start_part(context) -> int:
     )
 
     def read_statuses(_monitor) -> None:
+        for update in prices.payloads():
+            # The broker's stamp against the moment this machine looked. Read
+            # per message rather than once a tick: the offset is what is being
+            # measured, and a tick's own duration would be folded into it.
+            broker_time_ns = getattr(update, "broker_time_ns", None)
+            if broker_time_ns:
+                monitor.observe_venue_time(
+                    BROKER_VENUE_ID, int(broker_time_ns), _time.time_ns(),
+                )
         for status in statuses.payloads():
             response = status.venue_response if isinstance(status.venue_response, dict) else {}
             venue_time = response.get("serverTime") or response.get("time") or response.get("ts")

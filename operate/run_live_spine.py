@@ -608,11 +608,20 @@ LIVE_SPINE = (
     "market-anomaly-detector",
     "trading-halt-decider",
     "alert-raiser",
-    # ccxt-order-router and clock-skew-monitor are off: real Upstox order
-    # placement is a separate, not-yet-built body of work (a broker-order-
-    # router part does not exist yet -- runtime/brokers/upstox.py's own
-    # build_order_request_payload/read_order_result are proven but
-    # deliberately not wired to a part, per that commit's own reasoning).
+    # ccxt-order-router stays off: real Upstox order placement is a separate,
+    # not-yet-built body of work (a broker-order-router part does not exist yet
+    # -- runtime/brokers/upstox.py's own build_order_request_payload/
+    # read_order_result are proven but deliberately not wired to a part, per
+    # that commit's own reasoning).
+    #
+    # clock-skew-monitor comes back on (2026-09-06). It was off with that group
+    # because its only input was `raw-venue-order-status`, which no live part
+    # produces. It now also reads `broker-market-data`, whose `broker_time_ns`
+    # is Upstox's own stamp on every price, so the offset between this machine's
+    # clock and the broker's is measured continuously rather than never. Two
+    # timestamp traps were found by hand on the day this was rewired and nothing
+    # running would have caught either.
+    "clock-skew-monitor",
     "fund-conservation-auditor",
     "self-model-reporter",
     "decision-cost-accountant",
