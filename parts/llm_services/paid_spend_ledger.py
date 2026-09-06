@@ -13,8 +13,19 @@ irreversible thing hard to lose track of.
 - **The period is calendar-shaped, not a rolling window.** Spend limits are agreed
   per day or per month, so the ledger resets on that boundary and reports the
   boundary, rather than on a sliding 24 hours that never lines up with a bill.
-- **Results are in USDT (RL-028), and so is this.** Cost and PnL that are not in the
-  same unit cannot be compared, and the comparison is the entire point.
+- **This is in US dollars, because that is what the providers bill in.** The
+  reasoning here used to be "results are in USDT (RL-028), and so is this" --
+  cost and PnL in one unit so they can be compared, which is the right instinct
+  and was reached by making the cost follow the account. That stopped working
+  twice over on 2026-09-06: the account settles in **INR** now, not USDT, and an
+  LLM provider has never billed in either. Naming the cost as USDT made it
+  neither the currency it is charged in nor the currency the account keeps.
+
+  So it says USD, which is true, and **a comparison against PnL now needs a
+  stated rate** rather than an assumed identity. That is a real gap and it is
+  named rather than papered over: nothing here converts, and a caller that wants
+  cost beside PnL has to say what the rate was (`observe_conversion_rate` on
+  pnl-attributor is the shape that already exists for this).
 
 The ledger reports; the router refuses. Keeping the refusal in one place means there
 is one policy rather than two that can disagree.
@@ -45,7 +56,10 @@ NOT_METERED = "this-call-cost-no-money"
 ALREADY_RECORDED = "already-in-the-ledger"
 CEILING_REACHED = "the-period-ceiling-is-reached"
 
-QUOTE_CURRENCY = "USDT"
+# What the LLM providers actually bill in. Not the account's settlement
+# currency: those are different currencies and pretending otherwise is what made
+# this USDT while the account kept rupees.
+QUOTE_CURRENCY = "USD"
 
 
 @dataclass(frozen=True)

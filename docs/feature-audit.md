@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **19 of 29** |
+| features walked | **29 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -71,16 +71,16 @@ come before the ones that learn from a trade that has not happened yet.
 | 16 | `resource-governor` | **walked 2026-09-06** — 14/14 running, 491 carrying; nothing being shed, which is why `switch-record` is quiet |
 | 17 | `closed-trade-decoding` | **walked 2026-09-06** — 20/20 running, no gaps; idle downstream of a closed trade |
 | 18 | `learning-loop` | **walked 2026-09-06** — 18/18 running, no gaps; same |
-| 19 | `intelligence` | not walked |
-| 20 | `knowledge` | not walked |
-| 21 | `hypothesis` | not walked |
-| 22 | `ai-brain` | not walked |
-| 23 | `skills` | not walked |
-| 24 | `backtesting` | not walked |
-| 25 | `llm-foundation` | not walked |
-| 26 | `llm-services` | not walked |
-| 27 | `online-research` | not walked |
-| 28 | `autonomous` | not walked |
+| 19 | `intelligence` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 20 | `knowledge` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 21 | `hypothesis` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 22 | `ai-brain` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 23 | `skills` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 24 | `backtesting` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 25 | `llm-foundation` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 26 | `llm-services` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 27 | `online-research` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
+| 28 | `autonomous` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
 | 29 | `stock-market-news-data` | **walked 2026-09-06** — 5 of 29 built; the 24 missing are one coherent subsystem, mapped below |
 
 ---
@@ -1015,3 +1015,66 @@ news item. The one part outside this feature that is blocked by it is
 until essentially the whole subsystem exists. Building 24 parts and seven
 external integrations the day before the first live session would be the wrong
 trade; recording it as a costed plan is the right one.
+
+---
+
+## 19-28 — the intelligence, knowledge and LLM group, walked 2026-09-06
+
+All ten are **fully running** — every declared part launchable and alive — with
+no orphan types, no unlaunchable parts and no starved consumers. Their idle
+wires are downstream of a closed trade or an LLM call that has not been made.
+`autonomous` carries 2,665 wires, second only to observability.
+
+Because nothing was structurally wrong in any of them, the walk that mattered
+here was the crypto scan: which of their parts still reason in crypto's terms.
+Across all ten, **three**:
+
+- **`market-event-reader` — a symbol pattern that can never match an Indian
+  instrument.** `SYMBOL_PATTERN` is
+  `\b[0-9]{0,4}[A-Z]{2,10}(?:USDT|USDC|BUSD|PERP|-PERP)\b`, which matches
+  `BTCUSDT` and `ETH-PERP` and nothing this project trades. A delisting or a
+  contract change naming RELIANCE or NIFTY would be classified correctly and
+  attached to **no symbol at all**.
+
+  It is *not* fixed by loosening the regex, and the part's own comment says why:
+  "a looser pattern pulls ordinary words out of prose and attaches an event to a
+  symbol nobody mentioned." That is a far worse problem in Indian markets than
+  in crypto, because Indian tickers *are* ordinary words — PRESTIGE, CHEMICAL,
+  MARUTI. The right shape is resolution against the instrument master, which
+  this project already has, rather than a pattern over prose. Recorded rather
+  than built, because its input is dead in both directions: its producer
+  `exchange-announcement-reader` reports `rows_seen: 0`, so the branch carries
+  nothing today whatever the pattern says.
+
+- **`paid-spend-ledger` was counting LLM spend in USDT.** Fixed. The reasoning
+  in its docstring was "results are in USDT (RL-028), and so is this" — cost and
+  PnL in one unit so they can be compared, which is the right instinct reached by
+  making the cost follow the account. It stopped working twice over on this date:
+  the account settles in **INR** now, and an LLM provider has never billed in
+  either. It says **USD**, which is what is actually charged, and the docstring
+  now names the consequence rather than hiding it — comparing cost against PnL
+  needs a stated rate, and nothing here converts.
+
+- **`decision-cost-accountant`** is crypto-shaped only through the
+  `usdt-pnl-statement` type name and its `net_pnl_usdt` field, which is the
+  rename already recorded under feature 8 as a deliberate deferral.
+
+## Item 4 — is 29 foundational features enough?
+
+**Yes, on the evidence of walking all 29.** Nothing found in this audit wanted a
+home that did not exist:
+
+- Every type consumed has a producer somewhere in the 29 — the orphan-type scan
+  returns **zero**.
+- The two genuinely missing capabilities both belong inside features that
+  already exist: `broker-quote-bridge` went into `market-data-feed` (built), and
+  the Indian order path belongs in `broker-adapter` / `execution-venue-adapter`
+  (not built, recorded under feature 3).
+- The one feature that is mostly unbuilt, `stock-market-news-data`, is not a
+  missing *feature* — it is 24 missing parts inside a declared one, mapped in
+  dependency order under feature 29.
+
+The honest qualifier: this answers "does the blueprint have a place for
+everything the audit found", which is what item 4 asks. It does not answer
+"will a thirtieth be wanted once the bots have traded" — that is a question only
+a live session can raise, and Monday is the first one.
