@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **2 of 29** |
+| features walked | **4 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -55,8 +55,8 @@ come before the ones that learn from a trade that has not happened yet.
 |---|---|---|
 | 1 | `market-data-feed` | **walked 2026-09-06** — 4 defects found and fixed (bridges verified publishing); `broker-quote-bridge` named as missing |
 | 2 | `broker-adapter` | **walked 2026-09-06** — every Upstox REST call in the project was Cloudflare-blocked; 3 parts fixed, feature now fully carrying |
-| 3 | `execution-venue-adapter` | not walked |
-| 4 | `paper-live-trading` | not walked |
+| 3 | `execution-venue-adapter` | **walked 2026-09-06** — 9 of 11 are the crypto real-money path, correctly off for paper trading; no Indian equivalent exists yet |
+| 4 | `paper-live-trading` | **walked 2026-09-06** — chain is idle-because-no-trade, not broken; `implied-vol-reader` converted off crypto |
 | 5 | `opportunity-scanner` | not walked |
 | 6 | `segment-bot` | not walked |
 | 7 | `risk-capital-allocation` | not walked |
@@ -350,3 +350,142 @@ are off elsewhere in the blueprint, not to anything inside this feature.
   The adapter contract is there and Upstox is the only implementation, so there
   is no fallback if its feed or API goes down mid-session. That is planned work
   rather than a defect, but this feature is where it lands.
+
+---
+
+## 3. `execution-venue-adapter` — walked 2026-09-06 (market closed)
+
+11 parts, 2 running. 27 wires carrying, 10 idle, 176 not measured.
+
+**Nine of the eleven are the crypto real-money execution path** —
+`ccxt-order-router`, `order-state-poller`, `order-resubmitter`,
+`order-reject-classifier`, `order-not-found-debouncer`,
+`venue-order-status-translator`, `venue-balance-reader`,
+`venue-position-reader`, `venue-rate-budgeter`. All off, and **correctly off**:
+in paper mode the path is `order-destination-router → order-request →
+paper-fill-simulator → fill`, which touches none of them.
+
+So this feature is not broken; it is a real-money path with **no Indian
+equivalent built at all**. `broker-adapter` has a funds reader, a history
+reader, a catalogue reader, a margin quoter and a feed reader, and no order
+router, no order-status poller and no fill translator. That is correct
+sequencing — `docs/goal.md` item 7 is paper before live, and SEBI's Feb 2025
+algo-ID and static-IP requirement blocks live API order placement regardless —
+but it means **Phase A's "complete end-to-end" is not complete on the execution
+side**, and the work has not started. Named here so it is a known gap rather
+than a surprise.
+
+The two running parts (`limit-price-walker`, `resting-order-cancel-policy`) show
+`order-request` not carrying, which is `NOTHING YET`: no order has been placed
+on this live run.
+
+## 4. `paper-live-trading` — walked 2026-09-06 (market closed)
+
+10 parts, 9 running (`paper-liquidation-simulator` is deliberately off — an
+intraday equity position is squared off by the broker, not liquidated at a
+price). 126 wires carrying, 49 idle, 49 not measured.
+
+Every idle wire in the order chain is idle for one reason: **no order has been
+placed on this live run**, so `bounded-order`, `stamped-order`, `order-request`,
+`delayed-order-request` and `fill` have nothing on them. That is `NOTHING YET`
+and not a fault — the same chain opened and closed trades on the captured tape
+on 2026-09-04.
+
+### Tracing why nothing has been raised, which is the Monday question
+
+Walking the funnel backwards, **not one of the seven `entry-candidate`
+producers has published a single candidate** on this run. The five detectors are
+all receiving and evaluating, and their refusals are honest and market-shaped:
+
+    mean-reversion-detector    121,114 observations, symbols_with_a_full_window 0, deepest_window 3
+    momentum-burst-detector    120,716 observations, 398 symbols tracked, not a burst
+    volatility-gap-detector    2,672 tests, no_implied_surface 2,057
+    expiry-day-zero-to-hero    instruments_expiring_today 0  (it is Sunday)
+
+A frozen weekend snapshot has three distinct prices in it, so an empty window is
+the correct answer, not a defect. Monday's open is what tests this.
+
+**One branch is dead independently of market hours.**
+`universal-symbol-sweeper` has run 3,202 sweeps and raised nothing, and it never
+can as things stand: it tests `watch-condition`s, and it has received **zero**.
+`watch-condition-compiler` reports `compiled 0 / active_conditions 0` and has
+received nothing itself, because `instruction-writer` reports `requests 0 /
+written 0`. The whole autonomous instruction-generation loop has never produced
+an instruction, so the sweeper is a detector with nothing to detect. Not
+Monday-blocking (the five detectors are the primary path) but it is a
+permanently dark branch, and it is the honest answer to "why does the universal
+scanner never fire".
+
+### `implied-vol-reader` converted off crypto
+
+`no_implied_surface: 2,057` against `tests: 2,672` had one cause:
+`implied-vol-reader` had `reads 0 / quotes_seen 0 / surfaces_published 0` for
+its entire life. Its `start_part` drained `market-data`, threw it away and
+returned no read requests — a deliberate stub whose own docstring cited RL-050,
+**the crypto build order**, under which options were a segment this system had
+not built. That ordering is retired: Phase A is both options segments, first.
+
+Converted rather than replaced (goal item 3): the reader's core knows nothing
+about a venue and every rule in it is what an Indian chain needs. Only its input
+was crypto-era. It now reads `broker-option-greeks` (the broker's own implied
+volatility — read, never solved locally), `broker-subscribed-instrument-listing`
+(strike, expiry, CE/PE), `market-quote` (the two-sided market, from
+`broker-quote-bridge` built the same day) and `symbol-price-frame` (the
+underlying's spot). All four were already carrying; nothing new is fetched.
+
+Two defects the conversion exposed and fixed:
+
+- **An append-only quote list.** `observe_quote` appended per underlying and was
+  cleared only by `release()`. Harmless while the part received nothing; on a
+  live chain at hundreds of quotes a second it grows without bound, and the
+  staleness filter does not help because it runs at read time and leaves what it
+  dropped in the list. Now the newest quote per contract — a quote is a level.
+- **`underlying_key` cannot name an underlying.** Resolving it needs the
+  underlying's *own* listing, and measured on the real subscription only **26 of
+  1,707** subscribed options had their underlying subscribed too — a reader
+  waiting for it would wait for ever on 98% of the chain. Upstox's master states
+  `underlying_symbol` on every one of its 94,352 options (17,800 of which carry
+  no `underlying_key` at all), and the adapter was parsing the key and throwing
+  the name away. Now carried on `InstrumentListing`. It equals the underlying's
+  own trading symbol for every NSE_FO (32,008) and BSE_FO (4,170) option — index
+  and stock options, exactly Phase A — and deliberately not for a commodity
+  option, whose underlying is a futures contract carrying an expiry in its name.
+
+Verified live after the rewire: **`quotes_seen 8,037`**, from 0 for the part's
+whole life, with all four inputs carrying and `options_feed_connected` reading
+true from the data rather than from configuration.
+
+`reads` is still 0, and the reason is the finding below rather than the
+conversion.
+
+### The finding that outranks everything else before Monday
+
+`read` needs the underlying's spot, and **the feed does not subscribe the
+underlyings of the options it subscribes**. Measured on the real subscription of
+2026-09-06 — 1,915 instruments the feed actually delivered, 1,707 of them option
+contracts:
+
+    underlying     contracts   its own price subscribed
+    SILVERM              511   no
+    MIDCPNIFTY           205   no
+    USDINR               176   no
+    GOLD                 121   no
+    JPYINR                67   no
+    OFSS                  62   no
+    ...
+    options whose underlying is also subscribed:  26 of 1,707
+
+The top five underlyings by contract count are **silver, a mid-cap index,
+two currency pairs and gold** — not one of them a thing any of the three segment
+bots trades. NIFTY, the index-options bot's own chain, is not in the top ten.
+
+This is the same root cause first named walking `market-data-feed`
+(473 NSE_FO / 413 NSE_COM / 142 NCD_FO / 128 NSE_EQ on the tape) now measured
+precisely: `broker-market-feed-reader` fills its 2,000-instrument connection
+with *the universe first, then the master in catalogue order up to the cap*, and
+catalogue order is essentially instrument-key order, which is why commodity and
+currency derivatives dominate. Every downstream consequence follows from it —
+no vol surface, no spot for a quoted chain, and an option chain the bots do not
+trade.
+
+**This is the top item for the next session if it is not fixed in this one.**

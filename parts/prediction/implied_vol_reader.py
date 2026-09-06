@@ -18,10 +18,27 @@ implied volatilities the venue publishes, and:
   completeness. Interpolating across a missing wing invents exactly the part of
   the surface that carries the information.
 
-**Phase 1 has no options feed**, and this part says so rather than producing
-anything: options are a segment this system has not built (RL-050), and a reader
-that returned a flat surface would put an invented forward view into the vol
-feature builder and from there into every sizing decision.
+**It reads the broker's own chain, and still never computes an implied
+volatility itself.** Upstox publishes greeks per subscribed contract, implied
+volatility among them, so the number this part serves is the one the market
+made rather than one solved locally from a price -- which is the same rule the
+three bullets above are: read, do not model.
+
+Rewired 2026-09-06 (docs/proposals/implied-vol-reader-reads-the-broker-option-
+chain.md). Until then `start_part` drained `market-data`, threw it away and
+returned no read requests, so this part had `reads 0 / quotes_seen 0 /
+surfaces_published 0` for its entire life. That was deliberate and cited RL-050
+-- the **crypto** build order, under which options were a segment this system
+had not built. That ordering is retired: `docs/goal.md`'s Phase A is index
+options and stock options, both of them, fully, before anything else moves, so
+the one segment this part was told not to serve is now the first two in the
+plan. Nothing new is fetched; all four inputs were already carrying.
+
+`options_feed_connected` stays a reachable state rather than a line that can no
+longer be reached: it becomes true only once greeks have actually arrived, and
+a surface read before that still says the feed is not connected rather than
+returning a flat one. A flat surface is an invented forward view, and it would
+reach every sizing decision through the vol features.
 """
 
 from __future__ import annotations
@@ -36,7 +53,12 @@ PART_ID = "implied-vol-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="implied-vol-reader",
-    consumes=("market-data",),
+    consumes=(
+        "broker-option-greeks",
+        "broker-subscribed-instrument-listing",
+        "market-quote",
+        "symbol-price-frame",
+    ),
     produces=("implied-vol-surface", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -50,6 +72,14 @@ ALL_STALE = "every-quote-is-older-than-this-reader-trusts"
 
 CALL = "call"
 PUT = "put"
+
+UPSTOX_VENUE_ID = "upstox"
+MILLISECONDS_TO_NANOSECONDS = 1_000_000
+
+# Upstox's own instrument_type codes for the two option kinds, in its own
+# instrument master. Anything else in the subscription -- an equity, a future,
+# an index -- is not an option and contributes no point to a surface.
+OPTION_KIND_BY_INSTRUMENT_TYPE = {"CE": CALL, "PE": PUT}
 
 
 @dataclass(frozen=True)
@@ -116,6 +146,82 @@ class ReaderStanding:
     dropped_no_implied: int = 0
 
 
+class OptionChainListings:
+    """The subscribed instrument master, as the three lookups a chain needs.
+
+    An object rather than three dicts in `start_part` because it is real state
+    with real rules -- and because every other consumer of
+    `broker-subscribed-instrument-listing` reads the payload inside a method
+    exactly like this one, which is the shape the payload checker can follow
+    (the filter publishes a conveyor slice, so the type is not inferable at the
+    publish site).
+    """
+
+    def __init__(self) -> None:
+        self._listing_by_key: dict[str, object] = {}
+        self._symbol_by_key: dict[str, str] = {}
+
+    def observe_listing(self, listing) -> None:
+        instrument_key = getattr(listing, "instrument_key", None)
+        if instrument_key is None:
+            return
+        self._listing_by_key[instrument_key] = listing
+        symbol = getattr(listing, "trading_symbol", None)
+        if symbol:
+            self._symbol_by_key[instrument_key] = symbol
+
+    def listing_of(self, instrument_key: str):
+        return self._listing_by_key.get(instrument_key)
+
+    def symbol_of(self, instrument_key: str) -> str | None:
+        """The contract's own trading symbol, or None until its listing arrives."""
+        return self._symbol_by_key.get(instrument_key)
+
+    @property
+    def instruments_known(self) -> int:
+        return len(self._listing_by_key)
+
+
+def option_quote_from(listing, symbol: str, quote, greek, now_ns: int) -> "OptionQuote | None":
+    """One contract, as an OptionQuote -- or None where anything is missing.
+
+    Never a partial quote with a guessed leg: every None here is a contract this
+    part genuinely cannot say anything about, which is a different fact from a
+    contract whose market is one-sided (that one becomes a quote and is dropped,
+    and counted, by `read`).
+
+    The underlying is taken from the contract's own `underlying_symbol` rather
+    than by resolving `underlying_key` against the underlying's listing.
+    Measured 2026-09-06: only **26 of 1,707** subscribed options had their
+    underlying subscribed as well, so a reader that waited for that listing
+    would wait for ever on 98% of the chain, while every one of the 94,352
+    options in Upstox's master states this field outright.
+    """
+    kind = OPTION_KIND_BY_INSTRUMENT_TYPE.get(getattr(listing, "instrument_type", None))
+    if kind is None:
+        return None  # not an option; a subscription carries plenty that are not
+    strike = getattr(listing, "strike_price", None)
+    expiry_ms = getattr(listing, "expiry_ms", None)
+    underlying = getattr(listing, "underlying_symbol", None)
+    if strike is None or expiry_ms is None or not underlying:
+        return None
+    return OptionQuote(
+        symbol=symbol,
+        underlying=underlying,
+        kind=kind,
+        strike=float(strike),
+        # Seconds from now, so a contract that has already expired reads
+        # negative rather than being silently treated as the nearest expiry.
+        seconds_to_expiry=(expiry_ms * MILLISECONDS_TO_NANOSECONDS - now_ns) / 1e9,
+        bid=quote.bid_price,
+        ask=quote.ask_price,
+        implied_volatility=greek.implied_volatility,
+        # The broker's own stamp for the greeks, never arrival time: the
+        # staleness bound is about the market's age, not our latency.
+        quoted_at_ns=greek.broker_time_ns,
+    )
+
+
 class ImpliedVolReader:
     """Reads a surface from quoted options, and publishes its holes rather than filling them."""
 
@@ -138,17 +244,35 @@ class ImpliedVolReader:
         self._maximum_age_ns = int(maximum_quote_age_seconds * 1e9)
         self._minimum_strikes = minimum_strikes_per_expiry
         self._now_ns = now_ns
-        self._quotes: dict[str, list] = {}
+        # underlying -> contract symbol -> its newest quote. See observe_quote.
+        self._quotes: dict[str, dict[str, OptionQuote]] = {}
         self._feed_connected = False
         self.standing = ReaderStanding()
 
     def set_feed_connected(self, connected: bool) -> None:
-        """Whether an options feed exists at all. Phase 1 has none (RL-050)."""
+        """Whether an options feed exists at all.
+
+        Set from whether greeks have actually arrived, never from configuration:
+        a reader told it has a feed it does not have publishes `too-thin` where
+        the truth is `no-feed`, and those are different facts about the system.
+        """
         self._feed_connected = connected
 
     def observe_quote(self, venue_id: str, quote: OptionQuote) -> None:
+        """Hold this contract's newest quote for its underlying.
+
+        Newest per contract, not appended. A quote is a level: a contract's
+        newer quote supersedes its older one, and the by-strike surface is
+        last-write-wins anyway, so keeping both cannot change the answer while
+        it can exhaust the machine. Appending was harmless for as long as this
+        part received nothing at all (measured 2026-09-06: quotes_seen 0 for
+        its whole life); on a live chain at hundreds of quotes a second it
+        grows without bound for the life of the process, and the staleness
+        filter does not help because it runs at read time and leaves what it
+        dropped in the list.
+        """
         self.standing.quotes_seen += 1
-        self._quotes.setdefault(f"{venue_id}:{quote.underlying}", []).append(quote)
+        self._quotes.setdefault(f"{venue_id}:{quote.underlying}", {})[quote.symbol] = quote
 
     def read(self, venue_id: str, underlying: str, spot: float) -> ImpliedVolSurface:
         self.standing.reads += 1
@@ -167,7 +291,7 @@ class ImpliedVolReader:
         dropped = {"one-sided": 0, "stale": 0, "no-implied-volatility": 0}
         usable = []
 
-        for quote in self._quotes.get(key, []):
+        for quote in self._quotes.get(key, {}).values():
             if now - quote.quoted_at_ns > self._maximum_age_ns:
                 dropped["stale"] += 1
                 self.standing.dropped_stale += 1
@@ -293,30 +417,90 @@ def run_implied_vol_reader(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No options feed is connected in phase 1 and market-data carries no
-    options quote; the reader is told so and publishes surfaces that say
-    the feed is not connected, never an empty surface that reads as a flat
-    market.
-    """
-    # `market-data` carries trades AND candles: venue-trade-stream-reader
-    # publishes the first, ccxt-venue-reader the second, and both have always
-    # declared it. This part wants trades and now says so, rather than assuming
-    # the wire holds only what it happens to want -- a part that dies on an
-    # unexpected shape is a part the wiring can kill.
-    from runtime.market_data_stream import trades_in
-    from runtime.input_assembly import Batch
+    Four inputs, joined on the broker's own `instrument_key`:
 
-    trades = Batch(read=context.bus.reader("market-data"))
+        broker-option-greeks                  the implied volatility, per contract
+        broker-subscribed-instrument-listing  strike, expiry, CE/PE, underlying, symbol
+        market-quote                          the two-sided market, per contract symbol
+        symbol-price-frame                    the underlying's spot
+
+    A contract is quoted only when all of the first three agree about it. The
+    listing is what ties the other two together -- greeks arrive keyed by
+    instrument key and quotes by trading symbol, and only the listing knows they
+    are the same contract.
+    """
+    import time as _time
+
+    from runtime.input_assembly import Batch, LatestByKey
+    from runtime.price_frames import levels_in
+
+    greeks = LatestByKey(
+        read=context.bus.reader("broker-option-greeks"),
+        key_of=lambda item: item.instrument_key,
+        maximum_age_seconds=context.number("implied_vol_maximum_quote_age"),
+    )
+    listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
+    quotes = Batch(read=context.bus.reader("market-quote"))
+    spots = Batch(read=context.bus.reader("symbol-price-frame"))
     publish_surfaces = context.bus.publisher_for("implied-vol-surface")
+
     reader = ImpliedVolReader(
         maximum_quote_age_seconds=context.number("implied_vol_maximum_quote_age"),
         minimum_strikes_per_expiry=int(context.number("implied_vol_minimum_strikes_per_expiry")),
     )
-    reader.set_feed_connected(False)
+
+    listings_held = OptionChainListings()
+    newest_quote_by_symbol: dict[str, object] = {}
+    spot_by_symbol: dict[str, float] = {}
 
     def read_quotes(_reader):
-        trades_in(trades.payloads())
-        return ()
+        for listing in listings.payloads():
+            listings_held.observe_listing(listing)
+        now_ns = _time.time_ns()
+
+        # `market-quote` carries NormalisedQuote directly, one per contract --
+        # not a frame of levels, which is what `symbol-quote-frame` is. Anything
+        # not shaped like a quote is skipped rather than raised on: an inbox
+        # carries what the wiring delivers, and a part that died on an
+        # unexpected shape is a part the wiring could kill.
+        for quote in quotes.payloads():
+            symbol = getattr(quote, "symbol", None)
+            if symbol is not None and getattr(quote, "bid_price", None) is not None:
+                newest_quote_by_symbol[symbol] = quote
+        for level in levels_in(spots.payloads()):
+            spot_by_symbol[level.symbol] = level.price
+
+        known_greeks = greeks.mapping(now_ns)
+        # Greeks arriving at all is what "the options feed is connected" means.
+        # Read from the data rather than configured, so `no-feed` stays a
+        # reachable state instead of a line nobody can get to.
+        _reader.set_feed_connected(bool(known_greeks))
+
+        underlyings: set[tuple[str, str]] = set()
+        for instrument_key, greek in known_greeks.items():
+            listing = listings_held.listing_of(instrument_key)
+            if listing is None:
+                continue
+            symbol = listings_held.symbol_of(instrument_key)
+            if symbol is None:
+                continue
+            quote = newest_quote_by_symbol.get(symbol)
+            if quote is None:
+                continue
+            option = option_quote_from(listing, symbol, quote, greek, now_ns)
+            if option is None:
+                continue
+            _reader.observe_quote(UPSTOX_VENUE_ID, option)
+            underlyings.add((UPSTOX_VENUE_ID, option.underlying))
+
+        # One read per underlying that has a spot. Without a spot there is no
+        # at-the-money and no skew, and reading against a spot of zero would put
+        # every strike on the same side of the money.
+        return tuple(
+            (venue_id, underlying, spot_by_symbol[underlying])
+            for venue_id, underlying in sorted(underlyings)
+            if spot_by_symbol.get(underlying)
+        )
 
     def publish(items) -> None:
         kept = tuple(item for item in items if item is not None)

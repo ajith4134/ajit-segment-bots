@@ -115,9 +115,9 @@ class InstrumentListing:
     that type id would wire this reader into every existing crypto consumer
     of symbol-universe (docs/proposals/upstox-broker-adapter.md).
 
-    `expiry_ms`, `strike_price`, `underlying_key` are None for a plain equity
-    listing (Upstox's own JSON omits them there, not zeroes them -- absence is
-    carried as absence, never filled in).
+    `expiry_ms`, `strike_price`, `underlying_key` and `underlying_symbol` are
+    None for a plain equity listing (Upstox's own JSON omits them there, not
+    zeroes them -- absence is carried as absence, never filled in).
     """
 
     instrument_key: str
@@ -148,6 +148,22 @@ class InstrumentListing:
     # company under a post-closing-auction regime, or a fresh IPO -- none of
     # which an intraday bot may treat as an ordinary share.
     security_type: str | None = None
+    # The underlying's own plain name, as the master states it on the contract
+    # itself -- "NIFTY" on "NIFTY 24500 CE". Read since 2026-09-06 because
+    # `underlying_key` alone is not enough to name an underlying: resolving that
+    # key needs the underlying's *own* listing, and only 26 of 1,707 subscribed
+    # options had their underlying subscribed too, so a reader waiting for it
+    # would wait for ever on 98% of the chain. Every one of the 94,352 options
+    # in Upstox's master carries this field, while 17,800 carry no
+    # `underlying_key` at all.
+    #
+    # It equals the underlying's own trading_symbol for every NSE_FO (32,008)
+    # and BSE_FO (4,170) option -- index and stock options, which is Phase A --
+    # and deliberately does not for a commodity option, whose underlying is a
+    # futures contract whose symbol carries an expiry ("SILVER" against "SILVER
+    # FUT 05 JUL 27"). A commodity reader must resolve the key rather than use
+    # this; MCX is skeleton until the equity and options vertical is proven.
+    underlying_symbol: str | None = None
 
 
 class SubscriptionMode(enum.StrEnum):

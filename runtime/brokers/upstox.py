@@ -238,6 +238,7 @@ class UpstoxAdapter(BrokerAdapter):
                     expiry_ms=row.get("expiry"),
                     strike_price=row.get("strike_price"),
                     underlying_key=row.get("underlying_key"),
+                    underlying_symbol=row.get("underlying_symbol"),
                     intraday_margin_percent=row.get("intraday_margin"),
                     intraday_leverage=row.get("intraday_leverage"),
                     # NORMAL, SME, PCA, IPO or RELIST in Upstox's own master.
