@@ -42,7 +42,7 @@ and whether the market was open.
 | | |
 |---|---|
 | features walked | **1 of 29** |
-| parts declared | 372 |
+| parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
 | wires carrying | 3,806 of 5,843 (65.1%) |
@@ -220,6 +220,24 @@ no Indian equivalent yet and are the open question this walk leaves:**
   carries Upstox's own bid/ask prices and sizes, the same input
   `broker-order-book-bridge` already reads — so this is a bridge exactly
   parallel to the three that exist, not a new feed.
+
+  **Built and verified the same day.** Blueprint edit
+  `dashboard/blueprint_edits/apply_2026-09-06_broker_quote_bridge.py` (proposal
+  `docs/proposals/broker-quote-bridge.md`), part
+  `parts/market_data_feed/broker_quote_bridge.py`, on the live spine. Measured
+  30 s after a restart, market closed:
+
+      broker-quote-bridge   market-quote        106 published   551 instruments resolved
+      quote-level-sampler   market-quote        106 received    symbol-quote-frame 92 published
+      instrument-selector   symbol-quote-frame   46 received    symbols_with_a_quote 244
+      spread-reversion-detector                  47 received
+
+  `symbol-quote-frame` had never been produced by anything, ever, and
+  `instrument-selector` now holds a live quote for 244 symbols where it held
+  none. `quotes_refused_for_a_one_sided_book` reads 307 over the same window,
+  which is the guard doing real work rather than sitting unexercised: thin
+  option books quoted on one side only are common, and a mid built from one is
+  half the bid. The feature is 24 parts now, not 23.
 
 ### Open, not answered by this walk
 

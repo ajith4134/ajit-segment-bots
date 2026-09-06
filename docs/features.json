@@ -706,7 +706,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-05",
+        "on": "2026-09-06",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -13826,6 +13826,32 @@
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
       "skipped_tick_effect": "delays"
+    },
+    {
+      "id": "broker-quote-bridge",
+      "name": "Broker quote bridge",
+      "role": "republish a broker's own top of book as market-quote",
+      "category": "market-data-feed",
+      "consumes": [
+        "broker-subscribed-instrument-listing",
+        "broker-order-book-snapshot"
+      ],
+      "produces": [
+        "market-quote",
+        "part-health"
+      ],
+      "switchable": true,
+      "off_releases_resources": true,
+      "states": [
+        "off",
+        "on"
+      ],
+      "origin": "proposed",
+      "proposed": "2026-09-06",
+      "evidence": "docs/proposals/broker-quote-bridge.md",
+      "resource_class": "bandwidth-bound",
+      "rate_risk": "changes-the-answer",
+      "skipped_tick_effect": "delays"
     }
   ],
   "control_plane": {
@@ -14646,6 +14672,14 @@
     "proposal": [
       "docs/proposals/equity-opportunity-profiler.md",
       "docs/proposals/cash-equity-shortlist-ranker.md"
+    ]
+  },
+  "_proposal_2026-09-06_broker_quote_bridge": {
+    "what": "broker-quote-bridge -- the only producer of `market-quote` in the blueprint is the crypto `venue-quote-stream-reader`, which is off, so `quote-level-sampler` has received nothing ever, `symbol-quote-frame` has never been produced, and `instrument-selector` and `spread-reversion-detector` are both cut off from it. A quote is instrument-selector's fallback when the last trade is too old to size against (its own `priced_from_a_quote` counter), and NormalisedQuote's docstring records the measurement the type was built for: 525 of 9,945 intents refused for a price too old on the live run of 2026-08-24. Indian option chains make that the ordinary case. This reads the same `broker-order-book-snapshot` that broker-order-book-bridge already reads -- Upstox's depth levels carry bid/ask price and size -- and states the best level of it as a quote. No new data type, no new subscription; the fourth member of the existing bridge family (T-6: grow by adding parts). Separate from broker-order-book-bridge because the two answer different questions -- the whole book to walk a fill against, versus the top of it as the price a symbol may be believed at -- and the governor must be able to shed either without the other.",
+    "origin": "found by Claude walking market-data-feed, the first of the 29 foundational features under the audit temporary goal of 2026-09-05 (docs/feature-audit.md); item 5 of that goal asks which part each feature is missing",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_broker_quote_bridge.py",
+    "proposal": [
+      "docs/proposals/broker-quote-bridge.md"
     ]
   }
 }

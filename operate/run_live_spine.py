@@ -158,10 +158,18 @@ LIVE_SPINE = (
     # -> candle (kline-window-builder and the real conviction-model chain --
     # kronos-forecaster, bull/bear-conviction-model -- built 2026-09-02
     # specifically so this cutover would not take them to zero input).
+    # broker-quote-bridge -> market-quote (2026-09-06): its only producer in
+    # the blueprint was the crypto venue-quote-stream-reader, so
+    # quote-level-sampler had received nothing ever and symbol-quote-frame had
+    # never been produced -- which took instrument-selector's *fallback* away.
+    # A quote is what that part prices a symbol from when the last trade is too
+    # old to believe, and an Indian option that has not printed for minutes
+    # while carrying a live bid and ask is the ordinary case, not the corner.
     "broker-market-data-bridge",
     "broker-order-book-bridge",
     "broker-underlying-price-frame-bridge",
     "broker-candle-bridge",
+    "broker-quote-bridge",
     # The fifth bridge, and the one whose absence nothing reported: since the
     # cutover took symbol-catalogue-reader off this spine, NOTHING produced
     # symbol-universe. Eleven parts read it; seven of them were running and

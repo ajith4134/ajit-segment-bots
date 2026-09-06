@@ -17,6 +17,17 @@ the point, not an afterthought. The full statement, in the user's own words, is
 in `docs/goal.md`'s second TEMPORARY GOAL section (2026-09-05). It does not
 replace the first temporary goal below; both are active.
 
+**`docs/feature-audit.md` is the ledger this goal is walked with** — which of
+the 29 has been walked, what was measured in it, what was found and fixed, and
+what it is still missing. Read it before walking anything and append to it;
+without it every session re-walks what the last one already did. The instrument
+is `python3 dashboard/audit_feature_dataflow.py [feature-id]`, which reads each
+part's own bus counters per declared wire and keeps "nothing has travelled
+here" apart from "nobody has looked here". **1 of 29 walked** as of 2026-09-06
+(`market-data-feed`: four defects fixed — the three broker bridges had never
+published a single message — and one genuinely missing part,
+`broker-quote-bridge`, built).
+
 ## TEMPORARY GOAL (first, still active underneath) — 2026-09-05
 
 Three segment bots paper trading on **live** market data by **Monday
