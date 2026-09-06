@@ -429,6 +429,25 @@ def start_part(context) -> int:
         return decide
 
     def read_jobs():
+        # **Drained every tick, whether or not a replay runs.** These three are
+        # only *used* inside a replay -- `cost_of`, `cap` and `sequence_of` are
+        # called while walking bars -- and until 2026-09-06 they were only read
+        # there too. A replay needs a walk-forward-split, none had ever arrived,
+        # so the inboxes were never drained and the socket buffers filled:
+        #
+        #     execution-cost-model       52,989 published   12,606 not delivered
+        #     fill-volume-capper            513 published   31,503 not delivered
+        #     intra-bar-fill-sequencer      513 published   31,503 not delivered
+        #
+        # Every one of those drops is an inbox that was full when a datagram
+        # arrived, which is the same shape `subscribed-instrument-listing-filter`
+        # already carries its own note about. Draining is cheap; it is
+        # `mapping()` that copies the table, and that stays where it was.
+        estimates.take_in_what_arrived()
+        sizes.take_in_what_arrived()
+        sequences.take_in_what_arrived()
+        instructions.take_in_what_arrived()
+
         jobs = []
         window_by_id = windows.mapping()
         for outcome in splits.payloads():

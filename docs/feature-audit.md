@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **5 of 29** |
+| features walked | **7 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -58,8 +58,8 @@ come before the ones that learn from a trade that has not happened yet.
 | 3 | `execution-venue-adapter` | **walked 2026-09-06** — 9 of 11 are the crypto real-money path, correctly off for paper trading; no Indian equivalent exists yet |
 | 4 | `paper-live-trading` | **walked 2026-09-06** — chain is idle-because-no-trade, not broken; `implied-vol-reader` converted off crypto |
 | 5 | `opportunity-scanner` | **walked 2026-09-06** — a fourth checker built (declared inputs nothing reads); the learning chain proved end to end on a real replayed trade |
-| 6 | `segment-bot` | not walked |
-| 7 | `risk-capital-allocation` | not walked |
+| 6 | `segment-bot` | **walked 2026-09-06** — one part, 9 of 11 inputs carrying; idle downstream of an intent nothing has raised |
+| 7 | `risk-capital-allocation` | **walked 2026-09-06** — 16 of 17 running, every idle wire downstream of `trade-intent` |
 | 8 | `portfolio-state` | not walked |
 | 9 | `capital-desk` | not walked |
 | 10 | `bull-bot` | not walked |
@@ -723,3 +723,64 @@ opened.
 stamp on the live spine. It is recorded here because it is the exact shape this
 audit keeps finding: a number that looks measured, that nothing downstream could
 tell from a real one, in a path nobody had ever run.
+
+---
+
+## 6 and 7 — `segment-bot` and `risk-capital-allocation`, walked 2026-09-06
+
+`segment-bot` is one part, `instrument-selector`: 9 of 11 inputs carrying, 21
+wires carrying. `risk-capital-allocation` is 16 of 17 running, 231 carrying, 69
+idle. The single part off is `margin-liquidation-watch`, which is the crypto
+liquidation watcher and correctly off (an intraday equity position is squared
+off by the broker, not liquidated at a price).
+
+**Every idle wire in both is downstream of `trade-intent`, and nothing has
+raised one.** `opinion-arbiter` reports `intents_formed: 0` and receives
+`competence-map` and `market-regime` but no `directional-opinion` — which is
+what it arbitrates. That traces back through conviction, feature vectors and
+candidates to the same dry funnel feature 4 recorded: correct on a closed
+market, and Monday is what tests it. The intent-to-fill path itself is not
+untested — `tests/integration/test_an_intent_becomes_a_paper_fill.py` covers it
+and passes.
+
+## The scan that replaced walking one feature at a time
+
+Walking a feature answers "what is this one doing". It does not answer "where is
+something actually wrong", because on a shut market most wires are honestly
+idle. So the audit instrument now reports the one signature that is never
+honest:
+
+    a wire whose producer has published, whose consumer has received none,
+    with both ends running
+
+`python3 dashboard/audit_feature_dataflow.py` prints it under every summary.
+Across all 29 features and 10,997 wire readings it found **three**, all on one
+part.
+
+### `instruction-replayer` was dropping tens of thousands of messages
+
+It binds four readers and drained them only inside a replay. A replay needs a
+`walk-forward-split`, none had ever arrived (`runs: 0`), so three of those
+inboxes were never drained at all — and an undrained inbox fills, after which
+every datagram sent to it is refused:
+
+    execution-cost-model       52,989 published   12,606 NOT delivered
+    fill-volume-capper            513 published   31,503 NOT delivered
+    intra-bar-fill-sequencer      513 published   31,503 NOT delivered
+
+`fill-volume-capper` had **61 refusals for every message that landed**. Nothing
+reported a fault: the producer is entitled to publish and the consumer is
+entitled to be busy, and the only trace was a counter nobody was reading.
+
+This is a shape the project has met before — `subscribed-instrument-listing-filter`
+carries its own note that "every drop is an inbox that was full when a datagram
+arrived", and the 2026-08-26 storm was the same thing at scale. The fix is the
+one that note already prescribes: **drain every tick, and keep the expensive
+`mapping()` where it was.** Draining is cheap; copying the table is not.
+
+Verified after the restart:
+
+    instruction-replayer   cost-estimate 188, fill-sequence 3,462, fillable-size 3,415   (all 0 before)
+    execution-cost-model        950 published, 0 not delivered      (was 12,606 dropped)
+    intra-bar-fill-sequencer  3,462 published, 0 not delivered      (was 31,503)
+    fill-volume-capper        3,415 published, 47 not delivered      (was 31,503)

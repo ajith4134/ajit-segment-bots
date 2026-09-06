@@ -217,6 +217,50 @@ def audit_every_feature() -> list[FeatureAudit]:
     return sorted(audits, key=lambda a: a.feature_id)
 
 
+def starved_consumers() -> list[tuple[str, str, str, int]]:
+    """Wires whose producer is publishing and whose consumer receives none.
+
+    **The sharpest defect signal this project has.** A wire nothing has ever
+    travelled on is usually a system waiting for a trade; a wire whose producer
+    has published tens of thousands of messages while its consumer counts zero
+    is a fault, and it is invisible on every other view.
+
+    Found `instruction-replayer` on 2026-09-06 doing exactly that: it binds four
+    readers and drained them only inside a replay that had never run, so the
+    socket buffers filled and the senders' datagrams were refused --
+    execution-cost-model 52,989 published against 12,606 not delivered,
+    fill-volume-capper 513 published against 31,503 not delivered.
+    """
+    registry = json.loads((PROJECT / "docs" / "features.json").read_text(encoding="utf-8"))
+    features = registry["features"]
+    wires = read_declared_wires(features)
+    running, _proof = read_running_part_ids()
+    received, published = read_message_counts()
+    starved = []
+    for producer, consumer, data_type in sorted(wires):
+        if producer not in running or consumer not in running:
+            continue
+        sent = published.get(producer, {}).get(data_type, 0)
+        if sent > 0 and received.get(consumer, {}).get(data_type, 0) == 0:
+            starved.append((consumer, data_type, producer, sent))
+    return starved
+
+
+def print_starved(starved: list[tuple[str, str, str, int]]) -> None:
+    print("\n  Consumers receiving nothing from a producer that is publishing:")
+    if not starved:
+        print("    none — every live producer's messages are reaching their consumers")
+        return
+    for consumer, data_type, producer, sent in starved:
+        print(f"    {consumer:<32} {data_type:<26} {sent:>8} sent by {producer}")
+    print(
+        "    A wire nothing has travelled on is usually a system waiting for a trade.\n"
+        "    This is different: the messages exist and are not arriving. Check whether\n"
+        "    the consumer drains that inbox on every tick, or only inside work it is\n"
+        "    not doing yet — an undrained inbox fills and its senders are refused."
+    )
+
+
 def print_feature_summary(audits: list[FeatureAudit]) -> None:
     print("Foundational features — how much of each one's declared flow is moving\n")
     header = f"  {'feature':<26}{'parts on':>10}{'carrying':>10}{'idle':>8}{'unmeasured':>12}"
@@ -319,6 +363,7 @@ def main(argv: list[str]) -> int:
             print_one_feature(audit)
     else:
         print_feature_summary(audits)
+        print_starved(starved_consumers())
     return 0
 
 

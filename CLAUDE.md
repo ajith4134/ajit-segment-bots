@@ -94,7 +94,7 @@ what it is still missing. Read it before walking anything and append to it;
 without it every session re-walks what the last one already did. The instrument
 is `python3 dashboard/audit_feature_dataflow.py [feature-id]`, which reads each
 part's own bus counters per declared wire and keeps "nothing has travelled
-here" apart from "nobody has looked here". **5 of 29 walked** as of 2026-09-06
+here" apart from "nobody has looked here". **7 of 29 walked** as of 2026-09-06
 (`market-data-feed`: four defects fixed — the three broker bridges had never
 published a single message — and one genuinely missing part,
 `broker-quote-bridge`, built. `broker-adapter`: every Upstox REST call in the
