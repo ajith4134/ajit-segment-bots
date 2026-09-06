@@ -135,3 +135,121 @@ def test_a_mapper_given_no_budget_still_measures_every_pair():
     assert mapper.standing.pairs_measured_this_pass == mapper.standing.pairs_total
     assert mapper.standing.pairs_not_reached_this_pass == 0
     assert mapper.standing.sweeps_completed == 1
+
+
+# ---- the flat series, and the standing read that remapped -------------------
+#
+# Both of these crash-looped this part on the live spine on 2026-09-06: 139
+# restarts, exit code 1, `TypeError: bad operand type for abs(): 'NoneType'`
+# raised out of `read_standing`. The None is the first defect; that it was
+# raised out of a standing read at all is the second.
+
+import pathlib
+
+FLAT_RUN_DAY = "2026-09-04"
+# HINDUNILVR really printed 1972.0 thirty consecutive times between 09:53:53 and
+# 09:54:34 IST that day, while MARUTI traded through the same forty-one seconds.
+# Found by scanning the tape, not chosen: it is the longest flat run any NSE_EQ
+# instrument on the tape has, and a quiet share standing still for forty seconds
+# is the ordinary case on this market rather than a corner of it.
+FLAT_SYMBOL = "HINDUNILVR"
+MOVING_SYMBOL = "MARUTI"
+
+
+def real_prints_for(symbols, day=FLAT_RUN_DAY):
+    """Real Upstox prints off this project's own tape, per symbol (RL-063).
+
+    Deduplicated exactly as `RollingWindow.observe` does -- the same price at the
+    same instant is one fact redelivered -- so what this returns is what the
+    mapper's windows would actually have held.
+    """
+    from tests.conftest import upstox_trades_for
+
+    root = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape/upstox"
+    keys = [
+        entry.name
+        for entry in root.iterdir()
+        if entry.name.startswith("NSE_EQ") and (entry / f"{day}.index").exists()
+    ]
+    series: dict[str, list] = {symbol: [] for symbol in symbols}
+    for trade in upstox_trades_for(day, keys, 100_000):
+        if trade.symbol in series:
+            observation = (trade.price, trade.venue_time_ns)
+            if not series[trade.symbol] or series[trade.symbol][-1] != observation:
+                series[trade.symbol].append(observation)
+    return series
+
+
+def longest_flat_run_in(observations):
+    """Where the longest stretch of one unchanging price ends, and how long it is."""
+    longest, ends_at, run = 1, 0, 1
+    for index in range(1, len(observations)):
+        run = run + 1 if observations[index][0] == observations[index - 1][0] else 1
+        if run > longest:
+            longest, ends_at = run, index
+    return longest, ends_at
+
+
+def test_a_symbol_that_did_not_move_leaves_its_pairs_unmeasured_not_crashing():
+    """Correlation is undefined when a series has no variation. Not zero, and not a crash."""
+    import pytest
+
+    series = real_prints_for((FLAT_SYMBOL, MOVING_SYMBOL))
+    if not series[FLAT_SYMBOL] or not series[MOVING_SYMBOL]:
+        pytest.skip(f"the tape holds no {FLAT_RUN_DAY} prints for both symbols")
+
+    flat = series[FLAT_SYMBOL]
+    run_length, run_ends_at = longest_flat_run_in(flat)
+    window = 16
+    assert run_length > window, (
+        f"{FLAT_SYMBOL} moved within every {window}-observation window on "
+        f"{FLAT_RUN_DAY}, so this test would prove nothing"
+    )
+
+    mapper = CorrelationClusterMapper(
+        window_length=window,
+        minimum_shared_observations=8,
+        cluster_threshold=0.8,
+        passes_per_sweep_ceiling=1,
+        remembered_pairs_maximum=1000,
+    )
+    # Both symbols fed up to the end of the real flat run, so the flat symbol's
+    # window holds one price and the other's holds a share that really moved.
+    until_ns = flat[run_ends_at][1]
+    for symbol, observations in series.items():
+        for price, at_ns in observations:
+            if at_ns <= until_ns:
+                mapper.observe_price(symbol, price, at_ns)
+
+    mapper.map()
+
+    standing = mapper.standing
+    # A pair whose symbol never moved has all the shared history it needs and no
+    # variation to correlate. Counted apart from `unmeasured_pairs`, which is
+    # about history, and never as a correlation of zero -- zero says "measured,
+    # and they are unrelated", which is a claim nobody made.
+    assert standing.pairs_without_variation == 1
+    assert standing.unmeasured_pairs == 0
+
+
+def test_reading_the_standing_does_not_remap():
+    """The mapping is paced; a standing read that remapped would pay for all of it.
+
+    `read_standing` is called on every health emit -- once a second -- so a
+    standing read calling `map()` recomputed a quadratic statistic once a second
+    whatever `correlation_remap_interval_seconds` said, and advanced the sweep
+    cursor while doing it.
+    """
+    from parts.intelligence.correlation_cluster_mapper import (
+        describe_correlation_clusters,
+    )
+
+    mapper = a_budgeted_mapper(passes=1)
+    feed_a_family(mapper)
+    clusters = mapper.map()
+    mappings = mapper.standing.mappings
+
+    described = describe_correlation_clusters(mapper)
+
+    assert mapper.standing.mappings == mappings, "the standing read remapped"
+    assert described["clusters_now"] == len(clusters), "it must report the last mapping"

@@ -116,6 +116,14 @@ class MapperStanding:
     pairs_measured_this_pass: int = 0
     pairs_not_reached_this_pass: int = 0
     pairs_measured_this_sweep: int = 0
+    # Pairs with all the shared history they need and no variation to correlate:
+    # a share that stood at one price for the whole window. Counted apart from
+    # `unmeasured_pairs` because that is about history and this is about the
+    # market -- and apart from zero, which would claim a measurement saying they
+    # are unrelated. Measured on the tape of 2026-09-04: HINDUNILVR printed
+    # 1972.0 thirty consecutive times across forty-one seconds while MARUTI
+    # traded through the same stretch.
+    pairs_without_variation: int = 0
     passes_per_sweep: int = 1
     sweeps_completed: int = 0
     strong_pairs_remembered: int = 0
@@ -180,6 +188,14 @@ class CorrelationClusterMapper:
         self._measured_this_sweep = 0
         # Pairs measured at or above the threshold, carried across passes.
         self._strong_pairs: dict[tuple[str, str], float] = {}
+        # What the last mapping found. A standing read reports this rather than
+        # remapping: `read_standing` is called on every health emit -- once a
+        # second -- and a remap there recomputed a statistic quadratic in the
+        # universe whatever `correlation_remap_interval_seconds` said, and
+        # advanced the sweep cursor while doing it. The pacing in
+        # `run_correlation_cluster_mapper` was defeated by its own standing read
+        # from the day it was written until 2026-09-06.
+        self._last_clusters: tuple = ()
         self._prices: dict[str, RollingWindow] = {}
         # When this part last received anything about a symbol, on its own clock
         # rather than the venue's -- see `runtime.rolling_statistics.subjects_gone_quiet`
@@ -294,10 +310,12 @@ class CorrelationClusterMapper:
         self.forget_silent_symbols()
         symbols = sorted(self._prices)
         if len(symbols) < 2:
-            return ()
+            self._last_clusters = ()
+            return self._last_clusters
 
         parent = {symbol: symbol for symbol in symbols}
         unmeasured = 0
+        without_variation = 0
 
         def find(symbol):
             while parent[symbol] != symbol:
@@ -335,6 +353,17 @@ class CorrelationClusterMapper:
                 continue
             value = correlation(left_returns[-length:], right_returns[-length:])
             measured += 1
+            if value is None:
+                # One of the two series never moved, so its correlation with
+                # anything is undefined rather than zero -- there is no variation
+                # to share. Zero would say the pair was measured and found
+                # unrelated, which is how a book concentrates in exactly the
+                # symbols that are not trading. Until 2026-09-06 this crashed the
+                # part: `correlation` has always returned None for a flat series
+                # and this branch used the result without asking.
+                without_variation += 1
+                self._strong_pairs.pop((left, right), None)
+                continue
             if abs(value) >= self._threshold:
                 self._remember((left, right), value)
                 if (
@@ -374,6 +403,7 @@ class CorrelationClusterMapper:
             parent[find(left)] = find(right)
 
         self.standing.unmeasured_pairs = unmeasured
+        self.standing.pairs_without_variation = without_variation
 
         grouped: dict[str, list] = {}
         for symbol in symbols:
@@ -434,7 +464,13 @@ class CorrelationClusterMapper:
             self.standing.largest_cluster_seen,
             max((len(cluster.symbols) for cluster in clusters), default=0),
         )
-        return tuple(clusters)
+        self._last_clusters = tuple(clusters)
+        return self._last_clusters
+
+    @property
+    def last_clusters(self) -> tuple:
+        """What the last mapping found, without computing another one."""
+        return self._last_clusters
 
     def release(self, symbol: str) -> None:
         """T-3."""
@@ -443,7 +479,15 @@ class CorrelationClusterMapper:
 
 
 def describe_correlation_clusters(mapper: CorrelationClusterMapper) -> dict:
-    clusters = mapper.map()
+    """What the mapper has found, read rather than recomputed.
+
+    This is a part's standing, and `run_part` asks for it on every health emit.
+    Until 2026-09-06 it called `map()`, so the remap pacing added on 2026-08-26 --
+    the whole point of which is that correlating every pair is the expensive half
+    -- was paid once a second regardless, and the sweep cursor was advanced by
+    the reading of a counter.
+    """
+    clusters = mapper.last_clusters
     return {
         "part_id": PART_ID,
         "observations": mapper.standing.observations,
@@ -452,6 +496,7 @@ def describe_correlation_clusters(mapper: CorrelationClusterMapper) -> dict:
         "clusters_now": len(clusters),
         "largest_cluster": max((len(cluster.symbols) for cluster in clusters), default=0),
         "unmeasured_pairs": mapper.standing.unmeasured_pairs,
+        "pairs_without_variation": mapper.standing.pairs_without_variation,
         "symbols_forgotten_silent": mapper.standing.symbols_forgotten_silent,
         "strongest_correlation_seen": mapper.standing.strongest_correlation_seen,
         "clusters": [
