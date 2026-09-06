@@ -40,7 +40,10 @@ PART_ID = "venue-quote-stream-reader"
 # blueprint's, which is what RL-067 requires and the wiring probe checks.
 PART_DECLARATION = PartDeclaration(
     part_id="venue-quote-stream-reader",
-    consumes=("stream-plan", "venue-standing"),
+    # No `venue-standing`, for the same reason as venue-trade-stream-reader:
+    # declared, never bound, producer off, part being retired (2026-09-06,
+    # docs/proposals/a-declared-input-must-actually-be-read.md).
+    consumes=("stream-plan",),
     produces=("market-quote", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",

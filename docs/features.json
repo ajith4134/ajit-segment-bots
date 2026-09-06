@@ -88,7 +88,6 @@
       "consumes": [
         "broker-market-data",
         "broker-option-greeks",
-        "broker-price-frame",
         "broker-subscribed-instrument-listing",
         "cointegrated-pair",
         "consolidated-price",
@@ -128,7 +127,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-05",
+        "on": "2026-09-06",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -1328,7 +1327,6 @@
         "stop-audit",
         "symbol-price-frame",
         "symbol-profile",
-        "symbol-universe",
         "trade-episode",
         "training-label"
       ],
@@ -1357,7 +1355,7 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-05",
+        "on": "2026-09-06",
         "from": "its parts",
         "origin": "proposed"
       },
@@ -1401,7 +1399,6 @@
         "stop-audit",
         "symbol-price-frame",
         "symbol-profile",
-        "symbol-universe",
         "trade-episode",
         "training-label"
       ],
@@ -1430,7 +1427,7 @@
         "RL-048"
       ],
       "contract_recomputed": {
-        "on": "2026-09-05",
+        "on": "2026-09-06",
         "from": "its parts",
         "origin": "proposed"
       },
@@ -6713,8 +6710,7 @@
       "role": "stream live trades as they print",
       "category": "market-data-feed",
       "consumes": [
-        "stream-plan",
-        "venue-standing"
+        "stream-plan"
       ],
       "produces": [
         "market-data",
@@ -6730,7 +6726,13 @@
       "proposed": "2026-08-20",
       "resource_class": "io-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
+        }
+      ]
     },
     {
       "id": "order-book-reader",
@@ -8729,8 +8731,7 @@
         "broker-open-interest",
         "order-book-snapshot",
         "symbol-price-frame",
-        "symbol-profile",
-        "symbol-universe"
+        "symbol-profile"
       ],
       "produces": [
         "bull-feature-vector",
@@ -8755,6 +8756,10 @@
         {
           "on": "2026-09-05",
           "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        },
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
         }
       ]
     },
@@ -9087,8 +9092,7 @@
         "broker-open-interest",
         "order-book-snapshot",
         "symbol-price-frame",
-        "symbol-profile",
-        "symbol-universe"
+        "symbol-profile"
       ],
       "produces": [
         "bear-feature-vector",
@@ -9113,6 +9117,10 @@
         {
           "on": "2026-09-05",
           "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        },
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
         }
       ]
     },
@@ -12367,8 +12375,7 @@
       "role": "read every symbol's live quote from one venue",
       "category": "market-data-feed",
       "consumes": [
-        "stream-plan",
-        "venue-standing"
+        "stream-plan"
       ],
       "produces": [
         "market-quote",
@@ -12384,7 +12391,13 @@
       "evidence": "docs/proposals/an-all-market-quote-is-the-price-a-quiet-symbol-has.md",
       "resource_class": "bandwidth-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "delays"
+      "skipped_tick_effect": "delays",
+      "rewired": [
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
+        }
+      ]
     },
     {
       "id": "quote-level-sampler",
@@ -12638,7 +12651,6 @@
         "broker-subscribed-instrument-listing",
         "broker-market-data",
         "broker-option-greeks",
-        "broker-price-frame",
         "training-label"
       ],
       "produces": [
@@ -12661,6 +12673,10 @@
         {
           "on": "2026-09-05",
           "why": "docs/proposals/subscribed-instrument-listing-filter.md"
+        },
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
         }
       ]
     },
@@ -14700,6 +14716,14 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_implied_vol_reader_reads_the_broker_chain.py",
     "proposal": [
       "docs/proposals/implied-vol-reader-reads-the-broker-option-chain.md"
+    ]
+  },
+  "_proposal_2026-09-06_declared_inputs_that_were_never_read": {
+    "what": "Five parts declared a `consumes` type and never bound a reader for it, so R-01 drew a wire on every diagram that no message could ever travel and the audit board reported it as NOT CARRYING against a healthy producer. Found by scanning every launchable part's PART_DECLARATION against every literal handed to context.bus.reader(). expiry-day-zero-to-hero-detector judged moneyness from Upstox's own delta and never needed broker-price-frame; the bull and bear feature builders build one vector per candidate and never needed symbol-universe; the two crypto venue stream readers are off and being retired, and their venue-standing producer (ban-signal-detector) is off too. opinion-arbiter's bot-maturity is deliberately left alone -- it is a real design intent, dead at the source, and changing it changes how trades are arbitrated. dashboard/check_declared_inputs.py stops the class recurring; it is not in the pre-commit hook until the arbiter is answered.",
+    "origin": "found by Claude walking opportunity-scanner, feature 5 of the 29 under the audit temporary goal of 2026-09-05 (docs/feature-audit.md); item 1 of that goal is measured data flow rather than a declared contract, and RL-067 says a part's real consumes equal what the blueprint declares",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_declared_inputs_that_were_never_read.py",
+    "proposal": [
+      "docs/proposals/a-declared-input-must-actually-be-read.md"
     ]
   }
 }

@@ -45,7 +45,12 @@ PART_ID = "venue-trade-stream-reader"
 # the blueprint's, which is what RL-067 requires and what the wiring probe checks.
 PART_DECLARATION = PartDeclaration(
     part_id="venue-trade-stream-reader",
-    consumes=("stream-plan", "venue-standing"),
+    # No `venue-standing`: declared and never bound. A ban signal genuinely
+    # should stop a stream reader, but `ban-signal-detector` is off, this part is
+    # a crypto venue reader being retired by the Indian conversion, and a
+    # declaration that lies is worse than one that is absent (2026-09-06,
+    # docs/proposals/a-declared-input-must-actually-be-read.md).
+    consumes=("stream-plan",),
     produces=("market-data", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",

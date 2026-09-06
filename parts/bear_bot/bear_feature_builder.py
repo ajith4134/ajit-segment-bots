@@ -54,7 +54,11 @@ PART_DECLARATION = PartDeclaration(
     part_id="bear-feature-builder",
     consumes=(
         "bear-side-candidate", "broker-subscribed-instrument-listing", "broker-open-interest",
-        "order-book-snapshot", "symbol-price-frame", "symbol-profile", "symbol-universe",
+        # No `symbol-universe`, for the same reason as the bull side: one vector
+        # per candidate, and `bear-side-candidate` says which symbols those are.
+        # Declared and never bound until 2026-09-06 -- see
+        # docs/proposals/a-declared-input-must-actually-be-read.md.
+        "order-book-snapshot", "symbol-price-frame", "symbol-profile",
     ),
     produces=("bear-feature-vector", "part-health"),
     resource_class="bandwidth-bound",

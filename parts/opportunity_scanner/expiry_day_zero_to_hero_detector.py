@@ -37,7 +37,13 @@ PART_DECLARATION = PartDeclaration(
     part_id="expiry-day-zero-to-hero-detector",
     consumes=(
         "broker-subscribed-instrument-listing", "broker-market-data", "broker-option-greeks",
-        "broker-price-frame", "training-label",
+        # No `broker-price-frame`: moneyness comes from Upstox's own delta
+        # (zero_to_hero_maximum_abs_delta, and this part's own
+        # not_far_enough_otm counter), never from the underlying's spot. It was
+        # declared and never bound, so R-01 drew a wire that could not carry and
+        # the audit board reported it against a healthy producer -- 2026-09-06,
+        # docs/proposals/a-declared-input-must-actually-be-read.md.
+        "training-label",
     ),
     produces=("entry-candidate", "part-health"),
     resource_class="compute-bound",
