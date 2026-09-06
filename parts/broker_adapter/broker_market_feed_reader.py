@@ -92,41 +92,88 @@ def listing_key_of(listing: InstrumentListing) -> str:
     return listing.instrument_key
 
 
-def prioritize_index_option_chain(
+# What a tracked underlying is listed as in the broker's own master: an index for
+# an index-options chain, an ordinary share for a stock-options chain and for
+# cash equity. Never a future or an option -- those are the things that HAVE an
+# underlying, and treating one as an underlying would subscribe a chain on a
+# contract instead of on the thing it settles against.
+UNDERLYING_INSTRUMENT_TYPES = ("INDEX", "EQ")
+
+
+def only_what_the_segments_trade(
     listings: Sequence[InstrumentListing],
     tracked_trading_symbols: Sequence[str],
     now_ms: int,
 ) -> tuple[InstrumentListing, ...]:
-    """Reorders listings so the tracked index underlyings and their
-    nearest-expiry option chain come first -- plan_subscriptions and
-    plan_additional_subscriptions both take whatever fits the cap "in
-    listing order" (their own docstrings), and broker-instrument-catalogue-
-    reader's raw listing order has no relationship to what this project
-    trades: of 101,393 real Upstox listings, the first 2000 in catalogue
-    order essentially never include the NIFTY/BANKNIFTY/SENSEX option chain
-    instrument-selector needs a delta for.
+    """The tracked underlyings and their nearest-expiry option chains, nothing else.
 
-    Confirmed live, 2026-09-02: with this project's real subscribed set,
-    instrument-selector refused 14/14 trade-intents
-    no-instrument-is-listed-for-this-symbol and symbols_with_listed_
-    instruments stayed at 0 -- no option contract for any tracked underlying
-    was ever subscribed, so broker-option-greeks never carried a delta and
-    AtmStrikeTracker.atm_call_for/atm_put_for could never resolve, no matter
-    how long the connection stayed open.
+    A **filter**, not just an ordering, and that is the change of 2026-09-06.
+    Until then this reordered the catalogue and handed the whole of it to
+    `plan_subscriptions`, which takes whatever fits the cap in listing order --
+    so every slot the priority set did not claim was spent on whatever happened
+    to be next in `broker-instrument-catalogue-reader`'s raw order, which has no
+    relationship to what this project trades.
 
-    Nearest expiry only (spec section 2), computed here rather than assumed
-    from listing order, since Upstox's own catalogue is not expiry-sorted.
-    An expiry that has already passed is dropped, not just deprioritized --
-    a same-day-expired contract is real, current data and would otherwise
-    still win a nearest-expiry comparison against tomorrow's real chain.
+    Measured on the real subscription of 2026-09-06 -- 1,915 instruments the
+    feed actually delivered, 1,707 of them option contracts:
+
+        underlying     contracts   its own price subscribed
+        SILVERM              511   no
+        MIDCPNIFTY           205   no
+        USDINR               176   no
+        GOLD                 121   no
+        JPYINR                67   no
+        options whose underlying is also subscribed:  26 of 1,707
+
+    Silver, a mid-cap index, two currency pairs and gold. Not one of them is
+    something any of the three segment bots trades, and NIFTY -- the
+    index-options bot's entire chain -- was not in the top ten. The consequences
+    ran all the way down: `implied-vol-reader` could assemble 8,037 option
+    quotes and publish no surface at all, because no underlying it held had a
+    spot to read at-the-money against.
+
+    **A slot spent on the wrong instrument is spent for good.** The connection
+    caps at 2,000 and nothing evicts, so once the catalogue race filled it there
+    was no room left for the chain the bots were waiting on, however long the
+    connection stayed open or however many growth checks ran. An empty slot
+    costs nothing and can still be filled; a wrong one cannot be recovered. So
+    this returns only what a segment actually trades and lets the rest of the
+    connection stay empty.
+
+    **Every tracked underlying, whatever its instrument type.** This filtered on
+    `instrument_type == "INDEX"` from 2026-09-02, when index options were the
+    only segment. `underlyings_every_built_segment_trades` returns the union
+    across every built segment -- 3 indices for index-options and 14 ordinary
+    shares shared by stock-options and cash-equity-intraday -- and the INDEX
+    filter silently dropped all 14, so the stock-options bot's chains were never
+    prioritised at all and neither were the spot prices cash-equity needs.
+    Measured against the real master: INDEX-only selects 3 underlyings and 723
+    nearest-expiry contracts; every tracked type selects 15 and 1,528, which
+    with the ~40-instrument universe still fits the 2,000 cap with room to
+    spare.
+
+    Nearest expiry only (spec section 2), computed here rather than assumed from
+    listing order, since Upstox's own catalogue is not expiry-sorted. An expiry
+    that has already passed is dropped rather than deprioritized -- a
+    same-day-expired contract is real, current data and would otherwise still
+    win a nearest-expiry comparison against tomorrow's real chain.
+
+    Earlier evidence this exists at all, 2026-09-02: with the raw catalogue
+    order, `instrument-selector` refused 14 of 14 trade-intents
+    no-instrument-is-listed-for-this-symbol and `symbols_with_listed_instruments`
+    stayed at 0 -- no option contract for any tracked underlying was ever
+    subscribed, so `broker-option-greeks` never carried a delta.
     """
     tracked = set(tracked_trading_symbols)
-    underlying_keys: dict[str, str] = {
-        listing.trading_symbol: listing.instrument_key
+    # A set of keys rather than a symbol-keyed dict: the same name is listed on
+    # more than one exchange (NSE_EQ and BSE_EQ both list RELIANCE), and a dict
+    # would keep whichever came last and silently drop the other's chain.
+    tracked_underlying_keys = {
+        listing.instrument_key
         for listing in listings
-        if listing.instrument_type == "INDEX" and listing.trading_symbol in tracked
+        if listing.trading_symbol in tracked
+        and listing.instrument_type in UNDERLYING_INSTRUMENT_TYPES
     }
-    tracked_underlying_keys = set(underlying_keys.values())
 
     nearest_expiry_by_underlying: dict[str, int] = {}
     for listing in listings:
@@ -139,19 +186,15 @@ def prioritize_index_option_chain(
             if current is None or listing.expiry_ms < current:
                 nearest_expiry_by_underlying[listing.underlying_key] = listing.expiry_ms
 
-    priority: list[InstrumentListing] = []
-    priority_keys: set[str] = set()
+    wanted: list[InstrumentListing] = []
     for listing in listings:
         is_tracked_underlying = listing.instrument_key in tracked_underlying_keys
         is_nearest_expiry_option = listing.expiry_ms is not None and listing.expiry_ms == (
             nearest_expiry_by_underlying.get(listing.underlying_key)
         )
         if is_tracked_underlying or is_nearest_expiry_option:
-            priority.append(listing)
-            priority_keys.add(listing.instrument_key)
-
-    rest = (listing for listing in listings if listing.instrument_key not in priority_keys)
-    return tuple(priority) + tuple(rest)
+            wanted.append(listing)
+    return tuple(wanted)
 
 
 def state_of_the_subscription(
@@ -190,7 +233,7 @@ def subscribe_the_universe_first(
 ) -> tuple[SubscribableInstrument, ...]:
     """The selected universe ahead of whatever the catalogue race delivered.
 
-    `prioritize_index_option_chain` can only promote what already arrived, and
+    `only_what_the_segments_trade` can only select what already arrived, and
     what arrives is a race this part loses: `broker-instrument-catalogue-reader`
     restates all 102,940 listings into a 212,992-byte inbox that holds a few
     hundred messages. Measured on the live spine 2026-09-04, after the per-tick
@@ -351,7 +394,7 @@ def start_part(context) -> int:
     # all -- the bot runs, reports healthy, and never sees its own market.
     from runtime.segment_settings import underlyings_every_built_segment_trades
 
-    tracked_index_trading_symbols = underlyings_every_built_segment_trades(context)
+    tracked_trading_symbols = underlyings_every_built_segment_trades(context)
 
     publish_ltp = context.bus.publisher_for("broker-market-data")
     publish_candle = context.bus.publisher_for("broker-candle")
@@ -417,8 +460,8 @@ def start_part(context) -> int:
             # they can be subscribed before the catalogue race resolves, and
             # their chains follow once those prices arrive.
             return False
-        listings = prioritize_index_option_chain(
-            listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
+        listings = only_what_the_segments_trade(
+            listings, tracked_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
         plan = plan_subscriptions(
             adapter,
@@ -463,8 +506,8 @@ def start_part(context) -> int:
             "broker_subscription_growth_check_interval"
         )
         listings = instrument_listings.values()
-        listings = prioritize_index_option_chain(
-            listings, tracked_index_trading_symbols, now_ms=time.time_ns() // 1_000_000,
+        listings = only_what_the_segments_trade(
+            listings, tracked_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
         additional = plan_additional_subscriptions(
             adapter,
@@ -493,8 +536,8 @@ def start_part(context) -> int:
         # on the live spine 2026-09-04, this part had received 1,067 listings of
         # 102,940 with input_loss on the type, and the three index underlyings
         # the whole segment is about were not among them. The subscription
-        # priority prioritize_index_option_chain() applies was working
-        # perfectly and had nothing to promote.
+        # selection only_what_the_segments_trade() applies was working
+        # perfectly and had nothing to select.
         #
         # Draining is cheap; it is values()/mapping() that copies the whole
         # table, and that stays on its interval.
@@ -569,7 +612,7 @@ __all__ = [
     "plan_additional_subscriptions",
     "plan_subscriptions",
     "subscribe_the_universe_first",
-    "prioritize_index_option_chain",
+    "only_what_the_segments_trade",
     "start_part",
     "state_of_the_subscription",
 ]

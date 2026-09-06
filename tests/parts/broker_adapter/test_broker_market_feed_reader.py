@@ -2,7 +2,7 @@ import json
 
 from parts.broker_adapter.broker_market_feed_reader import (
     fetch_authorized_stream_url, listing_key_of, plan_additional_subscriptions,
-    plan_subscriptions, prioritize_index_option_chain,
+    only_what_the_segments_trade, plan_subscriptions,
     subscribe_the_universe_first,
 )
 from runtime.brokers.broker_adapter import (
@@ -57,19 +57,19 @@ def test_plan_subscriptions_covers_every_listing_when_under_the_cap():
     assert len(plan) == 180
 
 
-def test_prioritize_index_option_chain_puts_tracked_underlyings_and_their_nearest_expiry_chain_first():
-    """Real, confirmed 2026-09-02: plan_subscriptions/plan_additional_subscriptions
-    accept whatever fits the cap 'in listing order' (this file's own docstrings),
-    and broker-instrument-catalogue-reader's raw listing order has no relationship
-    to what this project actually trades -- of 101,393 real Upstox listings, the
-    first 2000 in catalogue order essentially never include the NIFTY/BANKNIFTY/
-    SENSEX option chain instrument-selector needs a delta for. Confirmed live:
-    instrument-selector refused 14/14 trade-intents no-instrument-is-listed-for-
-    this-symbol, symbols_with_listed_instruments stuck at 0, because no option
-    contract for any tracked underlying was ever subscribed at all -- so
-    broker-option-greeks never carried a delta and AtmStrikeTracker.atm_call_for
-    could never resolve. This reorders listings so the tracked underlyings and
-    their nearest-expiry chain come first, before the cap is ever reached."""
+def test_only_the_tracked_underlyings_and_their_nearest_expiry_chain_are_subscribed():
+    """Real, confirmed 2026-09-02: plan_subscriptions accepts whatever fits the
+    cap 'in listing order', and the catalogue's raw order has no relationship to
+    what this project trades -- instrument-selector refused 14/14 trade-intents
+    no-instrument-is-listed-for-this-symbol because no option contract for any
+    tracked underlying was ever subscribed.
+
+    Made a filter rather than an ordering on 2026-09-06, after the reordering
+    alone proved not to be enough: measured on the real subscription, 1,707 of
+    1,915 delivered instruments were options on SILVERM, MIDCPNIFTY, USDINR,
+    GOLD and JPYINR -- nothing any segment trades -- and only 26 of them had
+    their own underlying subscribed. A slot is spent for good: the connection
+    caps at 2,000 and nothing evicts."""
     nifty = _index_listing("NSE_INDEX|Nifty 50", "NIFTY")
     other_index = _index_listing("NSE_INDEX|Nifty Fin Service", "FINNIFTY")  # untracked
     near_call = _option_listing("NSE_FO|NIFTY|near|CE", "NSE_INDEX|Nifty 50", expiry_ms=2000)
@@ -78,43 +78,95 @@ def test_prioritize_index_option_chain_puts_tracked_underlyings_and_their_neares
     unrelated = _listing("NSE_EQ|RANDOM")
 
     listings = (unrelated, far_call, near_put, other_index, nifty, near_call)
-    ordered = prioritize_index_option_chain(
+    wanted = only_what_the_segments_trade(
         listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
     )
 
-    priority_keys = {listing.instrument_key for listing in ordered[:3]}
-    assert priority_keys == {nifty.instrument_key, near_call.instrument_key, near_put.instrument_key}
-    # far expiry, the untracked index, and the unrelated equity all land after the priority set
-    remaining_keys = [listing.instrument_key for listing in ordered[3:]]
-    assert set(remaining_keys) == {far_call.instrument_key, other_index.instrument_key, unrelated.instrument_key}
-    # nothing lost, nothing duplicated
-    assert len(ordered) == len(listings)
-    assert len(set(listing.instrument_key for listing in ordered)) == len(listings)
+    assert {listing.instrument_key for listing in wanted} == {
+        nifty.instrument_key, near_call.instrument_key, near_put.instrument_key,
+    }
+    # The far expiry, the untracked index and the unrelated equity are not
+    # deprioritized -- they are not subscribed at all, so their slots stay free
+    # for the chain the bots are actually waiting on.
+    assert len(wanted) == 3
 
 
-def test_prioritize_index_option_chain_excludes_expired_contracts():
+def test_a_tracked_ordinary_share_gets_its_chain_too_not_only_an_index():
+    """The INDEX-only filter of 2026-09-02 was written when index options were
+    the only segment. `underlyings_every_built_segment_trades` returns 3 indices
+    and 14 ordinary shares shared by stock-options and cash-equity-intraday, and
+    the filter silently dropped all 14 -- so the stock-options bot's chains were
+    never prioritised and cash equity never got its spot prices. Measured
+    against the real master: INDEX-only selects 3 underlyings and 723 contracts;
+    every tracked type selects 15 and 1,528."""
+    reliance = _listing("NSE_EQ|INE002A01018")
+    reliance = InstrumentListing(
+        instrument_key="NSE_EQ|INE002A01018", exchange="NSE", segment="NSE_EQ",
+        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    call = _option_listing("NSE_FO|RELIANCE|near|CE", "NSE_EQ|INE002A01018", expiry_ms=2000)
+
+    wanted = only_what_the_segments_trade(
+        (reliance, call), tracked_trading_symbols=("NIFTY", "RELIANCE"), now_ms=1000,
+    )
+    assert {listing.instrument_key for listing in wanted} == {
+        reliance.instrument_key, call.instrument_key,
+    }
+
+
+def test_the_same_name_listed_on_two_exchanges_keeps_both_chains():
+    """A symbol-keyed dict kept whichever row came last and silently dropped the
+    other exchange's chain."""
+    nse = InstrumentListing(
+        instrument_key="NSE_EQ|RELIANCE", exchange="NSE", segment="NSE_EQ",
+        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    bse = InstrumentListing(
+        instrument_key="BSE_EQ|RELIANCE", exchange="BSE", segment="BSE_EQ",
+        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    nse_call = _option_listing("NSE_FO|R|CE", "NSE_EQ|RELIANCE", expiry_ms=2000)
+    bse_call = _option_listing("BSE_FO|R|CE", "BSE_EQ|RELIANCE", expiry_ms=2000)
+
+    wanted = only_what_the_segments_trade(
+        (nse, bse, nse_call, bse_call), tracked_trading_symbols=("RELIANCE",), now_ms=1000,
+    )
+    assert len(wanted) == 4
+
+
+def test_an_expired_contract_is_excluded_not_merely_deprioritized():
+    """A same-day-expired contract is real, current data and would otherwise
+    still win a nearest-expiry comparison against tomorrow's real chain."""
     nifty = _index_listing("NSE_INDEX|Nifty 50", "NIFTY")
     expired_call = _option_listing("NSE_FO|NIFTY|expired|CE", "NSE_INDEX|Nifty 50", expiry_ms=500)
     live_call = _option_listing("NSE_FO|NIFTY|live|CE", "NSE_INDEX|Nifty 50", expiry_ms=5000)
 
-    ordered = prioritize_index_option_chain(
+    wanted = only_what_the_segments_trade(
         (expired_call, nifty, live_call),
         tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
     )
-    priority_keys = {listing.instrument_key for listing in ordered[:2]}
-    assert priority_keys == {nifty.instrument_key, live_call.instrument_key}
-    assert ordered[2].instrument_key == expired_call.instrument_key
+    assert {listing.instrument_key for listing in wanted} == {
+        nifty.instrument_key, live_call.instrument_key,
+    }
 
 
-def test_prioritize_index_option_chain_is_a_noop_when_nothing_is_tracked_yet():
-    """Before any broker-instrument-listing has arrived for a tracked index
-    (real state on first connect), the function must not crash or drop
-    listings -- everything just passes through in its original order."""
+def test_nothing_is_subscribed_before_a_tracked_listing_has_arrived():
+    """The behaviour this deliberately changed on 2026-09-06. It used to pass
+    everything through, which is how the connection filled with instruments no
+    segment trades before the real chain had even been delivered. An empty
+    result is correct: the feed still connects on `symbol-universe`, which
+    `subscribe_the_universe_first` puts ahead of this, and an empty slot can
+    still be filled while a wrongly-spent one cannot be recovered."""
     listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(5))
-    ordered = prioritize_index_option_chain(
+    assert only_what_the_segments_trade(
         listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
-    )
-    assert ordered == listings
+    ) == ()
 
 
 def test_plan_additional_subscriptions_skips_what_is_already_subscribed():

@@ -29,7 +29,14 @@ published a single message — and one genuinely missing part,
 `broker-quote-bridge`, built. `broker-adapter`: every Upstox REST call in the
 project was Cloudflare-blocked on the stdlib User-Agent, so the margin quoter
 had failed 1,016 of 1,016 calls and the 5x leverage path had never seen a real
-broker margin; all 9 parts now fully carrying).
+broker margin; all 9 parts now fully carrying. `execution-venue-adapter`:
+9 of 11 are the crypto real-money path, correctly off for paper trading, with no
+Indian equivalent built yet. `paper-live-trading`: the order chain is idle
+because no trade has opened, not broken; `implied-vol-reader` converted off its
+crypto stub, and the feed's 2,000-instrument subscription — which was 1,707
+options on silver, gold and currency pairs with only 26 of their underlyings
+priced — now carries only what the segments trade, 588 of 588 with their
+underlying subscribed).
 
 ## TEMPORARY GOAL (first, still active underneath) — 2026-09-05
 

@@ -488,4 +488,53 @@ currency derivatives dominate. Every downstream consequence follows from it —
 no vol surface, no spot for a quoted chain, and an option chain the bots do not
 trade.
 
-**This is the top item for the next session if it is not fixed in this one.**
+### Fixed the same session — the subscription now selects instead of reordering
+
+`broker-market-feed-reader` had a prioritiser (`prioritize_index_option_chain`,
+added 2026-09-02 for exactly this) and it was not enough, for two compounding
+reasons:
+
+1. **It filtered `instrument_type == "INDEX"`.** It was written when index
+   options were the only segment. `underlyings_every_built_segment_trades`
+   returns the union across every built segment — 3 indices for index-options
+   and **14 ordinary shares** shared by stock-options and cash-equity-intraday —
+   and the INDEX filter silently dropped all 14. The stock-options bot's chains
+   were never prioritised at all, and neither were the spot prices cash equity
+   needs. Measured against the real master: INDEX-only selects 3 underlyings and
+   723 nearest-expiry contracts; every tracked type selects **15 and 1,528**.
+2. **It only reordered.** It handed the whole catalogue to `plan_subscriptions`,
+   which takes whatever fits the cap in listing order — so every slot the
+   priority set did not claim went to whatever was next in raw catalogue order.
+   And **a slot spent on the wrong instrument is spent for good**: the
+   connection caps at 2,000 and nothing evicts, so once the catalogue race
+   filled it there was no room for the chain the bots were waiting on, however
+   long the connection stayed open.
+
+It is now `only_what_the_segments_trade` — a filter over every tracked
+underlying whatever its instrument type, plus their nearest-expiry chains, and
+nothing else. The rest of the connection stays empty on purpose: an empty slot
+costs nothing and can still be filled, a wrongly-spent one cannot be recovered.
+The same name listed on two exchanges keeps both chains (a symbol-keyed dict was
+dropping one).
+
+**Measured on the live spine, before and after:**
+
+    before   1,915 delivered, 1,707 options
+             SILVERM 511, MIDCPNIFTY 205, USDINR 176, GOLD 121, JPYINR 67
+             options whose underlying is also subscribed:   26 of 1,707
+             NIFTY not in the top ten
+
+    after      609 delivered,   588 options   (still filling as the catalogue streams)
+             NIFTY 184, MARUTI 96, RELIANCE 78, HINDUNILVR 74, SBIN 72,
+             TCS 38, TATASTEEL 20, KOTAKBANK 20, INFY 6
+             options whose underlying is also subscribed:  588 of 588
+
+Not one commodity or currency contract, and every single option's underlying is
+priced. Downstream, on a closed market:
+
+    implied-vol-reader     reads 263, quotes_seen 1,175, surfaces_published 90   (0 ever before)
+    instrument-selector    implied_vol_surfaces_seen 263                          (0 ever before)
+
+`reads_too_thin_for_a_surface: 173` of 263 is the honest weekend answer — few
+contracts carry a two-sided quote when the market is shut — and it is the state
+the reader is built to report rather than smooth over.
