@@ -314,7 +314,13 @@ def start_part(context) -> int:
             if isinstance(trade, NormalisedTrade):
                 key = (trade.venue_id, trade.symbol)
                 symbols.add(key)
-                volume[key] = volume.get(key, 0.0) + trade.quote_volume
+                # quote_volume is None when the source stated no size -- Upstox
+                # states one on about a quarter of its LTP updates and on no
+                # index at all. The symbol is still seen (its fee schedule is
+                # still observed); only the turnover it contributes is nothing,
+                # which is different from contributing a zero.
+                if trade.quote_volume is not None:
+                    volume[key] = volume.get(key, 0.0) + trade.quote_volume
         for key in symbols:
             model.observe_fee_schedule(key[0], fee)
             model.observe_daily_volume(key[0], key[1], volume.get(key, 0.0))

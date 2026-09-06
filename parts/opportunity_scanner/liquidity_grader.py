@@ -294,7 +294,11 @@ def start_part(context) -> int:
 
     def read_books(_grader):
         for trade in trades.payloads():
-            if isinstance(trade, NormalisedTrade):
+            # quote_volume is None when the source stated no size -- Upstox
+            # states one on about a quarter of its LTP updates. Turnover is
+            # the whole point of this observation, so an unsized print is not
+            # one; the book half of the grade is unaffected.
+            if isinstance(trade, NormalisedTrade) and trade.quote_volume is not None:
                 grader.observe_turnover(trade.venue_id, trade.symbol, trade.quote_volume)
         touched = set()
         for book in books.payloads():

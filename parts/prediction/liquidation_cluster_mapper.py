@@ -431,7 +431,12 @@ def start_part(context) -> int:
             mapper.observe_margin_schedule(entry.venue_id, entry.symbol, entry.margin_tiers)
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
-                mapper.observe_traded_volume(trade.venue_id, trade.symbol, trade.price, trade.quote_volume)
+                # An unsized print contributes no traded volume to the profile;
+                # a zero would put a price level in it with no volume behind it.
+                if trade.quote_volume is not None:
+                    mapper.observe_traded_volume(
+                        trade.venue_id, trade.symbol, trade.price, trade.quote_volume
+                    )
                 marks[(trade.venue_id, trade.symbol)] = trade.price
         now = _time.monotonic()
         if now - last_map[0] < context.health_interval_seconds:

@@ -49,6 +49,7 @@ import re
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.pending_instrument_updates import UpdatesAwaitingInstrumentListing
 from runtime.venues.venue_adapter import NormalisedCandle
 
 PART_ID = "broker-candle-bridge"
@@ -89,21 +90,30 @@ class BrokerCandleBridge:
     several granularities together, and this is what stops them mixing on
     the shared `candle` wire)."""
 
-    def __init__(self, wanted_interval: str) -> None:
+    def __init__(self, wanted_interval: str, *, held_instrument_limit: int) -> None:
         self._trading_symbol_by_key: dict[str, str] = {}
         self._wanted_interval = wanted_interval
+        # The connect burst arrives against an empty listing map; held rather
+        # than dropped (runtime/pending_instrument_updates.py). Newest bar per
+        # instrument is the right thing to hold: Upstox restates the forming
+        # bar continuously, so an older one is superseded, not lost.
+        self._awaiting_listing: UpdatesAwaitingInstrumentListing = (
+            UpdatesAwaitingInstrumentListing(held_instrument_limit=held_instrument_limit)
+        )
 
     def observe_listing(self, listing) -> None:
         self._trading_symbol_by_key[listing.instrument_key] = listing.trading_symbol
 
     def candle_for(self, bar, now_ns: int) -> NormalisedCandle | None:
-        """One OHLC bar, as candle -- or None if unresolved, the interval code
-        is not one of Upstox's documented shapes, or it is not the interval
-        this bridge is configured to republish."""
+        """One OHLC bar, as candle -- or None if the interval code is not one of
+        Upstox's documented shapes, it is not the interval this bridge
+        republishes, or its instrument is not listed yet -- in which case the
+        bar is held until the listing arrives."""
         if bar.interval != self._wanted_interval:
             return None
         symbol = self._trading_symbol_by_key.get(bar.instrument_key)
         if symbol is None:
+            self._awaiting_listing.hold(bar.instrument_key, bar)
             return None
         duration_ns = interval_duration_ns(bar.interval)
         if duration_ns is None:
@@ -124,10 +134,33 @@ class BrokerCandleBridge:
         )
 
 
+    def candles_now_resolvable(self, now_ns: int) -> tuple[NormalisedCandle, ...]:
+        """Every held bar whose listing has since arrived, as candle."""
+        released = tuple(
+            self._awaiting_listing.release_resolvable(
+                lambda key: key in self._trading_symbol_by_key
+            )
+        )
+        return tuple(
+            candle
+            for bar in released
+            if (candle := self.candle_for(bar, now_ns)) is not None
+        )
+    def candles_from(self, bars, now_ns: int) -> tuple[NormalisedCandle, ...]:
+        """One tick's worth of candle: what the listings just unblocked, then
+        this tick's own bars. The order is the point -- a released bar is older
+        than one that arrived this tick, and kline-window-builder reads the
+        wire in order."""
+        return self.candles_now_resolvable(now_ns) + tuple(
+            candle for bar in bars if (candle := self.candle_for(bar, now_ns)) is not None
+        )
+
+
 def describe_bridge(bridge: BrokerCandleBridge) -> dict:
     return {
         "part_id": PART_ID,
         "instruments_resolved": len(bridge._trading_symbol_by_key),
+        **bridge._awaiting_listing.describe(),
     }
 
 
@@ -142,17 +175,16 @@ def start_part(context) -> int:
     publish_candles = context.bus.publisher_for("candle")
     bridge = BrokerCandleBridge(
         wanted_interval=str(context.setting("upstox_candle_interval").value),
+        held_instrument_limit=int(
+            context.setting("unresolved_broker_update_hold_limit").value
+        ),
     )
 
     def tick() -> None:
         for listing in listings.payloads():
             bridge.observe_listing(listing)
         now_ns = time.time_ns()
-        candles = tuple(
-            candle
-            for bar in bars.payloads()
-            if (candle := bridge.candle_for(bar, now_ns)) is not None
-        )
+        candles = bridge.candles_from(bars.payloads(), now_ns)
         if candles:
             publish_candles(candles)
 

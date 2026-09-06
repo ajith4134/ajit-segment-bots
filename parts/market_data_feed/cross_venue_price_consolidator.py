@@ -223,6 +223,12 @@ def start_part(context) -> int:
         for trade in trades.payloads():
             if not isinstance(trade, NormalisedTrade):
                 continue  # a candle update is not a quote
+            if trade.quantity is None:
+                # This consolidation weights each venue by the size behind its
+                # quote, so a print that states no size has no weight to give.
+                # Not a zero -- a zero-quantity quote is excluded below anyway,
+                # and it would be excluded for the wrong stated reason.
+                continue
             touched.add(trade.symbol)
             yield VenueQuote(
                 venue_id=trade.venue_id,

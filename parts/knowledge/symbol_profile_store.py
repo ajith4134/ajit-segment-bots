@@ -144,13 +144,24 @@ class SymbolProfileStore:
         self.standing = StoreStanding()
 
     def observe_market(
-        self, venue_id: str, symbol: str, spread_fraction: float, quote_volume: float,
-        move_fraction: float, observed_tick: float | None = None,
+        self, venue_id: str, symbol: str, spread_fraction: float,
+        quote_volume: float | None, move_fraction: float,
+        observed_tick: float | None = None,
     ) -> None:
-        """One observation of what this symbol actually does."""
+        """One observation of what this symbol actually does.
+
+        `quote_volume` is None when the print stated no size -- Upstox states
+        one on about a quarter of its LTP updates and on no index at all. The
+        spread and the move are still real observations, so they are still
+        made; only the volume estimator sits this one out. TYPICAL_VOLUME then
+        reads absent rather than zero, which is the distinction `build`'s own
+        reason string already exists to keep ('a typical spread of zero makes
+        every symbol look free to trade').
+        """
         key = (venue_id, symbol)
         self._estimator(self._spreads, key).observe(abs(spread_fraction))
-        self._estimator(self._volumes, key).observe(quote_volume)
+        if quote_volume is not None:
+            self._estimator(self._volumes, key).observe(quote_volume)
         self._estimator(self._moves, key).observe(abs(move_fraction))
         if observed_tick is not None and observed_tick > 0:
             # What it does, not what the venue says it does.
@@ -334,7 +345,7 @@ def start_part(context) -> int:
                 store.observe_market(
                     item.venue_id, item.symbol,
                     spread_fraction=last_spread.get(key, 0.0),
-                    quote_volume=item.price * item.quantity,
+                    quote_volume=item.quote_volume,
                     move_fraction=(item.price - previous) / previous,
                 )
                 touched.add(key)

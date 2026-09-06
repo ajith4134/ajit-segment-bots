@@ -31,6 +31,7 @@ section 5), so every update this bridge sees already is one.
 from __future__ import annotations
 
 from runtime.order_book import OrderBookSnapshot
+from runtime.pending_instrument_updates import UpdatesAwaitingInstrumentListing
 from runtime.tape import NOT_SENT
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -51,15 +52,26 @@ PART_DECLARATION = PartDeclaration(
 class BrokerOrderBookBridge:
     """Resolves an instrument's own trading_symbol and republishes its depth."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, held_instrument_limit: int) -> None:
         self._trading_symbol_by_key: dict[str, str] = {}
+        # The connect burst arrives against an empty listing map; held rather
+        # than dropped (runtime/pending_instrument_updates.py). Newest depth per
+        # instrument is the right thing to hold: Upstox sends full depth per
+        # update rather than deltas, so an older snapshot is superseded whole.
+        self._awaiting_listing: UpdatesAwaitingInstrumentListing = (
+            UpdatesAwaitingInstrumentListing(held_instrument_limit=held_instrument_limit)
+        )
 
     def observe_listing(self, listing) -> None:
         self._trading_symbol_by_key[listing.instrument_key] = listing.trading_symbol
 
     def book_for(self, update) -> OrderBookSnapshot | None:
+        """One depth update, as order-book-snapshot -- or None while its
+        instrument is unknown, in which case it is held until the listing
+        arrives."""
         symbol = self._trading_symbol_by_key.get(update.instrument_key)
         if symbol is None:
+            self._awaiting_listing.hold(update.instrument_key, update)
             return None
         bids = tuple(
             sorted(
@@ -85,10 +97,31 @@ class BrokerOrderBookBridge:
         )
 
 
+    def books_now_resolvable(self) -> tuple[OrderBookSnapshot, ...]:
+        """Every held depth update whose listing has since arrived."""
+        released = tuple(
+            self._awaiting_listing.release_resolvable(
+                lambda key: key in self._trading_symbol_by_key
+            )
+        )
+        return tuple(
+            book for update in released if (book := self.book_for(update)) is not None
+        )
+    def books_from(self, updates) -> tuple[OrderBookSnapshot, ...]:
+        """One tick's worth of order-book-snapshot: what the listings just
+        unblocked, then this tick's own depth. The order is the point -- a book
+        is a level, and the last one on the wire is the one every consumer
+        keeps, so a released snapshot must never land behind a fresher one."""
+        return self.books_now_resolvable() + tuple(
+            book for update in updates if (book := self.book_for(update)) is not None
+        )
+
+
 def describe_bridge(bridge: BrokerOrderBookBridge) -> dict:
     return {
         "part_id": PART_ID,
         "instruments_resolved": len(bridge._trading_symbol_by_key),
+        **bridge._awaiting_listing.describe(),
     }
 
 
@@ -99,16 +132,16 @@ def start_part(context) -> int:
     listings = Batch(read=context.bus.reader("broker-subscribed-instrument-listing"))
     updates = Batch(read=context.bus.reader("broker-order-book-snapshot"))
     publish_books = context.bus.publisher_for("order-book-snapshot")
-    bridge = BrokerOrderBookBridge()
+    bridge = BrokerOrderBookBridge(
+        held_instrument_limit=int(
+            context.setting("unresolved_broker_update_hold_limit").value
+        ),
+    )
 
     def tick() -> None:
         for listing in listings.payloads():
             bridge.observe_listing(listing)
-        books = tuple(
-            book
-            for update in updates.payloads()
-            if (book := bridge.book_for(update)) is not None
-        )
+        books = bridge.books_from(updates.payloads())
         if books:
             publish_books(books)
 

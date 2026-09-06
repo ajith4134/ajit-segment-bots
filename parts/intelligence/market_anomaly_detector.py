@@ -607,7 +607,12 @@ def start_part(context) -> int:
             if isinstance(item, NormalisedTrade):
                 detector.observe_feed_gap(item.venue_id, item.symbol, False)
                 detector.observe_price(item.venue_id, item.symbol, item.price, item.venue_time_ns)
-                detector.observe_volume(item.venue_id, item.symbol, item.price * item.quantity)
+                # The price is always stated; the size is not (Upstox states one
+                # on about a quarter of its LTP updates, none on an index). A
+                # turnover of 0 would drag the volume window towards a figure
+                # nobody reported, so an unsized print contributes price only.
+                if item.quote_volume is not None:
+                    detector.observe_volume(item.venue_id, item.symbol, item.quote_volume)
                 touched.add((item.venue_id, item.symbol))
         for book in books.payloads():
             if not (book.bids and book.asks):

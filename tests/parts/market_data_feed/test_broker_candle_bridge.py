@@ -7,6 +7,10 @@ shape (RL-063)."""
 from runtime.brokers.broker_adapter import BrokerCandle, InstrumentListing
 from parts.market_data_feed.broker_candle_bridge import BrokerCandleBridge
 
+# Upstox's own documented ltpc_combined_limit, which is what the
+# unresolved_broker_update_hold_limit setting carries in the running spine.
+HELD_INSTRUMENT_LIMIT = 2000
+
 NIFTY_CALL = InstrumentListing(
     instrument_key="NSE_FO|1001", exchange="NSE", segment="NSE_FO",
     instrument_type="CE", trading_symbol="NIFTY 24500 CE", lot_size=75,
@@ -28,12 +32,12 @@ def _bar(instrument_key="NSE_FO|1001", interval="I1", bar_time_ms=1_740_000_000_
 
 
 def test_candle_for_is_none_before_the_listing_resolves():
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     assert bridge.candle_for(_bar(), now_ns=1_740_000_000_000 * 1_000_000) is None
 
 
 def test_an_unresolved_instrument_is_ignored_not_raised():
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     assert bridge.candle_for(_bar(instrument_key="NSE_FO|9999"), now_ns=0) is None
 
@@ -46,13 +50,13 @@ def test_a_bar_at_a_different_interval_than_configured_is_ignored_not_mixed_in()
     symbol) alone with no interval check, so the daily bar corrupted a
     window built from 1-minute bars. Configuring the bridge for one interval
     and filtering the rest is what stops that."""
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     assert bridge.candle_for(_bar(interval="1d"), now_ns=0) is None
 
 
 def test_builds_a_real_normalised_candle_readable_by_kline_window_builder():
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     now_ns = 1_740_000_000_000 * 1_000_000 + ONE_MINUTE_NS
     candle = bridge.candle_for(_bar(), now_ns=now_ns)
@@ -69,14 +73,14 @@ def test_builds_a_real_normalised_candle_readable_by_kline_window_builder():
 
 
 def test_i1_parses_as_one_minute_for_closure_timing():
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     assert bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns).close_time_ns == open_ns + ONE_MINUTE_NS
 
 
 def test_1d_parses_as_one_day_for_closure_timing():
-    bridge = BrokerCandleBridge(wanted_interval="1d")
+    bridge = BrokerCandleBridge(wanted_interval="1d", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     candle = bridge.candle_for(_bar(interval="1d", bar_time_ms=1_740_000_000_000), now_ns=open_ns)
@@ -84,7 +88,7 @@ def test_1d_parses_as_one_day_for_closure_timing():
 
 
 def test_an_unrecognised_interval_is_refused_not_guessed():
-    bridge = BrokerCandleBridge(wanted_interval="1w")
+    bridge = BrokerCandleBridge(wanted_interval="1w", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     assert bridge.candle_for(_bar(interval="1w"), now_ns=0) is None
 
@@ -93,7 +97,7 @@ def test_is_closed_is_false_while_wall_clock_has_not_reached_the_bar_s_close():
     """Upstox restates the forming bar on every tick and carries no closed
     flag (unlike Binance's k.x / Bybit's confirm) -- inferred from elapsed
     wall time instead, the only fact this venue actually gives."""
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     still_forming = bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns + 30_000_000_000)
@@ -101,7 +105,7 @@ def test_is_closed_is_false_while_wall_clock_has_not_reached_the_bar_s_close():
 
 
 def test_is_closed_is_true_once_wall_clock_passes_the_bar_s_close():
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     open_ns = 1_740_000_000_000 * 1_000_000
     finished = bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=open_ns + ONE_MINUTE_NS + 1)
@@ -112,7 +116,7 @@ def test_quote_volume_is_the_documented_close_times_volume_approximation():
     """Upstox's OHLC entry carries no per-bar turnover figure at all -- close
     * volume is a stated approximation (RL-061), never treated as the real
     sum of price*quantity a venue that does report turnover would give."""
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     candle = bridge.candle_for(_bar(), now_ns=0)
     assert candle.quote_volume == 222.0 * 1500.0
@@ -122,7 +126,57 @@ def test_trades_is_none_not_fabricated_zero():
     """Same shape as Bybit's own kline stream (runtime/venues/venue_adapter.py's
     NormalisedCandle.trades docstring): a venue that sends no count gets None,
     never a 0 that would read as 'nothing traded'."""
-    bridge = BrokerCandleBridge(wanted_interval="I1")
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
     bridge.observe_listing(NIFTY_CALL)
     candle = bridge.candle_for(_bar(), now_ns=0)
     assert candle.trades is None
+
+
+def test_a_bar_held_before_its_listing_is_released_when_the_listing_arrives():
+    """Measured on the live spine 2026-09-06: 1,878 broker-candle updates
+    received, 0 candle published, instruments_resolved 2,000. The feed sends
+    its snapshot on connect while listings arrive on a 300 s restatement
+    conveyor, so every bar in that burst met an empty map and was dropped."""
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
+    now_ns = (1_740_000_000_000 + 120_000) * 1_000_000
+    assert bridge.candle_for(_bar(), now_ns=now_ns) is None
+    assert bridge.candles_now_resolvable(now_ns) == ()
+
+    bridge.observe_listing(NIFTY_CALL)
+    released = bridge.candles_now_resolvable(now_ns)
+    assert len(released) == 1
+    assert released[0].symbol == "NIFTY 24500 CE"
+    assert released[0].interval == "I1"
+    assert bridge.candles_now_resolvable(now_ns) == ()
+
+
+def test_only_the_newest_held_bar_per_instrument_is_released():
+    """Upstox restates the forming bar continuously, so an older restatement
+    of the same bar is superseded rather than a bar anybody missed."""
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
+    now_ns = (1_740_000_000_000 + 120_000) * 1_000_000
+    bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=now_ns)
+    bridge.candle_for(_bar(bar_time_ms=1_740_000_060_000), now_ns=now_ns)
+    bridge.observe_listing(NIFTY_CALL)
+    released = bridge.candles_now_resolvable(now_ns)
+    assert [candle.open_time_ns for candle in released] == [1_740_000_060_000 * 1_000_000]
+
+
+def test_a_bar_at_the_wrong_interval_is_not_even_held():
+    """It is not waiting on a listing -- this bridge is never going to
+    republish it, so holding it would be a leak with a reason attached."""
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
+    assert bridge.candle_for(_bar(interval="1d"), now_ns=0) is None
+    assert bridge._awaiting_listing.instruments_awaiting_listing == 0
+
+
+def test_a_released_bar_never_lands_behind_this_tick_s_newer_bar():
+    bridge = BrokerCandleBridge(wanted_interval="I1", held_instrument_limit=HELD_INSTRUMENT_LIMIT)
+    now_ns = (1_740_000_000_000 + 300_000) * 1_000_000
+    bridge.candle_for(_bar(bar_time_ms=1_740_000_000_000), now_ns=now_ns)
+    bridge.observe_listing(NIFTY_CALL)
+    published = bridge.candles_from([_bar(bar_time_ms=1_740_000_120_000)], now_ns)
+    assert [candle.open_time_ns for candle in published] == [
+        1_740_000_000_000 * 1_000_000,
+        1_740_000_120_000 * 1_000_000,
+    ]

@@ -321,6 +321,13 @@ def start_part(context) -> int:
         touched = set()
         for trade in trades.payloads():
             if isinstance(trade, NormalisedTrade):
+                # Upstox states a size on about a quarter of its LTP updates
+                # and on no index at all (broker-market-data-bridge's own
+                # docstring, measured on the 2026-09-04 tape). Order flow is a
+                # statement about size, so a print with none is not observed --
+                # a 0 would read as a print in which nothing changed hands.
+                if trade.quantity is None:
+                    continue
                 encoder.observe_trade(trade.venue_id, trade.symbol, trade.price, trade.quantity, trade.venue_time_ns)
                 touched.add((trade.venue_id, trade.symbol))
         return tuple(

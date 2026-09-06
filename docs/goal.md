@@ -57,6 +57,15 @@ categories, each walked in full) — it is not expected to finish in one
 sitting, which is exactly why the user asked for it to persist across
 sessions rather than be re-explained each time.
 
+**The ledger is `docs/feature-audit.md`** — which feature has been walked, what
+was measured in it, what was found and fixed, and what it is still missing.
+Read it at the start of a session before walking anything, and append to it
+rather than rewriting it; a goal that spans sessions needs a record that spans
+sessions or each session re-walks what the last one already did. The measuring
+instrument is `python3 dashboard/audit_feature_dataflow.py`, which reads each
+part's own bus counters and keeps "nothing has travelled on this wire" apart
+from "nobody has looked at this wire".
+
 ## TEMPORARY GOAL — given 2026-09-05 (first), still standing underneath the one above
 
 The user asked that this be read at the start of **every** session, so that

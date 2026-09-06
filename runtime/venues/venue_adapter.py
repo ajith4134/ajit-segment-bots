@@ -313,7 +313,7 @@ class NormalisedTrade:
     venue_id: str
     symbol: str
     price: float
-    quantity: float
+    quantity: float | None
     side: str | None
     venue_time_ns: int
     sequence: int
@@ -323,15 +323,22 @@ class NormalisedTrade:
     def signed_quantity(self) -> float | None:
         """Positive when the aggressor bought, negative when it sold.
 
-        None when side itself is None -- a trade with no aggressor to
-        report has no sign to give it, and returning -quantity would state
+        None when side or quantity is itself None -- a trade with no aggressor
+        to report has no sign to give it, and returning -quantity would state
         a sell that was never observed."""
-        if self.side is None:
+        if self.side is None or self.quantity is None:
             return None
         return self.quantity if self.side == BUY else -self.quantity
 
     @property
-    def quote_volume(self) -> float:
+    def quote_volume(self) -> float | None:
+        """Turnover this print represents -- None when the source stated no size.
+
+        Not 0.0. A zero would say a print happened in which nothing changed
+        hands, and every volume window averaging it in would be pulled towards
+        a number the venue never reported."""
+        if self.quantity is None:
+            return None
         return self.price * self.quantity
 
 
