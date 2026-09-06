@@ -56,6 +56,9 @@ DOES_NOT_RECONCILE = "the-components-do-not-sum-to-the-realised-total"
 NOTHING_TO_ATTRIBUTE = "no-fill-was-recorded-for-this-trade"
 MIXED_CURRENCIES = "the-fills-are-not-all-in-one-quote-currency"
 
+# The default when a caller states no currency at all. The operator's own
+# `settlement_currency` is what the running part uses, and this exists so a test
+# constructing the class directly still has a unit rather than an empty string.
 QUOTE_CURRENCY = "USDT"
 
 
@@ -88,12 +91,28 @@ class AttributorStanding:
 class PnlAttributor:
     """Splits realised PnL into components that add back to the total."""
 
-    def __init__(self, reconciliation_tolerance: float, now_ns=time.time_ns) -> None:
+    def __init__(self, reconciliation_tolerance: float, now_ns=time.time_ns,
+                 settlement_currency: str = QUOTE_CURRENCY) -> None:
         if reconciliation_tolerance <= 0:
             raise ValueError(
                 "floating-point arithmetic needs some tolerance, but a decomposition "
                 "that does not reconcile is a story rather than an attribution"
             )
+        if not settlement_currency:
+            raise ValueError(
+                "an attribution states which currency its components are in; without "
+                "one, a number is a magnitude with no unit and nothing downstream can "
+                "tell rupees from dollars"
+            )
+        # Taken from the operator's own `settlement_currency` rather than the
+        # module constant. `start_part` already read that setting for the fills
+        # it records, while `_to_usdt` and `_attribution` compared against the
+        # constant -- so the day the setting stopped saying USDT, a fill recorded
+        # in the real currency would have failed the equality here and gone
+        # looking for a conversion rate nobody publishes. Found 2026-09-06,
+        # walking portfolio-state: the fees this project charges are Upstox's
+        # real rupee stack and the statements were labelled USDT.
+        self._settlement_currency = settlement_currency
         self._tolerance = reconciliation_tolerance
         self._now_ns = now_ns
         self._fills: dict[str, list] = {}
@@ -102,8 +121,13 @@ class PnlAttributor:
         self._conversion_rates: dict[str, float] = {}
         self.standing = AttributorStanding()
 
-    def observe_fill(self, trade_id: str, fill, quote_currency: str = QUOTE_CURRENCY) -> None:
-        self._fills.setdefault(trade_id, []).append((fill, quote_currency))
+    def observe_fill(self, trade_id: str, fill, quote_currency: str | None = None) -> None:
+        # None means "the currency this account settles in", which is what a
+        # caller that does not say means. Defaulting to a module constant made
+        # that untrue the moment the operator's own setting stopped matching it.
+        self._fills.setdefault(trade_id, []).append(
+            (fill, quote_currency or self._settlement_currency)
+        )
 
     def observe_funding(self, trade_id: str, amount: float) -> None:
         """Signed: a short in a positive-funding market is paid to hold."""
@@ -113,9 +137,9 @@ class PnlAttributor:
         """What the decision assumed. Slippage is measured from here, not from arrival."""
         self._decision_prices[trade_id] = price
 
-    def observe_conversion_rate(self, currency: str, rate_to_usdt: float) -> None:
+    def observe_conversion_rate(self, currency: str, rate_to_settlement: float) -> None:
         """RL-029: the rate is recorded, so a converted number can be re-derived."""
-        self._conversion_rates[currency] = rate_to_usdt
+        self._conversion_rates[currency] = rate_to_settlement
 
     def attribute(self, trade_id: str, closed_trade) -> AttributionOutcome:
         entries = self._fills.get(trade_id, [])
@@ -137,7 +161,8 @@ class PnlAttributor:
         unconvertible = {
             currency
             for currency in currencies
-            if currency != QUOTE_CURRENCY and currency not in self._conversion_rates
+            if currency != self._settlement_currency
+            and currency not in self._conversion_rates
         }
         if unconvertible:
             self.standing.mixed_currency_trades += 1
@@ -149,13 +174,14 @@ class PnlAttributor:
                 ),
                 None,
                 f"fills are in {', '.join(sorted(unconvertible))} with no recorded rate to "
-                f"{QUOTE_CURRENCY}. A decomposition that mixes quote currencies does not "
+                f"{self._settlement_currency}. A decomposition that mixes quote "
+                f"currencies does not "
                 f"add up, and the moment it stops adding up is when it starts being "
                 f"trusted anyway",
             )
 
         fees = sum(
-            self._to_usdt(fill.fee, currency) for fill, currency in entries
+            self._in_settlement_currency(fill.fee, currency) for fill, currency in entries
         )
         funding = self._funding.get(trade_id, 0.0)
         if funding > 0:
@@ -220,7 +246,7 @@ class PnlAttributor:
         )
         return self._outcome(
             trade_id, ATTRIBUTED, attribution, largest,
-            f"{closed_trade.realised_pnl:+.4f} {QUOTE_CURRENCY} = "
+            f"{closed_trade.realised_pnl:+.4f} {self._settlement_currency} = "
             + ", ".join(
                 f"{name} {components[name]:+.4f}"
                 for name in PNL_COMPONENTS
@@ -240,8 +266,14 @@ class PnlAttributor:
             ),
         )
 
-    def _to_usdt(self, amount: float, currency: str) -> float:
-        if currency == QUOTE_CURRENCY:
+    def _in_settlement_currency(self, amount: float, currency: str) -> float:
+        """One amount in the currency the account settles in.
+
+        A currency with no published rate raises rather than passing the number
+        through: an unconverted amount added to a converted one is a total in no
+        currency at all.
+        """
+        if currency == self._settlement_currency:
             return amount
         return amount * self._conversion_rates[currency]
 
@@ -254,7 +286,7 @@ class PnlAttributor:
             symbol=closed_trade.symbol,
             realised_pnl=closed_trade.realised_pnl,
             components=dict(components),
-            quote_currency=QUOTE_CURRENCY,
+            quote_currency=self._settlement_currency,
             reconciles=reconciles,
             residual=residual,
             attributed_at_ns=self._now_ns(),
@@ -344,8 +376,11 @@ def start_part(context) -> int:
     estimates = Batch(read=context.bus.reader("cost-estimate"))
     excursions = Batch(read=context.bus.reader("peak-excursion"))
     publish_attributions = context.bus.publisher_for("pnl-attribution")
-    attributor = PnlAttributor(reconciliation_tolerance=context.number("pnl_reconciliation_tolerance"))
     quote = str(context.setting("settlement_currency").value)
+    attributor = PnlAttributor(
+        reconciliation_tolerance=context.number("pnl_reconciliation_tolerance"),
+        settlement_currency=quote,
+    )
     pending_fills: dict[tuple[str, str], list] = {}
     pending_funding: dict[tuple[str, str], float] = {}
 

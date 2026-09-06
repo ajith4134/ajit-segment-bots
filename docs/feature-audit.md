@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **7 of 29** |
+| features walked | **9 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -60,8 +60,8 @@ come before the ones that learn from a trade that has not happened yet.
 | 5 | `opportunity-scanner` | **walked 2026-09-06** — a fourth checker built (declared inputs nothing reads); the learning chain proved end to end on a real replayed trade |
 | 6 | `segment-bot` | **walked 2026-09-06** — one part, 9 of 11 inputs carrying; idle downstream of an intent nothing has raised |
 | 7 | `risk-capital-allocation` | **walked 2026-09-06** — 16 of 17 running, every idle wire downstream of `trade-intent` |
-| 8 | `portfolio-state` | not walked |
-| 9 | `capital-desk` | not walked |
+| 8 | `portfolio-state` | **walked 2026-09-06** — idle downstream of `fill`; found the account settling in USDT while charging rupees |
+| 9 | `capital-desk` | **walked 2026-09-06** — 8 of 8 running, 125 wires carrying, 8 idle |
 | 10 | `bull-bot` | not walked |
 | 11 | `bear-bot` | not walked |
 | 12 | `profit-tailgating-bot` | not walked |
@@ -784,3 +784,56 @@ Verified after the restart:
     execution-cost-model        950 published, 0 not delivered      (was 12,606 dropped)
     intra-bar-fill-sequencer  3,462 published, 0 not delivered      (was 31,503)
     fill-volume-capper        3,415 published, 47 not delivered      (was 31,503)
+
+---
+
+## 8 and 9 — `portfolio-state` and `capital-desk`, walked 2026-09-06
+
+`capital-desk` is the healthiest feature walked so far: 8 of 8 running, 125
+wires carrying, 8 idle. `portfolio-state` is 6 of 7 running with 63 idle wires,
+every one of them downstream of `fill` — no trade has been made. Its one off
+part is `liquidation-price-tracker`, correctly off for the reason already
+recorded (an intraday equity position is squared off by the broker, not
+liquidated at a price).
+
+### The account was settling in USDT while charging rupees
+
+`usdt-pnl-accountant` computes every trade's profit and loss, and
+`settlement_currency` — the operator setting it and four other parts read — said
+**USDT**, with a note about "the currency both venues settle the traded
+perpetuals in". A crypto-era value that outlived the venues it named.
+
+Meanwhile every fee this project charges is Upstox's real rupee stack
+(`options_stt_sell_rate`, `equity_intraday_brokerage_rate` and the rest), every
+price on the tape is in rupees, and every paper account starts at 500,000
+rupees. **The statements were rupees wearing a USDT label** — not a wrong
+number, a number with the wrong unit on it, which is the kind of thing that only
+becomes wrong when somebody acts on it.
+
+### Changing the setting alone would have crashed the attributor
+
+`pnl-attributor` read `settlement_currency` from settings for the fills it
+recorded, and compared against a **hardcoded** `QUOTE_CURRENCY = "USDT"` in
+`_to_usdt` and `_attribution`. So the moment the setting stopped saying USDT, a
+fill recorded in the real currency would have failed that equality, gone looking
+for `self._conversion_rates["INR"]`, and raised — on the first closed trade.
+
+Two things that read the same fact from two places, free to disagree, and the
+disagreement was latent until somebody changed the one that was configurable.
+The part now takes the currency through its constructor from that setting, which
+is what made the setting safe to change. `_to_usdt` is
+`_in_settlement_currency`, and `observe_conversion_rate`'s `rate_to_usdt` is
+`rate_to_settlement`.
+
+`settlement_currency` is now **INR**. Verified: 4,282 tests pass, the spine
+restarts clean, and no currency or KeyError appears in the journal.
+
+### Still crypto-shaped here, and named rather than fixed
+
+The *names* remain: `usdt-pnl-accountant`, `usdt-pnl-statement`,
+`UsdtPnlStatement`. Renaming a part id and a data type touches the blueprint,
+the part, four consumers (`board-snapshot-builder`, `reward-shaper`,
+`allocation-rebalance-proposer`, `decision-cost-accountant`), the boards and the
+tests. That is a real piece of work and it is not a correctness fix — the unit
+is right now, only the label is stale — so it is recorded here rather than
+rushed the day before the first live session. 61 files still name USDT.
