@@ -47,6 +47,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from runtime.brokers.broker_http_request import build_broker_request
 from runtime.part_declaration import PartDeclaration
 
 PART_ID = "broker-margin-quoter"
@@ -260,14 +261,11 @@ def describe_quoting(quoter: BrokerMarginQuoter) -> dict:
 
 def fetch_margin_quotes(url: str, payload: dict, access_token: str, timeout_seconds: float):
     """One call to the broker's margin endpoint."""
-    request = urllib.request.Request(
+    request = build_broker_request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        access_token=access_token,
+        body=json.dumps(payload).encode("utf-8"),
+        content_type="application/json",
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:

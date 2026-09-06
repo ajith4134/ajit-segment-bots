@@ -23,10 +23,13 @@ what it is still missing. Read it before walking anything and append to it;
 without it every session re-walks what the last one already did. The instrument
 is `python3 dashboard/audit_feature_dataflow.py [feature-id]`, which reads each
 part's own bus counters per declared wire and keeps "nothing has travelled
-here" apart from "nobody has looked here". **1 of 29 walked** as of 2026-09-06
+here" apart from "nobody has looked here". **2 of 29 walked** as of 2026-09-06
 (`market-data-feed`: four defects fixed — the three broker bridges had never
 published a single message — and one genuinely missing part,
-`broker-quote-bridge`, built).
+`broker-quote-bridge`, built. `broker-adapter`: every Upstox REST call in the
+project was Cloudflare-blocked on the stdlib User-Agent, so the margin quoter
+had failed 1,016 of 1,016 calls and the 5x leverage path had never seen a real
+broker margin; all 9 parts now fully carrying).
 
 ## TEMPORARY GOAL (first, still active underneath) — 2026-09-05
 

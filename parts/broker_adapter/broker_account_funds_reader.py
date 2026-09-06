@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from runtime.brokers.broker_http_request import build_broker_request
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -75,10 +76,7 @@ class FundsStanding:
 
 
 def fetch_funds(access_token: str, timeout_seconds: float = 30.0) -> dict:
-    request = urllib.request.Request(
-        FUNDS_URL,
-        headers={"Accept": "application/json", "Authorization": f"Bearer {access_token}"},
-    )
+    request = build_broker_request(FUNDS_URL, access_token=access_token)
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         import json
 

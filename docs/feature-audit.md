@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **1 of 29** |
+| features walked | **2 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -54,7 +54,7 @@ come before the ones that learn from a trade that has not happened yet.
 | # | feature | state |
 |---|---|---|
 | 1 | `market-data-feed` | **walked 2026-09-06** — 4 defects found and fixed (bridges verified publishing); `broker-quote-bridge` named as missing |
-| 2 | `broker-adapter` | not walked |
+| 2 | `broker-adapter` | **walked 2026-09-06** — every Upstox REST call in the project was Cloudflare-blocked; 3 parts fixed, feature now fully carrying |
 | 3 | `execution-venue-adapter` | not walked |
 | 4 | `paper-live-trading` | not walked |
 | 5 | `opportunity-scanner` | not walked |
@@ -247,3 +247,106 @@ minutes after a spine restart, with the feed delivering one snapshot and then
 going quiet (`decoded_messages: 4`). **Monday 2026-09-07, 03:45 UTC** is the
 measurement; `ajit-open-watch.timer` is armed for 03:40 UTC and
 `operate/watch_market_open.py` samples the chain across the open.
+
+---
+
+## 2. `broker-adapter` — walked 2026-09-06 (market closed)
+
+9 parts, all 9 running, all 9 launchable. Started at **151 wires carrying, 27
+idle**; ended at **177 carrying, 1 idle**, with every part's every declared
+input and output carrying. Three defects, and the first one was the largest
+single finding of the audit so far.
+
+### Every Upstox REST call in the project was blocked, and nothing said so
+
+`broker-margin-quoter` read `calls_made 1,016 / calls_failed 1,016 / quotes_read 0`
+and `broker-account-funds-reader` read `reads 34 / failures 34`. A 100% failure
+rate on both, for the life of the process.
+
+The cause, reproduced against the live API with the same token and payload:
+
+    HTTP 403  Error 1010: browser_signature_banned
+    "The site owner has blocked access based on your browser's signature."
+    "**Do not retry.** Your user-agent has been banned by the site owner."
+
+Upstox sits behind Cloudflare, and Cloudflare bans the stdlib's default
+`Python-urllib/3.14` User-Agent. Not an auth failure, not token-dependent, and
+by Cloudflare's own instruction it never recovers on its own.
+
+**This mattered most for the goal that is due first.** `broker-margin-quoter` is
+the only producer of `broker-margin-requirement`, and `leverage-selector` sizes
+the 5x intraday equity bot against it — the machinery `docs/goal.md` records as
+"already resolved" in commit `b0a2d37`. It was resolved in the code and dead on
+the wire: the leverage path had never once received a real broker margin.
+
+**Why it stayed invisible is its own finding.** The part does hold the reason —
+`last_failure` is on `describe_quoting`'s output — but `countable_standing`
+(`runtime/part_process.py`) keeps numeric values only, so the one field that
+explained a thousand failures was dropped before it reached any board. Every
+visible counter looked like a part doing its job. Nothing in this project would
+have surfaced it except asking, per part and per wire, whether anything had
+actually travelled — which is what this audit is.
+
+**The knowledge already existed and had not travelled.** `broker-history-reader`
+hit this exact Cloudflare block on 2026-09-02 and answered it with `curl_cffi`'s
+`impersonate="chrome"`. That worked, and it was applied to exactly one of the
+four HTTP call sites in the project; the other three were never told.
+
+Fixed by `runtime/brokers/broker_http_request.py` — one builder every broker
+request goes through, carrying a User-Agent that **names this client** rather
+than impersonating a browser. Verified the same day against the live API:
+
+    no User-Agent    margin -> 403 (cf 1010)    funds -> 403 (cf 1010)
+    this User-Agent  margin -> 200              funds -> 200
+
+No browser impersonation is needed anywhere, which also means
+`broker-history-reader`'s chrome impersonation is heavier than the problem
+requires (verified: the plain header returns 200 on that endpoint too). Left as
+it is for now — it works, and changing a working call path is not this walk's
+job — but recorded so it is a decision rather than an oversight.
+
+### History was fetched over windows that contain no trading day
+
+`broker-history-reader` read `requests_planned 233 / windows_already_read 32 /
+candles_published 0` — 32 windows fetched, never a single bar published, ever.
+
+`broker_history_most_days_back` was **1**, and it counts **calendar** days. The
+window is `(today - most_days_back) .. today`, and this part deliberately fetches
+only while the market is shut, so on a Saturday the window is Friday..Saturday,
+on a Sunday it is Saturday..Sunday, and on a Monday morning before the bell it is
+Sunday..Monday. Measured against the live API on Sunday 2026-09-06, same
+instrument and interval:
+
+    most_days_back = 1    0 candles
+    most_days_back = 7    1,875 candles, back to 2026-08-31 09:15 IST (4 sessions)
+
+Raised to 7. Seven calendar days always spans at least one NSE session and stays
+far inside Upstox's one-month-per-request bound for 1-15 minute intervals. This
+is what primes `kline-window-builder` **before** an open rather than after it,
+which is the entire reason history is replayed while the market is shut — and it
+matters on Monday, because after a restart the arbiter stands aside until
+conviction is back.
+
+Verified after the fix: `candles_published 7,187`, `prints_published 7,187`.
+
+### Crypto-shaped parts in this feature
+
+None. This is the Indian-markets feature and every part in it is already
+Indian-shaped. The 9 wires reading `NOT MEASURED` all run to crypto parts that
+are off elsewhere in the blueprint, not to anything inside this feature.
+
+### What this feature is measurably missing
+
+- **A fault when a broker call fails, not just a counter.** 1,016 consecutive
+  failures produced no fault, no red tile and no journal line — only a number
+  nobody was reading. `countable_standing` dropping non-numeric standing is
+  correct for what it does, but it means a part's *reason* for failing can never
+  reach a board (Rule 8: every status carries its proof). The narrow fix would
+  be a numeric `seconds_since_last_success` or a `part-fault` on a run of
+  failures; naming it here rather than building it, because it is a
+  runtime-substrate change and belongs in its own piece of work.
+- **Only one of the six brokers exists.** `docs/goal.md` item 5 wants Upstox
+  primary with the other five covering data redundancy and API-load spreading.
+  The adapter contract is there and Upstox is the only implementation, so there
+  is no fallback if its feed or API goes down mid-session. That is planned work
+  rather than a defect, but this feature is where it lands.

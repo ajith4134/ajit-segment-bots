@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 from runtime.brokers.broker_adapter import BrokerAdapter, InstrumentListing
+from runtime.brokers.broker_http_request import build_broker_request
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.restatement_conveyor import RestatementConveyor
@@ -31,7 +32,7 @@ PART_DECLARATION = PartDeclaration(
 
 
 def fetch_bytes(url: str, timeout_seconds: float = 30.0) -> bytes:
-    request = urllib.request.Request(url, headers={"Accept": "application/gzip"})
+    request = build_broker_request(url, accept="application/gzip")
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         return response.read()
 
