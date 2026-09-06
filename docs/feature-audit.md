@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **14 of 29** |
+| features walked | **19 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -65,12 +65,12 @@ come before the ones that learn from a trade that has not happened yet.
 | 10 | `bull-bot` | **walked 2026-09-06** — 10 of 10 running, starved at `entry-candidate`; identical to bear |
 | 11 | `bear-bot` | **walked 2026-09-06** — identical shape to bull, 129 carrying / 75 idle |
 | 12 | `profit-tailgating-bot` | **walked 2026-09-06** — same funnel; peers stay isolated (R-03 holds) |
-| 13 | `prediction` | not walked |
+| 13 | `prediction` | **walked 2026-09-06** — 14/15 running, 216 carrying, only **5 idle**; `implied-vol-reader` now 4/4 in, 2/2 out |
 | 14 | `ledger` | **walked 2026-09-06** — 5 of 6 running, every idle wire downstream of a trade; the off part is crypto funding |
 | 15 | `observability` | **walked 2026-09-06** — 755 wires carrying, the most of any feature; `clock-skew-monitor` converted off crypto and switched back on |
-| 16 | `resource-governor` | not walked |
-| 17 | `closed-trade-decoding` | not walked |
-| 18 | `learning-loop` | not walked |
+| 16 | `resource-governor` | **walked 2026-09-06** — 14/14 running, 491 carrying; nothing being shed, which is why `switch-record` is quiet |
+| 17 | `closed-trade-decoding` | **walked 2026-09-06** — 20/20 running, no gaps; idle downstream of a closed trade |
+| 18 | `learning-loop` | **walked 2026-09-06** — 18/18 running, no gaps; same |
 | 19 | `intelligence` | not walked |
 | 20 | `knowledge` | not walked |
 | 21 | `hypothesis` | not walked |
@@ -81,7 +81,7 @@ come before the ones that learn from a trade that has not happened yet.
 | 26 | `llm-services` | not walked |
 | 27 | `online-research` | not walked |
 | 28 | `autonomous` | not walked |
-| 29 | `stock-market-news-data` | not walked — 24 of its 29 parts have no code at all |
+| 29 | `stock-market-news-data` | **walked 2026-09-06** — 5 of 29 built; the 24 missing are one coherent subsystem, mapped below |
 
 ---
 
@@ -958,3 +958,60 @@ its snapshot at connect and then goes quiet on a shut exchange, and the monitor
 starts after the feed so it missed that burst. Its standing reads
 `venues_watched: 0`, which is the honest state rather than a healthy-looking
 zero. Monday's first tick is what makes it measure.
+
+---
+
+## 13, 16, 17, 18 — the four that are simply working, 2026-09-06
+
+| feature | parts | carrying | idle |
+|---|---|---|---|
+| `prediction` | 14 of 15 | 216 | **5** |
+| `resource-governor` | 14 of 14 | 491 | 14 |
+| `closed-trade-decoding` | 20 of 20 | 249 | 161 |
+| `learning-loop` | 18 of 18 | 223 | 159 |
+
+No unbuilt parts, no orphan types, no starved consumers. `prediction`'s one off
+part is `liquidation-cluster-mapper` (crypto, correctly off), and
+`implied-vol-reader` now reads **4/4 in and 2/2 out** — this morning's conversion
+carrying in full. The governor's `switch-record` is quiet because nothing is
+being shed, which is the correct reading of a machine that is not contended. The
+two high-idle features are downstream of a closed trade, and that chain is
+proven end to end by `test_a_closed_trade_becomes_a_bot_maturity.py`.
+
+## 29 — `stock-market-news-data`: 5 built, 24 not
+
+The five that run are the trading-mechanics half and they carry fully:
+`corporate-action-reader`, `corporate-action-adjuster`,
+`trading-restriction-reader`, `instrument-restriction-state`,
+`market-session-calendar`. Feature-internal idle wires: **zero**.
+
+The 24 that do not exist are one coherent subsystem — the news pipeline — and
+they are the largest structural gap in the project. Mapped in dependency order
+so this is a buildable plan rather than a gap:
+
+**Layer 0 — the seven sources (each needs nothing unbuilt).**
+`broker-news-reader`, `exchange-filing-reader`, `financial-press-feed-reader`,
+`macro-event-calendar-reader`, `regulator-circular-reader`,
+`results-calendar-reader`, `social-chatter-reader`. Every one is an external
+integration; that is the real cost of this feature, not the parts above them.
+
+**Layer 1 — eight that need one source.** `news-item-deduplicator`,
+`news-latency-meter`, `news-source-health-monitor`, `news-text-structurer`,
+`news-symbol-resolver`, `news-category-classifier`, `news-history-reader`,
+`news-reaction-labeller`, `unexplained-move-investigator`.
+
+**Layer 2 — six that need those.** `news-credibility-scorer`,
+`news-novelty-scorer`, `news-sentiment-model`, `news-surprise-scorer`,
+`news-tape-writer`, `web-news-searcher`.
+
+**Layers 4 and 7 — the two terminal ones.** `news-segment-classifier`, then
+`news-impact-forecaster`, which waits on seven unbuilt types.
+
+**It is not Phase A blocking, and that is the reason it stays unbuilt today.**
+The three segment bots trade on price, greeks and volume; none of them reads a
+news item. The one part outside this feature that is blocked by it is
+`opportunity-scanner`'s `news-catalyst-detector`, which waits on `news-item` and
+`news-impact-forecast` — the very top of this stack — so it cannot do anything
+until essentially the whole subsystem exists. Building 24 parts and seven
+external integrations the day before the first live session would be the wrong
+trade; recording it as a costed plan is the right one.
