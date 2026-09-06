@@ -22,16 +22,19 @@ from dashboard.check_declared_inputs import (
     check_declared_inputs, declared_consumes, reader_bindings,
 )
 
-# opinion-arbiter declares `bot-maturity` and binds no reader for it. That is
-# not an oversight and is deliberately not fixed: how proven a bot is, is
-# exactly what an arbiter should weigh, the only producer
-# (`edge-graduation-gate`) has published nothing, and four other parts consume
-# it -- so deleting the declaration erases a design decision and binding it
-# changes how trades are arbitrated while still receiving nothing. It is the
-# operator's call (docs/proposals/a-declared-input-must-actually-be-read.md),
-# and this test states the one open case by name rather than asserting a bare
-# count that would go quietly green on the wrong day.
-KNOWN_OPEN = {"opinion-arbiter": ("bot-maturity",)}
+# Empty since 2026-09-06, and deliberately kept as a named structure rather than
+# deleted. It held one entry -- opinion-arbiter's `bot-maturity` -- which was not
+# an oversight but a real open design question: how proven a bot is, is arguably
+# what an arbiter should weigh, so deleting the declaration risked erasing a
+# decision while binding it changed how trades are arbitrated. The operator
+# answered it on 2026-09-06 (docs/proposals/the-arbiter-does-not-weigh-maturity.md):
+# drop it, because maturity gates what the system may *do* rather than how
+# convinced it is, and the four parts that really consume it use it that way.
+#
+# The shape stays so that the next genuinely-open case is recorded by name here
+# instead of the assertion below being loosened to a count -- which would go
+# quietly green on the wrong day.
+KNOWN_OPEN: dict[str, tuple[str, ...]] = {}
 
 
 def test_no_part_declares_an_input_it_never_reads():
@@ -47,9 +50,10 @@ def test_no_part_declares_an_input_it_never_reads():
     )
 
 
-def test_the_one_open_case_is_still_open_and_still_only_one():
-    """If the arbiter is resolved, this test is what says so -- and the entry
-    above should be deleted rather than the assertion loosened."""
+def test_every_declared_input_has_a_reader_and_nothing_is_being_tolerated():
+    """The whole checker, stated as one fact. This is what allowed
+    check_declared_inputs.py into the pre-commit hook beside the other three:
+    until 2026-09-06 it had a known failure and could not refuse a commit."""
     findings = check_declared_inputs()
     assert {part.part_id: part.never_bound for part in findings.defects} == KNOWN_OPEN
 

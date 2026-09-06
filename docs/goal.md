@@ -8,6 +8,66 @@ made only when the user gives them.
 trading bot) is in git history — `git log -p docs/goal.md` — not deleted, not
 carried forward as a parallel track.
 
+## TEMPORARY GOAL — given 2026-09-06 (third), read this first
+
+**In the user's own words, verbatim:**
+
+> Save the new temporary goal that is to check each part of 370 individually
+> with appropriate test with real data like for news parts check its inputs and
+> output if they are example outing the nifty index support or resistance , for
+> pridiction parts check if it is working for ever open trades, online research
+> part if ther are producing real useful data etc like these take ever part of
+> 370 chech if its serving its purpose like if its really providing or working
+> with the data according to its intended purpose or if it is just a skeleton
+> providing or inputting or outputing rubbish data which is not useful just
+> decorating data
+
+**What this asks that the second goal did not.** The 29-feature audit asked
+whether data *flows* — measured from each part's own bus counters, "has a
+message ever travelled on this wire". This asks whether what travels is
+**worth anything**. A part can be `RUNNING`, its wires can read `CARRYING`, every
+checker can pass, and it can still be publishing a number that means nothing.
+Those two questions are not the same question, and the first cannot answer the
+second: a counter that climbs proves a message moved, never that the message was
+right.
+
+The user's own examples set the standard, and each one names a different way a
+part can be hollow:
+
+| part kind | the question to actually ask |
+|---|---|
+| news parts | is the output a **real** reading — e.g. NIFTY support/resistance an operator would recognise — or a shape filled in? |
+| prediction parts | does it work **for every open trade**, not for a fixture? |
+| online research | is it producing **real useful data**, or decoration? |
+
+So a part passes only if it is *serving its purpose*: really providing, or
+really working with, data according to its intended purpose. It fails if it is
+**a skeleton — inputting or outputting rubbish data that is not useful, just
+decorating**.
+
+**The count.** The user said 370; the blueprint holds **373 parts** across 29
+categories (`docs/features.json`, measured 2026-09-06). The instruction is every
+part, and 373 is what every part means.
+
+**The test standard is RL-063 and it is not negotiable here.** "Appropriate test
+with real data" is the user's phrase. A part judged against an invented fixture
+has not been judged — the whole point of this goal is that a fixture is exactly
+what makes a hollow part look healthy. The tape, the Upstox history, the Yahoo
+and NSE free sources, and the real instrument master are what a verdict is
+allowed to rest on.
+
+**This goal stands alongside the other two, not instead of them.** As with the
+2026-09-05 audit, it persists across sessions until it is finished, and it needs
+its own ledger for the same reason that one did: without a written record of
+which of the 373 have been judged and what the verdict was, every session
+re-judges what the last one already did.
+
+**Its ledger is `docs/part-purpose-audit.md`.** One row per part: what it is
+*for*, what was fed in, what came out, and the verdict — `SERVING ITS PURPOSE`,
+`SKELETON` (runs, output is decoration), `NOT MEASURED` (nobody has looked yet),
+never a bare pass. Rule 8 applies to this ledger as much as to any board: a part
+nobody has tested reads `NOT MEASURED`, not green.
+
 ## TEMPORARY GOAL — given 2026-09-05 (second), read this first
 
 The user asked that this be read at the start of **every** session, so that

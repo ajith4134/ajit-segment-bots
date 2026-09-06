@@ -1254,9 +1254,9 @@ unit  = "seconds"
 note  = "operator, 2026-08-23: how long a mean-reversion claim is given. Five minutes, five times the spread detector's sixty: a single symbol's reversion to its own mean is slower than a cointegrated spread's, which has two legs pulling. Unmeasured; signal-horizon-profiler measures the realised time-to-resolution per detector and that is what would settle it."
 
 [mean_reversion_minimum_volatility_fraction]
-value = 0.0005
+value = 0.000037
 unit  = "fraction of price"
-note  = "operator, 2026-08-23: the least realised volatility over the window at which a mean-reversion z-score is worth computing. Five basis points, just under the round trip at the venues' taker fees: a symbol moving less than it costs to trade has no reversion worth catching."
+note  = "Claude, 2026-09-06: the least realised volatility over the window at which a mean-reversion z-score is worth computing -- a symbol moving less than it costs to trade has no reversion worth catching. Re-derived from Indian data; the previous value, 0.0005, was 'five basis points, just under the round trip at the venues' taker fees' (operator, 2026-08-23), which is a crypto perpetual's cost on a crypto perpetual's price and refuses an NSE index outright. Measured on the captured tape for 2026-09-04. CORRECTION, same day: an earlier version of this note said the only instruments this setting can act on are the three index underlyings, because broker-underlying-price-frame-bridge publishes exactly NIFTY, BANKNIFTY and SENSEX as symbol-price-frame. That is wrong -- symbol-price-frame has a second producer, price-level-sampler, which consumes market-data and therefore carries every Upstox print the broker-market-data-bridge relays. Measured from the live heartbeat table: mean-reversion-detector holds 1,721 symbols, not 3. This makes the single-number shape of this setting worse rather than better, because that universe spans indices whose sd/mean is about 4e-5 and options whose sd/mean is about 1e-2 -- two hundred and fifty times apart, gated by one fraction. The value below is still the right direction and the zero-candidate finding was measured from the parts' own bus counters rather than from this reasoning, but the per-instrument bound is now the fix rather than a refinement. NIFTY's own standard deviation over a 256-observation window is 0.000032 of its level at the median -- sixteen times under the old floor. It refused 32,796 of 35,136 NIFTY observations (93.3%) and 32,842 of 34,871 on BANKNIFTY (94.2%), and mean-reversion-detector raised zero candidates in 70,007 detections across both. This value is what the round trip actually costs, computed the way the Indian path really charges: the signal is on the index but the trade is in an option, so the condition is delta x z_threshold x sd_index >= round_trip_fraction x premium, i.e. sd/mean >= round_trip x premium / (delta x z x spot). Evaluated against real captured option greeks and real premiums on 2026-09-04 with runtime/indian_options_fee_model.py and this file's own six Upstox charge rates: NIFTY 23800 CE (premium 205.00, delta 0.726, round trip 0.541% of premium) needs 0.000032; NIFTY 23950 CE needs 0.000037; NIFTY 23800 PE 0.000069; NIFTY 24150 CE 0.000080. The median, 0.000037, is this value. The spread across those four is 2.5x and is real rather than noise -- a far-OTM contract's flat Rs20 brokerage is a much larger share of a small premium -- so one global fraction cannot express 'the move must pay for the contract about to be bought', and the correct shape is a per-contract bound computed at strike selection. That is recorded in docs/feature-audit.md as the remaining work; this value unblocks the cold start, which nothing else can: momentum-burst-detector needs a playbook-rule, which needs an opportunity-instruction, which needs a closed trade, so mean-reversion-detector is the only detector that can raise the first candidate on a cold system. Re-derive when the segments trade something other than index options, or when Upstox's charge schedule changes."
 
 [momentum_burst_horizon]
 value = 300.0
@@ -4325,3 +4325,329 @@ note  = "Claude, 2026-09-05: the hard ceiling on one pass, whatever the sweep ce
 value = 100000
 unit  = "pairs"
 note  = "Claude, 2026-09-05: how many cluster-forming pairs are carried between passes. Clusters are built from a whole sweep rather than from one pass's slice -- a pair measured three passes ago is still the best answer there is about it -- so the measurements have to be remembered, and remembering all of them at 2,444 symbols is three million entries. Only pairs at or above correlation_cluster_threshold are kept, because those are the only ones union-find acts on, and a pair that falls below it is forgotten the moment it is remeasured. 100,000 bounds this at tens of megabytes; strong_pairs_evicted on the standing is what says the bound was reached, and a number climbing there means the threshold is too low for this universe rather than that the memory is too small."
+
+# ---------------------------------------------------------------------------
+# Added 2026-09-06. These 61 settings existed only in the operator's live
+# ~/.config copy and in no tracked file, so a lost disk would have taken the
+# whole Indian-market half of this configuration with it -- every
+# equity_intraday_* charge rate, every cash_equity_shortlist_* weight, the
+# broker connection settings, and the zero_to_hero thresholds. Rule 9 says
+# everything on this server lives in GitHub; a number nobody can restore is
+# exactly the thing that rule exists for. Values and provenance notes are
+# copied verbatim from the live file, which stays the one the parts read.
+# ---------------------------------------------------------------------------
+
+[symbol_selection_liquidity_pool_size]
+value = 300
+unit  = "symbols per venue"
+note  = "operator, 2026-08-29: under the volume-and-volatility-blend metric, only the top this-many by volume are even eligible to be ranked by volatility -- a floor so a thin, hard-to-fill symbol cannot outrank a liquid one purely by having spiked. Not measured: a first estimate, six times captured_symbol_count (50), wide enough to surface real movers without reaching into the illiquid tail of ~860 symbols per venue. Revisit once the blend has run and fill quality on its lower-liquidity selections can be checked."
+
+[symbol_selection_volatility_weight]
+value = 0.35
+unit  = "fraction, 0 to 1"
+note  = "operator, 2026-08-29: how much a symbol's 24-hour range percentile counts against its volume percentile under the volume-and-volatility-blend metric -- 0 is pure volume (identical to quote-volume-24h restricted to the pool), 1 is pure volatility. 0.35 is a judgement call, not a measurement: there is no historical run yet to tune it against. Revisit against the first blend-selected watchlist's actual trade outcomes. Together with symbol_selection_momentum_weight and symbol_selection_acceleration_weight, must sum to at most 1.0 -- the remainder is volume's share."
+
+[symbol_selection_momentum_weight]
+value = 0.15
+unit  = "fraction, 0 to 1"
+note  = "operator, 2026-08-29: how much a symbol's 1-hour price-change percentile counts, under volume-and-volatility-blend. Bybit-only: it states a 1-hour-old price on its bulk ticker (prevPrice1h) and Binance states nothing shorter than 24h at all, so this signal is silently unavailable on Binance and its weight there returns to volume rather than ranking every symbol identically. Kept deliberately small -- a flat 1-hour net change cannot tell a fresh move from a spike that already reversed within the hour, which is the whole reason symbol_selection_acceleration_weight exists as the stronger signal."
+
+[symbol_selection_acceleration_weight]
+value = 0.35
+unit  = "fraction, 0 to 1"
+note  = "operator, 2026-08-29: how much a symbol's short-window acceleration percentile counts, under volume-and-volatility-blend -- the fraction of a recent kline window's own high-low range that happened in just its most recent slice (close to 1 = moving right now; close to 0 = already moved and gone quiet). This is the metric proposed to answer 'don't pick a symbol whose move is already over': docs/proposals/rank-by-recent-acceleration-not-just-24h-range.md. Only symbols the rotation has actually scanned carry a reading; the rest fall back to volume+volatility+momentum alone until their turn comes."
+
+[symbol_selection_short_window_scan_size]
+value = 60
+unit  = "symbols per venue per refresh"
+note  = "operator, 2026-08-29: how many liquidity-pool symbols get a fresh kline-based acceleration reading each catalogue refresh. Neither venue bulk-serves short-interval candles, so this is one REST call per symbol scanned -- bounded and rotated through the pool rather than scanning all symbol_selection_liquidity_pool_size (300) at once, since the per-call REST weight for a kline request was not confirmed against primary Binance documentation (WebFetch could not render the JS-rendered weight table; see the research behind this proposal). At 60/refresh with a 300-symbol pool, one full rotation takes 5 refreshes (75 minutes). Raise it once the actual weight cost is measured live."
+
+[symbol_selection_short_window_kline_interval]
+value = "5m"
+unit  = "candle interval name"
+note  = "operator, 2026-08-29: the bar size the acceleration scan requests. Five minutes, so symbol_selection_short_window_kline_count bars covers an hour at a resolution fine enough to tell 'moving in the last 15 minutes' from 'moved earlier in the hour'."
+
+[symbol_selection_short_window_kline_count]
+value = 12
+unit  = "bars"
+note  = "operator, 2026-08-29: how many symbol_selection_short_window_kline_interval bars the acceleration scan requests per symbol -- 12 five-minute bars is the one-hour baseline window symbol_selection_short_window_recent_bars is measured against."
+
+[symbol_selection_short_window_recent_bars]
+value = 3
+unit  = "bars"
+note  = "operator, 2026-08-29: how many of the most recent symbol_selection_short_window_kline_interval bars count as 'right now' when computing acceleration -- three five-minute bars is the last 15 minutes, measured against the full symbol_selection_short_window_kline_count-bar window."
+
+[regime_state_checkpoint_interval]
+value = 20000
+unit  = "price observations"
+note  = "operator, 2026-08-29: how many prices regime-classifier may observe before it writes its series down. Same figure and the same reasoning as pair_state_checkpoint_interval: this part reads the same symbol-price-frame wire cointegration-pair-finder does, at a comparable rate, and a price series changes hundreds of times a second so losing a few seconds of it costs nothing. Added after measuring 48,192 classification attempts and 48,192 unclassified -- every restart discarded the whole window, and regime_minimum_observations (1024) means a symbol whose window keeps getting wiped can never classify at all."
+
+[remembered_fill_ids]
+value = 5000
+unit  = "fill ids"
+note  = "operator, 2026-08-25: how many recent fill ids each lot-book part keeps so a venue re-sending a fill cannot count it twice. Bounded rather than unbounded for a reason that is arithmetic: the lot books are checkpointed on every fill, so a set that only grows makes each write larger and the total work quadratic -- at this run's ~40 fills an hour, a year of ids would be megabytes rewritten per fill. Five thousand is about five days at that rate and roughly 200 kB per checkpoint, against a re-delivery window a venue measures in seconds, so the bound is far wider than the thing it guards and still cheap. Getting it too low means a re-sent fill counted twice, which opens a phantom position; too high costs only writes. Raise or lower it against a measurement of actual re-delivery, and record what that measurement was."
+
+[closed_trades_trustworthy_after_ns]
+value = 1787639131000000000
+unit  = "nanoseconds since the epoch, UTC"
+note  = "operator, 2026-08-25: closed trades recorded before this moment carry an entry price and a quantity the market never printed, and every closed-trade-decoding part must refuse them rather than learn from them. position-close-detector backed the entry out of the closing fill, so a round trip sold in slices reported the whole trip's profit divided by whatever fraction closed last -- ten of the 113 trades on this machine carry one, including AAVE at 217.02 falling to 132.57 in 37 seconds and ETH at 3297 falling to 2517, neither of which happened. The fix is commit 460b7ec, committed 05:37:11Z; this value is 06:25:31Z, the first moment the live spine ran it, read from the supervisor log rather than guessed -- the code being committed is not the code being run. A decoder trained on the earlier rows would learn stop placement and exit quality from prices that never existed, which is worse than learning nothing. The bad rows are not deleted: the journal is append-only and digest-chained, and rewriting history to hide a defect is the one repair that costs more than the defect. Raise this only if another arithmetic defect is found in what a closed trade records, and say which."
+
+[pair_state_checkpoint_interval]
+value = 20000
+unit  = "price observations"
+note  = "operator, 2026-08-25: how many prices cointegration-pair-finder may observe before it writes its series and verdicts down. Twenty thousand, which at the observed rate -- about 4.7 price frames a second across 100 captured symbols, so roughly 470 observations a second -- is a write about every 40 seconds. The cost of a crash is that many observations, which for a 256-long window is a fraction of one refill; the cost of writing more often is an fsync of about a megabyte. Not every fill, as the lot books are: a lot book changes about 40 times an hour and losing one costs a whole round trip, while a price series changes hundreds of times a second and losing a second of it costs nothing. Raise it if checkpoint writes ever show up as an io-pressure-meter reading, and record that reading."
+
+[peak_excursion_checkpoint_interval]
+value = 1000
+unit  = "basis observations"
+note  = "operator, 2026-08-29: how many priced observations of an open position peak-excursion-tracker may make before it writes its extremes down. Counted only over ticks that actually had an open position to price (checkpointable_observations), not the whole market-data tape -- with a handful of positions open at a time this is a far lower rate than cointegration-pair-finder's, so its 20000 would have made this checkpoint about as stale as the fill-gated one it replaces. 1000 is a starting estimate, not a measurement: revisit against the observed write rate once this has run, and raise it if checkpoint writes ever show up as an io-pressure-meter reading."
+
+[position_state_root]
+value = "~/.local/share/ajit-segment-bots/positions"
+unit  = "path"
+note  = "operator, 2026-08-25: where a lot book waits for the next process. Its own directory rather than learned_state_root's, because a lot book is not learned -- it is what the venue filled, and an operator clearing what the system concluded must not also clear what it holds. Put through storage_facts.require_durable_directory, which refuses a memory-backed filesystem: /tmp is tmpfs on this box, so a position checkpointed there would survive right up until the machine restarted, which is the one moment it is needed. Measured reason this exists: the spine had started 46 times, 855 positions had been opened and only 115 round trips closed, because position-close-detector and cost-basis-tracker held their lot books in memory alone and every start forgot every open position."
+
+[position_state_checkpoint_interval]
+value = 1
+unit  = "fills"
+note  = "operator, 2026-08-25: how many fills a lot book may take before it is written down. One -- every fill. The learned models checkpoint every 500 observations because they train thousands of times a minute and an fsync per step would cost more than a crash; a fill is the opposite, arriving about 40 times an hour on this run, and what a missed one costs is not a fraction of a coefficient but a whole round trip that can never be scored. Raise it only against a measurement showing fill fsyncs are a cost, and record what that measurement was."
+
+[tail_crowding_order_flow_deviation_threshold]
+value = 2.0
+unit  = "standard deviations"
+note  = "Claude, 2026-09-01: how far the order-flow imbalance (broker-open-interest, buy minus sell quantity over their total) must sit from its usual level before it reads as a crowded position. Carried the crypto build's funding-deviation threshold's magnitude (tail_crowding_funding_deviation_threshold, operator, 2026-08-23) as a starting point since both measure a standardised deviation the same way -- NOT YET MEASURED against real Indian open-interest data."
+
+[funding_premium_clamp]
+value = 0.0005
+unit  = "fraction of notional"
+note  = "operator, 2026-08-29: the interest-vs-premium clamp in the venue formula funding-rate-forecaster computes (see that file's own docstring: clamp(interest - premium, +/-0.05%)). Five basis points, the standard perpetual-funding formula both venues document. Not fetched from either venue's API in this codebase -- unlike interval, cap, floor and interest rate, which are venue-declared per symbol and read off symbol-universe -- because neither exposes this clamp as a field on any endpoint read here. Reference knowledge from the venues' published formula documentation, not a live reading; revisit if a captured payload is ever found to carry it."
+
+[vol_feature_medium_window]
+value = 20
+unit  = "candles"
+note  = "operator, 2026-08-25: the middle horizon volatility-feature-builder measures over, between vol_feature_short_window (5) and vol_feature_long_window (60). The heterogeneous autoregressive form needs three legs and had two: a short and a long window can say whether volatility is rising or falling and cannot say whether it is doing so steadily or in a spike, which is a different trade. Twenty candles sits between the two at roughly the 1:4:12 spacing the daily HAR literature uses for 1, 5 and 22 days -- the ratios transfer to one-minute candles, the day counts do not, and annualising by 252 here would be applying a trading-day constant to minutes. From the volatility reel read 2026-08-20 (docs/research/instagram-2026-08-20.md section 1), whose ten-feature specification named RV1, RV5 and RV22 and which this system had implemented as two windows. Widen the spacing only against a measurement that the middle leg is carrying no weight the other two do not."
+
+[level_refresh_interval_seconds]
+value = 1.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how long an unchanged level may go unsaid before a part says it again. A level -- a budget, a fault, a tier, a limit -- is true until it changes, and 23 parts ended their tick with an unconditional publish of one, so every level went onto the bus on every tick. Measured on the live spine at 10:14: failing-part-detector published 26,575 messages a second from 283 received and part-restart-budgeter 17,106 from 6,963, 89,747 a second across the spine, load average 28.7 on twelve cores, and seven parts reading as silent because they could not get the CPU to send the heartbeat that would have proved them alive. One second, matching part_health_interval: a level is refreshed at the cadence every part already reports at, so a consumer that starts after the last change waits no longer for the level than it already waits for a heartbeat, and a LatestByKey bounded by part_usage_reading_maximum_age_seconds (10 s) sees ten refreshes before it would age a still-true level out. The refresh is what keeps this from being pure edge-triggering, which is how a restarted consumer starves."
+
+[sweep_short_window_fraction]
+value = 0.25
+unit  = "fraction of the window"
+note  = "Claude, 2026-08-26: what 'recent' means for volatility_ratio -- the standard deviation of the last quarter of a window's returns against the whole window's. A ratio, so a symbol whose volatility is rising reads the same in a stablecoin pair and a thin alt, which is the property the raw number does not have. A quarter of detector_window_length (256) is 64 observations, comfortably above the two a standard deviation needs and short enough that a change in regime shows before the long window has absorbed it. Not measured against outcomes yet -- no instruction has been written, so nothing has been scored -- and this note is the record that the number is a stated choice awaiting that measurement rather than a fitted one."
+
+[sweep_minimum_symbols_for_cross_section]
+value = 8
+unit  = "symbols"
+note  = "Claude, 2026-08-26: the fewest symbols with a measurement before universal-symbol-sweeper and signal-outcome-labeller will state a cross-sectional rank or a market excess over it. A percentile over one observation is 0 or 1 by construction and describes nothing; over eight, the coarsest a rank can be is one-seventh, which is finer than any threshold a watch condition would sensibly place on it. Below this the measurement is absent rather than approximate, so the sweeper counts the symbol unmeasurable instead of evaluating a condition against a universe that was not there. Eight rather than a fraction of the universe because the bound is about whether a percentile means anything at all, not about coverage -- coverage is what symbols_not_reached already reports."
+
+[regime_reading_maximum_age_seconds]
+value = 120.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how old a market-regime reading may be before signal-outcome-labeller stops attaching it to a claim. A LatestByKey with no age bound holds a key's last value forever, which is the shape that cost position-sizer a fifty-six minute stale price on 2026-08-23 and made every part the governor had switched off still look alive to it on 2026-08-26 -- the question to ask of every level is what makes its keys go away. 120 s is price_series_maximum_gap_seconds, and deliberately the same number: a regime is computed from a price window, so a reading whose series would already have been cleared as holed describes a stretch of market that no longer connects to now. regime-classifier publishes about once a second per symbol, so an ordinary reading is never near this; reaching it means the classifier stopped, and a claim then carries REGIME_NOT_KNOWN rather than the last thing it managed to say."
+
+[tail_move_remaining_maximum_age_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how old tail-move-remaining-estimator's reading may be before tail-trailing-exit-planner stops trailing against it. The estimator publishes when a follow-candidate arrives, so an ordinary reading is seconds old; reaching a minute means the move this bot joined is no longer being estimated, and a trail set against a stale figure is a stop placed by a number from a different market. Sixty seconds is reference_price_maximum_age_seconds, the same ceiling the price staleness estimator clamps to, and for the same reason: past it every symbol measured moves further than the stop distance being worked with, so the figure cannot place a stop whatever it says."
+
+[margin_schedule_maximum_age_seconds]
+value = 5400.0
+unit  = "seconds"
+note  = "Claude, 2026-08-26: how old a symbol-universe entry may be before liquidation-cluster-mapper stops reading its maintenance margin ladder. Every LatestByKey needs the question asked of it -- what makes its keys go away -- because a level with no age bound holds a key's last value forever, which is what made every part the governor had switched off still look alive to it on 2026-08-26. 5400 s is six times symbol_catalogue_refresh_interval (900 s), so five consecutive failed catalogue reads pass before a ladder expires: a margin ladder changes when a venue amends its risk limits, which is a matter of weeks, so the bound is about noticing the reader has died rather than about the number going stale. When it does expire the map is refused as no-margin-schedule, which is the correct answer -- a liquidation price computed from a ladder nobody is refreshing is a rule of thumb wearing a calculation's clothes."
+
+[broker_instrument_listing_maximum_age]
+value = 7200
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how old a broker-instrument-listing reading may be before broker-market-feed-reader stops trusting it. Twice broker_catalogue_refresh_interval (3600s), same reasoning as broker_token_standing_maximum_age -- one missed catalogue read is not yet a fault, two in a row is."
+
+[broker_reconnect_backoff_floor]
+value = 1.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: the first wait after a dropped Upstox feed connection, before doubling on repeated failures. Matches venue_reconnect_backoff_floor's own starting point for the crypto readers -- no measurement yet exists for Upstox's own reconnect behaviour, so this borrows the crypto build's already-justified floor rather than inventing an unmeasured one."
+
+[broker_reconnect_backoff_ceiling]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: the most this part waits between reconnect attempts, however many have failed in a row. Same reasoning and same value as venue_reconnect_backoff_ceiling -- a minute is long enough to stop hammering a broker that is genuinely down, short enough that a market-hours outage is not compounded by the reader itself sleeping through the recovery."
+
+[broker_stream_drain_interval]
+value = 1.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: the longest broker-market-feed-reader blocks on one socket read before yielding back to the tick loop. T-2 -- a part that blocked longer than this on I/O is a part the governor cannot switch promptly. One second matches stream_drain_interval's own value for the crypto readers."
+
+[broker_connection_open_timeout]
+value = 10.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how long to wait for the Upstox WebSocket handshake before treating it as failed. No Upstox-specific measurement yet -- ten seconds is a conservative default pending one, generous enough for a slow network without leaving a part hung well past its health-report interval."
+
+[broker_account_funds_freshness]
+value = 30.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: how old a broker account funds reading may be before broker-account-funds-reader reads it again. Same value as venue_balance_freshness -- available margin moves with fills, and thirty seconds is that part's own already-justified figure for the same kind of number in the crypto build."
+
+[broker_price_frame_cadence_seconds]
+value = 0.25
+unit  = "seconds between frames"
+note  = "Claude, 2026-09-01: how often broker-price-level-sampler publishes every instrument's latest price. Same value as price_frame_cadence_seconds -- the crypto build's own reasoning (four frames inside the tightest reference-price staleness bound any consumer will accept) applies unchanged to the same kind of number here; not re-derived since the underlying constraint (a level must be fresher than what a reader is told to expect) is identical, not asset-class-specific."
+
+[broker_price_frame_maximum_symbols]
+value = 2000
+unit  = "instruments in one frame"
+note  = "Claude, 2026-09-01: how many instruments one broker-price-frame may carry before it is split. Same value and same 131,072-byte bus ceiling as price_frame_maximum_symbols -- Phase A's ~200-symbol universe never approaches this, so the split path exists for the case nobody predicted, same as the crypto build's own reasoning. Not re-measured for this feed's own byte-per-instrument size; worth doing before this is relied on at a larger universe."
+
+[upstox_candle_interval]
+value = "I1"
+unit  = "Upstox OHLC interval code"
+note  = "Claude, 2026-09-02: which of Upstox's own OHLC bars broker-candle-bridge republishes onto the shared candle wire. Real bug found this date: market.marketOHLC.ohlc is a repeated field -- one MarketFullFeed message bundles several granularities together (Upstox documents \"I1\" for 1-minute and \"1d\" for daily; upstox.com/developer/api-documentation/v3/get-market-data-feed, fetched 2026-09-02), and the bridge was republishing every one of them onto `candle` unfiltered. kline-window-builder keys its per-symbol candle list by (venue_id, symbol) only, with no interval check, so a 1-day bar landed in the same window as 1-minute bars and corrupted its spacing/gap-detection math the instant a real feed ever carried more than one granularity. \"I1\" matches candle_interval's own reasoning (1m is the finest bar, the base the 5m/15m/30m ladder aggregates from) expressed in Upstox's own code rather than the crypto setting's \"1m\" -- broker-candle-bridge keeps Upstox's raw interval string on NormalisedCandle rather than remapping it, so this is compared against that raw string directly, never against candle_interval."
+
+[zero_to_hero_maximum_premium]
+value = 5.0
+unit  = "rupees"
+note  = "Claude, 2026-09-01: NOT YET MEASURED against real captured Indian option-chain data -- no live account is connected. Rs 5 is a commonly-cited colloquial cutoff for 'deep OTM lottery ticket' territory in Indian retail options discussion, used as a starting default rather than a derived figure. Re-derive from real premium distributions on NIFTY/BANKNIFTY/SENSEX expiry-day chains before this setting is relied on for anything beyond paper-trading exploration. MEASURED 2026-09-06 against real captured Indian option-chain data, which closes the caveat above rather than removing it: 1,524 NSE_FO contracts on the tape for 2026-09-04 carry both a real in-session premium and a real Upstox delta. Premium quantiles across them are p01 0.18, p05 0.70, p10 1.35, p25 5.00, p50 29.90; |delta| quantiles are p01 0.005, p05 0.017, p10 0.034, p25 0.130. So Rs 5 is the chain's own first quartile almost exactly, and 0.10 delta sits between its p10 and p25 -- the two colloquial defaults turn out to select the cheapest and furthest-OTM quarter of a real chain, which is what they were reaching for. Passing rates: premium 25.3%, delta 21.6%, both 16.3%, and the two disagree on 14.4% of contracts, so neither is redundant. The values are kept rather than moved: they are now sourced, and what should move them is a measured hit rate on scored candidates, not a re-fit to the same distribution. Note this detector only fires on expiry day, and 2026-09-04 was not one for these contracts, so this measures the chain rather than the pattern."
+
+[zero_to_hero_maximum_abs_delta]
+value = 0.10
+unit  = "delta magnitude"
+note  = "Claude, 2026-09-01: NOT YET MEASURED. 0.10 is a commonly-cited options-literature threshold for 'far out of the money', used as a starting default. Same caveat as zero_to_hero_maximum_premium -- re-derive from real captured Indian option-chain delta distributions before relying on it beyond paper-trading exploration. MEASURED 2026-09-06 against real captured Indian option-chain data, which closes the caveat above rather than removing it: 1,524 NSE_FO contracts on the tape for 2026-09-04 carry both a real in-session premium and a real Upstox delta. Premium quantiles across them are p01 0.18, p05 0.70, p10 1.35, p25 5.00, p50 29.90; |delta| quantiles are p01 0.005, p05 0.017, p10 0.034, p25 0.130. So Rs 5 is the chain's own first quartile almost exactly, and 0.10 delta sits between its p10 and p25 -- the two colloquial defaults turn out to select the cheapest and furthest-OTM quarter of a real chain, which is what they were reaching for. Passing rates: premium 25.3%, delta 21.6%, both 16.3%, and the two disagree on 14.4% of contracts, so neither is redundant. The values are kept rather than moved: they are now sourced, and what should move them is a measured hit rate on scored candidates, not a re-fit to the same distribution. Note this detector only fires on expiry day, and 2026-09-04 was not one for these contracts, so this measures the chain rather than the pattern."
+
+[zero_to_hero_horizon_seconds]
+value = 3600.0
+unit  = "seconds"
+note  = "Claude, 2026-09-01: NOT YET MEASURED. One hour, matching this project's other detectors' typical horizon order of magnitude (e.g. funding_skew_detector's now-retired 3600s) as a starting default for how long a zero-to-hero candidate's claim is scored against -- this pattern is specifically a last-hour-of-session phenomenon, so this figure deserves its own re-derivation from real session-close timing, not inherited from an unrelated detector's number."
+
+[underlying_price_bridge_index_trading_symbols]
+value = ["NIFTY", "BANKNIFTY", "SENSEX"]
+unit  = "trading symbol"
+note  = "Claude, 2026-09-01: the three index underlyings broker-underlying-price-frame-bridge tracks, matching docs/superpowers/specs/2026-09-01-options-segment-bots-design.md section 2's index-options universe. Verified against Upstox's real instrument master (assets.upstox.com/market-quote/instruments/exchange/complete.json.gz, fetched 2026-09-01): NSE_INDEX|Nifty 50 (trading_symbol NIFTY), NSE_INDEX|Nifty Bank (trading_symbol BANKNIFTY), BSE_INDEX|SENSEX (trading_symbol SENSEX), each instrument_type INDEX. A trading_symbol, not an instrument_key, because the key format is Upstox's own implementation detail this part resolves at runtime rather than assumes."
+
+[market_condition_level_maximum_age_seconds]
+value = 180.0
+unit  = "seconds"
+note  = "Claude, 2026-09-02: how long a reader of instrument-restriction or market-session-state believes the last statement about one key (one symbol, one segment). The bus publishes each item of a level as its own message and an empty level publishes nothing at all (runtime/bus.py publish: 'for item in items'), so 'this symbol is no longer banned' cannot travel as an empty tuple -- the reader has to expire the key. 180s is 3x instrument_restriction_refresh_interval_seconds' 60s, so two consecutive missed restatements are tolerated and the third expires the claim. Fails safe in both directions: an expired restriction stops halting a name the exchange released, and an expired session reads as 'not measured', which does not fill."
+
+[equity_intraday_flat_brokerage]
+value = 20.0
+unit  = "INR per executed order"
+note  = "Claude, 2026-09-05: the CEILING on equity intraday brokerage, not a flat charge. Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them, quotes 'Rs20 per executed order or 0.1% (whichever is lower)' -- so the charge is min(this, turnover x equity_intraday_brokerage_rate) and on a Rs5,000 order it is Rs5, not Rs20. Options are genuinely flat ('Flat Rs20 per executed order'), which is why options_flat_brokerage is read as a flat and this one is not; a model that copied the options one would overstate the cost of every small equity trade."
+
+[equity_intraday_brokerage_rate]
+value = 0.001
+unit  = "fraction of turnover"
+note  = "Claude, 2026-09-05: the percentage half of 'Rs20 per executed order or 0.1% (whichever is lower)', from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. 0.1% = 0.001. Whichever of this and equity_intraday_flat_brokerage is lower is charged. Has no counterpart in the options stack, which has no percentage brokerage at all."
+
+[equity_intraday_stt_sell_rate]
+value = 0.00025
+unit  = "fraction of turnover, sell side only"
+note  = "Claude, 2026-09-05: '0.025% on the sell side' for Equity Intraday, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. 0.025% = 0.00025. Charged on the sell leg only, on TURNOVER -- the options rate is 0.1% and is charged on PREMIUM, so using the options figure here was wrong in the rate and in the base at once. Read the October 2024 block: the April 2023 block on the same page states the same 0.025% for intraday but 0.0625% for options, and mixing the two eras is the mistake that block placement invites."
+
+[equity_intraday_exchange_transaction_charge_rate]
+value = 0.0000297
+unit  = "fraction of turnover"
+note  = "Claude, 2026-09-05: NSE '0.00297% per trade on buy & sell.' for Equity Intraday, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them, the 'From 1st October 2024' transaction-charges block. 0.00297% = 0.0000297. Charged on both legs. The options equivalent is 0.03503% on premium -- an order of magnitude larger -- which is what a cash-equity trade was being charged before this setting existed. BSE is stated on the page as 'charges vary as per the scrip group' and is therefore NOT represented by this number: a BSE_EQ fill priced with it is priced with an NSE rate, and this segment trades NSE."
+
+[equity_intraday_ipft_charge_rate]
+value = 0.000001
+unit  = "fraction of turnover"
+note  = "Claude, 2026-09-05: NSE 'Rs0.10 per Lakh of the turnover' for Equity Intraday, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. Rs0.10 per Rs100,000 = 0.000001. Charged on both legs. The options IPFT is Rs0.50 per lakh of premium, five times this and on a different base."
+
+[equity_intraday_stamp_duty_buy_rate]
+value = 0.00003
+unit  = "fraction of turnover, buy side only"
+note  = "Claude, 2026-09-05: '0.003% or Rs300 / crore on buy side' for Equity Intraday, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. 0.003% = 0.00003, and Rs300/crore is the same number stated twice. Buy leg only. Happens to equal the options stamp duty rate, which is a coincidence of the schedule and not a shared setting -- they are published on separate lines and could diverge."
+
+[equity_intraday_sebi_charge_rate]
+value = 0.000001
+unit  = "fraction of turnover"
+note  = "Claude, 2026-09-05: 'Rs10/crore' SEBI charges, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. Rs10 per Rs10,000,000 = 0.000001. Charged on both legs. NOTE the options charge stack in runtime/indian_options_fee_model.py omits this component although the same page lists it against Equity Options too -- that omission is left alone deliberately, because changing what an options fill costs is a separate change with its own evidence. At this rate it moves no conclusion either way."
+
+[equity_intraday_gst_rate]
+value = 0.18
+unit  = "fraction of the taxable components"
+note  = "Claude, 2026-09-05: '18% (on brokerage + transaction charges + IPFT charges)' for Equity Intraday, from Upstox's published brokerage page (https://upstox.com/brokerage-charges/), fetched 2026-09-05, reading the current 'From 1st October 2024' blocks and not the superseded ones beside them. Applied to those three components only -- STT, stamp duty and the SEBI charge are outside the GST base, which is what the page says rather than a simplification. Same rate and same base rule as the options GST, stated separately because it is published separately."
+
+[equity_profile_days_back]
+value = 365
+unit  = "days"
+note  = "Claude, 2026-09-05: how far back equity-opportunity-profiler's historical window reaches, one year -- enough to state a 52-week high and low without asking Upstox for more than the v3 historical-candle endpoint answers in one call."
+
+[equity_profile_atr_window_days]
+value = 14
+unit  = "trailing daily bars"
+note  = "Claude, 2026-09-05: how many trailing daily bars the average true range is taken over. Fourteen is Wilder's own published period for the indicator; not re-derived here because ATR's definition already names it, the same way this project treats a broker's own documented cap as a fact rather than a choice (see maximum_margin_quote_instruments)."
+
+[equity_profile_symbols_per_sweep]
+value = 20
+unit  = "symbols per sweep"
+note  = "Claude, 2026-09-05: how many ordinary shares one due tick asks Upstox for, modelled on broker_history_most_instruments's own sizing reasoning -- a year of daily bars is under 300 rows per symbol, an order of magnitude smaller than a chain's minute bars, so a wider sweep than that reader's 8 is affordable against the same rate limit. Not yet measured against Upstox's real historical-candle rate limit; re-measure and raise once the profiler has run against it."
+
+[equity_profile_fetch_interval_seconds]
+value = 5.0
+unit  = "seconds"
+note  = "Claude, 2026-09-05: how often equity-opportunity-profiler's sweep is due. At 20 symbols per sweep this profiles the ~2,655 candidate ordinary shares in about eleven minutes, and a window's key already includes today's date, so the sweep idles once every candidate has a fresh window until the next calendar day reopens all of them at once."
+
+[cash_equity_shortlist_size]
+value = 50
+unit  = "symbols"
+note  = "operator, 2026-09-05: how many cash-equity names the shortlist keeps, matching the standing ruling on captured_symbol_count (2026-08-25, 'hold at 50 and stop walking') -- cointegration-pair-finder and spread-reversion-detector fail as the square of the universe, and cash-equity's ~2,444-share eligible set is an order of magnitude past the size that ruling was written to cap."
+
+[cash_equity_shortlist_liquidity_pool_size]
+value = 200
+unit  = "symbols"
+note  = "Claude, 2026-09-05: how many of the most-liquid eligible shares are candidates for the blend before it ranks them, the same floor role volume's cut played in the retired crypto reader's own blend (symbol_catalogue_reader.VOLUME_AND_VOLATILITY_BLEND). Four times cash_equity_shortlist_size, chosen so the blend has real room to rank within rather than the pool and the shortlist being nearly the same size; not yet measured against how many of the ~2,444 eligible shares carry a real liquidity-grade reading on a given day."
+
+[cash_equity_shortlist_momentum_weight]
+value = 0.2
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on today's move so far. The six shortlist weights (momentum, volume, week-52 proximity, gap, VWAP deviation, ATR-normalised move) are set equal at one sixth each as a starting point -- none has been tuned against a real trading day yet, and RL-061 asks that this be named and revisited rather than presented as measured."
+
+[cash_equity_shortlist_volume_weight]
+value = 0.2
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on today's volume against this name's own average day. See cash_equity_shortlist_momentum_weight's note -- the six weights are an equal, untuned starting point."
+
+[cash_equity_shortlist_week_52_weight]
+value = 0.2
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on proximity to the 52-week high or low. See cash_equity_shortlist_momentum_weight's note -- the six weights are an equal, untuned starting point."
+
+[cash_equity_shortlist_gap_weight]
+value = 0.1333333333
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on the session's gap from the prior close. See cash_equity_shortlist_momentum_weight's note -- the six weights are an equal, untuned starting point (1/6 rounded so the six sum to 1.0 exactly)."
+
+[cash_equity_shortlist_vwap_weight]
+value = 0.1333333333
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on deviation from the session's own volume-weighted average price. See cash_equity_shortlist_momentum_weight's note -- the six weights are an equal, untuned starting point (1/6 rounded so the six sum to 1.0 exactly)."
+
+[cash_equity_shortlist_atr_weight]
+value = 0.1333333334
+unit  = "fraction of the six-signal blend"
+note  = "operator, 2026-09-05: share of the shortlist blend spent on today's move sized against average true range. See cash_equity_shortlist_momentum_weight's note -- the six weights are an equal, untuned starting point, this one carrying the remainder so all six sum to exactly 1.0."
+
+[cash_equity_shortlist_restatement_interval]
+value = 30.0
+unit  = "seconds"
+note  = "Claude, 2026-09-05: how often cash-equity-shortlist-ranker restates an unchanged shortlist, the same reasoning symbol_universe_restatement_interval carries -- a consumer that started after the last change has no way to ask for what it missed."
+
+[unresolved_broker_update_hold_limit]
+value = 2000
+unit  = "instrument keys"
+note  = "Claude, 2026-09-06: how many instruments the three broker bridges (market-data, candle, order-book) may hold an update for while waiting for that instrument's listing to reach them. 2000 is not a guess: it is Upstox's own documented ltpc_combined_limit / full_individual_limit (runtime/brokers/upstox.py, _LIMITS_SOURCE), the most instruments one feed connection can ever be subscribed to, so a bridge holding more keys than this is holding for instruments nobody subscribed and the oldest should go. Measured cause, live spine 2026-09-06: the feed delivers its whole snapshot the instant the socket connects, while subscribed-instrument-listing-filter restates the subscribed set over a 300 s conveyor cycle, so every bridge saw its updates against an empty map -- 2,000 / 1,878 / 1,999 updates received and 0 republished by all three, with instruments_resolved at 2,000 in each by the time anyone looked. A moving market hides this because the next tick replaces what was dropped; a quiet one, and every rarely-traded contract, loses it permanently."
+
+[detector_slowdown_checks]
+value = 5
+unit  = "consecutive checks"
+note  = "Claude, 2026-09-06: how many checks in a row a part must be over detector_slowdown_ratio before taking-longer-every-tick is a fault. Measured on the live spine that day: the rule fired 15,109 times -- every fault the detector raised was this one kind -- and unattended-run-warden had refused 4,671 restarts for a system-wide cause that was this detector's own noise, leaving the part that restarts a broken part deaf. The cause, unexplained in the code until then: both halves of the comparison come from one rolling window, so `earlier` is not a baseline but simply half a window ago, and a ratio between two means of a fluctuating series crosses any fixed threshold at a rate set by its variance, for ever. Five because the fault is named for persistence -- one window crossing is a spike, five consecutive is the growing structure it describes -- and because at the ~3% per-check rate this rule fired at, five independent crossings is about one in ten million rather than one in thirty. Raise it if noise returns; lowering it below three puts the warden back where it was."
+
+[broker_feed_venue_id]
+value = "upstox"
+unit  = "venue id"
+note  = "Claude, 2026-09-06: the venue_id the broker feed stamps on every market-data message, which feed-gap-detector keys its broker detector on. A named setting rather than an import of broker-underlying-price-frame-bridge's UPSTOX_VENUE_ID constant, because T-4 says a part names data and never another part -- and rather than a literal, because RL-061 says a number or name a decision turns on carries provenance. It must equal what broker-market-data-bridge actually publishes: measured 2026-09-06 from the captured tape and the live heartbeat, every broker market-data message carries venue_id \"upstox\". If a second broker is ever added this becomes a list, the same way captured_venues already is. Added because feed-gap-detector built its detectors only from load_captured_venue_adapters, so every Upstox print hit a silent `continue` and the one part that would notice the Indian feed going quiet was watching two crypto streams that stopped on 2026-09-01."
+
+[feed_gap_patience_multiple]
+value = 2.8
+unit  = "multiple of a stream's own p99 inter-print gap"
+note  = "Claude, 2026-09-06: how far past its own habit a stream must be silent before feed-gap-detector calls the silence a gap. The bound per stream becomes max(feed_gap_threshold, this x that stream's own p99 inter-print gap, estimated online from the gaps the detector itself observed), so a liquid symbol keeps the proven 60 s floor exactly and a quiet NSE option contract stops being reported as a stopped feed. Needed because feed_gap_threshold's own note already says the flat 60 s 'is NOT safe at the full universe: an illiquid perpetual is quiet for minutes at a time', and the Indian universe is that case at scale -- 1,974 subscribed instruments, mostly option contracts that print every few minutes. This project has already paid for the flat-floor version of this mistake once: anomaly_feed_silence_patience_multiple's own note records 3,282 of 3,289 anomalies being this-venue-has-stopped-updating on NSE contracts that were merely quiet, each one halting trading in that symbol. 2.8 carries the same provenance price_gap_patience_multiple and anomaly_feed_silence_patience_multiple both carry -- the ratio that let ordinary quiet through while a real 1031 s outage still cleared every window by more than a factor of eight -- and is the same rule RollingWindow._gap_bound_seconds applies to a price window. Deliberately not re-fitted here: it is the same question about the same feeds, and inventing a second number for it would be a number with no measurement behind it. Re-measure against a real Indian session once one has run with this on."

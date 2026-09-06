@@ -1,10 +1,21 @@
-"""Real trades off the tape, through the sampler, to one entry candidate.
+"""Real NSE option prints, through the sampler, to one entry candidate.
 
 This is the first test in the project where parts talk to each other. Nothing is
 mocked: `price-level-sampler`, `regime-classifier`, `cointegration-pair-finder`
 and `spread-reversion-detector` run as their own processes under the launcher, wired
 only by what the blueprint says they consume and produce, and what flows into them
-is trades this machine actually recorded from Binance and Bybit.
+is prints this machine actually recorded from **Upstox** -- one real NIFTY option
+chain, which is what the index-options segment bot actually trades.
+
+Ported off the Binance/Bybit tape on 2026-09-06. The reason it had stayed on the
+crypto pair was stated here as *"a different tape shape with no VenueAdapter
+behind it"*, and that is no longer true: `tests/conftest.upstox_trades_for` runs
+the captured Upstox prints through `broker-market-data-bridge` -- the part the
+live spine itself uses -- so what arrives is `market-data`, the same type
+`price-level-sampler` consumed before. The chain under test is unchanged; only
+the market it is fed is. That matters because the two temporary goals in
+CLAUDE.md ask for exactly this substitution, and because a chain proven only on
+perpetuals had never been shown to raise a candidate on an Indian instrument.
 
 What stands in for `venue-trade-stream-reader` is its own publisher -- the same
 `Publisher`, built from the same derived wiring, sending to the same addresses. The
@@ -27,20 +38,19 @@ import time
 
 import pytest
 
-from tests.conftest import most_recent_day_the_tape_holds
+from tests.conftest import (
+    busiest_upstox_option_chain, most_recent_upstox_trading_day, upstox_trades_for,
+)
 
 from runtime.bus import Inbox, Publisher
 from runtime.part_launcher import PartLauncher
-from runtime.tape import read_payload, read_tape_index
-from runtime.venues.adapter_registry import load_venue_adapter
 from runtime.wiring_plan import derive_wiring
 
-TAPE_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape"
-# The venues whose captured prints this test replays. Still the crypto pair: the
-# chain under test is venue-agnostic (T-4) and these are the only tapes with the
-# trade-by-trade depth it needs. Porting to the Upstox broker tape is real work
-# and outstanding -- it is a different tape shape with no VenueAdapter behind it.
-CAPTURED_VENUES = ("binance-usdm", "bybit-linear")
+# The venue whose captured prints this test replays. The chain under test is
+# venue-agnostic (T-4), so this is the one line that decides which market proves
+# it -- and it is the market the segment bots actually trade.
+CAPTURED_VENUE = "upstox"
+CAPTURED_VENUES = (CAPTURED_VENUE,)
 THREAD_CEILING = 1
 PLACEMENT_DEADLINE_SECONDS = 0.5
 PLACEMENT_POLL_SECONDS = 0.002
@@ -60,8 +70,14 @@ SPINE = (
     "spread-reversion-detector",
 )
 
-# Enough symbols for pairs to exist, few enough that the rotation reaches them all.
-SYMBOLS_PER_VENUE = 6
+# Enough contracts for pairs to exist, few enough that the rotation reaches them
+# all. Deliberately ONE underlying's chain rather than the six busiest contracts
+# outright: measured on the captured tape of 2026-09-04, the six busiest NSE_FO
+# contracts spanned four unrelated underlyings and produced **0 cointegrated
+# pairs**, while the six busiest NIFTY contracts produced **6 tradeable ones**.
+# Two options on different underlyings have no reason to move together, so the
+# scanner correctly finds nothing and the test reads as a broken chain.
+CONTRACTS_IN_THE_CHAIN = 6
 # The parts in this chain fill 256-observation windows, and since 2026-08-24 an
 # observation is a sampled level, not a print: the sampler publishes four frames a
 # second whatever the replay's print rate, so the windows fill with wall time.
@@ -79,36 +95,18 @@ REPLAY_PAUSE_SECONDS = 0.02
 PATIENCE_SECONDS = 240.0
 
 
-def busiest_symbols(venue_id: str, day: str, count: int) -> list[str]:
-    venue_root = TAPE_ROOT / venue_id
-    if not venue_root.is_dir():
-        return []
-    sized = []
-    for symbol_directory in venue_root.iterdir():
-        index_path = symbol_directory / f"{day}.index"
-        if index_path.exists() and index_path.stat().st_size > 0:
-            sized.append((index_path.stat().st_size, symbol_directory.name))
-    sized.sort(reverse=True)
-    return [symbol for _size, symbol in sized[:count]]
-
-
 def read_trades_in_time_order(day: str) -> list:
-    """Real trades from both venues, in the order the bus would deliver them."""
-    merged = []
-    for venue_id in CAPTURED_VENUES:
-        adapter = load_venue_adapter(venue_id)
-        for symbol in busiest_symbols(venue_id, day, SYMBOLS_PER_VENUE):
-            index_path = TAPE_ROOT / venue_id / symbol / f"{day}.index"
-            blob_path = TAPE_ROOT / venue_id / symbol / f"{day}.blob"
-            read = 0
-            for record in read_tape_index(index_path):
-                for trade in adapter.read_trades(read_payload(blob_path, record)):
-                    merged.append(trade)
-                    read += 1
-                if read >= TRADES_PER_SYMBOL:
-                    break
-    merged.sort(key=lambda trade: trade.venue_time_ns)
-    return merged
+    """One real NIFTY chain's prints, in the order the bus would deliver them.
+
+    `upstox_trades_for` puts them through `broker-market-data-bridge` rather than
+    building `NormalisedTrade` here, so what this test replays is what the running
+    system would actually have seen -- including the 2026-09-06 correction that
+    Upstox states no size on about three quarters of its LTP updates.
+    """
+    chain = busiest_upstox_option_chain(day, CONTRACTS_IN_THE_CHAIN)
+    if not chain:
+        return []
+    return upstox_trades_for(day, chain, TRADES_PER_SYMBOL)
 
 
 @pytest.fixture
@@ -156,18 +154,17 @@ def price_inbox(wiring, part_id: str) -> pathlib.Path:
 
 @pytest.fixture(scope="module")
 def todays_trades():
-    """Real trades from both venues, read once and shared by the tests below."""
-    # The latest day the tape actually holds, not today. The crypto spine went
-    # inactive on 2026-09-01 with the pivot to Indian markets, so "today" has had
-    # no prints since and these tests errored on every run. See
-    # most_recent_day_the_tape_holds for why the day may move without weakening
-    # what is proved.
-    day = most_recent_day_the_tape_holds(CAPTURED_VENUES)
+    """One real NIFTY chain's prints, read once and shared by the tests below."""
+    # The latest day the tape holds enough real prints on to replay, not today:
+    # a market that was shut yesterday is not a broken test. The day is allowed
+    # to move because what is proved does not depend on which session it was --
+    # see most_recent_upstox_trading_day.
+    day = most_recent_upstox_trading_day(TRADES_PER_SYMBOL, instruments=CONTRACTS_IN_THE_CHAIN)
     if day is None:
         pytest.skip(
-            "no captured tape for any of "
-            f"{CAPTURED_VENUES}; these tests replay real venue prints (RL-063) "
-            "and there are none on this machine to replay"
+            f"no captured Upstox tape holds {TRADES_PER_SYMBOL} prints on "
+            f"{CONTRACTS_IN_THE_CHAIN} contracts; these tests replay real broker "
+            "prints (RL-063) and there are none on this machine to replay"
         )
     trades = read_trades_in_time_order(day)
     assert len(trades) > TRADES_PER_SYMBOL, (
@@ -320,6 +317,6 @@ def test_a_tradeable_pair_becomes_an_entry_candidate(
 
     candidate = seen_candidates[0].payload
     assert candidate.detector == "spread-reversion-detector"
-    assert candidate.venue_id in set(CAPTURED_VENUES)
+    assert candidate.venue_id == CAPTURED_VENUE
     assert candidate.signal_strength != 0
     assert seen_candidates[0].producer_part_id == "spread-reversion-detector"

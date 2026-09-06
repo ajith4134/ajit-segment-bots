@@ -1043,9 +1043,9 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-02",
+        "on": "2026-09-06",
         "from": "its parts",
-        "origin": "user"
+        "origin": "proposed"
       }
     },
     {
@@ -4408,7 +4408,6 @@
       "consumes": [
         "directional-opinion",
         "market-regime",
-        "bot-maturity",
         "regime-break-alert",
         "forecast-bias",
         "competence-map",
@@ -4453,7 +4452,13 @@
       ],
       "resource_class": "compute-bound",
       "rate_risk": "changes-the-answer",
-      "skipped_tick_effect": "corrupts"
+      "skipped_tick_effect": "corrupts",
+      "rewired": [
+        {
+          "on": "2026-09-06",
+          "why": "docs/proposals/the-arbiter-does-not-weigh-maturity.md"
+        }
+      ]
     },
     {
       "id": "profit-lock",
@@ -14740,6 +14745,14 @@
     "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_clock_skew_watches_the_broker.py",
     "proposal": [
       "docs/proposals/clock-skew-monitor-watches-the-broker-clock.md"
+    ]
+  },
+  "_proposal_2026-09-06_arbiter_does_not_weigh_maturity": {
+    "what": "opinion-arbiter declared bot-maturity and bound no reader for it, so R-01 drew a wire on every diagram no message could travel and the audit board reported NOT CARRYING against a producer that is not at fault. Dropped rather than bound: the part's own docstring argues item by item what moves conviction and maturity is not among them; the four parts that really consume it (live-switch-guard, autonomy-boundary, opinion-conflict-resolver, exploration-pair-opener) use it to gate what the system is allowed to do rather than how convinced it is; and its only producer, edge-graduation-gate, has never published, so binding it would add a code path nothing exercises one day before the first live session. Whether an arbiter should eventually weigh how proven a bot is stays open, and is not answered by leaving an unread declaration in place. This changes no behaviour -- bot-maturity appeared exactly once in the part, in the declaration itself.",
+    "origin": "the operator's call, asked and answered 2026-09-06, on the question apply_2026-09-06_declared_inputs_that_were_never_read.py deliberately left open; found under the audit temporary goal of 2026-09-05 (docs/feature-audit.md) and RL-067, a part's real consumes equal what the blueprint declares",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-06_arbiter_does_not_weigh_maturity.py",
+    "proposal": [
+      "docs/proposals/the-arbiter-does-not-weigh-maturity.md"
     ]
   }
 }

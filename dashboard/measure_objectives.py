@@ -152,6 +152,108 @@ def coverage() -> dict | None:
         return None
 
 
+# A setting's `note` is where RL-061 requires its provenance. A note that
+# justifies a number by naming a crypto venue, a perpetual, or a taker fee is a
+# number fitted to a market this project no longer trades -- and unlike a file
+# that merely mentions Binance, such a number is silently *acting* every tick.
+# Word boundaries matter here: an unanchored search for "eth" or "sol" matches
+# "method" and "resolution" and reports 176 where the truth is 82.
+CRYPTO_PROVENANCE = re.compile(
+    r"\b(binance|bybit|[A-Z]{2,10}USDT|USDT|BTC|ETH|SOL|perpetuals?|crypto"
+    r"|the venues'|taker fee|funding rate)\b"
+)
+
+
+def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
+    """(fitted to crypto, of those read by running code, settings in total).
+
+    The second figure is the one that matters: a crypto-derived number nobody
+    reads is dead weight, and a crypto-derived number a detector reads every
+    tick is what stopped `mean-reversion-detector` raising a single candidate
+    on real NIFTY prices until 2026-09-06.
+    """
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return (0, 0, 0)
+    total = 0
+    fitted: list[str] = []
+    for block in re.split(r"\n(?=\[)", text):
+        named = re.match(r"\[([a-z0-9_]+)\]", block)
+        if named is None:
+            continue
+        total += 1
+        if CRYPTO_PROVENANCE.search(block):
+            fitted.append(named.group(1))
+    # Named directories rather than a glob pattern: `[pr][ao][rn]*` looks like it
+    # covers parts and runtime and silently covers only parts, because "u" is not
+    # in [ao]. A search that quietly halves its own scope reports a falling number
+    # as progress, which is the exact failure this whole probe exists to prevent.
+    sources = [
+        source
+        for directory in ("parts", "runtime")
+        for source in (PROJECT / directory).rglob("*.py")
+    ]
+    read_by_code = 0
+    for name in fitted:
+        quoted = f'"{name}"'
+        for source in sources:
+            try:
+                if quoted in source.read_text(encoding="utf-8", errors="ignore"):
+                    read_by_code += 1
+                    break
+            except OSError:
+                continue
+    return (len(fitted), read_by_code, total)
+
+
+PART_PURPOSE_LEDGER = PROJECT / "docs/part-purpose-audit.md"
+
+# The third temporary goal's own measurement (2026-09-06). Deliberately counts
+# the rows still reading NOT MEASURED rather than the ones judged: this goal
+# exists because a part can be RUNNING with every wire CARRYING and still
+# publish decoration, so the number that matters is how much of the system
+# nobody has actually looked at.
+PART_JUDGED = "SERVING ITS PURPOSE"
+PART_SKELETON = "SKELETON"
+PART_UNJUDGED = "NOT MEASURED"
+
+
+def parts_judged_for_purpose() -> tuple[int, int, int]:
+    """(serving their purpose, found to be skeletons, parts in the ledger).
+
+    A row counts only when its first cell is a part id the blueprint actually
+    declares. Matching on the table shape instead counted the legend at the top
+    of the ledger -- which names each verdict in a cell of its own -- and read
+    376 parts with 2 already judged on the day the ledger was created empty.
+    A probe that miscounts in the optimistic direction is the failure Rule 8 is
+    about, so the blueprint decides what a part row is.
+    """
+    try:
+        text = PART_PURPOSE_LEDGER.read_text()
+    except OSError:
+        return (0, 0, 0)
+    try:
+        blueprint = json.loads((PROJECT / "docs/features.json").read_text())
+        part_ids = {feature["id"] for feature in blueprint["features"]}
+    except (OSError, ValueError, KeyError):
+        return (0, 0, 0)
+
+    serving = skeleton = counted = 0
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 4 or cells[1].strip("`") not in part_ids:
+            continue
+        counted += 1
+        verdict = cells[2]
+        if verdict == PART_JUDGED:
+            serving += 1
+        elif verdict == PART_SKELETON:
+            skeleton += 1
+    return (serving, skeleton, counted)
+
+
 def main() -> int:
     print("What this project is trying to do, measured\n")
 
@@ -204,6 +306,55 @@ def main() -> int:
         "     instruction was convert or replace; nothing was counting, so nothing\n"
         "     objected. Run this before deciding what to work on."
     )
+    print()
+
+    print("4. NUMBERS STILL FITTED TO CRYPTO  (goal 2, item 3 — the acting half)")
+    fitted, read_by_code, total = settings_whose_provenance_is_crypto()
+    if total == 0:
+        print("     NOT MEASURED  no runtime.toml at the settings path")
+    else:
+        print("     settings whose provenance names a crypto venue, instrument or fee")
+        print(f"     {'fitted to crypto':<26} {fitted:>4} of {total}")
+        print(f"     {'of those, read by code':<26} {read_by_code:>4}   these act every tick")
+        print(
+            "     This overcounts by design: a note that explains why a number is no\n"
+            "     longer crypto-derived still names crypto, and telling that apart from\n"
+            "     a note that justifies a value by naming Binance is not reliable. It\n"
+            "     fails towards reporting drift that is already fixed, never towards\n"
+            "     missing drift that is not."
+        )
+        print(
+            "\n     A file that mentions Binance is a naming problem. A *number* fitted\n"
+            "     to Binance is a decision being made on a market this project does not\n"
+            "     trade. mean_reversion_minimum_volatility_fraction was five basis\n"
+            "     points because that was 'just under the round trip at the venues'\n"
+            "     taker fees'; on NSE it refused 92.2% of every in-session NIFTY print and\n"
+            "     the detector raised zero candidates in-session. Re-derived from\n"
+            "     Indian data it is 0.000037, and the same session produced 1,470.\n"
+            "     Each of these is a number that has never been checked against the\n"
+            "     market it now decides in."
+        )
+    print()
+
+    print("5. IS EACH PART ACTUALLY SERVING ITS PURPOSE?  (goal 3, 2026-09-06)")
+    serving, skeleton, in_ledger = parts_judged_for_purpose()
+    if in_ledger == 0:
+        print("     NOT MEASURED  no ledger at docs/part-purpose-audit.md")
+    else:
+        looked_at = serving + skeleton
+        print(f"     {'parts judged':<26} {looked_at:>4} of {in_ledger}")
+        print(f"     {'serving their purpose':<26} {serving:>4}")
+        print(f"     {'found to be skeletons':<26} {skeleton:>4}")
+        print(f"     {'nobody has looked yet':<26} {in_ledger - looked_at:>4}")
+        print(
+            "\n     A different question from every number above it. Those measure\n"
+            "     whether data flows; this asks whether what flows is worth anything.\n"
+            "     A part can be RUNNING, every wire can read CARRYING, all four\n"
+            "     checkers can pass, and it can still publish a number that means\n"
+            "     nothing -- a climbing counter proves a message moved, never that\n"
+            "     the message was right. Real data only (RL-063): a fixture is\n"
+            "     exactly what makes a hollow part look healthy."
+        )
     return 0
 
 

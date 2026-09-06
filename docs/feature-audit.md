@@ -1078,3 +1078,400 @@ The honest qualifier: this answers "does the blueprint have a place for
 everything the audit found", which is what item 4 asks. It does not answer
 "will a thirtieth be wanted once the bots have traded" — that is a question only
 a live session can raise, and Monday is the first one.
+
+## The detectors were calibrated on crypto, and nothing could raise a candidate — 2026-09-06
+
+Walking the 29 features answered "is data flowing" everywhere. It did not ask
+the question Monday actually turns on: **can any detector raise an
+`entry-candidate` on real Indian prices?** Two instruments say no, and they
+agree.
+
+The live spine's own counters (`dashboard/audit_feature_dataflow.py
+opportunity-scanner`): `entry-candidate` is **not carrying out of any of the
+seven parts that can produce it**. Not one candidate has ever been raised.
+
+Driving the real parts over the real captured NSE tape for 2026-09-04 — 21
+instruments, 152,739 detections — reproduces it: **6 candidates**, all on one
+thin equity (TMCV), none on anything either options segment trades.
+
+### The cold start has exactly one door
+
+- `momentum-burst-detector` **found 2,129 real bursts** on NIFTY and BANKNIFTY
+  and discarded every one at `no-playbook-rule-for-this-regime`. Its z gate is
+  fine on Indian data. It needs a `playbook-rule`, which needs an
+  `opportunity-instruction`, which needs a closed trade — so it **cannot open a
+  cold system**, and the live counters confirm `playbook-rule` has never carried
+  into any of its three consumers.
+- `spread-reversion-detector`, `volatility-gap-detector` and
+  `expiry-day-zero-to-hero-detector` all publish nothing today.
+- `mean-reversion-detector` needs no playbook. It is the **only** detector that
+  can raise the first candidate on a cold system — and it was the one held shut.
+
+### What held it shut was a crypto fee constant
+
+`mean_reversion_minimum_volatility_fraction = 0.0005`, whose own note read
+*"five basis points, just under the round trip at **the venues' taker fees**"*.
+That is a crypto perpetual's cost measured against a crypto perpetual's price.
+
+`broker-underlying-price-frame-bridge` publishes exactly **NIFTY, BANKNIFTY and
+SENSEX** as `symbol-price-frame`, so those three are the only instruments this
+setting can act on live. NIFTY's own standard deviation over a 256-observation
+window is **0.000032 of its level** at the median — sixteen times under the
+floor. Measured over the real session:
+
+    NIFTY      26,542 in-session prints   24,467 refused as no-volatility (92.2%)   0 candidates
+    BANKNIFTY  24,896 in-session prints   23,128 refused as no-volatility (92.9%)   0 candidates
+
+**In-session prints only, and that check mattered.** 24.5% of NIFTY's captured
+records fall outside 09:15-15:30 IST: the feed holds its connection through the
+close and Upstox restates the last traded price. Those records carry **no new
+prices at all** (1,342 distinct in-session, 1,342 distinct overall), so a
+256-observation window filled with them has a standard deviation of zero and
+refuses for the right reason at any floor. Measured both ways before this was
+written down, because a refusal rate inflated by a closed market would have made
+the crypto floor look worse than it is: whole-tape 93.3% / 94.2%, in-session
+92.2% / 92.9%, and **zero candidates either way**. The conclusion does not
+depend on it. The figures quoted here are the in-session ones.
+
+The z threshold itself is **not** the problem: 12.56% of full-window
+observations on real Indian ticks reach `detector_z_threshold = 2.0`, and the
+reverting regime is reachable on both indices (3,814 and 8,865 readings).
+
+### The right number, derived the way the Indian path really charges
+
+The signal is on the **index**; the trade is in an **option**. So the condition
+is not "does the index move more than a fee on the index" — it is
+
+    delta x z_threshold x sd_index  >=  round_trip_fraction x premium
+
+Evaluated against real captured option greeks and real premiums for 2026-09-04,
+with `runtime/indian_options_fee_model.py` and the six published Upstox charge
+rates already in settings:
+
+    NIFTY 23800 CE   premium 205.00  delta 0.726  round trip 0.541%   needs 0.000032
+    NIFTY 23950 CE   premium 101.00  delta 0.516  round trip 0.906%   needs 0.000037
+    NIFTY 23800 PE   premium  31.30  delta 0.239  round trip 2.507%   needs 0.000069
+    NIFTY 24150 CE   premium  25.70  delta 0.203  round trip 3.012%   needs 0.000080
+
+The median, **0.000037**, is now the setting. Measured after the change, on the
+same tape:
+
+    NIFTY      309 candidates    (still refuses 39.9% as no-volatility)
+    BANKNIFTY  1,161 candidates  (still refuses 23.3%)
+
+The same 309 and 1,161 on the whole tape and on in-session prints alone -- every
+candidate was raised inside market hours, which is the only place one could be
+acted on. In-session `sd/mean` is 0.000041 on NIFTY and 0.000055 on BANKNIFTY at
+the median, so the new floor sits just under the market's own ordinary
+volatility and the old one sat an order of magnitude above it.
+
+**0 → 1,470.** The floor still refuses about half of all observations, so it is
+doing real work rather than having been switched off.
+
+### What is still wrong, and is recorded rather than built
+
+The spread across those four contracts is **2.5x**, and it is real rather than
+noise: a far-OTM contract's flat Rs20 brokerage is a much larger share of a
+small premium. **One global fraction cannot express "the move must pay for the
+contract I am about to buy"** — the correct shape is a per-contract bound
+computed at strike selection, where the premium and delta are known. The median
+unblocks the cold start; it does not make the test right for every strike.
+
+Also open, and larger: `momentum-burst-detector`, `volatility-gap-detector` and
+the whole instruction chain behind `procedural-playbook` are dead until the
+first trade closes. That is the cold start working as designed, not a defect —
+but it means **the first live session's candidates all come from one detector**,
+and that is worth knowing before Monday rather than after.
+
+### The measurement that keeps this from recurring
+
+82 of 922 settings still carry provenance naming a crypto venue, instrument or
+fee; **77 of those are read by a running part or the runtime**. That is a
+number that can fall, and it belongs beside the drift guard's file count.
+
+### The arbiter's unread input, closed
+
+`opinion-arbiter` declared twelve `consumes` types and bound a reader for
+eleven. `bot-maturity` appeared exactly once in the file — inside
+`PART_DECLARATION` — so it had never affected an arbitration, while R-01 drew a
+wire on every diagram no message could travel and the audit board reported
+`NOT CARRYING` against a producer that was not at fault.
+
+`apply_2026-09-06_declared_inputs_that_were_never_read.py` deliberately left
+this one for the operator, because binding it would change how trades are
+arbitrated. Asked and answered 2026-09-06: **drop it**. Maturity is a gate on
+what the system may do — which is exactly how `live-switch-guard`,
+`autonomy-boundary`, `opinion-conflict-resolver` and `exploration-pair-opener`
+use it — not one of the things the arbiter's docstring argues, item by item,
+into conviction. Its only producer has never published, so binding it would have
+added a code path nothing exercises one day before the first live run.
+
+Blueprint edit first (`docs/proposals/the-arbiter-does-not-weigh-maturity.md`,
+`dashboard/blueprint_edits/apply_2026-09-06_arbiter_does_not_weigh_maturity.py`),
+then the code. **All four checkers pass together for the first time**, which is
+what `check_declared_inputs.py` needed to join the other three in the pre-commit
+hook.
+
+### The chain that raises a candidate now runs on Indian prints — 2026-09-06
+
+`tests/integration/test_market_data_to_entry_candidate.py` is the one test where
+parts talk to each other as real processes under the launcher —
+`price-level-sampler`, `regime-classifier`, `cointegration-pair-finder`,
+`spread-reversion-detector` — and it replayed **Binance and Bybit**. Its own
+comment said why: *"Porting to the Upstox broker tape is real work and
+outstanding — it is a different tape shape with no VenueAdapter behind it."*
+
+That stopped being true earlier in this same audit. `tests/conftest`'s
+`upstox_trades_for` runs captured Upstox prints through
+`broker-market-data-bridge` — the part the live spine itself uses — so what
+comes out is `market-data`, exactly the type `price-level-sampler` already
+consumed. **The chain under test did not have to change at all; only the market
+feeding it did.**
+
+Ported, and it passes on the real tape: **2 passed in 162s**, raising a real
+`entry-candidate` from `spread-reversion-detector` on a real NIFTY option chain.
+
+One deliberate choice inside it: the replay uses `busiest_upstox_option_chain`,
+**one underlying's contracts**, not the six busiest contracts outright.
+Measured on 2026-09-04, the six busiest NSE_FO contracts spanned four unrelated
+underlyings and produced **0 cointegrated pairs**; the six busiest NIFTY
+contracts produced **6**. Options on different underlyings have no reason to
+move together, so the scanner correctly finds nothing and the test reads as a
+broken chain when it is not.
+
+**This corrects the statement above.** "No detector has ever raised a candidate"
+is true of the *live spine* — the bus counters say `entry-candidate` carries out
+of none of the seven producers — and it was true of `mean-reversion-detector` on
+Indian prices. It is **not** true that the detector-to-candidate path was
+unexercised: this test exercises it as real processes, and now does so on Indian
+data. What remains untested end to end is the half *after* the candidate —
+setup filter, opinion, arbiter, intent, order — because
+`operate/replay_a_captured_session.py` stamps `replay-opened-at-the-first-print`
+and opens without consulting a detector at all. Monday is still that path's
+first run.
+
+Drift guard: **107 → 105 files**.
+
+### 61 settings existed only on this VM — 2026-09-06
+
+`settings/runtime.example.toml` is the tracked twin of the operator's live
+`~/.config/ajit-segment-bots/settings/runtime.toml`. Comparing them key by key
+while re-deriving the volatility floor: the live file held **922** settings and
+the tracked one **863**.
+
+The 61 that existed nowhere but this disk are almost exactly the Indian-market
+work:
+
+- **all seven `equity_intraday_*` charge rates** — the entire cash-equity fee
+  model, brokerage through GST
+- **all eight `cash_equity_shortlist_*` weights** and the pool size
+- the nine `broker_*` connection, cadence and freshness settings
+- `underlying_price_bridge_index_trading_symbols` — the three index underlyings
+  the detectors are fed
+- the three `zero_to_hero_*` thresholds, and `position_state_root`
+
+Rule 9 exists for precisely this. A tuned number nobody can restore is not
+configuration, it is a memory of one machine. All 61 are now in the tracked file
+with their provenance notes copied verbatim; the live file stays the one the
+parts actually read. Scanned for credential shapes and machine-absolute paths
+before copying — none; `position_state_root` is `~`-relative like every path
+setting already tracked.
+
+Two settings run the other way (`tail_crowding_funding_deviation_threshold`,
+`tail_crowding_sentiment_deviation_threshold`): tracked but no longer live,
+both crypto funding-shaped and left in place rather than deleted alongside the
+rest of the crypto retirement.
+
+### Three guessed thresholds became measured ones
+
+`zero_to_hero_maximum_premium` (Rs 5), `zero_to_hero_maximum_abs_delta` (0.10)
+and `zero_to_hero_horizon_seconds` all carried the same note: *"NOT YET MEASURED
+against real captured Indian option-chain data — no live account is connected."*
+There is captured data now.
+
+Across **1,524 NSE_FO contracts** on the 2026-09-04 tape carrying both a real
+in-session premium and a real Upstox delta:
+
+    premium   p01 0.18   p05 0.70   p10 1.35   p25 5.00   p50 29.90
+    |delta|   p01 0.005  p05 0.017  p10 0.034  p25 0.130
+
+**Rs 5 is the chain's own first quartile almost exactly**, and 0.10 delta sits
+between its p10 and p25. The two colloquial defaults select the cheapest and
+furthest-OTM quarter of a real chain, which is what they were reaching for.
+Passing rates: premium 25.3%, delta 21.6%, both 16.3% — and they disagree on
+14.4% of contracts, so neither is redundant.
+
+**The values are kept, not moved.** They are sourced now; what should move them
+is a measured hit rate on scored candidates, not a re-fit to the same
+distribution. The detector only fires on expiry day and 2026-09-04 was not one
+for these contracts, so this measures the chain rather than the pattern — said
+in the notes so the next reader does not mistake one for the other.
+
+
+---
+
+## A third temporary goal arrived — 2026-09-06
+
+The user gave a new standing goal while this audit's work was in flight, and it
+asks a different question from the one this ledger answers. **This ledger
+measures whether data flows.** The new one asks whether what flows is worth
+anything — whether each of the 373 parts is *"really providing or working with
+the data according to its intended purpose, or if it is just a skeleton
+providing or inputting or outputing rubbish data which is not useful just
+decorating data"*.
+
+The two are not interchangeable and neither replaces the other. Everything in
+this file — the bus counters, `CARRYING` versus `NOT CARRYING`, the four
+checkers — proves a message moved. None of it proves the message was right. The
+clearest case is in this very session: `mean-reversion-detector` read as a
+healthy part on every instrument here, with its inputs carrying and its code
+correct, while its output was zero candidates because a crypto fee constant
+gated it. Flow measurement could not see that; feeding it real NIFTY prints and
+reading the output could.
+
+Its ledger is **`docs/part-purpose-audit.md`**, seeded this day with all 373
+parts at `NOT MEASURED`, and its number is section 5 of
+`dashboard/measure_objectives.py`. The statement in the user's own words is at
+the top of `docs/goal.md`.
+
+### What each part is actually working on — measured 2026-09-06
+
+The operator asked, from the live board, why parts still looked like they were
+working on crypto. `dashboard/audit_part_data_reality.py` was written to answer
+it for every part rather than by sampling: it resolves the symbols in each
+part's own checkpoint against the **real Upstox instrument master**, and takes a
+counter delta across two readings of the heartbeat table it observes itself.
+
+**The answer is that almost nothing is on crypto data — and two things are.**
+
+Every symbol-holding checkpoint resolves to real Indian instruments:
+`cointegration-pair-finder` 5,949 of 5,949, `regime-classifier` 1,720 of 1,720,
+both naming only `upstox`. The two genuine remnants:
+
+- **`paper-account-keeper.paper-account-futures.json` holds `BTCUSDT` on
+  `binance-usdm`** — the retired futures segment's paper account, still on disk
+  and still restored.
+- **`feed-gap-detector`'s entire standing is keyed by crypto venues** —
+  `tracked_streams.binance-usdm`, `tracked_streams.bybit-linear`,
+  `gaps_found.*`, `messages_seen.*`, `resyncs_seen.*` — and it is IDLE. It is
+  watching two dead streams and is not watching the Upstox feed at all, so
+  nothing would notice a gap in the feed the bots actually trade on.
+
+**A regex is not allowed to answer this question.** The first pass classified
+`788BOBPERP` as a crypto perpetual; it is a Bank of Baroda perpetual **bond**.
+Indian debt series (`0MOFSL27`, `1015SCL28B`) and ordinary NSE equities
+(`20MICRONS`, `3MINDIA`, `5PAISA`) all read as "not Indian" to a pattern written
+around crypto tickers. The master lookup is the only honest classifier, and the
+probe uses it.
+
+### The real defect the board was showing
+
+Not crypto — **dead universes that make a part look maximally busy.**
+
+    cointegration-pair-finder   5,949 symbols held, 5,512 holding ONE price,
+                                newest observation 2.4 days old,
+                                7,814,961 pairs tested, 7,804,577 verdicts
+                                suppressed -- and the board reads WORKING 1,619/s
+    regime-classifier           1,720 symbols, 1,701 holding one price, 2.4 days old
+    corporate-action-adjuster   93,482 instruments known, IDLE
+    bull/bear-feature-builder   2,061 symbols each, IDLE
+
+`cointegration-pair-finder` has **no forgetting of any kind** — no
+`forget_silent_symbols`, no age bound, no check against what the feed
+subscribes — so it restores every symbol it has ever seen (`restored_symbols`
+5,926) and tests the square of that universe forever. `regime-classifier` grew
+exactly this fix already; the pair finder never did. This is the shape CLAUDE.md
+warns about — the pair scanner failing as the square of the universe — arriving
+by a different route: not a raised symbol count, but a checkpoint nobody expires.
+
+### Two claims of mine that were wrong, corrected
+
+**1. The detectors do not see only three underlyings.** This ledger and the
+`mean_reversion_minimum_volatility_fraction` note both said
+`broker-underlying-price-frame-bridge` publishes exactly NIFTY, BANKNIFTY and
+SENSEX, so those were the only instruments the floor could act on.
+`symbol-price-frame` has a **second producer** — `price-level-sampler`, which
+consumes `market-data` and therefore carries every Upstox print the bridge
+relays. Measured from the live heartbeat: `mean-reversion-detector` holds
+**1,721** symbols, not 3.
+
+That makes the single-number shape of the floor *worse*, not better: the
+universe spans indices at `sd/mean` ~4e-5 and options at ~1e-2, **250x apart,
+gated by one fraction**. The zero-candidate finding stands — it was measured
+from the parts' own bus counters, not from this reasoning — but the
+per-instrument bound is now the fix rather than a refinement.
+
+**2. The feed does not subscribe 588 instruments.** CLAUDE.md records "588 of
+588" after the subscription was narrowed. Measured live this day:
+`broker-market-feed-reader` and `subscribed-instrument-listing-filter` both
+report `subscribed_instruments` **1,974**, with `universe_instruments_known`
+491. Whatever narrowed it has not held, or 588 counted something else.
+
+### Both crypto remnants fixed — 2026-09-06
+
+**1. The retired futures paper account is gone.**
+`paper-account-keeper.paper-account-futures.json` held a live crypto position —
+0.064 BTC at 77,511.70 on `binance-usdm`, margin 4,960.75, `fills_applied` 1 —
+and was being **re-written**, not merely left on disk: its `saved_at_ns` was that
+same afternoon. `built_segments` already excludes futures, so nothing should
+have created it; the file was orphaned state from when `segment_id` was
+`futures`, restored and re-armed on every restart of the keeper (which the
+warden was restarting repeatedly for `taking-longer-every-tick`).
+
+Removed from the live path, with a copy kept in the project's own
+`positions-crypto-era-backup-2026-09-02/` rather than destroyed — the same
+convention that directory already records. Verified: **it did not come back
+through a full spine restart.**
+
+**2. `feed-gap-detector` watches the Indian feed now.**
+
+The defect was two lines. `detectors` was built only from
+`load_captured_venue_adapters`, and the tick did `continue` on any message whose
+venue had no detector — so every Upstox print was dropped in silence. The part
+read IDLE with its entire standing keyed by `binance-usdm` and `bybit-linear`:
+watching two streams that stopped on 2026-09-01, and **not watching the feed the
+segment bots actually trade**. Nothing would have noticed the Indian feed going
+quiet.
+
+Converted rather than deleted (goal 2, item 3). Three pieces:
+
+- **`BrokerFeedContinuity`** — Upstox numbers nothing on its LTP stream, which is
+  exactly `SequenceContinuity.NOT_NUMBERED`, a case the vocabulary already
+  carried: *"the venue numbers nothing on this stream, so silence is the only
+  detector"*. Deliberately **not** a `VenueAdapter`: Upstox is a broker, and
+  inventing an adapter to satisfy a type would claim this feed answers order
+  books and premiums it does not.
+- **Per-stream silence patience.** `feed_gap_threshold`'s own note says the flat
+  60 s *"is NOT safe at the full universe: an illiquid perpetual is quiet for
+  minutes at a time"*, and 1,974 subscribed NSE instruments are that case at
+  scale. The bound is now `max(60 s, 2.8 x this stream's own p99 gap)`, the same
+  rule and the same measured multiple `price_gap_patience_multiple` and
+  `anomaly_feed_silence_patience_multiple` already carry. Without it this would
+  have repeated the flood those notes record — 3,282 of 3,289 anomalies false on
+  merely-quiet NSE contracts.
+- **The silent `continue` is now counted.** `dropped_no_detector_for.<venue>` and
+  a total, so a message thrown away for want of a detector is a figure on the
+  board instead of the invisible line that hid this for five days (Rule 8).
+
+**A defect in that fix, caught before it shipped.** The patience estimate first
+swallowed the overnight close — one enormous gap every night — and set a
+**14,375 s (four-hour) bound on a 6.25-hour session**, which would have blinded
+the detector for most of the day it exists to watch. Measured on the quiet
+contract `NSE_FO|84322`: p99 inter-print gap 4,742 s across the whole tape
+against 1,239 s in-session. Fixed on a principle rather than another number —
+**an outage is not evidence about ordinary quiet**, so a gap already past the
+bound is reported and then *not* fed back into the estimate that produced it.
+Bound fell from 14,375.8 s to **166.5 s**, an 86x tightening, with still zero
+false gaps on that contract.
+
+Measured after the restart, on the live spine:
+
+    messages_seen.upstox            5,262      (was 0, ever)
+    tracked_streams.upstox              4
+    sequence_gaps                       0      Upstox numbers nothing; 0 is correct
+    silence_gaps                        2      real
+    dropped_no_detector_for_total       0
+    messages_seen.binance-usdm          0      kept, so the zero stays visible
+
+Two new settings with provenance: `broker_feed_venue_id` (a setting rather than
+an import of another part's constant, T-4) and `feed_gap_patience_multiple`.

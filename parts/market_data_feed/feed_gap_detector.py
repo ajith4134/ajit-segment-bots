@@ -1,8 +1,39 @@
-"""feed-gap-detector: a symbol gone silent, or a sequence that broke."""
+"""feed-gap-detector: a symbol gone silent, or a sequence that broke.
+
+**It watches the broker feed as well as the venue feeds, since 2026-09-06.**
+Until that date `detectors` was built only from `load_captured_venue_adapters`,
+and a message from any other venue hit a `continue` on the next line -- so every
+Upstox print was dropped in silence. The part read IDLE with its whole standing
+keyed by `binance-usdm` and `bybit-linear`: it was watching two streams that
+stopped on 2026-09-01 and was not watching the feed the segment bots actually
+trade. Nothing would have noticed the Indian feed going quiet.
+
+Upstox numbers nothing on its LTP stream, so the sequence half does not apply to
+it and `SequenceContinuity.NOT_NUMBERED` is exactly the case the vocabulary
+already carries -- "the venue numbers nothing on this stream, so silence is the
+only detector". `BrokerFeedContinuity` says that and nothing else.
+
+**Silence is judged against each symbol's own rhythm, not one flat threshold.**
+`feed_gap_threshold` is 60 s and its own note says why that cannot be applied to
+a full universe: *"an illiquid perpetual is quiet for minutes at a time"*. The
+Indian universe is exactly that case at scale -- 1,974 subscribed instruments,
+most of them option contracts that print every few minutes. This project has
+already paid for that mistake once: with a flat floor,
+`anomaly_feed_silence_patience_multiple`'s own note records **3,282 of 3,289
+anomalies** being "this-venue-has-stopped-updating" on NSE contracts that were
+merely quiet, each one halting trading in that symbol.
+
+So the bound per symbol is `max(feed_gap_threshold, patience x that symbol's own
+p99 inter-print gap)`, estimated online from the gaps this detector has itself
+observed, and the stated floor alone until enough gaps have been seen for the
+estimate to mean anything. That is the same rule `RollingWindow._gap_bound_seconds`
+already applies to a price window, carrying the same measured multiple.
+"""
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
@@ -24,6 +55,12 @@ PART_DECLARATION = PartDeclaration(
 SILENCE = "silence"
 SEQUENCE_BREAK = "sequence-break"
 
+# How many of a stream's own gaps to keep for the p99 the patience bound uses.
+# Bounded for the reason `_StreamState` states; the figure matches the window
+# length the price detectors reason over, so the estimate describes about the
+# same recent stretch of the session the rest of the system does.
+GAPS_REMEMBERED_PER_STREAM = 256
+
 
 @dataclass(frozen=True)
 class FeedGap:
@@ -43,6 +80,32 @@ class FeedGap:
 class _StreamState:
     last_seen_monotonic: float
     last_sequence: int | None = None
+    # This stream's own observed gaps, bounded. The patience bound is a p99 over
+    # them, so an unbounded list would let an early quiet hour set the patience
+    # for the rest of the session -- and 1,974 subscribed instruments times an
+    # unbounded list is the unbounded-structure shape this project has been
+    # bitten by more than once.
+    recent_gaps_seconds: deque = field(default_factory=lambda: deque(maxlen=GAPS_REMEMBERED_PER_STREAM))
+
+
+class BrokerFeedContinuity:
+    """A broker feed's continuity rule: it numbers nothing.
+
+    Shaped like the one thing `FeedGapDetector` asks a `VenueAdapter` for, and
+    deliberately not a `VenueAdapter` -- Upstox is a broker, it has no venue
+    adapter, and inventing one to satisfy a type would claim this feed answers
+    order books and premiums it does not. `sequence_continuity` is the whole of
+    what the detector reads, so this is the whole of what it needs to be.
+    """
+
+    def __init__(self, venue_id: str) -> None:
+        self.venue_id = venue_id
+
+    def sequence_continuity(self, stream_kind) -> SequenceContinuity:
+        return SequenceContinuity.NOT_NUMBERED
+
+    def read_previous_sequence(self, payload: bytes) -> int | None:
+        return None
 
 
 @dataclass
@@ -68,11 +131,17 @@ class FeedGapDetector:
         self,
         adapter: VenueAdapter,
         feed_gap_threshold_seconds: float,
+        silence_patience_multiple: float | None = None,
         monotonic=time.monotonic,
         now_ns=time.time_ns,
     ) -> None:
         self._adapter = adapter
         self._threshold = feed_gap_threshold_seconds
+        # None keeps the flat threshold exactly as it was, which is what the two
+        # crypto venues were measured against; a value turns on the per-symbol
+        # bound the Indian universe needs. Opt-in rather than always-on, so no
+        # existing measurement is silently reinterpreted.
+        self._silence_patience_multiple = silence_patience_multiple
         self._monotonic = monotonic
         self._now_ns = now_ns
         self._streams: dict[tuple[str, StreamKind], _StreamState] = {}
@@ -99,6 +168,23 @@ class FeedGapDetector:
             self.standing.resyncs_seen += 1
         else:
             gap = self._check_sequence(facts, state)
+        # This stream's own rhythm, measured from the arrivals themselves rather
+        # than assumed. Recorded before last_seen is moved on, because the gap is
+        # the distance between this arrival and the previous one.
+        #
+        # **An outage does not teach patience.** A gap already past the bound was
+        # reported as a gap, so feeding it back into the estimate would let every
+        # outage widen the very bound that caught it. That is not hypothetical
+        # here: this part runs through the night, and the closed market is one
+        # enormous gap every day. Measured on the captured tape for 2026-09-04,
+        # a quiet NIFTY contract's p99 inter-print gap is 4,742 s across the
+        # whole tape and 1,239 s in-session alone -- so an estimate that swallows
+        # the overnight silence sets a 3.7-hour bound on a 6.25-hour session and
+        # the detector goes blind for most of the day it is meant to watch.
+        # Only ordinary quiet is evidence about ordinary quiet.
+        elapsed = now - state.last_seen_monotonic
+        if elapsed <= self.silence_bound_seconds(state):
+            state.recent_gaps_seconds.append(elapsed)
         state.last_seen_monotonic = now
         state.last_sequence = self._sequence_of(facts) or state.last_sequence
         return gap
@@ -131,13 +217,30 @@ class FeedGapDetector:
             observed_sequence=observed,
         )
 
+    def silence_bound_seconds(self, state: _StreamState) -> float:
+        """How long THIS stream may be quiet before the quiet is a gap.
+
+        The stated threshold alone until the stream has shown enough of its own
+        rhythm to be measured against it -- an estimate from a handful of gaps
+        would let one early pause set the patience, which is the same reasoning
+        `RollingWindow._gap_bound_seconds` carries and the same multiple.
+        """
+        if self._silence_patience_multiple is None:
+            return self._threshold
+        gaps = state.recent_gaps_seconds
+        if len(gaps) < max(2, GAPS_REMEMBERED_PER_STREAM // 2):
+            return self._threshold
+        ordered = sorted(gaps)
+        p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
+        return max(self._threshold, self._silence_patience_multiple * p99)
+
     def check_for_silence(self) -> tuple[FeedGap, ...]:
-        """Every tracked stream that has said nothing past the threshold."""
+        """Every tracked stream that has said nothing past its own bound."""
         now = self._monotonic()
         gaps = []
         for (symbol, stream_kind), state in self._streams.items():
             silent_for = now - state.last_seen_monotonic
-            if silent_for <= self._threshold:
+            if silent_for <= self.silence_bound_seconds(state):
                 continue
             state.last_seen_monotonic = now
             gaps.append(
@@ -196,7 +299,7 @@ def describe_gaps(detector: FeedGapDetector) -> dict:
     }
 
 
-def describe_all_gaps(detectors: dict) -> dict:
+def describe_all_gaps(detectors: dict, unwatched: dict[str, int] | None = None) -> dict:
     """One standing across every venue this part watches, keyed so all survive.
 
     Continuity is a venue's property -- Binance numbers aggregate trades and
@@ -214,6 +317,13 @@ def describe_all_gaps(detectors: dict) -> dict:
         for name in totals:
             totals[name] += one[name]
     merged.update(totals)
+    # Messages this part threw away because no detector was keyed to their
+    # venue. Zero is the healthy reading and any other number names the venue,
+    # so the failure that hid the Upstox feed here for five days is now a figure
+    # on the board instead of a `continue` nobody could see (Rule 8).
+    for venue_id, dropped in sorted((unwatched or {}).items()):
+        merged[f"dropped_no_detector_for.{venue_id}"] = dropped
+    merged["dropped_no_detector_for_total"] = sum((unwatched or {}).values())
     return merged
 
 
@@ -259,17 +369,43 @@ def start_part(context) -> int:
     trades = Batch(read=context.bus.reader("market-data"))
     publish_gaps = context.bus.publisher_for("feed-gap")
     threshold = context.number("feed_gap_threshold")
+    patience = context.number("feed_gap_patience_multiple")
     detectors = {
-        adapter.venue_id: FeedGapDetector(adapter=adapter, feed_gap_threshold_seconds=threshold)
+        adapter.venue_id: FeedGapDetector(
+            adapter=adapter,
+            feed_gap_threshold_seconds=threshold,
+            silence_patience_multiple=patience,
+        )
         for adapter in load_captured_venue_adapters(context.settings[RUNTIME_SCOPE])
     }
+    # The broker feed, which is what the segment bots actually trade on. Added
+    # 2026-09-06: without it every Upstox print hit the `continue` below and this
+    # part watched only two streams that had already stopped. Built from the same
+    # setting `broker-underlying-price-frame-bridge` stamps its frames with, so
+    # the id this keys on is the id the bridge really publishes.
+    broker_venue = str(context.setting("broker_feed_venue_id").value)
+    detectors[broker_venue] = FeedGapDetector(
+        adapter=BrokerFeedContinuity(broker_venue),
+        feed_gap_threshold_seconds=threshold,
+        silence_patience_multiple=patience,
+    )
+
+    self_standing_unwatched: dict[str, int] = {}
 
     def tick() -> None:
         found = []
         for trade in trades.payloads():
             detector = detectors.get(trade.venue_id)
             if detector is None:
-                continue  # a venue the operator has not turned on; not this part's call
+                # A venue the operator has not turned on; not this part's call.
+                # Counted rather than merely skipped: this silent `continue` is
+                # what hid the Upstox feed from this detector for five days, and
+                # a drop nobody counts is indistinguishable from a feed nobody
+                # is sending (Rule 8).
+                self_standing_unwatched[trade.venue_id] = (
+                    self_standing_unwatched.get(trade.venue_id, 0) + 1
+                )
+                continue
             gap = detector.observe(
                 MessageFacts(
                     stream_kind=StreamKind.TRADE,
@@ -293,5 +429,5 @@ def start_part(context) -> int:
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
-        read_standing=lambda: describe_all_gaps(detectors),
+        read_standing=lambda: describe_all_gaps(detectors, self_standing_unwatched),
     )

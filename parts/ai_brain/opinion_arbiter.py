@@ -57,7 +57,11 @@ PART_ID = "opinion-arbiter"
 PART_DECLARATION = PartDeclaration(
     part_id="opinion-arbiter",
     consumes=(
-        "directional-opinion", "market-regime", "bot-maturity", "regime-break-alert",
+        # No `bot-maturity`: it was declared here and never read, and dropping it
+        # rather than binding it is docs/proposals/the-arbiter-does-not-weigh-maturity.md.
+        # How proven a bot is gates what the system may do (live-switch-guard,
+        # autonomy-boundary), it is not one of the things weighed above.
+        "directional-opinion", "market-regime", "regime-break-alert",
         "forecast-bias", "competence-map", "coverage-report", "conflict-ruling",
         "bot-weight", "counter-argument", "regime-memory", "strategy-review",
     ),

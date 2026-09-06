@@ -1,5 +1,45 @@
 # ajit-segment-bots
 
+## TEMPORARY GOAL (third, active) — 2026-09-06, read before anything else
+
+**Take every one of the 373 parts individually and prove, with a real-data
+test, that it is actually serving its purpose — or find that it is a skeleton
+producing decoration.** The user's full statement is at the top of
+`docs/goal.md`; the standard, in their words, is whether a part is *"really
+providing or working with the data according to its intended purpose, or if it
+is just a skeleton providing or inputting or outputing rubbish data which is not
+useful just decorating data"*.
+
+**This is not the second goal repeated.** That audit asked whether data
+*flows*, measured from each part's own bus counters. This asks whether what
+flows is **worth anything**. A part can be RUNNING, every wire can read
+CARRYING, all four checkers can pass, and it can still publish a number that
+means nothing — a climbing counter proves a message moved, never that it was
+right. The first question cannot answer the second.
+
+The user's own examples set the bar, and each names a different way to be
+hollow:
+
+| part kind | what to actually ask |
+|---|---|
+| news parts | is the output a real reading — NIFTY support/resistance an operator would recognise — or a filled-in shape? |
+| prediction parts | does it work **for every open trade**, not for one fixture? |
+| online research | is it producing **real useful data**, or decoration? |
+
+**"Appropriate test with real data" is the user's phrase and RL-063 is the
+standard.** A fixture is exactly what makes a hollow part look healthy, so a
+verdict may rest only on the tape, the Upstox history, the free Yahoo/NSE
+sources, or the real instrument master.
+
+**Ledger: `docs/part-purpose-audit.md`.** One row per part — what it is for,
+what was fed in, what came out, and the verdict: `SERVING ITS PURPOSE`,
+`SKELETON`, or `NOT MEASURED`. Rule 8 binds it: a part nobody has tested reads
+`NOT MEASURED`, never green, and never a bare pass. Read it before judging
+anything and append to it, or every session re-judges what the last one did.
+
+The user asked this stay active across every session until it is complete. It
+does not replace either goal below; all three are active.
+
 ## TEMPORARY GOAL (second, active) — 2026-09-05, read before anything else
 
 **A systematic audit of all 29 foundational features (`docs/features.json`
@@ -85,8 +125,22 @@ was counting. It counts **code**, not comments — a file ported to Upstox keeps
 a note saying what it was ported from, and that is history rather than drift;
 counting both together gives a figure that never falls however much is
 converted. Baseline 2026-09-06 after the first two integration tests were
-ported: **107 files** (parts 14, runtime 1, tests 82, operate 1, dashboard 9).
-If that number is not falling, the audit is not doing what it was asked to do.
+ported: **107 files** (parts 14, runtime 1, tests 82, operate 1, dashboard 9);
+**106** after `mean-reversion-detector`'s floor was re-derived. If that number is
+not falling, the audit is not doing what it was asked to do.
+
+**A second drift number was added 2026-09-06, and it is the sharper one: how
+many *settings* are still fitted to crypto.** A file that mentions Binance is a
+naming problem; a **number** whose provenance note justifies it by naming
+Binance is a decision being made every tick on a market this project does not
+trade. **83 of 922 settings**, **78 of them read by a running part**. That is
+not hypothetical drift — `mean_reversion_minimum_volatility_fraction` was five
+basis points because that was *"just under the round trip at the venues' taker
+fees"*, and on NSE it refused **92.2% of every in-session NIFTY
+observation** and let `mean-reversion-detector` raise **zero candidates**. Re-derived
+from Indian data it is `0.000037`, and the same captured session then produced
+**1,470**. Each of the remaining 78 is a number nobody has checked against the
+market it now decides in.
 
 **`docs/feature-audit.md` is the ledger this goal is walked with** — which of
 the 29 has been walked, what was measured in it, what was found and fixed, and
@@ -107,7 +161,7 @@ because no trade has opened, not broken; `implied-vol-reader` converted off its
 crypto stub, and the feed's 2,000-instrument subscription — which was 1,707
 options on silver, gold and currency pairs with only 26 of their underlyings
 priced — now carries only what the segments trade, 588 of 588 with their
-underlying subscribed. `opportunity-scanner`: a fourth checker,
+underlying subscribed — **but measured again on 2026-09-06 the live feed reports `subscribed_instruments` **1,974**, not 588, so that narrowing has not held or 588 counted something else; see `docs/feature-audit.md`. `opportunity-scanner`: a fourth checker,
 `dashboard/check_declared_inputs.py`, for inputs a part declares and never
 reads — six found, five dropped; and the learning chain from a closed trade to a
 `bot-maturity` proved end to end on a real replayed trade, which the replay

@@ -39,3 +39,19 @@ python3 "$repo_root/dashboard/check_contracts.py" || {
   echo "fix the call, or the method, or use --no-verify and say why."
   exit 1
 }
+
+# The third shape of the same class, and the one that lies on a diagram rather
+# than crashing a part: a `consumes` type nothing ever binds a reader for. R-01
+# computes every edge from consumes/produces, so a declared-and-unread input
+# draws a wire on every diagram no message can travel and puts a NOT CARRYING
+# line on the audit board against a producer that is doing its job -- which is
+# how `broker-price-level-sampler` read as starved while publishing 5,868 frames.
+# Held out of this hook until 2026-09-06, because `opinion-arbiter`'s unread
+# `bot-maturity` was a real open design question rather than an oversight; with
+# that answered, all four checkers pass together and this one earns its place.
+"$repo_root/.venv/bin/python" "$repo_root/dashboard/check_declared_inputs.py" || {
+  echo ""
+  echo "commit refused: a part declares an input it never binds a reader for."
+  echo "bind it, or stop declaring it -- both are blueprint edits first."
+  exit 1
+}
