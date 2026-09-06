@@ -210,8 +210,119 @@ def historical_prints(
     )
 
 
+def prints_for_instrument(row: dict, day: str, session=None,
+                          nse_session=None) -> tuple[list[tuple[int, float]], str]:
+    """One instrument's prices for one session, from whichever free source has them.
+
+    Returns the prints and **the name of the source that served them**, because a
+    replay whose prices came from somewhere else than it thinks is a replay whose
+    result means something else.
+
+    The order is by cost, not by preference:
+
+        equity, index      Yahoo         free, no account, unlimited
+        option, last session  NSE intraday   free, no account, that session only
+        anything else      Upstox        one minute, back to 2022, DAILY QUOTA
+
+    Upstox is last on purpose. It is the only source that can serve an arbitrary
+    past option session, and it is the only one that runs out -- so spending it on
+    a price Yahoo or NSE would have given for nothing is spending the thing that
+    cannot be replaced.
+
+    Empty prints with a stated source is an honest answer: the caller knows which
+    source was asked and can say so, rather than reporting a quiet market.
+    """
+    instrument_type = (row.get("instrument_type") or "").strip()
+    trading_symbol = (row.get("trading_symbol") or "").strip()
+
+    if instrument_type in ("EQ", "INDEX"):
+        from operate import yahoo_finance_prints as yahoo
+
+        if yahoo.ticker_for(trading_symbol, instrument_type) is not None:
+            try:
+                prints = yahoo.historical_prints(
+                    trading_symbol, instrument_type, day, session=session,
+                )
+                if prints:
+                    return prints, "yahoo"
+            except Exception:
+                # A free source that is down is a reason to try the next one,
+                # never a reason to stop: the replay still has Upstox.
+                pass
+
+    if instrument_type in ("CE", "PE"):
+        prints, source = option_prints_from_nse(row, day, session=nse_session)
+        if prints:
+            return prints, source
+
+    token = upstox_access_token()
+    return historical_prints(row["instrument_key"], day, day, token), "upstox"
+
+
+def option_prints_from_nse(row: dict, day: str, session=None
+                           ) -> tuple[list[tuple[int, float]], str]:
+    """One option's intraday session from NSE, when NSE is serving that session.
+
+    NSE's chart endpoint takes no date -- it answers with whatever the last
+    trading day was -- so the day it served is read back from the series and
+    checked. Believing it had answered the day that was asked for is how a replay
+    of 2025 would quietly be a replay of last Friday.
+    """
+    import datetime
+
+    from operate import nse_intraday_option_prices as nse
+
+    expiry_ms = row.get("expiry")
+    strike = row.get("strike_price")
+    underlying = row.get("underlying_symbol")
+    option_type = (row.get("instrument_type") or "").strip()
+    if not (expiry_ms and strike and underlying):
+        return [], "nse-intraday"
+    expiry = datetime.datetime.fromtimestamp(expiry_ms / 1000, datetime.UTC).date()
+    identifier = nse.identifier_for(
+        underlying, expiry, option_type, float(strike),
+        underlying_is_an_index=(row.get("segment") or "").endswith("_FO")
+        and underlying in nse_index_underlyings(),
+    )
+    try:
+        cached = nse.cache_path_for(identifier, day)
+        if cached.exists():
+            return nse.intraday_prints(identifier, day, session=session), "nse-intraday"
+        document = nse.fetch_chart(identifier, session=session)
+    except Exception:
+        return [], "nse-intraday"
+    if nse.the_session_this_serves(document) != day:
+        # It has a session, but not the one asked for. Saying so beats replaying
+        # the wrong day.
+        return [], "nse-intraday"
+    prints = nse.prints_from_chart(document)
+    if prints:
+        try:
+            path = nse.cache_path_for(identifier, day)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(prints))
+        except OSError:
+            pass
+    return prints, "nse-intraday"
+
+
+def nse_index_underlyings() -> frozenset[str]:
+    """The underlyings NSE names with OPTIDX rather than OPTSTK.
+
+    NSE's own two prefixes, and there is no rule to derive the split from -- an
+    index is not a listed security. Written down once, from NSE's own option
+    chain.
+    """
+    return frozenset(
+        {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+    )
+
+
 __all__ = [
     "HISTORICAL_INTERVAL",
+    "nse_index_underlyings",
+    "option_prints_from_nse",
+    "prints_for_instrument",
     "HISTORICAL_UNIT",
     "NoBrokerToken",
     "historical_candles",

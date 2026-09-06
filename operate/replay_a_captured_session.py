@@ -299,7 +299,7 @@ def the_most_recent_weekday_before_today() -> str:
 
 
 def contracts_from_history(from_date: str, to_date: str, per_segment: int,
-                           minimum_prints: int) -> tuple[dict, collections.Counter]:
+                           minimum_prints: int) -> tuple[dict, collections.Counter, dict]:
     """Each built segment's own instruments, priced from the broker's history.
 
     The tape is three days deep and holds only what the feed was subscribed to.
@@ -317,9 +317,27 @@ def contracts_from_history(from_date: str, to_date: str, per_segment: int,
     """
     from runtime.segment_settings import built_segments, read_segment_symbols
 
-    from operate.historical_prints import historical_prints, upstox_access_token
+    from operate.historical_prints import prints_for_instrument
+    from operate.nse_intraday_option_prices import open_browser_session as open_nse_session
+    from operate.yahoo_finance_prints import open_browser_session as open_yahoo_session
 
-    token = upstox_access_token()
+    # One warmed session per host, reused for every instrument. Both are free and
+    # neither needs an account; Upstox is reached only when neither can serve,
+    # because it is the one source with a quota to spend.
+    yahoo_session = open_yahoo_session()
+    try:
+        nse_session = open_nse_session()
+    except Exception:
+        nse_session = None
+    sources_used: collections.Counter = collections.Counter()
+
+    def prints_of_instrument(row):
+        prints, source = prints_for_instrument(
+            row, to_date, session=yahoo_session, nse_session=nse_session,
+        )
+        sources_used[source] += 1
+        return prints
+
     context = SettingsContext()
     master = instruments_by_key()
     by_symbol = {}
@@ -348,7 +366,7 @@ def contracts_from_history(from_date: str, to_date: str, per_segment: int,
             if row is None:
                 skipped[f"no master row for {underlying}"] += 1
                 continue
-            spot = historical_prints(row["instrument_key"], from_date, to_date, token)
+            spot = prints_of_instrument(row)
             if len(spot) < minimum_prints:
                 skipped[f"{underlying} has no history for {to_date}"] += 1
                 continue
@@ -361,16 +379,20 @@ def contracts_from_history(from_date: str, to_date: str, per_segment: int,
             for contract in contracts_nearest_the_money(master, underlying, close, day_ms):
                 if len(chosen) >= per_segment:
                     break
-                prints = historical_prints(
-                    contract["instrument_key"], from_date, to_date, token,
-                )
+                prints = prints_of_instrument(contract)
                 if len(prints) < minimum_prints:
                     skipped[f"{contract.get('trading_symbol')} never traded that day"] += 1
                     continue
                 chosen.append((contract["instrument_key"], contract, prints))
         if chosen:
             wanted[segment] = chosen
-    return wanted, skipped
+    # Which source actually served, reported separately from what was skipped: a
+    # count of prices is not a reason an instrument was dropped, and printing it
+    # under that heading is the kind of mislabelled number this project keeps
+    # finding. A replay whose prices came from somewhere other than it thinks is
+    # a replay whose result means something else, so this is carried out with
+    # the result rather than left in a local.
+    return wanted, skipped, dict(sources_used)
 
 
 def segment_trades_the_underlying_itself(segment: str) -> bool:
@@ -1033,7 +1055,7 @@ def main() -> int:
 
     if from_history:
         replayed_day = from_history
-        by_segment, skipped = contracts_from_history(
+        by_segment, skipped, priced_by = contracts_from_history(
             replayed_day, replayed_day, arguments.per_segment, arguments.minimum_prints)
         print(f"Replaying {replayed_day} from Upstox's own one-minute history, "
               "one bot per segment.")
@@ -1048,6 +1070,7 @@ def main() -> int:
         replayed_day = arguments.day
         by_segment, skipped = contracts_for_each_segment(
             replayed_day, arguments.per_segment, arguments.minimum_prints)
+        priced_by = {"the captured tape": sum(len(rows) for rows in by_segment.values())}
         print(f"Replaying the captured tape for {replayed_day}, one bot per segment.")
         print("Which segment owns an instrument is asked of segment_that_trades -- the "
               "live spine's own classifier, not a copy of the rule.\n")
@@ -1146,6 +1169,15 @@ def main() -> int:
     print("      verdict, a trial verdict and a coverage report; a replay produces none")
     print("      of the four, and inventing them would call a fabrication a graduation.\n")
 
+    if priced_by:
+        print("=== where the prices came from")
+        for source, count in sorted(priced_by.items()):
+            print(f"    {count:>4} instrument(s) priced by {source}")
+        print("    Upstox is asked last on purpose: it is the only source with a daily")
+        print("    quota, and the only one that can serve an arbitrary past option")
+        print("    session. Spending it on a price a free source would have given is")
+        print("    spending the thing that cannot be replaced.\n")
+
     traded = [s for s, rows in results.items() if any(r.get("closed") for r in rows)]
     print(f"Segments that opened AND closed a trade: {len(traded)} of {len(results)}"
           f"  {traded}")
@@ -1166,6 +1198,7 @@ def main() -> int:
         "replayed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "segments_that_opened_and_closed": traded,
         "by_segment": results,
+        "priced_by": priced_by,
         "learning": {
             "closed_trades_decoded": len(decoded),
             "trade_episodes_encoded": learning.episodes,

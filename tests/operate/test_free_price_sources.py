@@ -191,3 +191,106 @@ def test_a_cached_day_is_read_back_without_fetching(tmp_path, monkeypatch):
             raise AssertionError("a cached day must not be fetched again")
 
     assert bhavcopy.fetch_bhavcopy("20260904", session=Exploding()) == A_REAL_BHAVCOPY
+
+
+# ---- NSE intraday options: the source that closed the last gap ---------------
+
+from operate import nse_intraday_option_prices as nse_intraday  # noqa: E402
+
+# One real response shape. NSE writes IST wall-clock as though it were an epoch:
+# 1788513300000 reads as 09:15 UTC and is really 09:15 IST, the NSE open.
+A_REAL_OPTION_CHART = {
+    "closePrice": 120.95,
+    "grapthData": [[1788513300000, 135.2], [1788513360000, 0], [1788513420000, 137.8]],
+}
+
+
+def test_an_index_option_and_a_stock_option_have_different_prefixes():
+    """NSE's own two names. There is no rule to derive the split from -- an index
+    is not a listed security -- so the caller says which it is."""
+    import datetime
+
+    index = nse_intraday.identifier_for(
+        "NIFTY", datetime.date(2026, 9, 8), "CE", 23900.0, underlying_is_an_index=True)
+    stock = nse_intraday.identifier_for(
+        "RELIANCE", datetime.date(2026, 9, 29), "CE", 1320.0, underlying_is_an_index=False)
+    assert index == "OPTIDXNIFTY08-09-2026CE23900.00"
+    assert stock == "OPTSTKRELIANCE29-09-2026CE1320.00"
+
+
+def test_the_strike_carries_two_decimals():
+    """Not cosmetic: NSE answers 200 with an empty series for a name it does not
+    recognise, so a strike written 23900 reads as a contract nobody traded rather
+    than as a request nobody understood."""
+    import datetime
+
+    assert nse_intraday.identifier_for(
+        "NIFTY", datetime.date(2026, 9, 8), "PE", 23900, underlying_is_an_index=True
+    ).endswith("PE23900.00")
+
+
+def test_stamps_are_shifted_out_of_ist_into_the_instant_they_really_were():
+    """Measured against this project's own tape for the same contract: read as
+    UTC, 52 shared minutes at a 3.88% median difference; shifted back 5:30, 69
+    shared minutes at 0.30%."""
+    import datetime
+
+    prints = nse_intraday.prints_from_chart(A_REAL_OPTION_CHART)
+    first = datetime.datetime.fromtimestamp(prints[0][0] / 1e9, datetime.UTC)
+    assert first.strftime("%H:%M") == "03:45"       # 09:15 IST, the NSE open
+    assert first.strftime("%Y-%m-%d") == "2026-09-04"
+
+
+def test_a_point_with_no_price_is_dropped():
+    assert [price for _at, price in nse_intraday.prints_from_chart(A_REAL_OPTION_CHART)] == [
+        135.2, 137.8,
+    ]
+
+
+def test_the_session_served_is_read_back_rather_than_assumed():
+    """The endpoint takes no date. A caller that believed it had asked for one
+    would replay whatever the last session was and call it the day it wanted."""
+    assert nse_intraday.the_session_this_serves(A_REAL_OPTION_CHART) == "2026-09-04"
+    assert nse_intraday.the_session_this_serves({"grapthData": []}) is None
+
+
+def test_prints_come_back_oldest_first():
+    prints = nse_intraday.prints_from_chart(A_REAL_OPTION_CHART)
+    assert [at for at, _price in prints] == sorted(at for at, _ in prints)
+
+
+# ---- the chooser -------------------------------------------------------------
+
+def test_an_option_for_a_session_nse_is_not_serving_falls_through(monkeypatch):
+    """NSE has a session but not the one asked for. Saying so beats replaying
+    the wrong day."""
+    from operate import historical_prints
+
+    monkeypatch.setattr(
+        historical_prints, "option_prints_from_nse",
+        lambda row, day, session=None: ([], "nse-intraday"),
+    )
+    row = {
+        "instrument_key": "NSE_FO|1", "instrument_type": "CE",
+        "trading_symbol": "NIFTY 23900 CE 08 SEP 26", "underlying_symbol": "NIFTY",
+        "strike_price": 23900.0, "expiry": 1788513300000, "segment": "NSE_FO",
+    }
+    captured = {}
+
+    def fake_upstox(key, frm, to, token):
+        captured["asked"] = key
+        return [(1, 2.0)]
+
+    monkeypatch.setattr(historical_prints, "historical_prints", fake_upstox)
+    monkeypatch.setattr(historical_prints, "upstox_access_token", lambda *a, **k: "token")
+    prints, source = historical_prints.prints_for_instrument(row, "2025-01-01")
+    assert source == "upstox"
+    assert captured["asked"] == "NSE_FO|1"
+
+
+def test_the_index_underlyings_nse_names_with_optidx_are_written_down():
+    from operate.historical_prints import nse_index_underlyings
+
+    named = nse_index_underlyings()
+    assert "NIFTY" in named and "BANKNIFTY" in named
+    assert "RELIANCE" not in named

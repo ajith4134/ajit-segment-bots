@@ -39,6 +39,20 @@ Upstox", then "find the options price source"):
 | `operate/historical_prints.py` (Upstox) | everything, options included | 1 minute | Jan 2022 | broker token, **daily quota** |
 | `operate/yahoo_finance_prints.py` | equities, indices — **no options** | 1m / 5m / 1d | 1m ~1 month, 1d 10 years | none |
 | `operate/nse_fo_bhavcopy.py` (NSE's own) | **every option and future** | daily OHLC + volume + OI | ~2 years | none |
+| `operate/nse_intraday_option_prices.py` (NSE's own) | **every option, index and stock** | intraday ticks | **most recent session only** | none |
+
+`operate/historical_prints.prints_for_instrument` picks between them and says
+which one served: equities and indices from Yahoo, options from NSE's intraday
+chart, **Upstox only when neither can** — it is the one source with a quota and
+the only one that can serve an arbitrary past option session, so spending it on
+a price a free source would have given is spending the thing that cannot be
+replaced. Verified 2026-09-06: a full three-segment replay of 2026-09-04 ran on
+4 Yahoo and 4 NSE instruments and **made no Upstox call at all**.
+
+NSE's intraday endpoint writes IST wall-clock as though it were an epoch —
+09:15 IST arrives as 09:15 "UTC". Shifted back 5:30 it agrees with this
+project's own tape to 0.30% tick-against-tick; read as UTC it disagrees by
+3.88%. Same trap the project already carries for Upstox's historical rows.
 
 Yahoo was checked against this project's own captured tape minute by minute and
 agreed to a **median difference of 0.0000%** (MARUTI, NATIONALUM, BAJAJ-AUTO;
