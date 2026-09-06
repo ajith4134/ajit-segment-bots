@@ -110,6 +110,7 @@ class FailingPartDetector:
         minimum_ticks: int,
         stuck_answer_ticks: int,
         slowdown_ratio: float,
+        slowdown_checks: int,
         perfect_run_ticks: int,
         now_ns=time.time_ns,
     ) -> None:
@@ -120,6 +121,11 @@ class FailingPartDetector:
             )
         if stuck_answer_ticks < 2:
             raise ValueError("one repeated answer is not a stuck answer")
+        if slowdown_checks < 1:
+            raise ValueError(
+                "a slowdown has to be seen at least once to be a fault; below one "
+                f"this reports every part on every check (got {slowdown_checks!r})"
+            )
         if slowdown_ratio <= 1.0:
             raise ValueError(
                 "the slowdown ratio is how many times its own baseline a part may take "
@@ -133,6 +139,10 @@ class FailingPartDetector:
         self._minimum_ticks = minimum_ticks
         self._stuck_answer_ticks = stuck_answer_ticks
         self._slowdown_ratio = slowdown_ratio
+        self._slowdown_checks = slowdown_checks
+        # How many consecutive checks this part has been over the ratio. Reset,
+        # never decayed: a slowdown that stopped is not a slower slowdown.
+        self._slower_streak: dict[str, int] = {}
         self._perfect_run_ticks = perfect_run_ticks
         self._now_ns = now_ns
         self._durations: dict[str, RollingWindow] = {}
@@ -219,19 +229,42 @@ class FailingPartDetector:
                 # time a half-window mean swings on. Measured at matched maturity
                 # it made no difference -- 10,569 faults at 1,182 ticks per part
                 # with the mean, 11,123 at 1,157 with the median -- so the theory
-                # is wrong and the mean stays. Why this fires on ~3% of all checks
-                # is still unexplained, and it is now the whole of the warden's
-                # remaining escalation volume.
+                # is wrong and the mean stays.
+                #
+                # **Why it fired on ~3% of every check, which was unexplained
+                # until 2026-09-06:** `earlier` is not a baseline. Both halves
+                # come out of the same rolling window, so once that window is
+                # full `earlier` is simply "half a window ago" and the test
+                # compares recent noise against slightly older noise. A ratio
+                # between two means of a fluctuating series crosses any fixed
+                # threshold at some rate set by the variance, for ever -- so this
+                # measured variance and reported it as a trend. Measured on the
+                # live spine that day: 15,109 faults, **every one of them this
+                # kind**, and the warden had refused 4,671 restarts for a
+                # "system-wide cause" that was this detector's own noise. The
+                # part that restarts a genuinely broken part was deaf, which is
+                # worse than the noise.
+                #
+                # A fault named "taking-longer-EVERY-tick" has to persist to be
+                # that. One window crossing the ratio is a spike; the same part
+                # crossing it on consecutive checks is the structure this fault
+                # describes. The streak is reset the moment it does not.
                 baseline = statistics.mean(earlier)
                 latest = statistics.mean(recent)
                 if baseline > 0 and latest / baseline >= self._slowdown_ratio:
-                    return self._fault(
-                        part_id, GETTING_SLOWER, DEGRADED,
-                        f"{latest / baseline:.1f}x its own baseline tick time", ticks,
-                        True,
-                        "the tick time returning to its baseline, usually after whatever "
-                        "structure is growing is bounded",
-                    )
+                    streak = self._slower_streak.get(part_id, 0) + 1
+                    self._slower_streak[part_id] = streak
+                    if streak >= self._slowdown_checks:
+                        return self._fault(
+                            part_id, GETTING_SLOWER, DEGRADED,
+                            f"{latest / baseline:.1f}x its own baseline tick time on "
+                            f"{streak} consecutive checks", ticks,
+                            True,
+                            "the tick time returning to its baseline, usually after whatever "
+                            "structure is growing is bounded",
+                        )
+                else:
+                    self._slower_streak.pop(part_id, None)
 
         # Too healthy: in a system that talks to venues, zero errors over a long run
         # means errors are being swallowed rather than not happening. Only asked of
@@ -421,6 +454,7 @@ def start_part(context) -> int:
         minimum_ticks=int(context.number("detector_minimum_ticks")),
         stuck_answer_ticks=int(context.number("detector_stuck_answer_ticks")),
         slowdown_ratio=context.number("detector_slowdown_ratio"),
+        slowdown_checks=int(context.number("detector_slowdown_checks")),
         perfect_run_ticks=int(context.number("detector_perfect_run_ticks")),
     )
     loss_seen: dict[str, int] = {}

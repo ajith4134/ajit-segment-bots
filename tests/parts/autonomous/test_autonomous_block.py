@@ -205,10 +205,16 @@ def test_the_reader_consumes_nothing_by_declaration():
 
 # ---- failing-part-detector --------------------------------------------------
 
-def a_detector(window=10, minimum=4, stuck=3, slowdown=3.0, perfect=20):
+def a_detector(window=10, minimum=4, stuck=3, slowdown=3.0, perfect=20,
+               slowdown_checks=1):
+    """`slowdown_checks=1` here so a test that drives one slowdown still sees the
+    fault. The running part uses `detector_slowdown_checks` (5), which is what
+    stops a rolling window's own variance being reported as a trend -- see the
+    persistence test below."""
     return FailingPartDetector(
         window=window, minimum_ticks=minimum, stuck_answer_ticks=stuck,
-        slowdown_ratio=slowdown, perfect_run_ticks=perfect, now_ns=Clock(),
+        slowdown_ratio=slowdown, slowdown_checks=slowdown_checks,
+        perfect_run_ticks=perfect, now_ns=Clock(),
     )
 
 
@@ -1379,3 +1385,50 @@ def test_a_fault_that_stops_being_restated_escalates_again_when_it_returns():
     clock.now += ESCALATION_FORGET_SECONDS + 1.0
     returned = subject.decide(fault)
     assert returned.escalate, "a fault that went away and came back is news again"
+
+
+def test_one_slow_window_is_a_spike_and_consecutive_ones_are_the_fault():
+    """The fault is named "taking-longer-EVERY-tick", so it has to persist.
+
+    Measured on the live spine 2026-09-06: this rule fired 15,109 times and was
+    **every fault the detector raised**, while unattended-run-warden refused
+    4,671 restarts for a "system-wide cause" that was this detector's own noise
+    -- leaving the part that restarts a broken part deaf, which is worse than
+    the noise.
+
+    The cause was unexplained in the code until then: both halves of the
+    comparison come out of one rolling window, so `earlier` is not a baseline
+    but simply half a window ago, and a ratio between two means of a fluctuating
+    series crosses any fixed threshold at a rate set by its variance, for ever.
+    """
+    subject = a_detector(minimum=4, slowdown=2.0, slowdown_checks=3)
+    for index in range(4):
+        subject.observe_health("p-1", 0.1, 1, 1, f"d-{index}")
+    for index in range(4):
+        subject.observe_health("p-1", 1.0, 1, 1, f"e-{index}")
+
+    # One crossing is a spike, and two still are.
+    assert subject.check("p-1").state != GETTING_SLOWER
+    assert subject.check("p-1").state != GETTING_SLOWER
+    # The third consecutive one is the structure this fault describes.
+    assert subject.check("p-1").state == GETTING_SLOWER
+
+
+def test_a_slowdown_that_stops_resets_the_streak():
+    """A slowdown that stopped is not a slower slowdown, so the count starts
+    again rather than carrying a part most of the way to a fault it recovered
+    from."""
+    subject = a_detector(minimum=4, slowdown=2.0, slowdown_checks=3)
+    for index in range(4):
+        subject.observe_health("p-1", 0.1, 1, 1, f"d-{index}")
+    for index in range(4):
+        subject.observe_health("p-1", 1.0, 1, 1, f"e-{index}")
+    subject.check("p-1")
+    subject.check("p-1")
+
+    # Back to its old speed: the window refills with fast ticks and the streak
+    # must not survive it.
+    for index in range(8):
+        subject.observe_health("p-1", 0.1, 1, 1, f"f-{index}")
+    assert subject.check("p-1").state != GETTING_SLOWER
+    assert subject._slower_streak.get("p-1") in (None, 0)

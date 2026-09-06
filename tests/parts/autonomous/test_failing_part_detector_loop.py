@@ -58,7 +58,7 @@ class StopAfter:
 def _detector() -> FailingPartDetector:
     return FailingPartDetector(
         window=32, minimum_ticks=3, stuck_answer_ticks=4,
-        slowdown_ratio=3.0, perfect_run_ticks=5,
+        slowdown_ratio=3.0, slowdown_checks=1, perfect_run_ticks=5,
     )
 
 

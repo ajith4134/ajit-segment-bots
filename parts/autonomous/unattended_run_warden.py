@@ -70,7 +70,23 @@ HOLDS_CAPITAL_STATE = "restarting-it-could-lose-track-of-a-live-position"
 UNRECOGNISED_FAULT = "restarting-is-not-a-treatment-for-this-fault"
 
 # The faults a restart is actually a treatment for.
-RESTARTABLE_FAULTS = ("crashed", "alive-but-producing-nothing", "taking-longer-every-tick")
+#
+# **A slowdown is not one of them, since 2026-09-06.** `taking-longer-every-tick`
+# was restartable, and the consequence measured on the live spine that day was
+# the opposite of a safety net: the detector raised that fault on part after part
+# (it was *every* fault it raised), the warden restarted six of them, and six is
+# past the ceiling -- so it then refused 394 further faults as a "system-wide
+# cause". A genuinely crashed part would not have been restarted, which is the
+# one thing this part exists to do.
+#
+# Restarting is also not a treatment for it. The fault's own suggested remedy is
+# "the tick time returning to its baseline, usually after whatever structure is
+# growing is bounded" -- a bounded structure, not a fresh process. And a part
+# restarted because the machine is loaded adds load, which makes its neighbours
+# slower, which raises the same fault about them: the treatment causes the
+# disease. It is escalated instead, so nothing is hidden and the ceiling stays
+# for the crashes it was meant for.
+RESTARTABLE_FAULTS = ("crashed", "alive-but-producing-nothing")
 
 
 @dataclass(frozen=True)

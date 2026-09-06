@@ -41,7 +41,7 @@ and whether the market was open.
 
 | | |
 |---|---|
-| features walked | **9 of 29** |
+| features walked | **12 of 29** |
 | parts declared | 373 (`broker-quote-bridge` added 2026-09-06 by this walk) |
 | parts running (2026-09-06 04:56 UTC) | 322 |
 | parts with no `start_part` at all | 25 — 24 of them `stock-market-news-data` |
@@ -62,9 +62,9 @@ come before the ones that learn from a trade that has not happened yet.
 | 7 | `risk-capital-allocation` | **walked 2026-09-06** — 16 of 17 running, every idle wire downstream of `trade-intent` |
 | 8 | `portfolio-state` | **walked 2026-09-06** — idle downstream of `fill`; found the account settling in USDT while charging rupees |
 | 9 | `capital-desk` | **walked 2026-09-06** — 8 of 8 running, 125 wires carrying, 8 idle |
-| 10 | `bull-bot` | not walked |
-| 11 | `bear-bot` | not walked |
-| 12 | `profit-tailgating-bot` | not walked |
+| 10 | `bull-bot` | **walked 2026-09-06** — 10 of 10 running, starved at `entry-candidate`; identical to bear |
+| 11 | `bear-bot` | **walked 2026-09-06** — identical shape to bull, 129 carrying / 75 idle |
+| 12 | `profit-tailgating-bot` | **walked 2026-09-06** — same funnel; peers stay isolated (R-03 holds) |
 | 13 | `prediction` | not walked |
 | 14 | `ledger` | not walked |
 | 15 | `observability` | not walked |
@@ -837,3 +837,76 @@ the part, four consumers (`board-snapshot-builder`, `reward-shaper`,
 tests. That is a real piece of work and it is not a correctness fix — the unit
 is right now, only the label is stale — so it is recorded here rather than
 rushed the day before the first live session. 61 files still name USDT.
+
+---
+
+## 10-12 — the three peer bots, and the structural scan, 2026-09-06
+
+Bull and bear are **identical**: 10 of 10 running, 129 wires carrying, 75 idle,
+and both starved at the same place — `bull-setup-filter` and
+`bear-setup-filter` receive no `entry-candidate`. Same funnel feature 5 traced.
+R-03 holds: the peers carry nothing between each other.
+
+Walking a feature at a time stopped paying here, because on a shut market most
+wires are honestly idle. Two structural scans replaced it:
+
+**Types consumed by nobody's producer: zero.** Every type someone reads has a
+part that writes it.
+
+**Types whose every producer is off: twelve**, and eleven are the crypto layer
+being retired — `raw-venue-order-status`, `order-reject-reason`,
+`venue-position-report`, `venue-rate-budget`, `key-standing` (real-money
+execution), `liquidation-map`, `liquidation-price` (crypto liquidation),
+`consolidated-price`, `stream-plan`, `venue-standing` (crypto venue layer),
+`funding-settlement` (perpetual funding). `venue-standing` has **8 consumers**,
+the largest dead type, and its Indian equivalent — noticing an Upstox throttle —
+is the gap already named in feature 1.
+
+The twelfth was not crypto, and led somewhere.
+
+## The safety net was deaf, and the detector was measuring its own noise
+
+`probe-runner` looked off. It was not: it reports every 0.3s. What was real was
+the warden beside it, which had escalated the same part 1,717 times with
+`refused_system_wide_cause` at **4,671**.
+
+`failing-part-detector` had raised **15,109 faults, every single one the same
+kind** — `taking-longer-every-tick`. The code itself said the cause was
+unknown: *"Why this fires on ~3% of all checks is still unexplained, and it is
+now the whole of the warden's remaining escalation volume."*
+
+**The cause.** Both halves of the comparison come out of **one rolling window**:
+
+    recent  = window[-half:]      earlier = window[:half]
+
+so once the window is full, `earlier` is not a baseline — it is simply half a
+window ago. A ratio between two means of a fluctuating series crosses any fixed
+threshold at a rate set by its variance, for ever. It was measuring variance and
+reporting it as a trend.
+
+**What that cost.** `taking-longer-every-tick` was in the warden's
+`RESTARTABLE_FAULTS`, so the warden restarted six healthy parts, and six is past
+its system-wide ceiling — after which it refused every further fault as "one
+cause rather than many independent faults". **A genuinely crashed part would not
+have been restarted**, which is the single thing that part exists to do. The
+safety net had been switched off by noise, and nothing said so.
+
+Two changes, both measured on the live spine:
+
+| | before | after |
+|---|---|---|
+| faults raised | 15,109 of 318,224 checks (4.75%) | 1,020 of 72,882 (1.4%) |
+| warden restarts requested | 6 | 0 |
+| warden refused system-wide | 4,671 | **0** |
+
+1. **A slowdown must persist.** `detector_slowdown_checks` (5) requires the
+   ratio to hold on consecutive checks — a fault named "taking-longer-*every*-
+   tick" has to be more than one window crossing. The streak resets the moment
+   it does not.
+2. **A slowdown is escalated, not restarted.** Restarting is not a treatment for
+   it — the fault's own remedy is "the tick time returning to its baseline,
+   usually after whatever structure is growing is bounded" — and a part
+   restarted because the machine is loaded adds load, which raises the same
+   fault about its neighbours. The treatment caused the disease. It is still
+   escalated (129 escalations), so nothing is hidden, and the ceiling stays for
+   the crashes it was meant for.
