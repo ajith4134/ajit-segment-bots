@@ -649,12 +649,77 @@ what has not landed, which is what it was built to do.
 
 ### What this feature is measurably missing
 
-- **The replay does not exercise the learning half.** It stops at
-  `position-close-detector`. Extending it to run the closed-trade chain would
-  turn 252 real closed trades into 252 real episodes and scorecards, and is the
-  cheapest way to have the learning loop proven before it matters.
+- ~~**The replay does not exercise the learning half.**~~ **Done 2026-09-06**,
+  at the operator's instruction — see below.
 - **`stop-placement-audit` has no producer at all** — it is an optional piece of
   a trade episode that nothing in the blueprint writes.
 - The instruction loop remains dark: `instruction-writer` has had 0 requests, so
   `watch-condition-compiler` compiles nothing and `universal-symbol-sweeper` has
   swept 3,202 times against zero conditions.
+
+---
+
+## The replay runs the learning half — 2026-09-06
+
+`operate/replay_a_captured_session.py` imported seven parts and stopped at
+`position-close-detector`. A closed trade now walks on through
+`pnl-attributor` → `entry-quality-scorer` → `luck-skill-separator` →
+`trade-episode-encoder` → `bot-scorekeeper`.
+
+**Measured on the captured tape of 2026-09-04**, 10 closed trades across all
+three segments:
+
+    10 closed trade(s) decoded, 10 became a trade-episode
+    attribution    10 attributed
+    entry quality  10 scored
+    significance   10 unlikely-to-be-noise
+    bot-scorecard  bull: 10 trade(s), 3 win(s)
+    episodes refused for a missing piece: none
+
+What is real and what is not, on the same terms the script already set:
+
+- **Real** — the fills are the replay's own, priced by Upstox's real charge
+  stack; the attribution is computed across them; the entry-quality window is
+  the captured prints in the `entry_quality_window` seconds after the entry,
+  which is what the scorer means by "the window the decision could have acted
+  in"; and the significance is each trade's return over that contract's **own**
+  measured daily volatility, computed from its own print-to-print returns.
+- **Stated** — the detector, the regime and the opinion's probability, because
+  the replay opens at the first print by construction, so no detector fired and
+  no bot stated a conviction. Named `replay-opened-at-the-first-print` and
+  `unclassified-in-replay` in the output so nothing reads as measured that was
+  not. What *is* real on the scorecard is the half that matters: whether each
+  trade made money, and how much.
+- **Not run** — `edge-graduation-gate`. It needs a decision quality, a
+  refutation verdict, a trial verdict and a coverage report, and a replay
+  produces none of the four. Driving it would mean inventing all four and
+  calling the result a graduation, which is the fabrication the encoder's own
+  refusal exists to prevent. What it would need is printed instead.
+
+### The defect the trading half could never have shown
+
+`paper-fill-simulator` stamps a fill `filled_at_ns=self._now_ns()` and
+`position-close-detector` stamps `closed_at_ns=self._now_ns()`. Live that is
+exactly right. In a replay it was **the wall clock of the machine running the
+replay**, so a round trip that took forty minutes of market time was recorded as
+having been held for the few milliseconds the replay took to walk its prints.
+
+Net PnL does not depend on the clock, which is why nothing ever noticed. The
+learning half does: `luck-skill-separator` scales a symbol's volatility to the
+horizon actually held, so a millisecond hold made the expected noise vanish and
+every trade read as thousands of standard deviations from it.
+
+    before   -1958.31   -1779.31   2501.50   2948.04   774.53   -3069.10   -5689.92
+    after       -6.90      -2.80      4.00      3.87     1.96      -6.40      -9.24
+
+    holding periods, after: 36s, 194s, 205s, 181s, 1,494s, 387s, 243s, 3,596s
+
+`TapeClock` hands those two parts the captured session's own time, advancing to
+each print as it is walked, and never backwards — a clock that went back would
+make a holding period negative, which reads as a trade that closed before it
+opened.
+
+**This was a replay-only defect and not a live one** — `now_ns()` is the correct
+stamp on the live spine. It is recorded here because it is the exact shape this
+audit keeps finding: a number that looks measured, that nothing downstream could
+tell from a real one, in a path nobody had ever run.

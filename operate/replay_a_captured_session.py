@@ -30,6 +30,27 @@ What is real here, and what is not:
   derived here from the contract's own captured move over the session and the
   provenance is printed with the results, so nothing reads as measured that was
   not.
+
+**Since 2026-09-06 it runs the learning half too.** Until then this script
+imported seven parts and stopped at `position-close-detector`: the 2026-09-04
+replay closed 252 trades and not one of them reached `pnl-attributor`, so
+everything downstream of `closed-trade` had never run on a real trade at all.
+That is why `edge-graduation-gate` reads `judgements 0` on the live spine and
+`bot-maturity` has never been produced for any of its five consumers. A closed
+trade now walks on through attribution, entry quality, significance, the trade
+episode and the bot scorecard -- see `LearningReplay` for what of that is
+measured and what is stated, and for the one part it deliberately does not run.
+
+Doing that exposed a defect the trading half could never have shown.
+`paper-fill-simulator` stamps a fill `filled_at_ns=self._now_ns()` and
+`position-close-detector` stamps `closed_at_ns=self._now_ns()`; live that is
+right, and in a replay it was the wall clock of the machine running it, so a
+forty-minute round trip was recorded as held for the few milliseconds the replay
+took to walk its prints. Net PnL does not depend on the clock, so nothing
+noticed. Anything scaled by a horizon does: `luck-skill-separator` reported
+outcomes of **-1,958 and -5,689 standard deviations** where the honest figures
+are -6.9 and -9.2. `TapeClock` gives those parts the captured session's own time
+instead.
 """
 
 from __future__ import annotations
@@ -38,6 +59,7 @@ import argparse
 import collections
 import datetime
 import json
+import math
 import pathlib
 import statistics
 import sys
@@ -45,6 +67,11 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from parts.closed_trade_decoding.entry_quality_scorer import EntryQualityScorer
+from parts.closed_trade_decoding.luck_skill_separator import LuckSkillSeparator
+from parts.closed_trade_decoding.pnl_attributor import PnlAttributor
+from parts.closed_trade_decoding.trade_episode_encoder import TradeEpisodeEncoder
+from parts.learning_loop.bot_scorekeeper import BotScorekeeper
 from parts.paper_live_trading.paper_fill_simulator import FILLED, PaperFillSimulator
 from parts.paper_live_trading.stop_order_manager import (
     PLACE_NEW, PLACE_TARGET, StopOrderManager, as_order_request,
@@ -65,6 +92,18 @@ from runtime.trading_types import BUY, LONG, MARKET, OPTION, SELL, SPOT
 REPLAY_ROOT = pathlib.Path.home() / ".local/share/ajit-segment-bots/replay"
 TAPE = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape/upstox"
 VENUE = "upstox"
+
+# Prints in a full NSE session, used to scale a contract's own per-print
+# volatility up to the daily figure luck-skill-separator compares against. The
+# session is 09:15-15:30 IST; the count is the contract's own, so a thin
+# contract is not flattered by a busy one's sampling rate.
+SECONDS_IN_AN_NSE_SESSION = 6.25 * 60 * 60
+
+# What the replay states rather than measures on the scorecard half, named here
+# so it is one list rather than a value buried at each call site. See
+# `LearningReplay`'s docstring.
+THE_REPLAY_HAS_NO_DETECTOR = "replay-opened-at-the-first-print"
+THE_REPLAY_HAS_NO_REGIME = "unclassified-in-replay"
 
 
 def number(document, name: str) -> float:
@@ -305,13 +344,51 @@ def busiest_option_contracts(day: str, wanted: int) -> list[tuple[str, list]]:
     return scored[:wanted]
 
 
+class TapeClock:
+    """The captured session's own time, for the parts that stamp `now`.
+
+    `paper-fill-simulator` stamps a fill `filled_at_ns=self._now_ns()` and
+    `position-close-detector` stamps `closed_at_ns=self._now_ns()`. Live that is
+    exactly right. In a replay it is the wall clock of the machine running the
+    replay, so a round trip that took forty minutes of real market time was
+    recorded as having been held for the few **milliseconds** the replay took to
+    walk its prints.
+
+    Nothing noticed while the replay stopped at `position-close-detector`,
+    because net PnL does not depend on the clock. The learning half does:
+    `luck-skill-separator` scales a symbol's volatility to the horizon actually
+    held, so a millisecond hold made the expected noise vanish and every trade
+    read as thousands of standard deviations from it. Measured 2026-09-06,
+    before this existed: standardised outcomes of -1,958 and -5,689 where the
+    honest figures are single digits.
+
+    So the replay hands those parts the tape's clock instead. It advances to
+    each print as that print is walked, which is what "now" means to a part
+    replaying a captured session.
+    """
+
+    def __init__(self, at_ns: int = 0) -> None:
+        self._at_ns = at_ns
+
+    def advance_to(self, at_ns: int) -> None:
+        # Never backwards: the tape is walked in order, and a clock that went
+        # back would make a holding period negative, which reads as a trade that
+        # closed before it opened.
+        self._at_ns = max(self._at_ns, at_ns)
+
+    def __call__(self) -> int:
+        return self._at_ns
+
+
 class ReplayChain:
     """The six parts that turn a fill into a closed trade, wired as the live
     spine wires them. Mirrors the integration test's own chain deliberately --
     this is a proof about captured data, not a second implementation."""
 
     def __init__(self, settings, quantity_increment: float, replayed_day: str,
-                 segment: str = "", kind: str = OPTION) -> None:
+                 segment: str = "", kind: str = OPTION, clock: "TapeClock | None" = None) -> None:
+        # The captured session's clock, not this machine's. See TapeClock.
+        self.clock = clock or TapeClock()
         # Which of Upstox's two charge stacks this segment's fills pay. Passed
         # the same way the live runner passes it, so a replayed cash-equity
         # trade is charged 0.025% STT on turnover rather than the options
@@ -341,6 +418,7 @@ class ReplayChain:
                 "gst_rate": number(settings, "equity_intraday_gst_rate"),
             },
             kinds_by_segment={segment: kind} if segment else None,
+            now_ns=self.clock,
         )
         self.book.observe_session(
             MarketSessionState(
@@ -361,12 +439,17 @@ class ReplayChain:
         self.excursions = PeakExcursionTracker()
         self.chainer = ExitOrderChainer()
         self.stops = StopOrderManager()
-        self.closes = PositionCloseDetector(quantity_increment)
+        self.closes = PositionCloseDetector(quantity_increment, now_ns=self.clock)
         self.closed_trades = []
         self.exit_orders_sent = []
         self.positions_held: dict = {}
+        # Every fill this replay actually produced, in order. The learning half
+        # attributes a closed trade across its own fills, and until 2026-09-06
+        # nothing here kept them: the replay stopped at position-close-detector.
+        self.fills = []
 
     def apply_fill(self, fill) -> None:
+        self.fills.append(fill)
         position = self.reconciler.observe_fill(fill)
         self.cost_basis.observe_fill(fill)
         self.excursions.observe_position(position)
@@ -418,6 +501,9 @@ class ReplayChain:
             self.book.simulate(segment=self.segment, **as_paper_order(as_order_request(action)))
 
     def observe_price(self, symbol: str, price: float, at_ns: int) -> None:
+        # Before anything else: a fill this print causes is stamped with this
+        # print's own time, which is what makes a replayed holding period real.
+        self.clock.advance_to(at_ns)
         self.excursions.observe_price(VENUE, symbol, price, observed_at_ns=at_ns)
         for result in self.book.evaluate_resting({(VENUE, symbol): price}):
             if result.did_fill:
@@ -427,6 +513,178 @@ class ReplayChain:
                         VENUE, symbol, excursion.best_unrealised, excursion.worst_unrealised,
                     )
                 self.apply_fill(result.fill)
+
+
+def daily_volatility_of(prints: list[tuple[int, float]]) -> float | None:
+    """The contract's own realised volatility for the day, from its own prints.
+
+    `luck-skill-separator` compares a trade's return against the noise the
+    symbol produces on its own, and it wants that as a **daily fraction** --
+    `expected_noise` scales it to the holding period by the square root of time,
+    and `assess` divides `realised_pnl / notional` by the result. So this is
+    return-space, never rupees.
+
+    Measured, not stated: the standard deviation of the contract's own
+    print-to-print returns, scaled up by the square root of how many of those
+    intervals fit a session. A contract with fewer than two returns has no
+    dispersion to measure and gets None, which the separator reports as
+    "this symbol's volatility has never been measured" rather than as a zero.
+    """
+    returns = [
+        (later / earlier) - 1.0
+        for (_, earlier), (_, later) in zip(prints, prints[1:])
+        if earlier > 0
+    ]
+    if len(returns) < 2:
+        return None
+    per_print = statistics.stdev(returns)
+    first_ns, last_ns = prints[0][0], prints[-1][0]
+    covered_seconds = (last_ns - first_ns) / 1e9
+    if covered_seconds <= 0:
+        return None
+    seconds_per_print = covered_seconds / len(returns)
+    if seconds_per_print <= 0:
+        return None
+    return per_print * math.sqrt(SECONDS_IN_AN_NSE_SESSION / seconds_per_print)
+
+
+class LearningReplay:
+    """The closed-trade chain, run on a replayed trade -- the half the replay never had.
+
+    Until 2026-09-06 this script imported seven parts and stopped at
+    `position-close-detector`. The 2026-09-04 replay closed 252 trades and not
+    one of them reached `pnl-attributor`, so everything downstream of
+    `closed-trade` had never run on a real trade at all -- which is why
+    `edge-graduation-gate` reads `judgements 0` on the live spine and
+    `bot-maturity` has never been produced for any of its five consumers.
+
+    What is real here, on the same terms the module docstring already sets:
+
+    - **Real**: the fills are this replay's own, priced by Upstox's real charge
+      stack. The attribution is computed across them. The entry-quality window
+      is the captured prints in the `entry_quality_window` seconds after the
+      entry -- the window the decision could actually have acted in, which is
+      what the scorer means by it. The significance is the trade's own return
+      over the contract's own measured daily volatility.
+    - **Stated**: the detector, the regime and the opinion's stated probability
+      on the scorecard half. The replay opens at the first print by
+      construction, so no detector fired and no bot stated a conviction. Those
+      are named `replay-opened-at-the-first-print` and `unclassified-in-replay`
+      so nothing reads as measured that was not, and the two that ARE real --
+      whether the trade made money, and how much -- are what the scorecard is
+      actually built from.
+
+    **`edge-graduation-gate` is deliberately not run.** It needs a decision
+    quality, a refutation verdict, a trial verdict and a coverage report, and a
+    replay can produce none of the four. Driving it would mean inventing all
+    four and calling the result a graduation, which is exactly the fabrication
+    the encoder's own refusal exists to prevent. What it would need is printed
+    instead.
+    """
+
+    def __init__(self, settings) -> None:
+        self.attributor = PnlAttributor(
+            reconciliation_tolerance=number(settings, "pnl_reconciliation_tolerance"),
+        )
+        self.entry_scorer = EntryQualityScorer(
+            window_seconds=number(settings, "entry_quality_window"),
+            minimum_prices=int(number(settings, "entry_quality_minimum_prices")),
+            chasing_in_typical_movements=number(settings, "entry_quality_chasing_movements"),
+        )
+        self.separator = LuckSkillSeparator(
+            significance_threshold=number(settings, "luck_significance_threshold"),
+            minimum_comparable_outcomes=int(
+                number(settings, "luck_minimum_comparable_outcomes")),
+        )
+        self.encoder = TradeEpisodeEncoder()
+        # The replay states no conviction, so the "stated probability" it
+        # records is the scorekeeper's own prior -- the number that means "no
+        # information", rather than one invented here.
+        self.stated_probability = number(settings, "learning_prior_hit_rate")
+        self.scorekeeper = BotScorekeeper(
+            prior_hit_rate=number(settings, "learning_prior_hit_rate"),
+            prior_weight=number(settings, "learning_prior_weight"),
+            half_life_observations=number(settings, "learning_half_life_observations"),
+            minimum_observations=int(number(settings, "learning_minimum_observations")),
+        )
+        self.episodes = 0
+        self.refused = collections.Counter()
+
+    def decode(self, trade_id: str, closed_trade, fills, prints, entry_at_ns) -> dict:
+        """One closed trade, all the way to an episode and a scorecard entry."""
+        for fill in fills:
+            self.attributor.observe_fill(trade_id, fill)
+        self.attributor.observe_decision_price(trade_id, closed_trade.entry_price)
+        attribution = self.attributor.attribute(trade_id, closed_trade)
+
+        # The signal existed when the replay decided to open, and the window is
+        # the prints after it -- "the window the decision could have acted in".
+        self.entry_scorer.observe_signal_time(trade_id, entry_at_ns)
+        for at_ns, price in prints:
+            self.entry_scorer.observe_price(VENUE, closed_trade.symbol, price, at_ns)
+        typical = typical_movement_of(prints)
+        if typical is not None:
+            self.entry_scorer.observe_typical_movement(VENUE, closed_trade.symbol, typical)
+        entry_quality = self.entry_scorer.score(trade_id, closed_trade)
+
+        volatility = daily_volatility_of(prints)
+        if volatility is not None:
+            self.separator.observe_daily_volatility(VENUE, closed_trade.symbol, volatility)
+        significance = self.separator.assess(trade_id, closed_trade)
+
+        # Each part publishes the inner value, never its own wrapper, so this is
+        # what the encoder would receive on the bus.
+        encoded = self.encoder.encode(
+            trade_id, closed_trade,
+            detector=THE_REPLAY_HAS_NO_DETECTOR,
+            action="bought",
+            outcome="target" if closed_trade.realised_pnl > 0 else "stop",
+            attribution=attribution.attribution if attribution.is_usable else None,
+            entry_quality=entry_quality.quality if entry_quality.is_usable else None,
+            significance=significance.significance if significance.is_usable else None,
+        )
+        if encoded.episode is not None:
+            self.episodes += 1
+        for missing in encoded.missing:
+            self.refused[missing] += 1
+
+        won = closed_trade.realised_pnl > 0
+        self.scorekeeper.record_opinion_outcome(
+            bot="bull",
+            detector=THE_REPLAY_HAS_NO_DETECTOR,
+            regime=THE_REPLAY_HAS_NO_REGIME,
+            # Stated, and deliberately the prior: the replay states no conviction,
+            # and any other number would be one invented here.
+            stated_probability=self.stated_probability,
+            the_opinion_was_right=won,
+            realised=closed_trade.realised_pnl,
+        )
+        return {
+            # The captured session's own holding period, which only became a
+            # real number when the replay stopped stamping fills with the wall
+            # clock (see TapeClock). Everything scaled by a horizon depends on
+            # it, so it is carried out with the result rather than trusted.
+            "holding_seconds": closed_trade.holding_seconds,
+            "attribution": attribution.state,
+            "entry_quality": entry_quality.state,
+            "significance": significance.state,
+            "episode": encoded.state,
+            "episode_missing": list(encoded.missing),
+            "daily_volatility_measured": volatility,
+            "standardised_outcome": significance.significance.standardised,
+        }
+
+
+def typical_movement_of(prints: list[tuple[int, float]]) -> float | None:
+    """How far this contract usually moves between prints, in price.
+
+    What `entry-quality-scorer` measures chasing against. Measured from the
+    contract's own captured prints -- the median absolute move -- so a thin
+    contract is judged against itself rather than against a busy one.
+    """
+    moves = [abs(later - earlier) for (_, earlier), (_, later) in zip(prints, prints[1:])]
+    moves = [move for move in moves if move > 0]
+    return statistics.median(moves) if moves else None
 
 
 class PaperMode:
@@ -477,11 +735,15 @@ def stop_and_target_for(prints: list[tuple[int, float]], entry: float,
 def replay_one_contract(name: str, prints: list, settings, lot_size: float,
                         stop_multiple: float, target_multiple: float, day: str,
                         segment: str = "", kind: str = OPTION,
-                        quantity: float | None = None) -> dict:
+                        quantity: float | None = None,
+                        learning: "LearningReplay | None" = None) -> dict:
     """Open at the first print, rest the exits, then walk every later print."""
-    chain = ReplayChain(settings, quantity_increment=lot_size, replayed_day=day,
-                        segment=segment, kind=kind)
     entry_at_ns, entry_price = prints[0]
+    # Started at the entry print: the opening fill is stamped before any later
+    # print is walked, and a fill stamped 0 would make the holding period the
+    # whole epoch.
+    chain = ReplayChain(settings, quantity_increment=lot_size, replayed_day=day,
+                        segment=segment, kind=kind, clock=TapeClock(entry_at_ns))
     traded_quantity = lot_size if quantity is None else quantity
     stop_price, target_price = stop_and_target_for(
         prints, entry_price, stop_multiple, target_multiple)
@@ -513,6 +775,15 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         }
 
     closed = chain.closed_trades[0]
+    # The learning half, on this replay's own fills and prints. Optional so the
+    # trading half can still be replayed alone, and never able to change what
+    # the trading half decided -- it reads a finished round trip.
+    decoded = None
+    if learning is not None:
+        decoded = learning.decode(
+            trade_id=f"{day}:{name}", closed_trade=closed, fills=chain.fills,
+            prints=prints, entry_at_ns=entry_at_ns,
+        )
     # Which of Upstox's two charge stacks actually priced these fills, carried
     # out with the result rather than trusted. A cash-equity trade priced by the
     # options stack still produces a plausible net -- twice the real cost on a
@@ -537,6 +808,7 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         "net_pnl": closed.realised_pnl - closed.fees_paid,
         "direction": closed.direction,
         "opened_at_ns": entry_at_ns,
+        "decoded": decoded,
     }
 
 
@@ -562,6 +834,10 @@ def main() -> int:
     print("Which segment owns an instrument is asked of segment_that_trades -- the "
           "live spine's own classifier, not a copy of the rule.\n")
 
+    # One learning chain across every segment, because a scorecard is about a
+    # bot and the bot is the same one whichever segment's instrument it traded.
+    learning = LearningReplay(settings)
+
     results: dict[str, list] = {}
     for segment, instruments in by_segment.items():
         segment_settings = load_settings_document(
@@ -583,7 +859,7 @@ def main() -> int:
                     arguments.stop_multiple, arguments.target_multiple, arguments.day,
                     segment=segment,
                     kind=KIND_OF_INSTRUMENT_TYPE.get(row.get("instrument_type"), OPTION),
-                    quantity=quantity)
+                    quantity=quantity, learning=learning)
             except ValueError as refusal:
                 replayed = {"symbol": name, "opened": False, "why": str(refusal)}
             replayed["instrument_key"] = name
@@ -624,6 +900,34 @@ def main() -> int:
                 print(f"    {shown:<30} did not close: {trade.get('why')}")
         print()
 
+    closed_everywhere = [r for rows in results.values() for r in rows if r.get("closed")]
+    decoded = [r["decoded"] for r in closed_everywhere if r.get("decoded")]
+    print("=== the learning half, on the same trades")
+    print(f"    {len(decoded)} closed trade(s) decoded, "
+          f"{learning.episodes} became a trade-episode")
+    for piece, state in (
+        ("attribution", "attribution"), ("entry quality", "entry_quality"),
+        ("significance", "significance"),
+    ):
+        states = collections.Counter(row[state] for row in decoded)
+        rendered = ", ".join(f"{count} {name}" for name, count in states.most_common())
+        print(f"    {piece:<14} {rendered}")
+    if learning.refused:
+        print("    an episode was refused for a missing piece:")
+        for missing, count in learning.refused.most_common():
+            print(f"       {count:>4}  {missing} had not landed")
+    card = learning.scorekeeper.scorecard_for("bull").describe()
+    for regime, record in card["by_regime"].items():
+        print(f"    bot-scorecard  bull/{regime}: "
+              f"{record['trades']} trade(s), {record['wins']} win(s)")
+    print("    REAL here: the fills, the attribution across them, the entry-quality")
+    print("      window of captured prints, and the contract's own measured volatility.")
+    print("    STATED: the detector, the regime and the opinion's probability -- the")
+    print(f"      replay opens at the first print, so no detector fired ({THE_REPLAY_HAS_NO_DETECTOR}).")
+    print("    NOT RUN: edge-graduation-gate. It needs a decision quality, a refutation")
+    print("      verdict, a trial verdict and a coverage report; a replay produces none")
+    print("      of the four, and inventing them would call a fabrication a graduation.\n")
+
     traded = [s for s, rows in results.items() if any(r.get("closed") for r in rows)]
     print(f"Segments that opened AND closed a trade: {len(traded)} of {len(results)}"
           f"  {traded}")
@@ -644,6 +948,21 @@ def main() -> int:
         "replayed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "segments_that_opened_and_closed": traded,
         "by_segment": results,
+        "learning": {
+            "closed_trades_decoded": len(decoded),
+            "trade_episodes_encoded": learning.episodes,
+            "episodes_refused_for_a_missing_piece": dict(learning.refused),
+            "bot_scorecard_bull": learning.scorekeeper.scorecard_for("bull").describe(),
+            "stated_not_measured": {
+                "detector": THE_REPLAY_HAS_NO_DETECTOR,
+                "regime": THE_REPLAY_HAS_NO_REGIME,
+                "stated_probability": learning.stated_probability,
+            },
+            "edge_graduation_gate_not_run_because": (
+                "it needs a decision quality, a refutation verdict, a trial verdict and "
+                "a coverage report, and a replay produces none of the four"
+            ),
+        },
         "instruments_no_segment_owns": dict(skipped.most_common(20)),
     }, indent=2) + "\n")
     print(f"\nwrote {written}")
