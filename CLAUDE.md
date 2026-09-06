@@ -30,7 +30,29 @@ replay asks `market-session-calendar` — the live spine's own answer — and an
 unmeasured session counts as shut. A bar close is one price a minute rather than
 every print, so the tape stays the finer evidence where it exists.
 
-**The historical quota is real and it is not per-second.** After a day of
+**Three free sources, so no replay depends on one broker's quota** (operator,
+2026-09-06 — "you can find other free sources instead of relying only on
+Upstox", then "find the options price source"):
+
+| source | covers | granularity | depth | account |
+|---|---|---|---|---|
+| `operate/historical_prints.py` (Upstox) | everything, options included | 1 minute | Jan 2022 | broker token, **daily quota** |
+| `operate/yahoo_finance_prints.py` | equities, indices — **no options** | 1m / 5m / 1d | 1m ~1 month, 1d 10 years | none |
+| `operate/nse_fo_bhavcopy.py` (NSE's own) | **every option and future** | daily OHLC + volume + OI | ~2 years | none |
+
+Yahoo was checked against this project's own captured tape minute by minute and
+agreed to a **median difference of 0.0000%** (MARUTI, NATIONALUM, BAJAJ-AUTO;
+133/133/82 shared minutes). NSE's file carries 26,872 stock options and 4,996
+index options for one session — complete coverage of both Phase A segments,
+against the 2,000 instruments the live feed can subscribe to. It is daily, so it
+is breadth and history where Upstox is intraday depth.
+
+`nsearchives.nseindia.com` is **not** blocked — the earlier note was about a
+different path, and it was the filename that was wrong. The legacy
+`content/historical/DERIVATIVES/...` names answer 404; the UDiFF ones under
+`content/fo/` are what NSE serves now.
+
+**The Upstox historical quota is real and it is not per-second.** After a day of
 fetching, Upstox answers HTTP 429 and keeps refusing through four backoffs
 totalling 200 seconds. Fetched ranges are cached under
 `~/.local/share/ajit-segment-bots/history/` because a past session never
