@@ -43,7 +43,9 @@ master.
 
 ## Progress
 
-**4 of 373 parts judged** as of 2026-09-06 — 3 serving their purpose, 1 skeleton (`cointegration-pair-finder`).
+**5 of 373 parts judged** as of 2026-09-06 — 4 serving their purpose, 1 skeleton (`cointegration-pair-finder`).
+
+`correlation-cluster-mapper` was judged on 2026-09-06 after two defects were fixed that had it crash-looping on the live spine (139 restarts, exit code 1). A part that cannot stay up cannot be judged, so the fix came first: `correlation` has always returned None for a series with no variation and `map()` used the result without asking, and `describe_correlation_clusters` recomputed the whole quadratic mapping on every health read, defeating the remap pacing. Both are covered by real-tape tests.
 
 The user said 370; the blueprint holds **373** parts across 29 categories, and every part is what the instruction means.
 
@@ -172,7 +174,7 @@ The user said 370; the blueprint holds **373** parts across 29 categories, and e
 |---|---|---|---|
 | `abstention-coverage-auditor` | NOT MEASURED | | |
 | `causal-refutation-battery` | NOT MEASURED | | |
-| `correlation-cluster-mapper` | NOT MEASURED | | |
+| `correlation-cluster-mapper` | SERVING ITS PURPOSE — with a caveat on feed density | real 5-minute bars for 15 NSE shares over 60 days (Yahoo, free source), 4,365-4,374 bars each, fed synchronised by timestamp at production settings (window 256, minimum 64, threshold 0.7); and separately the full captured tape of 2026-09-04, 64,721 real prints across 582 NSE_EQ symbols | On the dense data it is a reading an operator would recognise: one cluster, HCLTECH/INFY/WIPRO at 0.78 average and 0.72 weakest — the IT trio. Same-sector pairs positive (INFY/WIPRO 0.807, SBIN/AXISBANK 0.477), cross-sector pairs at nothing (HDFCBANK/TCS -0.062, HINDUNILVR/NESTLEIND -0.033, TITAN/SBIN 0.08). It is measuring returns, not prices, and it says so. **On the captured tape the same settings left 167,693 of 169,071 pairs (99.2%) unmeasured** for want of 64 shared observations, and the one cluster it did form — 360ONE/CDSL/HINDZINC/IOLCP/TMCV — is five unrelated businesses. That is the feed's per-symbol density, not the part: it correctly refuses to call a thin pair uncorrelated. What it means live is that this part is only worth its CPU on symbols the feed samples densely, and `unmeasured_pairs` on its standing is the number that says so. |
 | `counterfactual-replayer` | NOT MEASURED | | |
 | `cross-segment-exposure-watch` | NOT MEASURED | | |
 | `cross-segment-lesson-bridge` | NOT MEASURED | | |
