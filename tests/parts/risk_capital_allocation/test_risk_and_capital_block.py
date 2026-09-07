@@ -2242,3 +2242,65 @@ def test_a_plan_naming_no_contract_is_trusted():
     plan = PlanFor(entry_price=22.5, stop_price=21.0, priced_for_contract=None)
     choice = ChoiceOf("RELIANCE 1320 PE 29 SEP 26", reference_price=22.85)
     assert entry_price_for(plan, choice) == 22.5
+
+
+def test_the_ceiling_bounds_the_position_not_the_order():
+    """`maximum_capital_per_trade` is "the most one trade may commit", and a
+    trade is a position.
+
+    This gate capped each order and never saw what it was adding to, while the
+    bots re-decided the same contract every few seconds. Measured on the live
+    spine 2026-09-07: 66 open positions above the ceiling, the largest
+    Rs 1,277,667 against 200,000, and one contract that walked 4,149 -> 10,492
+    units in a single round trip with every add passing this gate.
+    """
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    # 800 already committed of a 1,000 ceiling: only 200 of room is left.
+    gate.observe_position(VENUE, SYMBOL, 800.0)
+
+    bounded = gate.bound(
+        sized_for_gate(quantity=5.0, entry=100.0), bounds(minimum=10.0, maximum=1_000.0),
+        settings_are_valid=True,
+    )
+
+    assert bounded.quantity * 100.0 <= 200.0 + 1e-9, bounded.reason
+    assert gate.standing.capped_to_the_room_left == 1
+
+
+def test_a_position_already_at_the_ceiling_refuses_the_order_outright():
+    """A bound is not a ban on adding, but there is nothing left to add."""
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    gate.observe_position(VENUE, SYMBOL, 1_000.0)
+
+    bounded = gate.bound(
+        sized_for_gate(quantity=1.0, entry=100.0), bounds(minimum=10.0, maximum=1_000.0),
+        settings_are_valid=True,
+    )
+
+    assert bounded.quantity == 0.0
+    assert gate.standing.refused_position_already_at_the_ceiling == 1
+    assert "already committed" in bounded.reason
+
+
+def test_a_first_entry_is_bounded_exactly_as_before():
+    """A symbol nothing is held in must behave identically -- this is the same
+    rule applied to the right quantity, not a new rule for a first order."""
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+
+    bounded = gate.bound(
+        sized_for_gate(quantity=50.0, entry=100.0), bounds(minimum=10.0, maximum=1_000.0),
+        settings_are_valid=True,
+    )
+
+    assert bounded.quantity * 100.0 <= 1_000.0 + 1e-9
+    assert gate.standing.refused_position_already_at_the_ceiling == 0
+    assert gate.standing.capped_to_the_room_left == 0
+
+
+def test_a_position_gone_flat_stops_counting_against_the_ceiling():
+    """A position is a state: closed means the room is back."""
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    gate.observe_position(VENUE, SYMBOL, 1_000.0)
+    gate.observe_position(VENUE, SYMBOL, 0.0)
+
+    assert gate.held_capital(sized_for_gate(quantity=1.0, entry=100.0)) == 0.0

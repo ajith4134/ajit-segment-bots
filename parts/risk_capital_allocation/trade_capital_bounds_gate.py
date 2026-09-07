@@ -42,7 +42,7 @@ PART_ID = "trade-capital-bounds-gate"
 
 PART_DECLARATION = PartDeclaration(
     part_id="trade-capital-bounds-gate",
-    consumes=("sized-order", "trade-capital-bounds", "capital-settings-verdict"),
+    consumes=("sized-order", "trade-capital-bounds", "capital-settings-verdict", "position"),
     produces=("bounded-order", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -62,6 +62,7 @@ REFUSED_NOT_TRADEABLE = "refused-order-not-tradeable"
 # 50.00 maximum", which order-destination-router then counted in routed_to_paper
 # and paper-fill-simulator dropped before it was ever simulated -- so the gate,
 # the router and the book each reported nothing wrong and no order existed.
+REFUSED_POSITION_AT_THE_CEILING = "the-position-is-already-at-the-capital-ceiling"
 REFUSED_MAXIMUM_BUYS_NOTHING = "refused-the-maximum-cannot-buy-one-increment"
 
 
@@ -115,6 +116,12 @@ class GateStanding:
     refused_settings: int = 0
     refused_bump: int = 0
     refused_not_tradeable: int = 0
+    # An order refused because the position already holds the whole ceiling,
+    # and one cut to the room left rather than to the ceiling. Both are new on
+    # 2026-09-07 and both were previously invisible: the gate capped each
+    # order and never saw the position it was adding to.
+    refused_position_already_at_the_ceiling: int = 0
+    capped_to_the_room_left: int = 0
     largest_capital_used: float = 0.0
 
 
@@ -126,6 +133,9 @@ class TradeCapitalBoundsGate:
             raise ValueError("a quantity increment of zero cannot snap anything")
         self._increment = quantity_increment
         self._now_ns = now_ns
+        # What each symbol already has committed to it, so the ceiling bounds
+        # the position rather than the slice.
+        self._held_capital: dict[tuple[str, str], float] = {}
         self.standing = GateStanding()
 
     def _increment_for(self, sized_order) -> float:
@@ -139,6 +149,21 @@ class TradeCapitalBoundsGate:
         """
         step = getattr(sized_order, "quantity_increment", 0.0)
         return float(step) if step and step > 0 else self._increment
+
+    def observe_position(self, venue_id: str, symbol: str, capital: float) -> None:
+        """What is already committed to this symbol, from `position`.
+
+        Replaced rather than accumulated: a position is a state, and the last one
+        published is what is held.
+        """
+        key = (venue_id, symbol)
+        if capital <= 0:
+            self._held_capital.pop(key, None)
+        else:
+            self._held_capital[key] = capital
+
+    def held_capital(self, sized_order) -> float:
+        return self._held_capital.get((sized_order.venue_id, sized_order.symbol), 0.0)
 
     def bound(self, sized_order, bounds, settings_are_valid: bool) -> BoundedOrder:
         if not settings_are_valid:
@@ -159,8 +184,35 @@ class TradeCapitalBoundsGate:
         leverage = leverage_behind(sized_order)
         capital = capital_committed_by(sized_order.quantity, sized_order.entry_price, leverage)
 
+        # **The ceiling is on the position, not on this order** (2026-09-07).
+        # `maximum_capital_per_trade` is the operator's "the most one trade may
+        # commit", and a trade is a position; this gate applied it to one order
+        # while the bots re-decided the same contract every few seconds, so the
+        # adds stacked. Measured on the live spine that day: 66 open positions
+        # above the ceiling, the largest Rs 1,277,667 against 200,000, and one
+        # contract walked 4,149 -> 10,492 units in a single round trip with every
+        # add passing this gate.
+        #
+        # A symbol nothing is held in has `already` zero and behaves exactly as
+        # before, so this is the same rule applied to the quantity the operator
+        # was talking about, not a new rule for a first entry.
+        already = self.held_capital(sized_order)
+        room = bounds.maximum_capital - already
+        if already > 0 and room <= 0:
+            self.standing.refused_position_already_at_the_ceiling += 1
+            return self._refusal(
+                sized_order, bounds, REFUSED_POSITION_AT_THE_CEILING,
+                f"{already:,.2f} is already committed to {sized_order.symbol}, at or past the "
+                f"{bounds.maximum_capital:,.2f} a trade may commit; adding to it would put the "
+                f"position beyond a bound the operator set, however small this order is",
+            )
+
         if capital < bounds.minimum_capital:
             return self._bump(sized_order, bounds, capital)
+        if already > 0 and capital > room:
+            # Cap to the room left rather than to the whole ceiling.
+            self.standing.capped_to_the_room_left += 1
+            return self._cap(sized_order, bounds, capital, room)
         if capital > bounds.maximum_capital:
             return self._cap(sized_order, bounds, capital)
 
@@ -198,11 +250,18 @@ class TradeCapitalBoundsGate:
             f"raised from {capital:,.2f} to the {bounds.minimum_capital:,.2f} minimum",
         )
 
-    def _cap(self, sized_order, bounds, capital: float) -> BoundedOrder:
-        """Cut to the maximum, unless the maximum does not reach one increment."""
+    def _cap(self, sized_order, bounds, capital: float, room: float | None = None) -> BoundedOrder:
+        """Cut to what may still be committed, unless that is under one increment.
+
+        `room` is the ceiling less what the position already holds, and is the
+        real limit whenever anything is held; the ceiling itself is the limit for
+        a first entry. Passing the ceiling where the room was smaller is what let
+        a position walk to six times it, one compliant order at a time.
+        """
+        ceiling = bounds.maximum_capital if room is None else room
         leverage = leverage_behind(sized_order)
         quantity = self._snap_down(
-            quantity_for_capital(bounds.maximum_capital, sized_order.entry_price, leverage),
+            quantity_for_capital(ceiling, sized_order.entry_price, leverage),
             self._increment_for(sized_order),
         )
         if quantity <= 0:
@@ -212,7 +271,7 @@ class TradeCapitalBoundsGate:
             self.standing.refused_maximum_buys_nothing += 1
             return self._bounded(
                 sized_order, bounds, 0.0, 0.0, REFUSED_MAXIMUM_BUYS_NOTHING, 0.0,
-                f"the {bounds.maximum_capital:,.2f} maximum does not buy one "
+                f"the {ceiling:,.2f} that may still be committed does not buy one "
                 f"{self._increment_for(sized_order):g} increment at "
                 f"{sized_order.entry_price:,.2f}",
             )
@@ -222,7 +281,7 @@ class TradeCapitalBoundsGate:
         return self._bounded(
             sized_order, bounds, quantity, capped_capital, CAPPED_AT_MAXIMUM,
             self._risk_at(sized_order, quantity),
-            f"cut from {capital:,.2f} to the {bounds.maximum_capital:,.2f} maximum",
+            f"cut from {capital:,.2f} to the {ceiling:,.2f} that may still be committed",
         )
 
     def _risk_at(self, sized_order, quantity: float) -> float:
@@ -280,6 +339,10 @@ def describe_bounding(gate: TradeCapitalBoundsGate) -> dict:
         "refused_settings_invalid": gate.standing.refused_settings,
         "refused_bump_breaches_risk": gate.standing.refused_bump,
         "refused_not_tradeable": gate.standing.refused_not_tradeable,
+        "refused_position_already_at_the_ceiling": (
+            gate.standing.refused_position_already_at_the_ceiling
+        ),
+        "capped_to_the_room_left": gate.standing.capped_to_the_room_left,
         "refused_maximum_buys_nothing": gate.standing.refused_maximum_buys_nothing,
         "largest_capital_used": gate.standing.largest_capital_used,
     }
@@ -358,9 +421,27 @@ def start_part(context) -> int:
         maximum_age_seconds=context.number("capital_bounds_maximum_age_seconds"),
     )
     verdicts = LatestValue(read=context.bus.reader("capital-settings-verdict"))
+    # What is already committed per symbol, so the ceiling bounds the position
+    # rather than the slice. Age-bounded for the same reason the bounds above
+    # are: a position that stopped being restated must stop counting against the
+    # ceiling rather than blocking the symbol forever.
+    positions = LatestByKey(
+        read=context.bus.reader("position"),
+        key_of=lambda position: (position.venue_id, position.symbol),
+        maximum_age_seconds=context.number("capital_bounds_maximum_age_seconds"),
+    )
     publish_bounded_orders = context.bus.publisher_for("bounded-order")
+    gate = TradeCapitalBoundsGate(
+        quantity_increment=context.number("order_quantity_increment")
+    )
 
     def read_sized_orders():
+        for (venue_id, symbol), position in positions.mapping().items():
+            leverage = getattr(position, "leverage", None) or 1.0
+            gate.observe_position(
+                venue_id, symbol,
+                abs(position.quantity) * position.average_entry_price / leverage,
+            )
         bounds_by_segment = bounds.mapping()
         permitted = does_verdict_permit_trading(verdicts.value())
         return tuple(
@@ -377,7 +458,7 @@ def start_part(context) -> int:
         )
 
     return run_trade_capital_bounds_gate(
-        gate=TradeCapitalBoundsGate(quantity_increment=context.number("order_quantity_increment")),
+        gate=gate,
         control_socket=context.control_socket,
         read_sized_orders=read_sized_orders,
         publish_bounded_orders=publish_bounded_orders,

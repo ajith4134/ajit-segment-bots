@@ -67,6 +67,11 @@ class DetectorStanding:
     # what was already recorded -- see `_close_residues_left_by_an_older_build`.
     residues_closed_at_restore: int = 0
     open_symbols: int = 0
+    # A sell that arrived with nothing held. Phase A never sells to open, so
+    # this is a stale exit outliving the position it protected -- eleven of
+    # them became real short positions on 2026-09-07 before this was refused.
+    refused_a_sell_that_would_open_a_short: int = 0
+    quantity_refused_as_an_unmatched_exit: float = 0.0
     # Not counters: what happened to the checkpoint at start. On the board these
     # separate a part that has never run from one that came back holding nothing.
     restored_symbols: int = 0
@@ -113,7 +118,17 @@ class PositionCloseDetector:
         quantity_increment: float,
         now_ns=time.time_ns,
         remembered_fill_ids: int = 5000,
+        may_open_a_short: bool = False,
     ) -> None:
+        """`may_open_a_short` states whether a sell with nothing held opens a
+        position or is refused as a stale exit.
+
+        False here and false in every built segment: Phase A buys options and buys
+        shares, and `instrument-selector` marks every instrument it registers
+        `supports_short=False`. It is an argument rather than an assumption so
+        that a segment which really does sell to open has somewhere to say so,
+        and so the rule is visible where the position is decided (RL-061).
+        """
         # The venue's quantity step. Below one of these a book holds nothing any
         # order could sell, which is what `LotBook.is_flat_within` calls flat --
         # see that method for the 13 positions this was measured against. Not
@@ -128,6 +143,7 @@ class PositionCloseDetector:
         self._now_ns = now_ns
         self._books: dict[tuple[str, str], LotBook] = {}
         self._direction: dict[tuple[str, str], str] = {}
+        self._may_open_a_short = may_open_a_short
         self._realised: dict[tuple[str, str], float] = {}
         self._fees: dict[tuple[str, str], float] = {}
         self._entered_quantity: dict[tuple[str, str], Decimal] = {}
@@ -330,6 +346,28 @@ class PositionCloseDetector:
         # position open forever and the trade unscoreable.
         filled = exact_quantity(fill.quantity)
 
+        if direction == FLAT and fill_direction == SHORT and not self._may_open_a_short:
+            # **A sell against a flat book is a stale exit, not a new short.**
+            # Phase A buys options and buys shares; `instrument-selector` marks
+            # every instrument it registers `supports_short=False`, and nothing in
+            # this system ever decides to sell to open. So a sell arriving with
+            # nothing held is an exit that outlived the position it protected --
+            # `stop-order-manager` rests a stop for the whole position, the
+            # position closes by another path, and the stale stop then fires.
+            #
+            # Measured on the live spine 2026-09-07: eleven short positions, every
+            # one of them opened by exactly this, immediately after a
+            # `position-closed`. RELIANCE 1320 PE went flat and reopened at
+            # **-10,474 units**, which is the stop's own quantity. Treating it as a
+            # short made the system hold the one position it was built never to
+            # hold, and made a board show an option sold that nobody sold.
+            #
+            # Refused and counted rather than dropped: the fill happened, and a
+            # fill nobody can account for is worse than one reported as unmatched.
+            self.standing.refused_a_sell_that_would_open_a_short += 1
+            self.standing.quantity_refused_as_an_unmatched_exit += float(filled)
+            return None
+
         if direction in (FLAT, fill_direction):
             if direction == FLAT:
                 self._opened_at[key] = fill.filled_at_ns
@@ -448,6 +486,12 @@ def describe_closes(detector: PositionCloseDetector) -> dict:
         "residues_closed_at_restore": detector.standing.residues_closed_at_restore,
         "reversals": detector.standing.reversals,
         "open_symbols": detector.standing.open_symbols,
+        "refused_a_sell_that_would_open_a_short": (
+            detector.standing.refused_a_sell_that_would_open_a_short
+        ),
+        "quantity_refused_as_an_unmatched_exit": (
+            detector.standing.quantity_refused_as_an_unmatched_exit
+        ),
         # What survived the last off switch, and why -- so a board can tell a part
         # that came back holding four positions from one that came back cold
         # because its checkpoint was unreadable (Rule 8).

@@ -1591,3 +1591,47 @@ def test_a_cost_basis_restored_as_a_residue_is_released_without_waiting_for_a_fi
     assert tracker.standing.residues_released_with_the_side == 1
     assert tracker.read("bybit-linear", "WIFUSDT").direction == FLAT
     assert tracker.read("binance-usdm", "STORJUSDT").direction == LONG
+
+
+def test_a_sell_with_nothing_held_does_not_open_a_short():
+    """Phase A buys options and buys shares. It never sells to open.
+
+    `stop-order-manager` rests a stop for the whole position; the position closes
+    by another path; the stale stop then fires against a flat book. Read as a new
+    position that sell is a **short** -- the one position this system was built
+    never to hold -- and it showed on the board as an option sold that nobody
+    sold.
+
+    Measured on the live spine 2026-09-07: eleven short positions, every one
+    opened immediately after a `position-closed`. RELIANCE 1320 PE went flat and
+    reopened at -10,474.62 units, exactly the resting stop's own quantity.
+    """
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+    detector.observe_fill(fill("f1", BUY, 24.0, 100.0, at=1))
+    closed = detector.observe_fill(fill("f2", SELL, 25.0, 100.0, at=2))
+    assert closed is not None, "the round trip should have closed"
+
+    # The stale stop, arriving after the position is already flat.
+    stale = detector.observe_fill(fill("f3", SELL, 23.95, 100.0, at=3))
+
+    assert stale is None
+    assert detector.standing.refused_a_sell_that_would_open_a_short == 1
+    assert detector.standing.quantity_refused_as_an_unmatched_exit == pytest.approx(100.0)
+
+
+def test_a_buy_with_nothing_held_still_opens_normally():
+    """The guard is about selling to open and must not touch buying to open."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT)
+
+    assert detector.observe_fill(fill("f1", BUY, 24.0, 100.0, at=1)) is None
+    assert detector.standing.refused_a_sell_that_would_open_a_short == 0
+
+
+def test_a_segment_that_really_sells_to_open_can_say_so():
+    """The rule is an argument rather than an assumption, so a segment that does
+    sell to open has somewhere to state it (RL-061)."""
+    detector = PositionCloseDetector(QUANTITY_INCREMENT, may_open_a_short=True)
+
+    detector.observe_fill(fill("f1", SELL, 24.0, 100.0, at=1))
+
+    assert detector.standing.refused_a_sell_that_would_open_a_short == 0

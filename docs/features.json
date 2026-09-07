@@ -11882,7 +11882,8 @@
       "consumes": [
         "sized-order",
         "trade-capital-bounds",
-        "capital-settings-verdict"
+        "capital-settings-verdict",
+        "position"
       ],
       "produces": [
         "bounded-order",
