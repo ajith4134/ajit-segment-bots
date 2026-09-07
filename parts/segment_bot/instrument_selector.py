@@ -236,6 +236,13 @@ class ListedInstrument:
     # bearish-only (2026-09-01, options-segment-bots conversion): nothing
     # before this needed the symmetric check supports_short already had.
     supports_long: bool = True
+    # The venue's own id for this contract, where one is known. Carried so the
+    # contract can be priced from `broker-market-data`, which names contracts by
+    # instrument key and never by trading symbol -- the second of the two ways an
+    # option's own price reaches this part, and the one that arrives for every
+    # subscribed contract rather than only for those on `symbol-price-frame`.
+    # None for an instrument registered from a source that names no key.
+    venue_instrument_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,14 +268,34 @@ class InstrumentChoice:
     state: str
     reason: str
     chosen_at_ns: int
-    # What the symbol last traded at when this choice was made. Carried because the
-    # parts downstream have to size a position against a price and none of them
-    # consumes market-data: the sizer's risk is a distance from an entry, and an
-    # entry price that arrived separately would be a price from a different moment
-    # than the choice it belongs to. None when nothing has traded yet, and None
+    # What **the contract this choice names** last traded at when the choice was
+    # made -- `chosen.contract_symbol`, not `symbol`. Carried because the parts
+    # downstream have to size a position against a price and none of them consumes
+    # market-data: the sizer's risk is a distance from an entry, and an entry price
+    # that arrived separately would be a price from a different moment than the
+    # choice it belongs to. None when the contract has not traded yet, and None
     # when what did trade is older than this part was told to believe -- a price
     # withheld reads to every reader downstream as the absence it is, rather than
     # as a number.
+    #
+    # **It is the traded contract's price and not the intent's since 2026-09-07.**
+    # Until then it was `_believable_price(intent.symbol)` -- the underlying's --
+    # while every consumer sizes and prices an order on `chosen.contract_symbol`.
+    # position-sizer fixed the *symbol* on 2026-09-04 ("the contract the selector
+    # chose, not the symbol the intent named") and nothing fixed the *price*, so
+    # every options order left with an entry on the wrong scale. Measured on the
+    # live spine 2026-09-07, against this project's own tape: RELIANCE 1320 PE
+    # priced at 1311.05 against a real premium of 22.85, ITC 265 CE at 263.30
+    # against 3.70, TCS 2280 CE at 2264.65 against 53.15 -- in each case the
+    # underlying's own last trade, to the paisa. paper-fill-simulator compares it
+    # against the contract's market price and refuses past
+    # `maximum_decision_price_drift` (6%), so 6,806 of the 8,049 orders that
+    # reached a verdict that morning were refused as `decision-price-stale`, 84.6%
+    # of them, and no options position could open. The two that did open were the
+    # ones whose contract had no print yet, which skips the drift check entirely --
+    # and they then carried a stop on the underlying's scale (a BUY filled at 10.70
+    # protected at 705.80), so both were through their trigger on arrival and shut
+    # within the minute for the fees.
     reference_price: float | None = None
     # When that price printed, by the venue's own clock. Carried separately from
     # `chosen_at_ns` because they are different moments, and conflating them is the
@@ -276,6 +303,15 @@ class InstrumentChoice:
     # whenever the symbol last traded, and on the live run of 2026-08-23 that gap
     # reached fifty-six minutes while every message about it looked current.
     reference_price_observed_at_ns: int | None = None
+    # What the intent's own symbol last traded at -- the underlying, wherever the
+    # chosen contract is a claim on something else. Kept as its own field rather
+    # than deleted: a reader that genuinely wants the underlying (how far a strike
+    # is from spot, what fraction of spot a premium is) must not have to reach for
+    # the number an order is sized against, which is the confusion that produced
+    # the defect above. Equal to `reference_price` for any segment whose instrument
+    # is the underlying, cash-equity-intraday included.
+    underlying_reference_price: float | None = None
+    underlying_reference_price_observed_at_ns: int | None = None
     # The side the chosen contract is traded on to OPEN the intended view, in the
     # venue's vocabulary. None when nothing was chosen.
     #
@@ -330,6 +366,19 @@ class SelectorStanding:
     # doing the job it was added for: refusals falling while this stays zero would
     # mean they fell for some other reason entirely.
     priced_from_a_quote: int = 0
+    # A contract was chosen and this part could not say what that contract is
+    # worth. The order cannot be sized (position-sizer counts it as
+    # missing_entry_price) and this is the near side of that refusal, so the two
+    # can be read against each other. Counted from the day the reference price
+    # became the contract's own (2026-09-07): before it, this state was invisible
+    # because the underlying always has a price and the wrong price was always
+    # available.
+    chosen_without_a_price_for_the_contract: int = 0
+    # How often the contract's price came from the venue's own market data rather
+    # than from `symbol-price-frame`. The two name contracts differently -- an
+    # instrument key against a trading symbol -- so this says how much of the
+    # options book is priced only by the second route, which is nearly all of it.
+    priced_from_the_venues_own_market_data: int = 0
 
 
 class InstrumentSelector:
@@ -411,8 +460,9 @@ class InstrumentSelector:
         # *same* contract_symbol, which is right for a funding-rate update
         # on one perpetual and wrong for a strike that is no longer ATM.
         self._registered_atm: dict[tuple[str, str, str], str] = {}
-        # An option contract's own last-traded price, keyed by instrument_key.
-        self._option_prices: dict[str, float] = {}
+        # An option contract's own last-traded price, keyed by instrument_key,
+        # with the moment the venue said it.
+        self._option_prices: dict[str, ObservedPrice] = {}
 
     def observe_option_listing(self, listing) -> None:
         """One broker-instrument-listing row -- an underlying or an option contract."""
@@ -436,12 +486,22 @@ class InstrumentSelector:
     def observe_option_price(self, instrument_key: str, last_traded_price: float, at_ns: int) -> None:
         """One option contract's own LTP (broker-market-data), kept so its
         premium can be expressed as a fraction of the underlying's spot --
-        the same unit every other carry figure in this part already is.
+        the same unit every other carry figure in this part already is, and so a
+        contract can be priced at all where `symbol-price-frame` never names it.
 
         Refreshes the same way observe_option_greeks does: a price arriving
         after the greeks-triggered refresh already ran must not leave the
-        registered candidate's premium_fraction stale at None."""
-        self._option_prices[instrument_key] = last_traded_price
+        registered candidate's premium_fraction stale at None.
+
+        **`at_ns` is kept since 2026-09-07; it was taken and dropped before.** A
+        price with no age is the shape `observe_price`'s own docstring refuses,
+        and it was only harmless while this store fed a ratio nobody sized
+        against. It prices orders now, so the age has to travel with it or the
+        staleness bound downstream has nothing to bound.
+        """
+        self._option_prices[instrument_key] = ObservedPrice(
+            price=last_traded_price, observed_at_ns=at_ns
+        )
         underlying_symbol = self._atm_tracker.underlying_of(instrument_key)
         if underlying_symbol is not None:
             self._refresh_atm_instruments(underlying_symbol)
@@ -470,7 +530,7 @@ class InstrumentSelector:
             spot = self._prices.get((UPSTOX_VENUE_ID, underlying_symbol))
             option_price = self._option_prices.get(atm.instrument_key)
             premium_fraction = (
-                option_price / spot.price
+                option_price.price / spot.price
                 if option_price is not None and spot is not None and spot.price > 0
                 else None
             )
@@ -484,6 +544,7 @@ class InstrumentSelector:
                 ListedInstrument(
                     venue_id=UPSTOX_VENUE_ID, symbol=underlying_symbol, instrument_kind=OPTION,
                     contract_symbol=atm.trading_symbol,
+                    venue_instrument_id=atm.instrument_key,
                     funding_rate_per_settlement=None, settlements_per_day=None,
                     basis_fraction=None,
                     premium_fraction=premium_fraction,
@@ -936,7 +997,9 @@ class InstrumentSelector:
             + unbuilt_note,
         )
 
-    def _believable_price(self, key: tuple[str, str]) -> float | None:
+    def _believable_price(
+        self, key: tuple[str, str], count_the_source: bool = True
+    ) -> float | None:
         """The price to hand downstream, or None where nothing recent enough exists.
 
         Two facts are tried, in this order: the last trade, then the resting mid.
@@ -954,6 +1017,12 @@ class InstrumentSelector:
         `priced_from_a_quote` says how often the second fact was the one used: a
         number that came from an offer rather than an execution is a different
         number, and one nobody can see is one nobody can judge.
+
+        `count_the_source` is False for the second price a choice carries -- the
+        underlying's, which nothing sizes against. That counter answers "how often
+        was the number an order was sized against an offer rather than a trade",
+        and pricing two symbols per choice while counting both would double it and
+        make it answer nothing.
         """
         traded = self._prices.get(key)
         if self._price_staleness is None:
@@ -963,7 +1032,8 @@ class InstrumentSelector:
             return traded.price
         quoted = self._quotes.get(key)
         if quoted is not None and quoted.age_seconds(self._deciding_at_ns) <= bound.value:
-            self.standing.priced_from_a_quote += 1
+            if count_the_source:
+                self.standing.priced_from_a_quote += 1
             return quoted.price
         return None
 
@@ -1098,7 +1168,27 @@ class InstrumentSelector:
     ) -> InstrumentChoice:
         if state != CHOSEN:
             self.standing.by_refusal[state] = self.standing.by_refusal.get(state, 0) + 1
-        observed = self._fresher_reference((intent.venue_id, intent.symbol))
+        # The two are the same key for any instrument that IS its underlying -- a
+        # perpetual, a share -- and different the moment a contract carries a view
+        # on something else. Both are computed here, once, so no reader downstream
+        # has to know which case it is in.
+        traded_key = self._traded_symbol_of(intent, chosen)
+        underlying_key = (intent.venue_id, intent.symbol)
+        traded_price = self._believable_price(traded_key)
+        observed = self._fresher_reference(traded_key)
+        if traded_price is None:
+            # `symbol-price-frame` names a contract only where the contract is
+            # itself a subscribed symbol, and 7,013 of the 8,200 contracts chosen
+            # in the first four minutes of 2026-09-07's run were not. The venue's
+            # own market data names every subscribed contract by instrument key,
+            # so it is asked second rather than the choice going out unpriced.
+            from_the_venue = self._contract_price_from_the_venue(chosen)
+            if from_the_venue is not None:
+                self.standing.priced_from_the_venues_own_market_data += 1
+                traded_price, observed = from_the_venue.price, from_the_venue
+        underlying_observed = self._fresher_reference(underlying_key)
+        if state == CHOSEN and traded_price is None:
+            self.standing.chosen_without_a_price_for_the_contract += 1
         return InstrumentChoice(
             venue_id=intent.venue_id,
             symbol=intent.symbol,
@@ -1115,9 +1205,57 @@ class InstrumentSelector:
             state=state,
             reason=reason,
             chosen_at_ns=self._now_ns(),
-            reference_price=self._believable_price((intent.venue_id, intent.symbol)),
+            reference_price=traded_price,
             reference_price_observed_at_ns=None if observed is None else observed.observed_at_ns,
+            underlying_reference_price=self._believable_price(
+                underlying_key, count_the_source=False
+            ),
+            underlying_reference_price_observed_at_ns=(
+                None if underlying_observed is None else underlying_observed.observed_at_ns
+            ),
         )
+
+    def _traded_symbol_of(self, intent, chosen) -> tuple[str, str]:
+        """The (venue, symbol) an order for this choice would actually be sent on.
+
+        The chosen contract's own symbol, which is what position-sizer puts on the
+        order and what paper-fill-simulator looks the market price up by. The
+        intent's symbol only when nothing was chosen, because then there is no
+        contract to price and the symbol the intent named is the only fact there
+        is -- a refusal still carries a price so the refusal can be judged against
+        what the market was doing.
+
+        `contract_symbol` equals `symbol` for an instrument that is its own
+        underlying, so this is the identity for cash equity and for a perpetual,
+        and only options move under it.
+        """
+        if chosen is None:
+            return (intent.venue_id, intent.symbol)
+        return (chosen.venue_id, chosen.contract_symbol)
+
+    def _contract_price_from_the_venue(self, chosen) -> "ObservedPrice | None":
+        """The chosen contract's own LTP as the venue named it, or None.
+
+        Held under the venue's instrument key rather than a trading symbol, which
+        is the only name `broker-market-data` uses. Bound by the same believable
+        age every other price here is bound by: this is a second source for one
+        fact, not a second standard for it, and a source that skipped the bound
+        would be the freshest-looking number precisely when it was the stalest.
+        """
+        key = None if chosen is None else getattr(chosen, "venue_instrument_id", None)
+        if key is None:
+            return None
+        observed = self._option_prices.get(key)
+        if observed is None:
+            return None
+        if self._price_staleness is None:
+            return observed
+        bound = self._price_staleness.believable_age_seconds(
+            chosen.venue_id, chosen.contract_symbol
+        )
+        if observed.age_seconds(self._deciding_at_ns) > bound.value:
+            return None
+        return observed
 
 
 def describe_instrument_selection(selector: InstrumentSelector) -> dict:
@@ -1155,6 +1293,12 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         # be success: it would mean the bound had stopped refusing anything, which
         # is the guard being off rather than the prices being good.
         "priced_from_a_quote": selector.standing.priced_from_a_quote,
+        "chosen_without_a_price_for_the_contract": (
+            selector.standing.chosen_without_a_price_for_the_contract
+        ),
+        "priced_from_the_venues_own_market_data": (
+            selector.standing.priced_from_the_venues_own_market_data
+        ),
         "symbols_with_a_quote": len(selector._quotes),
         "intents_refused": sum(selector.standing.by_refusal.values()),
         # What this part currently believes about how long each symbol's price is

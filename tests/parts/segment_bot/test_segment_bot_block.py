@@ -798,3 +798,122 @@ def test_an_option_universe_entry_is_not_counted_as_an_unpriced_kind():
     assert not any(
         "kind option" in reason for reason in subject.standing.listings_skipped
     ), dict(subject.standing.listings_skipped)
+
+
+# ---- instrument-selector: the price a choice carries is the contract's -------
+
+
+def test_a_choice_carries_the_chosen_contracts_price_and_not_the_underlyings():
+    """The defect that refused every options order on 2026-09-07.
+
+    `reference_price` is the only price the parts downstream have -- neither
+    position-sizer nor stop-target-placer consumes market-data -- and both put it
+    on an order whose symbol is `chosen.contract_symbol`. It was read off
+    `intent.symbol` instead, so an order for a contract left carrying the
+    underlying's price. Measured live that morning against this project's own
+    tape: RELIANCE 1320 PE went out priced at 1311.05 with the contract printing
+    22.85, ITC 265 CE at 263.30 against 3.70, TCS 2280 CE at 2264.65 against 3.70.
+    paper-fill-simulator refuses past `maximum_decision_price_drift` (6%), so
+    6,806 of the 8,049 orders that reached a verdict were refused
+    `decision-price-stale` and no options position could open.
+
+    The numbers here are that session's: NIFTY at 23,773.6 with the contract at
+    118.0. The ratio is what matters -- a premium is not on its underlying's scale
+    and no bound over a fraction of price can absorb the difference.
+    """
+    spot, premium = 23_773.6, 118.0
+    subject = a_selector_fed_from_the_universe(spot=spot, premium=premium)
+    subject.observe_price(UPSTOX_VENUE_ID, "NIFTY24500CE", premium, time.time_ns())
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY))
+
+    assert choice.chosen.contract_symbol == "NIFTY24500CE"
+    assert choice.reference_price == premium, (
+        "an order is sent on the contract, so the price it is sized against is the "
+        "contract's -- the underlying's price is a different scale entirely"
+    )
+    assert choice.underlying_reference_price == spot, (
+        "the underlying's price is still carried, under its own name, for the "
+        "readers that genuinely want it"
+    )
+
+
+def test_the_underlyings_price_alone_does_not_price_a_contract():
+    """A contract neither source can price is left unpriced, never priced off its
+    underlying.
+
+    This is the state the old field could not reach: the underlying always has a
+    price, so a contract with none was invisible and went out carrying a number
+    from the wrong instrument. Withholding it is what makes position-sizer count
+    `missing_entry_price` instead of sizing against 23,773.6 an order that fills
+    at 118 -- an unsized order is a trade not taken, and a wrongly-sized one is a
+    position in a place nobody looked.
+
+    The contract here carries a premium fraction (so it can be chosen) and no
+    venue instrument id and no frame price (so it cannot be priced), which is a
+    listing that reached this part from a source naming neither.
+    """
+    subject = InstrumentSelector(
+        built_segments=("index-options",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+    )
+    subject.observe_price(UPSTOX_VENUE_ID, NIFTY, 23_773.6, observed_at_ns=1_000 * SECOND_NS)
+    subject.observe_listed_instrument(
+        ListedInstrument(
+            venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, instrument_kind=OPTION,
+            contract_symbol="NIFTY 23750 CE 08 SEP 26", venue_instrument_id=None,
+            funding_rate_per_settlement=None, settlements_per_day=None,
+            basis_fraction=None, premium_fraction=0.005, seconds_to_expiry=86_400.0,
+            supports_short=False, supports_long=True, supports_convexity=True,
+            round_trip_cost_fraction=0.001, absorbable_quote=None, seconds_to_fill=None,
+        )
+    )
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY))
+
+    assert choice.chosen is not None, choice.reason
+    assert choice.reference_price is None
+    assert choice.reference_price_observed_at_ns is None
+    assert choice.underlying_reference_price == 23_773.6
+    assert subject.standing.chosen_without_a_price_for_the_contract == 1
+
+
+def test_an_instrument_that_is_its_own_underlying_is_unchanged():
+    """cash-equity-intraday and every perpetual: contract_symbol IS symbol.
+
+    The fix must be the identity for them, or it would have moved the defect
+    rather than removed it.
+    """
+    subject = a_selector_that_pays_fees()
+    subject.observe_price(VENUE, SYMBOL, 77_000.0, observed_at_ns=1_000 * SECOND_NS)
+
+    choice = subject.select(Intent())
+
+    assert choice.reference_price == 77_000.0
+    assert choice.underlying_reference_price == 77_000.0
+
+
+def test_a_contract_is_priced_from_the_venues_own_market_data_when_the_frame_never_names_it():
+    """The second half of the same defect, measured four minutes after the first
+    fix went live on 2026-09-07.
+
+    `symbol-price-frame` names a contract only where that contract is itself a
+    subscribed symbol, and most are not: 7,013 of the 8,200 contracts chosen in
+    those four minutes had no price on it. `broker-market-data` names every
+    subscribed contract, by instrument key rather than by trading symbol, and this
+    part was already holding those prices -- it used them for one ratio and threw
+    the timestamp away. Asking it second is what turns a correctly-refused choice
+    into a priced one.
+    """
+    subject = a_selector_fed_from_the_universe(spot=23_773.6, premium=118.0)
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY))
+
+    assert choice.chosen.venue_instrument_id == A_CALL_KEY
+    assert choice.reference_price == 118.0, (
+        "the contract's own LTP is a price for the contract, and it is the only "
+        "one most contracts have"
+    )
+    assert choice.reference_price_observed_at_ns is not None
+    assert subject.standing.priced_from_the_venues_own_market_data == 1
+    assert subject.standing.chosen_without_a_price_for_the_contract == 0
