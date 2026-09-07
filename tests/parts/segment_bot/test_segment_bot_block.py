@@ -878,6 +878,94 @@ def test_the_underlyings_price_alone_does_not_price_a_contract():
     assert subject.standing.chosen_without_a_price_for_the_contract == 1
 
 
+def test_a_contract_nothing_can_price_is_refused_rather_than_chosen():
+    """The same listing, with a staleness bound configured -- which is what the
+    live spine always has.
+
+    Leaving it CHOSEN and unpriced was not enough. Every reader downstream still
+    had to decide what to do with a choice that named a contract and no price, and
+    `stop-target-placer` decided to use the underlying's: 6,981 of 8,259 choices in
+    ten minutes of the live run of 2026-09-07 were CHOSEN with no price for the
+    contract, and the orders they produced were refused by the book on the scale
+    mismatch. A refusal here is what makes that unreachable.
+
+    The gate is on the contract and not on the intent's symbol, and that is the
+    whole point: NIFTY's own spot prints continuously, so a gate on the underlying
+    passes exactly when the contract cannot be priced.
+    """
+    subject = InstrumentSelector(
+        built_segments=("index-options",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+        price_staleness=PriceStalenessEstimator(
+            materiality_fraction=0.008532, anchor_seconds=1.0, quantile=0.95,
+            window=3_600, observations_needed=300, prior_one_second_move=0.002324,
+            minimum_age_seconds=13.0, maximum_age_seconds=13.0,
+        ),
+    )
+    subject.observe_price(UPSTOX_VENUE_ID, NIFTY, 23_773.6, observed_at_ns=1_000 * SECOND_NS)
+    subject.observe_listed_instrument(
+        ListedInstrument(
+            venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, instrument_kind=OPTION,
+            contract_symbol="NIFTY 23750 CE 08 SEP 26", venue_instrument_id=None,
+            funding_rate_per_settlement=None, settlements_per_day=None,
+            basis_fraction=None, premium_fraction=0.005, seconds_to_expiry=86_400.0,
+            supports_short=False, supports_long=True, supports_convexity=True,
+            round_trip_cost_fraction=0.001, absorbable_quote=None, seconds_to_fill=None,
+        )
+    )
+
+    choice = subject.select(
+        Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY), now_ns=1_000 * SECOND_NS,
+    )
+
+    assert choice.state != CHOSEN
+    assert choice.chosen is None
+    assert choice.reference_price is None
+    # The underlying is priced, and to the paisa -- which is exactly why a gate on
+    # it would have passed. It stays on the choice for a reader that wants it.
+    assert choice.underlying_reference_price == 23_773.6
+    assert "NIFTY 23750 CE 08 SEP 26" in choice.reason
+    assert subject.standing.chosen == 0
+
+
+def test_a_contract_the_venues_own_market_data_prices_is_chosen():
+    """The second source doing its job: no `symbol-price-frame` entry for the
+    contract, a `broker-market-data` LTP under its instrument key, and the choice
+    goes out priced at the premium rather than being refused."""
+    subject = InstrumentSelector(
+        built_segments=("index-options",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+        price_staleness=PriceStalenessEstimator(
+            materiality_fraction=0.008532, anchor_seconds=1.0, quantile=0.95,
+            window=3_600, observations_needed=300, prior_one_second_move=0.002324,
+            minimum_age_seconds=13.0, maximum_age_seconds=13.0,
+        ),
+    )
+    subject.observe_price(UPSTOX_VENUE_ID, NIFTY, 23_773.6, observed_at_ns=1_000 * SECOND_NS)
+    subject.observe_option_price("NSE_FO|42629", 48.75, at_ns=1_000 * SECOND_NS)
+    subject.observe_listed_instrument(
+        ListedInstrument(
+            venue_id=UPSTOX_VENUE_ID, symbol=NIFTY, instrument_kind=OPTION,
+            contract_symbol="NIFTY 23750 CE 08 SEP 26",
+            venue_instrument_id="NSE_FO|42629",
+            funding_rate_per_settlement=None, settlements_per_day=None,
+            basis_fraction=None, premium_fraction=0.005, seconds_to_expiry=86_400.0,
+            supports_short=False, supports_long=True, supports_convexity=True,
+            round_trip_cost_fraction=0.001, absorbable_quote=None, seconds_to_fill=None,
+        )
+    )
+
+    choice = subject.select(
+        Intent(venue_id=UPSTOX_VENUE_ID, symbol=NIFTY), now_ns=1_000 * SECOND_NS,
+    )
+
+    assert choice.state == CHOSEN, choice.reason
+    assert choice.reference_price == 48.75
+    assert choice.underlying_reference_price == 23_773.6
+    assert subject.standing.priced_from_the_venues_own_market_data == 1
+    assert subject.standing.chosen_without_a_price_for_the_contract == 0
+
+
 def test_an_instrument_that_is_its_own_underlying_is_unchanged():
     """cash-equity-intraday and every perpetual: contract_symbol IS symbol.
 

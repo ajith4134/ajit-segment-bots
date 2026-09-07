@@ -87,21 +87,35 @@ def order_side_for_intent(intent, instrument) -> str | None:
 
 
 def priced_entry_for(instrument, underlying_entry: float | None) -> float | None:
-    """The price to actually place a stop against.
+    """The price to actually place a stop against, or None when there is not one.
 
-    The chosen instrument's own reference price when one was chosen and is
-    actionable -- the option's premium, not the underlying's spot -- because
-    that is the scale the order and the stop both live on. Falls back to the
-    underlying's own price (recovered from the bot's exit plan) only when
-    nothing has been selected yet, which is the bookkeeping case: no order
-    can be placed either way, and a stop against *some* number is what the
-    fallback in `position_sizer.stop_price_for` still needs to snap to a
-    fraction.
+    The chosen instrument's own reference price -- the option's premium, not the
+    underlying's spot -- because that is the scale the order and the stop both
+    live on.
+
+    **It no longer falls back to the underlying's price (2026-09-07).** Until then
+    a choice that named a contract but could not price it was answered with the
+    underlying's own price, on the theory that no order could be placed either way
+    so the number was bookkeeping. That was wrong: `position-sizer` sizes an open
+    from exactly this entry, so the order went out on the underlying's scale --
+    an order to buy INFY 1200 CE at 1,088.40 against a real premium of 21.10, and
+    RELIANCE 1320 PE at 1,311.05 against 22.85. `paper-fill-simulator` compares
+    that against the contract's own market price and refused 6,806 of 8,049 orders
+    that reached a verdict on the morning of 2026-09-07 as `decision-price-stale`,
+    84.6% of them, so no options position could open.
+
+    An order on the wrong scale is worse than no order: it consumes a decision, a
+    slot and a refusal, and it reads on every board as a bot that is trading. The
+    caller skips the intent instead, and says so in its own standing.
+
+    `underlying_entry` stays a parameter because it is still what a target is
+    translated from (`priced_target_for`) -- a scale-free fraction of the bot's own
+    exit plan, which is reasoned in the underlying's scale.
     """
     reference = getattr(instrument, "reference_price", None)
     if instrument is not None and getattr(instrument, "is_actionable", False) and reference:
         return reference
-    return underlying_entry
+    return None
 
 
 def priced_target_for(
@@ -152,6 +166,11 @@ class PlacerStanding:
     moved_clear: int = 0
     refused_no_distance: int = 0
     refused_thin_reward: int = 0
+    # An intent whose chosen instrument could not be priced. The plan is skipped
+    # rather than placed against the underlying's price, and this is what says how
+    # often that happens -- the far side of instrument-selector's own
+    # `chosen_without_a_price_for_the_contract`, so the two can be read together.
+    skipped_without_a_price_for_the_instrument: int = 0
     excursions_learned: int = 0
     symbols_fitted: int = 0
     widest_stop_fraction: float = 0.0
@@ -377,6 +396,9 @@ def describe_placement(placer: StopTargetPlacer) -> dict:
         "moved_clear_of_clusters": placer.standing.moved_clear,
         "refused_no_distance": placer.standing.refused_no_distance,
         "refused_thin_reward": placer.standing.refused_thin_reward,
+        "skipped_without_a_price_for_the_instrument": (
+            placer.standing.skipped_without_a_price_for_the_instrument
+        ),
         "excursions_learned": placer.standing.excursions_learned,
         "symbols_with_a_fitted_distance": fitted,
         "widest_stop_fraction": placer.standing.widest_stop_fraction,
@@ -545,6 +567,13 @@ def start_part(context) -> int:
                 # Guessing BUY or SELL here is exactly the defect this fixes.
                 continue
             entry_price = priced_entry_for(instrument, underlying_entry)
+            if entry_price is None:
+                # No price for the contract this plan would be placed against.
+                # Skipped rather than priced from the underlying, which is what
+                # sent every options order out on the wrong scale until
+                # 2026-09-07.
+                placer.standing.skipped_without_a_price_for_the_instrument += 1
+                continue
             targets = tuple(sorted(
                 (target.price for target in plan.targets),
                 reverse=intent.is_short,

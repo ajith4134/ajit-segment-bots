@@ -193,7 +193,21 @@ def price_staleness_from(context, materiality_fraction: float | None = None) -> 
     settings read separately in each of them is seven chances for two parts to
     disagree about how old a price may be. What makes a stale price material is
     the same threshold that makes a cost material, so the materiality defaults to
-    the round trip's taker fee rather than being a number of its own (RL-061).
+    what a round trip on the traded instrument costs (RL-061).
+
+    **That default is `reference_price_materiality_fraction`, and it stopped being
+    `2 * taker_fee_rate` on 2026-09-07.** `taker_fee_rate` is Bybit's published
+    perpetual rate; this project trades NSE options, whose round trip is Upstox's
+    six-line charge stack *plus two crossings of a spread that is wider than every
+    charge put together*. Measured on this project's own tape that day: charges
+    0.2341% round trip, half touch spread 0.3175% at p50 over 23,606 book
+    snapshots, so 0.8532% all in against the 0.1100% the crypto fee implied. The
+    prior one-second move was wrong the other way by 2.6x, and the two errors
+    cancelled into a bound of 1.5s that looked ordinary -- while the median option
+    contract prints every 9.25s, so the newest price in existence was refused for
+    82% of the session and every reader downstream fell back to the underlying's
+    price. Both numbers now come from
+    `measurements/2026-09-07-indian-price-staleness/`.
 
     **`materiality_fraction` exists because "material" is not one question.** The
     default asks how old a price may be before acting on it costs more than the
@@ -215,7 +229,7 @@ def price_staleness_from(context, materiality_fraction: float | None = None) -> 
     """
     return PriceStalenessEstimator(
         materiality_fraction=(
-            2 * context.number("taker_fee_rate")
+            context.number("reference_price_materiality_fraction")
             if materiality_fraction is None
             else materiality_fraction
         ),

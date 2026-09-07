@@ -308,7 +308,7 @@ def start_part(context) -> int:
         for kind in ("bull-exit-plan", "bear-exit-plan", "tail-exit-plan")
     }
     publish_counterfactuals = context.bus.publisher_for("exit-counterfactual")
-    replayer = ExitCounterfactualReplayer(round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"))
+    replayer = ExitCounterfactualReplayer(round_trip_cost_fraction=context.number("reference_price_materiality_fraction"))
 
     def read_jobs():
         for trade in trades.payloads():

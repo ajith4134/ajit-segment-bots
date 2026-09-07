@@ -15,7 +15,7 @@ note  = "operator: set this to the real balance before anything trades. Zero mea
 [maximum_capital_per_trade]
 value = 0.0
 unit  = "INR"
-note  = "operator: a hard ceiling on what any sizer may produce, whatever it estimates. RL-061 -- estimation gives the bot intelligence, this bound stops a broken estimator sizing a trade at any value. capital-allotment-reader binds the tighter of this and the segment's own maximum_capital_per_trade, so setting this below a segment's ceiling silently overrides that segment -- which is what capped every index-options order at 100 rupees until 2026-09-04."
+note  = "operator: a hard ceiling on what any sizer may produce, whatever it estimates. RL-061 -- estimation gives the bot intelligence, this bound stops a broken estimator sizing a trade at any value. capital-allotment-reader binds the tighter of this and the segment's own maximum_capital_per_trade, so setting this below a segment's ceiling silently overrides that segment -- which is what capped every index-options order at 100 rupees until 2026-09-04. It happened again on 2026-09-07: the three segment files were raised to 200,000 and this one was not, so the gate passed 0 orders all morning and capped every one at 99,999.9999 while the operator believed the ceiling was 200,000. Nothing reported which of the two ceilings had won, which is why capital-allotment-reader now publishes binding_ceiling naming the file. **Move this whenever a segment ceiling moves, or check binding_ceiling after.**"
 
 [leverage_ceiling]
 value = 1.0

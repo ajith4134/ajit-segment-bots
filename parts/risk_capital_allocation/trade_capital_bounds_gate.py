@@ -128,6 +128,18 @@ class TradeCapitalBoundsGate:
         self._now_ns = now_ns
         self.standing = GateStanding()
 
+    def _increment_for(self, sized_order) -> float:
+        """The step to snap this order to: the one it was sized with.
+
+        `order_quantity_increment` is a single global step, and since 2026-09-07
+        `position-sizer` snaps to the venue's own lot size wherever the instrument
+        choice names one. Capping with a different step than the sizer used would
+        hand the book a quantity neither part chose -- 187.2 lots of a contract
+        the exchange trades in blocks of 65.
+        """
+        step = getattr(sized_order, "quantity_increment", 0.0)
+        return float(step) if step and step > 0 else self._increment
+
     def bound(self, sized_order, bounds, settings_are_valid: bool) -> BoundedOrder:
         if not settings_are_valid:
             self.standing.refused_settings += 1
@@ -164,7 +176,8 @@ class TradeCapitalBoundsGate:
         """Raise to the minimum, unless that would risk more than allowed (RL-054)."""
         leverage = leverage_behind(sized_order)
         quantity = self._snap_up(
-            quantity_for_capital(bounds.minimum_capital, sized_order.entry_price, leverage)
+            quantity_for_capital(bounds.minimum_capital, sized_order.entry_price, leverage),
+            self._increment_for(sized_order),
         )
         scaled_risk = self._risk_at(sized_order, quantity)
 
@@ -189,7 +202,8 @@ class TradeCapitalBoundsGate:
         """Cut to the maximum, unless the maximum does not reach one increment."""
         leverage = leverage_behind(sized_order)
         quantity = self._snap_down(
-            quantity_for_capital(bounds.maximum_capital, sized_order.entry_price, leverage)
+            quantity_for_capital(bounds.maximum_capital, sized_order.entry_price, leverage),
+            self._increment_for(sized_order),
         )
         if quantity <= 0:
             # The maximum is smaller than one increment of this instrument at this
@@ -199,7 +213,8 @@ class TradeCapitalBoundsGate:
             return self._bounded(
                 sized_order, bounds, 0.0, 0.0, REFUSED_MAXIMUM_BUYS_NOTHING, 0.0,
                 f"the {bounds.maximum_capital:,.2f} maximum does not buy one "
-                f"{self._increment:g} increment at {sized_order.entry_price:,.2f}",
+                f"{self._increment_for(sized_order):g} increment at "
+                f"{sized_order.entry_price:,.2f}",
             )
         capped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
         self.standing.capped += 1
@@ -216,11 +231,13 @@ class TradeCapitalBoundsGate:
             return 0.0
         return sized_order.risk_at_stop * (quantity / sized_order.quantity)
 
-    def _snap_up(self, quantity: float) -> float:
-        return round(math.ceil(quantity / self._increment) * self._increment, 12)
+    def _snap_up(self, quantity: float, increment: float | None = None) -> float:
+        step = self._increment if increment is None else increment
+        return round(math.ceil(quantity / step) * step, 12)
 
-    def _snap_down(self, quantity: float) -> float:
-        return round(math.floor(quantity / self._increment) * self._increment, 12)
+    def _snap_down(self, quantity: float, increment: float | None = None) -> float:
+        step = self._increment if increment is None else increment
+        return round(math.floor(quantity / step) * step, 12)
 
     def _bounded(self, sized_order, bounds, quantity, capital, outcome, risk, reason) -> BoundedOrder:
         return BoundedOrder(

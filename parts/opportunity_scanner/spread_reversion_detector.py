@@ -424,7 +424,7 @@ def start_part(context) -> int:
     # threshold that could disagree with the first (RL-061).
     reference_price = ReferencePriceChooser(
         staleness=price_staleness,
-        materiality_fraction=2 * context.number("taker_fee_rate"),
+        materiality_fraction=context.number("reference_price_materiality_fraction"),
     )
     detector = SpreadReversionDetector(
         z_threshold=context.number("spread_reversion_z_threshold"),

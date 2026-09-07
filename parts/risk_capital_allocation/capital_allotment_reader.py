@@ -64,6 +64,17 @@ class ReaderStanding:
     last_failure: str | None = None
     last_read_at_ns: int | None = None
     allotted: float | None = None
+    # Which of the two independently-editable ceilings actually bound the last
+    # read. Counted because `min()` is silent: on 2026-09-07 the operator raised
+    # all three segments/*.toml to 200,000 and left main-account.toml at 100,000,
+    # so the account ceiling went on binding and the edit had no effect -- the
+    # gate passed 0 orders and its largest_capital_used was 99,999.9999. The same
+    # thing happened on 2026-09-04, a 100 USDT ceiling capping every rupee trade
+    # at 100 rupees. A bound nobody can see which side of is a bound that gets
+    # edited twice.
+    reads_bound_by_the_main_account: int = 0
+    reads_bound_by_the_segment: int = 0
+    binding_ceiling: str | None = None
 
 
 class CapitalAllotmentReader:
@@ -110,6 +121,20 @@ class CapitalAllotmentReader:
             segment_maximum if main_account_maximum_capital_per_trade is None
             else min(segment_maximum, main_account_maximum_capital_per_trade)
         )
+        if (
+            main_account_maximum_capital_per_trade is not None
+            and main_account_maximum_capital_per_trade < segment_maximum
+        ):
+            self.standing.reads_bound_by_the_main_account += 1
+            self.standing.binding_ceiling = (
+                f"main-account.toml at {main_account_maximum_capital_per_trade:,.2f}, "
+                f"tighter than the {self._segment} segment's own {segment_maximum:,.2f}"
+            )
+        else:
+            self.standing.reads_bound_by_the_segment += 1
+            self.standing.binding_ceiling = (
+                f"the {self._segment} segment's own {segment_maximum:,.2f}"
+            )
         try:
             bounds = TradeCapitalBounds(
                 segment=self._segment,
@@ -182,6 +207,11 @@ def describe_allotment(reader: CapitalAllotmentReader) -> dict:
         "leverage_ceiling": current.leverage_ceiling if current else None,
         "minimum_capital_per_trade": current.bounds.minimum_capital if current else None,
         "maximum_capital_per_trade": current.bounds.maximum_capital if current else None,
+        # Which file the maximum above actually came from. Rule 8: a number whose
+        # provenance cannot be named is not a status.
+        "binding_ceiling": reader.standing.binding_ceiling,
+        "reads_bound_by_the_main_account": reader.standing.reads_bound_by_the_main_account,
+        "reads_bound_by_the_segment": reader.standing.reads_bound_by_the_segment,
     }
 
 

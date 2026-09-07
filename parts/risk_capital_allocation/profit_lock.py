@@ -305,7 +305,7 @@ def start_part(context) -> int:
     widest_stop = context.number("risk_maximum_stop_fraction")
     lock = ProfitLock(
         break_even_trigger_fraction=context.number("profit_lock_break_even_trigger"),
-        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+        round_trip_cost_fraction=context.number("reference_price_materiality_fraction"),
         prior_retracement_fraction=context.number("profit_lock_prior_retracement"),
         maximum_trail_fraction=context.number("profit_lock_maximum_trail"),
         minimum_observations=int(context.number("profit_lock_minimum_observations")),

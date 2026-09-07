@@ -130,3 +130,56 @@ def test_result_is_deterministic_on_a_tie():
         list(reversed(tied)), shortlist_size=3, weights=EQUAL_WEIGHTS, liquidity_pool_size=3,
     )
     assert first == second == ("ALPHA", "MID", "ZED")
+
+
+def test_a_cold_ranking_picks_the_most_traded_and_not_the_alphabet():
+    """The first pass of the day, before anything is subscribed.
+
+    Nothing has a spread reading (spreads come from `liquidity-grade`, which only
+    exists for a subscribed symbol) and nothing has a live price (prices come from
+    the feed, which subscribes what this function returns). Every blended signal
+    is therefore None for every candidate and they all score identically -- so the
+    tie-break alone decides the shortlist.
+
+    Until 2026-09-07 that tie-break was `entry.symbol`, and the live spine was
+    subscribed to 3PLAND, 63MOONS, AADHARHFC, ABGSEC and ABSLLIQUID: the
+    alphabetical head of the NSE master, including two ETFs. They print 20-700
+    times a session against MARUTI's 8,002, so no detector window ever filled and
+    cash-equity-intraday formed zero trade intents all day. The loop was closed --
+    the only names ever measured were the ones the first cold ranking happened to
+    pick.
+
+    Average daily volume comes from `equity-historical-profile`, which is fetched
+    from history for every ordinary share whether or not it is subscribed, so it
+    is the one liquidity fact that survives having no subscription.
+    """
+    candidates = [
+        CashEquityCandidate(symbol="3PLAND", average_daily_volume=12_000.0),
+        CashEquityCandidate(symbol="ABGSEC", average_daily_volume=4_000.0),
+        CashEquityCandidate(symbol="ABSLLIQUID", average_daily_volume=900.0),
+        CashEquityCandidate(symbol="TRENT", average_daily_volume=3_100_000.0),
+        CashEquityCandidate(symbol="ZOMATO", average_daily_volume=42_000_000.0),
+    ]
+
+    shortlist = rank_cash_equity_candidates(
+        candidates, shortlist_size=2, weights=EQUAL_WEIGHTS, liquidity_pool_size=5,
+    )
+
+    assert shortlist == ("ZOMATO", "TRENT")
+
+
+def test_a_measured_spread_still_outranks_an_unmeasured_one():
+    """Volume orders the unmeasured names; it does not promote them past a name
+    whose spread this system has actually seen."""
+    candidates = [
+        CashEquityCandidate(
+            symbol="TIGHT", liquidity_spread_fraction=0.0004, average_daily_volume=1_000.0,
+        ),
+        CashEquityCandidate(symbol="LOUD", average_daily_volume=90_000_000.0),
+    ]
+
+    shortlist = rank_cash_equity_candidates(
+        candidates, shortlist_size=1, weights=EQUAL_WEIGHTS, liquidity_pool_size=1,
+    )
+
+    assert shortlist == ("TIGHT",)

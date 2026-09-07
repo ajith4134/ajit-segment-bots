@@ -323,7 +323,7 @@ def start_part(context) -> int:
     decoder = ExplorationPairDecoder(
         maximum_opening_gap_seconds=context.number("pair_maximum_opening_gap"),
         size_tolerance=context.number("pair_size_tolerance"),
-        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+        round_trip_cost_fraction=context.number("reference_price_materiality_fraction"),
     )
     sides_seen: dict[tuple[str, str], set[str]] = {}
 

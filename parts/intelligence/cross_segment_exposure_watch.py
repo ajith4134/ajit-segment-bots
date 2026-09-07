@@ -347,8 +347,25 @@ def run_cross_segment_exposure_watch(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Every position is this segment's: the one the settings name. A symbol's
-    underlying is the symbol with the settlement currency taken off its end.
+    **A position's segment is the position's own, not `segment_id`'s.** Until
+    2026-09-07 every position was stamped with the segment the settings name,
+    which on a spine trading three segments made a cross-segment watch that could
+    only ever see one: measured on the live spine that day, two stock-options
+    positions (HINDUNILVR 1980 PE, KOTAKBANK 425 PE) were both filed under
+    `by_segment.index-options`, so the one number this part exists to produce --
+    what the whole book is exposed to across segments -- was a single segment's
+    exposure wearing three segments' name. `Position.segment` has carried the
+    answer since 2026-09-05; `segment_id` stays only as the fallback for a
+    position restored from a checkpoint that predates it.
+
+    A symbol's underlying is the share or index the contract is a claim on: the
+    first token of the venue's trading symbol, so "HINDUNILVR 1980 PE 29 SEP 26"
+    groups with "HINDUNILVR 2000 CE 29 SEP 26" and with the share itself. Was the
+    symbol with the settlement currency taken off its end, which is BTCUSDT's
+    rule: on an NSE options book it stripped nothing, so every strike of every
+    expiry was its own underlying and two positions on one share read as two
+    unrelated bets -- exactly the concentration this part is here to see.
+
     No correlation reaches this part -- `position` is its only input -- so
     every cross-underlying pair is reported as unmeasured, which is the true
     state, not a guess at one.
@@ -365,12 +382,27 @@ def start_part(context) -> int:
     )
 
     def underlying_of(symbol: str) -> str:
-        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+        # An option's trading symbol leads with the share or index it is a claim
+        # on ("HINDUNILVR 1980 PE 29 SEP 26"), so the first token is the
+        # underlying and is the identity for a share, an index or a perpetual
+        # that has no space in its name.
+        head = symbol.split(" ", 1)[0]
+        if head != symbol:
+            return head
+        # A settlement-suffixed perpetual (BTCUSDT), the crypto rule this part was
+        # written against. Kept because it is still right for that shape and
+        # costs nothing where the symbol has no suffix.
+        if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement):
+            return symbol[: -len(settlement)]
+        return symbol
 
     def read_positions(_watch) -> None:
         for position in positions.payloads():
             watch.set_underlying(position.symbol, underlying_of(position.symbol))
-            watch.observe_position(segment, position)
+            # The position's own segment, falling back to this spine's only where
+            # the position names none -- a checkpoint written before positions
+            # carried one.
+            watch.observe_position(getattr(position, "segment", "") or segment, position)
 
     def publish(view) -> None:
         if view is not None:

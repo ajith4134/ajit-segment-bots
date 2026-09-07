@@ -56,7 +56,7 @@ from parts.risk_capital_allocation.participation_capped_order_splitter import (
 from parts.risk_capital_allocation.position_sizer import (
     REFUSED_NO_INCREMENT, REFUSED_NO_LIMIT, REFUSED_STOP_INVALID, REFUSED_TOO_SMALL,
     SIZED, SHRUNK_TO_FIT, PositionSizer, entry_price_for, opening_order_target,
-    stop_price_for,
+    quantity_increment_for, stop_price_for,
 )
 from parts.risk_capital_allocation.profit_lock import (
     HELD, MOVED_TO_BREAK_EVEN, NOT_YET_PROFITABLE, TRAILED, ProfitLock,
@@ -915,9 +915,24 @@ def test_the_chosen_instruments_own_price_is_what_gets_priced():
     assert priced_entry_for(instrument, underlying_entry=24_500.0) == 220.0
 
 
-def test_no_instrument_chosen_yet_falls_back_to_the_underlying():
-    assert priced_entry_for(Choice(chosen=None), underlying_entry=24_500.0) == 24_500.0
-    assert priced_entry_for(None, underlying_entry=24_500.0) == 24_500.0
+def test_an_unpriced_instrument_yields_no_entry_rather_than_the_underlyings():
+    """The underlying's price is never an entry for a contract.
+
+    It used to be, whenever the choice named a contract this part could not
+    price. `position-sizer` sizes an open from exactly this number, so those
+    orders went out on the underlying's scale -- INFY 1200 CE at 1,088.40
+    against a real premium of 21.10 -- and `paper-fill-simulator` refused
+    84.6% of the orders that reached a verdict on 2026-09-07 as
+    `decision-price-stale`. An order on the wrong scale is worse than no
+    order, so there is no entry and the caller skips.
+    """
+    assert priced_entry_for(Choice(chosen=None), underlying_entry=24_500.0) is None
+    assert priced_entry_for(None, underlying_entry=24_500.0) is None
+    # A contract that was chosen but carries no reference price is the same
+    # refusal: chosen is not the same fact as priced.
+    assert priced_entry_for(
+        Choice(reference_price=None, chosen=Contract()), underlying_entry=24_500.0,
+    ) is None
 
 
 def test_a_target_is_translated_by_the_same_fraction_not_carried_over_raw():
@@ -948,12 +963,14 @@ class Choice:
     """An instrument-choice, as the sizer reads it -- by shape, never by import."""
 
     def __init__(
-        self, reference_price=None, chosen="BTCUSDT-PERP", state="chosen", order_side=None
+        self, reference_price=None, chosen="BTCUSDT-PERP", state="chosen", order_side=None,
+        quantity_increment=None,
     ):
         self.reference_price = reference_price
         self.chosen = chosen
         self.state = state
         self.order_side = order_side
+        self.quantity_increment = quantity_increment
 
     @property
     def is_actionable(self):
@@ -1184,14 +1201,16 @@ def bounds(minimum=100.0, maximum=1000.0):
     return TradeCapitalBounds(SEGMENT, minimum, maximum, "USDT")
 
 
-def sized_for_gate(quantity, entry=100.0, risk=50.0, allowed=100.0, leverage=1.0):
+def sized_for_gate(
+    quantity, entry=100.0, risk=50.0, allowed=100.0, leverage=1.0, quantity_increment=0.0,
+):
     from parts.risk_capital_allocation.position_sizer import SIZED, SizedOrder
 
     return SizedOrder(
         venue_id=VENUE, symbol=SYMBOL, side=BUY, quantity=quantity, entry_price=entry,
         stop_price=98.0, outcome=SIZED, risk_allowed=allowed, risk_at_stop=risk,
         fees_charged=0.0, notional=quantity * entry, leverage=leverage, reason="",
-        sized_at_ns=1,
+        sized_at_ns=1, quantity_increment=quantity_increment,
     )
 
 
@@ -2129,3 +2148,37 @@ def test_a_segment_that_does_not_borrow_needs_no_broker_quote():
 
     assert chosen.leverage > 0
     assert subject.standing.unleveraged_for_want_of_a_broker_quote == 0
+
+
+def test_a_quantity_is_snapped_to_the_venues_own_lot_not_a_global_step():
+    """A NIFTY option trades in blocks of 65 and the global step is 0.001.
+
+    Measured on the live spine 2026-09-07, before the choice carried a lot size:
+    an order for 12,165.44092528724 units of NIFTY 23750 PE. No exchange accepts
+    that quantity, so every fee, margin and fill figure computed from it was a
+    fiction and the paper book filled a size the real book could never take.
+    `order_quantity_increment`'s own note has asked for exactly this since
+    2026-08-22 -- "the honest fix is a per-symbol venue fact carried on
+    instrument-choice".
+    """
+    assert quantity_increment_for(Choice(quantity_increment=65.0), 0.001) == 65.0
+    # A share trades in single units, and that is a real lot size, not an absence.
+    assert quantity_increment_for(Choice(quantity_increment=1.0), 0.001) == 1.0
+    # No lot named is not the same as a lot of one: it falls back to the global
+    # step rather than silently trading a contract in single units.
+    assert quantity_increment_for(Choice(quantity_increment=None), 0.001) == 0.001
+    assert quantity_increment_for(None, 0.001) == 0.001
+
+
+def test_the_gate_caps_to_the_step_the_sizer_used():
+    """Capping with a different step than the order was sized to would hand the
+    book a quantity neither part chose."""
+    gate = TradeCapitalBoundsGate(quantity_increment=0.001)
+    sized = sized_for_gate(quantity=300.0, entry=48.75, quantity_increment=65.0)
+
+    bounded = gate.bound(
+        sized, bounds(minimum=1_000.0, maximum=10_000.0), settings_are_valid=True
+    )
+
+    assert bounded.quantity % 65 == 0, bounded.quantity
+    assert bounded.quantity * 48.75 <= 10_000.0

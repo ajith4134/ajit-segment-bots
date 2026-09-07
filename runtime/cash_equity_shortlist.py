@@ -165,6 +165,33 @@ def rank_cash_equity_candidates(
     with no liquidity reading ranks last on that cut rather than being dropped
     outright -- an unmeasured spread is not an infinite one, but it is not a
     zero one either.
+
+    **Every ordering among unmeasured names is by average daily volume, and
+    that is what stops this function sealing itself shut (2026-09-07).** A spread
+    reading exists only for a symbol the feed is subscribed to, the feed
+    subscribes what this function shortlists, and this function used
+    `entry.symbol` as the tie-break wherever a reading was missing -- in the pool
+    cut and, more damagingly, inside `percentile_rank`, where a missing reading
+    does not produce a tie but a *position*, so the alphabet became the score. The
+    first ranking of a day has no spreads and no prices at all, so all six signals
+    were None for every candidate and the blend was six copies of the alphabet. It
+    returned the head of the NSE master, the feed subscribed those, they became
+    the only names ever measured, and every ranking after it returned the same
+    list. Measured on the live spine on 2026-09-07, the cash-equity segment was
+    subscribed to `3PLAND`, `63MOONS`, `AADHARHFC`, `AARTIIND`, `ABGSEC`,
+    `ABSLLIQUID` (a liquid-fund ETF), `ABSLBANETF` and thirty-two more of the
+    same shape, out of 2,654 candidates. They print 20 to 700 times a session
+    against MARUTI's 8,002, never fill `mean-reversion-detector`'s 256-deep
+    window, and so raised not one candidate: the segment formed **zero** trade
+    intents all session and `instrument-selector` recorded zero refusals for it,
+    because nothing ever arrived to refuse.
+
+    Average daily volume is the right escape because it is the one liquidity fact
+    that does **not** require a subscription: `equity-opportunity-profiler`
+    fetches it from history for every ordinary share, subscribed or not. So an
+    unmeasured name is ordered by how much it really trades, not by its initial,
+    and the names that enter the shortlist on that basis are priced from the next
+    cycle onward and then compete on the live blend like everything else.
     """
     if shortlist_size < 1:
         raise ValueError(
@@ -183,6 +210,10 @@ def rank_cash_equity_candidates(
         key=lambda entry: (
             entry.liquidity_spread_fraction is None,
             entry.liquidity_spread_fraction if entry.liquidity_spread_fraction is not None else 0.0,
+            # Among names with no spread reading, the most-traded first. Their
+            # spreads are unknown precisely because nothing is subscribed to
+            # them, and volume is the liquidity fact that survives that.
+            -(entry.average_daily_volume or 0.0),
             entry.symbol,
         ),
     )
@@ -193,9 +224,25 @@ def rank_cash_equity_candidates(
     def percentile_rank(signal) -> dict[str, float]:
         # Best (largest opportunity) first; a signal this candidate has no
         # reading for sorts last -- worst on that one signal, not dropped.
+        #
+        # **Among candidates with no reading, by average daily volume.** This is
+        # the tie-break that closed the loop: a percentile is a *position*, so
+        # ordering the unmeasured by `entry.symbol` did not leave them tied, it
+        # gave them distinct scores running from best to worst in alphabetical
+        # order. On the first ranking of a day nothing has a live price, every one
+        # of the six signals is None for every candidate, and the blend was
+        # therefore six copies of the alphabet -- which is how the cash-equity
+        # segment came to be subscribed to 3PLAND, 63MOONS, ABGSEC and ABSLLIQUID
+        # out of 2,654 shares, and then stayed there, because those were the only
+        # names anything ever measured.
         ordered = sorted(
             pool,
-            key=lambda entry: (signal(entry) is None, -(signal(entry) or 0.0), entry.symbol),
+            key=lambda entry: (
+                signal(entry) is None,
+                -(signal(entry) or 0.0),
+                -(entry.average_daily_volume or 0.0),
+                entry.symbol,
+            ),
         )
         return {entry.symbol: i / (len(pool) - 1) for i, entry in enumerate(ordered)}
 
@@ -207,7 +254,14 @@ def rank_cash_equity_candidates(
     def blended_score(entry: CashEquityCandidate) -> float:
         return sum(pct[entry.symbol] * weight for pct, weight in percentiles)
 
-    ranked = sorted(pool, key=lambda entry: (blended_score(entry), entry.symbol))
+    # A genuine tie -- two names alike on all six signals and on volume -- is
+    # broken by symbol, which is the only deterministic answer left.
+    ranked = sorted(
+        pool,
+        key=lambda entry: (
+            blended_score(entry), -(entry.average_daily_volume or 0.0), entry.symbol,
+        ),
+    )
     return tuple(entry.symbol for entry in ranked[:shortlist_size])
 
 

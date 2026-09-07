@@ -279,7 +279,7 @@ def start_part(context) -> int:
     publish_episodes = context.bus.publisher_for("near-miss-episode")
     recorder = NearMissRecorder(
         horizon_seconds=context.number("near_miss_horizon"),
-        round_trip_cost_fraction=2.0 * context.number("taker_fee_rate"),
+        round_trip_cost_fraction=context.number("reference_price_materiality_fraction"),
     )
     prices: dict[tuple[str, str], float] = {}
     latest_candidate: dict[tuple[str, str], object] = {}

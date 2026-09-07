@@ -99,6 +99,12 @@ class SizedOrder:
     # reports nothing. Empty means the producer named no segment, which is what a
     # spine trading one segment looked like before this.
     segment: str = ""
+    # The step this quantity was snapped to -- the venue's own lot size where
+    # the instrument choice named one, `order_quantity_increment` otherwise.
+    # Carried so `trade-capital-bounds-gate` caps to the same step this was
+    # sized to: two parts snapping one quantity to two different steps is how an
+    # order leaves the gate in a size the sizer would never have produced.
+    quantity_increment: float = 0.0
 
     @property
     def is_tradeable(self) -> bool:
@@ -328,6 +334,7 @@ class PositionSizer:
             # seven orders and seven fills on the run of 12:08.
             intent_id=intent_id,
             segment=segment,
+            quantity_increment=quantity_increment,
             reason=(
                 f"{snapped:g} risks {risk_at_stop:,.2f} of {risk_allowed:,.2f} allowed, "
                 f"stopping {abs(entry - stop):g} away"
@@ -423,6 +430,31 @@ def opening_order_target(intent, choice) -> tuple[str, str] | None:
     if chosen is None or side is None or contract is None:
         return None
     return contract, side
+
+
+def quantity_increment_for(instrument, global_increment: float) -> float:
+    """The step this instrument's quantity is snapped to.
+
+    The venue's own lot size when the choice carries one -- 65 for a NIFTY
+    contract, 50 for a MARUTI one, 1 for a share -- and `order_quantity_increment`
+    only when it does not.
+
+    That setting is one global step for every instrument, and its own note has
+    called itself "the coarsest number in the system and it is temporary" since
+    2026-08-22, naming this exact fix: "the honest fix is a per-symbol venue fact
+    carried on instrument-choice". Measured on the live spine 2026-09-07, before
+    it existed: an order for **12,165.44092528724 units** of NIFTY 23750 PE, a
+    contract the exchange trades in blocks of 65. No venue accepts that quantity,
+    so every fee, margin and fill figure computed from it was a fiction, and the
+    figure the paper book filled was a size the real book could never have taken.
+
+    Read by shape rather than by import, because this part knows the data it
+    consumes and not the part that produces it (T-4).
+    """
+    lot = getattr(instrument, "quantity_increment", None)
+    if lot and lot > 0:
+        return float(lot)
+    return global_increment
 
 
 def entry_price_for(plan, instrument) -> float | None:
@@ -853,8 +885,15 @@ def start_part(context) -> int:
                     "bound_by": binding[1],
                     "leverage": leverage.leverage if leverage is not None else 1.0,
                     "price_increment": getattr(increment, "increment", None),
-                    "quantity_increment": quantity_increment,
-                    "minimum_quantity": quantity_increment,
+                    # The venue's own lot size where the choice names one, so an
+                    # options order is a whole number of lots rather than a
+                    # fractional slice of one (2026-09-07).
+                    "quantity_increment": quantity_increment_for(
+                        instrument, quantity_increment
+                    ),
+                    "minimum_quantity": quantity_increment_for(
+                        instrument, quantity_increment
+                    ),
                     # Read off the field SizeHint carries, not through a getattr
                     # default: a default is what let this read return None on every
                     # intent for three days without anything reporting it.

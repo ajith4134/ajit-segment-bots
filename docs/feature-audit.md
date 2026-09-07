@@ -1475,3 +1475,100 @@ Measured after the restart, on the live spine:
 
 Two new settings with provenance: `broker_feed_venue_id` (a setting rather than
 an import of another part's constant, T-4) and `feed_gap_patience_multiple`.
+
+---
+
+## 2026-09-07 — why no options order could fill, and why cash equity never tried
+
+Three bots on live NSE data. Stock options had opened eighteen positions all
+session, index options none, cash-equity-intraday had never formed a single
+trade intent. Two independent causes.
+
+### Cause one: every order was priced on the wrong instrument
+
+`stop-target-placer.priced_entry_for` took the chosen contract's own reference
+price **or the underlying's price when there was none**, and `position-sizer`
+sizes an open from exactly that number. So orders left carrying the underlying:
+`INFY 1200 CE 23 NOV 26` at **1,088.40** against a real premium of **21.10**,
+`RELIANCE 1320 PE` at 1,311.05 against 22.85. `paper-fill-simulator` compares
+against the contract's market price and refuses past
+`maximum_decision_price_drift` (6%), so **6,806 of 8,049** orders that reached a
+verdict were refused as `decision-price-stale` — 84.6%.
+
+Index options were worse, and for a reason worth writing down: those intents
+*name a contract*, so `select()` resolved the contract to its underlying, picked
+the ATM strike, and then priced the strike the **intent** named. `NIFTY 23750 PE`
+went out at 3.20 — a deep-OTM wing's premium — while the contract being ordered
+traded at 48.75. Drift 1,425%.
+
+**How often the contract had no price, and why.** The believable-age bound is
+`(materiality / one-second move)²`, clamped to `[1s, 60s]`, and both inputs were
+the wrong market's:
+
+| | in use | measured | out by |
+|---|---|---|---|
+| `reference_price_prior_one_second_move` | 0.000898, six Binance/Bybit perpetuals | **0.002324** | 2.6x |
+| materiality, `2 x taker_fee_rate` | 0.0011, twice Bybit's taker rate | **0.008532** | 7.8x |
+
+The errors ran in opposite directions and cancelled into **1.50 s**, which looks
+ordinary. The median live option contract prints every **9.25 s** (p90 66.6 s),
+so the newest price in existence was refused **82.0%** of the time — against
+`chosen_without_a_price_for_the_contract` measured at **84.5%** (6,981 of 8,259).
+Corrected, the same formula gives **13.48 s**. Crossing the spread twice is two
+thirds of the real round trip (half spread 0.3175% at p50 over 23,606 book
+snapshots; charges 0.2341%), which is why a fee-only figure was 7.8x light.
+`measurements/2026-09-07-indian-price-staleness/` carries it.
+
+Fixed on the principle rather than only the numbers: **an unpriced choice
+refuses.** `instrument-selector` now gates on the contract it chose rather than
+on the intent's symbol — an option chain's underlying always prints, so the old
+gate passed exactly when the contract could not be priced — and
+`priced_entry_for` returns `None` with `stop-target-placer` counting
+`skipped_without_a_price_for_the_instrument`. An order on the wrong scale is
+worse than no order: it consumes a decision, a slot and a refusal, and reads on
+every board as a bot that is trading.
+
+### Cause two: the cash-equity shortlist had sealed itself shut
+
+`cash-equity-intraday` was subscribed to `3PLAND`, `63MOONS`, `AADHARHFC`,
+`ABGSEC`, `ABSLLIQUID` (a liquid-fund ETF), `ABSLBANETF` and 33 more — the
+alphabetical head of the NSE master, out of 2,654 candidates. They print 20-700
+times a session against MARUTI's 8,002, never filled
+`mean-reversion-detector`'s 256-deep window, and raised no candidate at all.
+`instrument-selector` recorded **zero** `no-instrument-is-listed-for-this-symbol`
+refusals across 162,685 intents: nothing was refused because nothing arrived.
+
+Not the liquidity pool cut, which was the obvious suspect. `percentile_rank`
+assigns a **position**, so ranking a missing signal by `entry.symbol` did not
+leave candidates tied — it made the alphabet the score, six times over. On the
+first ranking of a day nothing has a price and all six signals are `None` for
+everything, so the blend *was* the alphabet. The feed subscribed those names,
+they became the only names ever measured, and every later ranking returned the
+same list.
+
+Fixed by ranking every unmeasured reading by **average daily volume**, which
+comes from `equity-historical-profile` and is fetched from history for a share
+whether or not it is subscribed — the one liquidity fact that survives having no
+subscription.
+
+### Four more found while measuring
+
+- `trade-capital-bounds-gate` `passed` **0**, everything capped,
+  `largest_capital_used` 99,999.9999: the operator raised all three
+  `segments/*.toml` to 200,000 at 06:00 and `main-account.toml` stayed at
+  100,000, so `min()` kept the account ceiling binding and the edit did nothing.
+  Same failure as 2026-09-04. `capital-allotment-reader` now publishes
+  `binding_ceiling` naming which file won.
+- Order quantities were fractional — **12,165.44 units** of a contract the
+  exchange trades in blocks of 65. The venue's lot size now travels
+  `symbol-universe` → `ListedInstrument` → `InstrumentChoice` → sizer → gate,
+  which is the fix `order_quantity_increment`'s own note has asked for since
+  2026-08-22.
+- `cross-segment-exposure-watch` filed two stock-options positions under
+  `by_segment.index-options`: it stamped `segment_id` on every position instead
+  of reading `position.segment`, so a cross-segment watch could only ever see one
+  segment. Its underlying rule was also `symbol minus "USDT"`, which strips
+  nothing from an NSE contract, so every strike was its own underlying.
+- `intent_timing_maximum_price_drift` and `limit_walk_maximum_total_fraction`
+  were still 0.004 while both notes say they **are**
+  `maximum_decision_price_drift`, re-derived to 0.06 on 2026-09-05.
