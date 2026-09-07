@@ -141,7 +141,7 @@ function OpenPositions({ open }) {
               is what `maximum_capital_per_trade` bounds. Showing the first alone
               under the word "capital" made a 100 USDT ceiling read as breached
               4.5x while the gate was holding every trade to 99.99999996. */}
-          <span>{open.capital_in?.toFixed(2)} USDT notional</span>
+          <span>₹{open.capital_in?.toFixed(2)} notional</span>
           <span className="sep">·</span>
           {open.capital_committed == null ? (
             <span className="unmeasured">committed NOT MEASURED</span>
@@ -482,7 +482,7 @@ function ClosedTrades({ closed }) {
                 <span className="unmeasured">capital in NOT MEASURED</span>
               ) : (
                 <>
-                  <span>{summary.capital_in.toFixed(2)} USDT in</span>
+                  <span>₹{summary.capital_in.toFixed(2)} in</span>
                   <span className="sep">·</span>
                   <span>
                     <Pnl value={summary.return_on_capital * 100} digits={2} />% on capital
