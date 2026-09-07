@@ -221,6 +221,14 @@ def paper_fetcher(timeout: float = 20.0):
     """
     arxiv = arxiv_search(timeout=timeout, maximum=1)
 
+    def _from_arxiv(query: str):
+        rows = arxiv(query)
+        if not rows or not rows[0].get("abstract"):
+            return None
+        row = rows[0]
+        return (row["title"], row["abstract"], row["source_reference"],
+                "preprint", "export.arxiv.org")
+
     def fetch(query: str):
         url = f"{CROSSREF_ENDPOINT}?" + urllib.parse.urlencode(
             {"query": query, "rows": 1, "select": "title,abstract,DOI,type,container-title"}
@@ -235,18 +243,35 @@ def paper_fetcher(timeout: float = 20.0):
                 item = items[0]
                 titles = item.get("title") or []
                 abstract = item.get("abstract")
+                if abstract:
+                    return (
+                        WHITESPACE.sub(" ", titles[0]).strip() if titles else query,
+                        readable_text(abstract, 20_000),
+                        f"https://doi.org/{item.get('DOI')}" if item.get("DOI") else query,
+                        str(item.get("type") or "journal-article"),
+                        "api.crossref.org",
+                    )
+                # **Crossref answered, and its record carries no abstract.** Most
+                # do not: measured on the live spine 2026-09-07, ten of ten
+                # Crossref answers came back with none, so `book-and-paper-fetcher`
+                # counted `paywalled` 10 of 10 and returned zero documents. A
+                # record with no text is a worse answer than a preprint with text,
+                # so arXiv is asked before falling back to reporting a paywall --
+                # a paywall is the honest state only when nothing free has the
+                # words.
+                preprint = _from_arxiv(query)
+                if preprint is not None:
+                    return preprint
                 return (
                     WHITESPACE.sub(" ", titles[0]).strip() if titles else query,
-                    readable_text(abstract, 20_000) if abstract else None,
+                    None,
                     f"https://doi.org/{item.get('DOI')}" if item.get("DOI") else query,
                     str(item.get("type") or "journal-article"),
                     "api.crossref.org",
                 )
-        rows = arxiv(query)
-        if rows:
-            row = rows[0]
-            return (row["title"], row["abstract"], row["source_reference"],
-                    "preprint", "export.arxiv.org")
+        preprint = _from_arxiv(query)
+        if preprint is not None:
+            return preprint
         raise LookupError(f"no source answered for {query!r}")
 
     return fetch

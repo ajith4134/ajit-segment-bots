@@ -100,3 +100,28 @@ def test_a_github_result_is_answered_with_its_readme_not_a_snippet():
     # reason this path exists.
     assert len(content) > 500, f"only {len(content)} chars, that is a snippet"
     assert "github.com" in url
+
+
+@pytest.mark.network
+def test_a_crossref_record_with_no_abstract_falls_through_to_arxiv():
+    """A record with no text is a worse answer than a preprint with text.
+
+    Measured on the live spine 2026-09-07: ten of ten Crossref answers carried no
+    abstract, so `book-and-paper-fetcher` counted `paywalled` 10 of 10 and
+    returned zero documents -- the fetcher was installed, every counter said it
+    was working, and nothing came out. A paywall is the honest state only when
+    nothing free has the words.
+    """
+    fetch = paper_fetcher()
+    answers = [
+        fetch("volatility risk premium index options"),
+        fetch("mean reversion pairs trading cointegration"),
+        fetch("order flow imbalance market microstructure"),
+    ]
+
+    with_text = [a for a in answers if a[1]]
+    assert len(with_text) >= 2, "at least two of three queries should find real text"
+    for title, content, reference, kind, host in with_text:
+        assert host in ("api.crossref.org", "export.arxiv.org")
+        assert len(content) > 100, f"{len(content)} chars is not an abstract"
+        assert title and reference
