@@ -15,7 +15,7 @@ from parts.segment_bot.instrument_selector import (
     BEST_IS_IN_AN_UNBUILT_SEGMENT, CHOSEN, DATED_FUTURE,
     NO_REFERENCE_PRICE_HAS_EVER_ARRIVED, NONE_CAN_CARRY_THE_INTENT,
     NONE_LIQUID_ENOUGH, NOTHING_AVAILABLE, OPTION, PERPETUAL_FUTURE,
-    REFERENCE_PRICE_IS_TOO_OLD, SPOT, UPSTOX_VENUE_ID, InstrumentSelector,
+    REFERENCE_PRICE_IS_TOO_OLD, SPOT, UNKNOWN_SEGMENT, UPSTOX_VENUE_ID, InstrumentSelector,
     ListedInstrument,
 )
 from runtime.part_declaration import load_declaration_from_blueprint
@@ -1005,3 +1005,75 @@ def test_a_contract_is_priced_from_the_venues_own_market_data_when_the_frame_nev
     assert choice.reference_price_observed_at_ns is not None
     assert subject.standing.priced_from_the_venues_own_market_data == 1
     assert subject.standing.chosen_without_a_price_for_the_contract == 0
+
+
+def test_a_share_is_registered_and_can_carry_an_intent():
+    """cash-equity-intraday's whole segment, which could not be expressed at all.
+
+    Until 2026-09-07 `observe_listed_symbol` skipped every kind that was not a
+    perpetual, counting it as "not priced by this part yet" -- a line from the
+    crypto build order whose docstring said spot was "honestly empty (RL-050,
+    RL-062)". It stayed after the pivot made cash equity one of the three
+    segments actually being traded, so an equity intent could only ever come back
+    `no-instrument-is-listed-for-this-symbol` and the segment could not express a
+    view even in principle. Measured on the live spine that day: 0 trade-intents
+    on any share that is not an F&O underlying, across a full session.
+
+    A share is its own underlying, so contract_symbol is symbol, the reference
+    price is the share's own, and the carry is zero -- `carry_over` already
+    returned 0.0 for SPOT before this could ever reach it.
+    """
+    subject = InstrumentSelector(
+        built_segments=("cash-equity-intraday",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+        # The spine passes `segment_resolver_from_settings`, which asks
+        # `segment_that_trades("spot", "IFCI")` and gets cash-equity-intraday from
+        # that segment's own `every-nse-share-without-a-derivative` rule. The
+        # default resolver maps kind to name alone and answers "spot", the retired
+        # crypto segment -- right for a caller that stated no segments, and not
+        # what production does.
+        segment_of=lambda instrument: (
+            "cash-equity-intraday" if instrument.instrument_kind == SPOT else UNKNOWN_SEGMENT
+        ),
+    )
+    subject.observe_listed_symbol(
+        CapturableSymbol(
+            venue_id=UPSTOX_VENUE_ID, symbol="IFCI", contract_type=None,
+            quote_volume_24h=None, price_increment=0.01, instrument_kind=SPOT,
+            lot_size=1, venue_instrument_id="NSE_EQ|INE039A01010",
+        )
+    )
+    subject.observe_price(UPSTOX_VENUE_ID, "IFCI", 61.25, observed_at_ns=1_000 * SECOND_NS)
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol="IFCI"))
+
+    assert choice.state == CHOSEN, choice.reason
+    assert choice.chosen.contract_symbol == "IFCI"
+    # The share is its own underlying: both prices are the share's own, and the
+    # order goes out on the same scale the view was formed in.
+    assert choice.reference_price == 61.25
+    assert choice.underlying_reference_price == 61.25
+    assert choice.quantity_increment == 1.0
+    # A share pays no funding, no basis and no premium.
+    assert choice.carry_cost_fraction == 0.0
+
+
+def test_a_share_cannot_be_sold_to_open_in_phase_a():
+    """Phase A cash equity is long-only (docs/goal.md), and a segment that cannot
+    short must say so at selection rather than have the arbiter discover it."""
+    subject = InstrumentSelector(
+        built_segments=("cash-equity-intraday",), maximum_cost_fraction=0.05,
+        round_trip_cost_fraction=0.001,
+    )
+    subject.observe_listed_symbol(
+        CapturableSymbol(
+            venue_id=UPSTOX_VENUE_ID, symbol="IFCI", contract_type=None,
+            quote_volume_24h=None, price_increment=0.01, instrument_kind=SPOT,
+            lot_size=1, venue_instrument_id="NSE_EQ|INE039A01010",
+        )
+    )
+    subject.observe_price(UPSTOX_VENUE_ID, "IFCI", 61.25, observed_at_ns=1_000 * SECOND_NS)
+
+    choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol="IFCI", is_long=False))
+
+    assert choice.state != CHOSEN

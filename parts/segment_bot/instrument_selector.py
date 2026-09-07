@@ -815,6 +815,40 @@ class InstrumentSelector:
             # against spot -- rather than by a second, poorer one beside it.
             self.observe_option_listing(chain_fact)
             return
+        if listed.instrument_kind == SPOT:
+            # A share, for cash-equity-intraday. Registered since 2026-09-07:
+            # until then this part skipped every non-perpetual kind as "not
+            # priced by this part yet" -- a crypto-era line whose docstring said
+            # spot was "honestly empty (RL-050, RL-062)", and which stayed after
+            # the pivot made cash equity one of the three segments actually being
+            # traded. The effect was total: an equity intent could only ever come
+            # back `no-instrument-is-listed-for-this-symbol`, so
+            # cash-equity-intraday could not express a view even in principle.
+            #
+            # A share is the simplest instrument this part handles. It IS its own
+            # underlying, so contract_symbol is symbol and every price path is the
+            # identity; `carry_over` already returns 0.0 for SPOT, because a share
+            # held overnight pays no funding, no basis and no premium -- and this
+            # segment squares off daily anyway. It cannot be sold to open here
+            # (Phase A is long-only cash equity) and carries no convexity.
+            self.observe_listed_instrument(
+                ListedInstrument(
+                    venue_id=listed.venue_id, symbol=listed.symbol,
+                    instrument_kind=SPOT, contract_symbol=listed.symbol,
+                    venue_instrument_id=listed.venue_instrument_id,
+                    quantity_increment=float(listed.lot_size) if listed.lot_size else None,
+                    funding_rate_per_settlement=None, settlements_per_day=None,
+                    basis_fraction=None, premium_fraction=None, seconds_to_expiry=None,
+                    # Intraday cash equity is squared off the same session, so a
+                    # short is a real position the broker permits -- but Phase A
+                    # is long-only (docs/goal.md), and a segment that cannot short
+                    # must say so here rather than have the arbiter discover it.
+                    supports_short=False, supports_long=True, supports_convexity=False,
+                    round_trip_cost_fraction=self._round_trip_cost_fraction,
+                    absorbable_quote=None, seconds_to_fill=None,
+                )
+            )
+            return
         if listed.instrument_kind != PERPETUAL_FUTURE:
             self.standing.listings_skipped[
                 f"kind {listed.instrument_kind or 'unrecognised'} is not priced by this part yet"
