@@ -330,11 +330,22 @@ def run_metered_api_caller(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No endpoint is installed and no metered spend is authorised (the spend
-    ceiling is zero), so every routed request is refused NO_ENDPOINT by
-    name with its record. The money left handed to each call is the
-    authorised ceiling, which is nothing: the caller refuses before it
-    could spend, and the refusal is the state.
+    **An endpoint is installed since 2026-09-07, where a key exists for one.**
+    The providers are rows in `llm_providers`: Kimi (Moonshot), Groq, Cerebras
+    and OpenRouter, all of which answer the same OpenAI `/chat/completions` body,
+    so a provider is a settings row rather than a module.
+
+    The first row whose key is actually in the encrypted store wins, and a row
+    whose key is missing or still `PLACEHOLDER_` is skipped by name -- firing at
+    an endpoint with no credential spends a retry budget to learn what the store
+    already knew. With no key installed anywhere this part behaves exactly as it
+    did before: every request refused NO_ENDPOINT, which is the honest state and
+    not a fault.
+
+    The spend ceiling still binds independently. A free tier declares a price of
+    zero, which is a real price -- this part prices a call before making it and
+    refuses what it cannot price, so a provider with no declared price would be
+    unpriceable rather than free.
     """
     from runtime.input_assembly import Batch
 
@@ -348,6 +359,43 @@ def start_part(context) -> int:
         estimate_safety_multiplier=context.number("llm_estimate_safety_multiplier"),
     )
     money_authorised = context.number("llm_spend_ceiling")
+
+    from runtime.llm_providers import (
+        NoCredential, OpenAiShapedProvider, openai_shaped_call,
+    )
+    from runtime.secrets_reader import read_secret_field
+
+    def provider_rows():
+        for row in context.setting("llm_providers").value:
+            fields = str(row).split("|")
+            if len(fields) != 7:
+                continue
+            provider_id, base_url, model_id, secret, price_in, price_out, latency = fields
+            yield OpenAiShapedProvider(
+                provider_id=provider_id, base_url=base_url, model_id=model_id,
+                secret_field=secret,
+                cost_per_input_token=float(price_in),
+                cost_per_output_token=float(price_out),
+                typical_latency_seconds=float(latency),
+            )
+
+    for provider in provider_rows():
+        group, _, field = provider.secret_field.partition(".")
+        key = read_secret_field(group, field)
+        if key is None:
+            continue
+        try:
+            caller.install_endpoint(openai_shaped_call(provider, key))
+        except NoCredential:
+            continue
+        # Both directions, because they differ by a factor of three to five and
+        # this part prices a call before it makes it.
+        caller.observe_price(
+            provider.model_id,
+            provider.cost_per_input_token,
+            provider.cost_per_output_token,
+        )
+        break
 
     return run_metered_api_caller(
         caller=caller,

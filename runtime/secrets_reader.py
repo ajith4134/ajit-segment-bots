@@ -83,4 +83,43 @@ def read_upstox_env(
     return env
 
 
-__all__ = ["PLACEHOLDER_PREFIX", "SECRETS_PATH", "UPSTOX_ENV_BY_FIELD", "read_upstox_env"]
+def read_secret_field(
+    group: str, field: str, path: pathlib.Path = SECRETS_PATH, run=subprocess.run
+) -> str | None:
+    """One field out of the store, or None where there is no usable value.
+
+    Added 2026-09-07 for the LLM providers, whose keys each live in their own
+    group. Same rules as `read_upstox_env` and for the same reasons: decrypted to
+    a pipe and never to a file, a `PLACEHOLDER_` refused by name rather than sent,
+    and every failure -- no store, no sops, a failed decrypt -- answered with None
+    rather than an exception, because no key configured yet is an ordinary
+    startup condition and not a reason to refuse to start.
+
+    Never logged and never put in a repr: the caller holds it as a local and hands
+    it straight to the transport. A key in a traceback is a key in an issue.
+    """
+    if not path.exists():
+        return None
+    sops = _find_sops()
+    if sops is None:
+        return None
+    try:
+        result = run([sops, "-d", str(path)], capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        document = yaml.safe_load(result.stdout) or {}
+    except yaml.YAMLError:
+        return None
+    value = (document.get(group) or {}).get(field)
+    if isinstance(value, str) and value and not value.startswith(PLACEHOLDER_PREFIX):
+        return value
+    return None
+
+
+__all__ = [
+    "PLACEHOLDER_PREFIX", "SECRETS_PATH", "UPSTOX_ENV_BY_FIELD",
+    "read_secret_field", "read_upstox_env",
+]

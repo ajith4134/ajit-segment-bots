@@ -321,10 +321,21 @@ def run_subscription_session_caller(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No session is installed on this box, so every routed request is
-    answered NO_SESSION by name with its record. `install_session` is the
-    one way a session gets in, and the retry and backoff rules apply from
-    that moment.
+    **A session is installed since 2026-09-07: Claude Code itself.** `claude -p`
+    is a first-party interface that runs on the operator's own Claude
+    subscription, so this transport needs no credential -- the CLI already holds
+    the login. It is deliberately not a reverse-engineered claude.ai session;
+    imitating the API with a scraped web token is circumventing what the
+    subscription is sold as, and this project does not do it.
+
+    **It is rate-limited here rather than downstream, because it spends the
+    operator's own allowance.** Measured on this box: a stripped call on Haiku
+    costs about $0.04, with a floor of roughly 20,000 cache-creation tokens
+    because `~/.claude/CLAUDE.md` loads whatever the working directory is. At
+    `llm_subscription_calls_per_hour` (20) that is about $20 a day, which is a
+    bound somebody chose. `skill-distiller` alone published 88 requests in two
+    minutes on the day this was wired, so the limit is doing real work and a
+    request past it is refused by name rather than queued.
     """
     from runtime.input_assembly import Batch
 
@@ -337,6 +348,31 @@ def start_part(context) -> int:
         backoff_multiplier=context.number("llm_backoff_multiplier"),
         quota_cost_per_call=context.number("llm_quota_cost_per_call"),
     )
+
+    from runtime.llm_providers import claude_code_session_call
+
+    calls_per_hour = int(context.number("llm_subscription_calls_per_hour"))
+    transport = claude_code_session_call(
+        model=str(context.setting("llm_subscription_model").value)
+    )
+    spent_at: list[float] = []
+
+    def call_within_the_hour(routed):
+        """The transport, with the operator's own hourly allowance in front of it.
+
+        A refusal is answered in the transport's own shape -- empty text with a
+        `rate-limited` reason -- rather than by raising, because this caller
+        counts a failed call and retries it, and an exception would take the part
+        off the air instead.
+        """
+        now = time.monotonic()
+        spent_at[:] = [at for at in spent_at if now - at < 3600.0]
+        if len(spent_at) >= calls_per_hour:
+            return ("", "rate-limited", 0, 0, 0.0)
+        spent_at.append(now)
+        return transport(routed)
+
+    caller.install_session(call_within_the_hour)
 
     return run_subscription_session_caller(
         caller=caller,

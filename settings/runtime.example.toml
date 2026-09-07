@@ -3196,6 +3196,41 @@ value = 0.1
 unit  = "fraction"
 note  = "operator, 2026-08-23: the fewest calls the gauge admits while throttled and not stopped. A tenth: a gauge that admitted none while calling itself throttled would be stopped under another name."
 
+[llm_subscription_measured_cost_per_call]
+value = 0.041
+unit  = "USD per call"
+note  = "Claude, 2026-09-07: what one subscription call actually costs, measured on this box rather than assumed. `claude -p` stripped to Haiku -- explicit system prompt, dynamic sections excluded, slash commands and MCP off, run from an empty directory -- answered a one-word question for $0.0406. The same question unstripped, on the default model, cost $0.245: Opus, and 24,107 cache-creation tokens. About 20,000 of those tokens are the floor whatever is asked, because the operator own ~/.claude/CLAUDE.md loads regardless of the working directory, and cache creation is charged once and read cheaply afterwards so sustained use amortises where a burst does not. llm-model-picker prices the subscription pocket against the metered ones with this figure, so it is the number that decides when paying a provider is cheaper than spending the operator allowance. Re-measure with `claude -p '...' --output-format json` and read total_cost_usd."
+
+[llm_subscription_measured_latency_seconds]
+value = 8.0
+unit  = "seconds"
+note  = "Claude, 2026-09-07: how long a subscription call takes, including the CLI start-up that an HTTP endpoint does not pay. Measured at about 2.1s of API time plus process start on an idle box; eight seconds is that with headroom for a spine at load, which is the state this actually runs in. Used by llm-model-picker to trade latency against cost, so a figure measured on an idle machine would make the subscription look faster than it is when it matters."
+
+[llm_estimated_input_tokens_per_call]
+value = 2000
+unit  = "tokens"
+note  = "Claude, 2026-09-07: how large a prompt this system typically sends, used only to turn a provider per-token price into a per-call cost so llm-model-picker can compare pockets. Two thousand: a rendered prompt here is an instruction plus the verified facts it is grounded in, and the facts are the larger half. Deliberately separate from llm_characters_per_token, which metered-api-caller uses to price a specific call before making it -- that one is about this request, this one is about a typical request, and conflating them would price a real call against an average."
+
+[llm_providers]
+value = [
+  "kimi|https://api.moonshot.ai/v1/chat/completions|kimi-k2-0905-preview|moonshot_api.api_key|0.0000006|0.0000025|8.0",
+  "groq|https://api.groq.com/openai/v1/chat/completions|llama-3.3-70b-versatile|groq_api.api_key|0.0|0.0|2.0",
+  "cerebras|https://api.cerebras.ai/v1/chat/completions|llama-3.3-70b|cerebras_api.api_key|0.0|0.0|2.0",
+  "openrouter|https://openrouter.ai/api/v1/chat/completions|deepseek/deepseek-chat-v3.1:free|openrouter_api.api_key|0.0|0.0|10.0",
+]
+unit  = "provider_id|base_url|model_id|secret_field|input_price_per_token|output_price_per_token|latency_seconds"
+note  = "operator, 2026-09-07: the metered and free-tier chat endpoints metered-api-caller may use, one row each. Every one speaks the OpenAI /chat/completions body -- Kimi, Groq, Cerebras and OpenRouter are the same request and the same response -- so a provider is a row here rather than a module, which is the point of the shape. **A price of 0.0 is a real price and not a missing one**: metered-api-caller prices a call before making it and refuses what it cannot price, so a free tier has to declare zero rather than nothing. Kimi is priced from Moonshot published kimi-k2 rates (about $0.60 per million input tokens and $2.50 per million output); the three free tiers are zero because their free allowance is free until it rate-limits, which the caller counts separately from a failure. The secret_field names a group and field in the encrypted store (docs/secrets.md); a provider whose key is missing or still PLACEHOLDER_ is reported absent and never called, because firing at an endpoint with no credential spends a retry budget to learn what the store already knew. Adding a provider is a row; removing one is deleting a row. Verify a new row with tests/runtime/test_llm_providers.py before trusting it."
+
+[llm_subscription_model]
+value = "haiku"
+unit  = "Claude Code model alias"
+note  = "Claude, 2026-09-07: which model the subscription transport asks for. `subscription-session-caller` drives Claude Code with `claude -p`, which runs on the operator own Claude subscription -- a first-party interface, not a scraped claude.ai session. Haiku rather than the default because the default is Opus: measured on this box the same one-word answer cost $0.245 on Opus against $0.041 stripped down to Haiku. The floor is about 20,000 cache-creation tokens whatever is asked, because the operator own ~/.claude/CLAUDE.md loads regardless of the working directory, and that is the whole reason this transport is for few high-value calls while the providers above carry bulk."
+
+[llm_subscription_calls_per_hour]
+value = 20
+unit  = "calls"
+note  = "Claude, 2026-09-07: how many subscription calls an hour this system may make. Twenty, because each one costs about $0.04 of the operator allowance at the measured floor and this spine runs unattended around the clock -- twenty an hour is roughly $20 a day at that rate, which is a bound somebody chose rather than a number nobody watched. It is deliberately far below what the bots would ask for: skill-distiller alone published 88 requests in two minutes on 2026-09-07. The rest are for the metered providers, and what does not fit either is not made. Raise it only against a measured allowance, never because a queue looked long."
+
 [llm_exploration_share]
 value = 0.1
 unit  = "fraction"

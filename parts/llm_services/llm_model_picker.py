@@ -293,10 +293,20 @@ def run_llm_model_picker(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No model is declared on this box -- no subscription session, no paid
-    endpoint, no local weights -- so every request is answered NO_MODELS by
-    name and nothing is chosen. The quality a model shows is learned from
-    call records, so the moment a model is declared its record starts.
+    **Models are declared since 2026-09-07**, from the same two places the
+    callers take their transports from, so a model this part offers is one
+    something can actually answer:
+
+    - the Claude subscription, whichever `llm_subscription_model` names, declared
+      only because `claude -p` runs on the operator's own login and needs no key
+    - every `llm_providers` row whose API key is really in the encrypted store --
+      a row with a missing or `PLACEHOLDER_` key is not declared, because a model
+      nothing can call is a choice this part would make and no caller could honour
+
+    So with no provider key installed exactly one model is declared, and with
+    none of either this part answers NO_MODELS by name as it always did. The
+    quality a model shows is still learned from call records; declaring it only
+    starts its record.
     """
     from runtime.input_assembly import Batch
 
@@ -311,6 +321,40 @@ def start_part(context) -> int:
         half_life_observations=context.number("learning_half_life_observations"),
     )
     quality_bar = context.number("llm_quality_bar")
+
+    from runtime.secrets_reader import read_secret_field
+
+    # The subscription always answers: `claude -p` runs on the operator's own
+    # login. Its cost per call is the measured floor on this box -- about four
+    # cents on Haiku, dominated by the ~20,000 cache-creation tokens that
+    # ~/.claude/CLAUDE.md costs whatever is asked.
+    picker.declare_model(
+        model_id=str(context.setting("llm_subscription_model").value),
+        payment_kind=SUBSCRIPTION,
+        cost_per_call=context.number("llm_subscription_measured_cost_per_call"),
+        typical_latency_seconds=context.number("llm_subscription_measured_latency_seconds"),
+    )
+    for row in context.setting("llm_providers").value:
+        fields = str(row).split("|")
+        if len(fields) != 7:
+            continue
+        _, _, model_id, secret, price_in, price_out, latency = fields
+        group, _, field = secret.partition(".")
+        if read_secret_field(group, field) is None:
+            # No usable key, so nothing could answer a request routed here.
+            continue
+        picker.declare_model(
+            model_id=model_id,
+            payment_kind=METERED,
+            # Priced at this part's own estimate of a call rather than per token,
+            # which is what `cost_per_call` means here. A free tier is zero, and
+            # zero is a price.
+            cost_per_call=(
+                float(price_in) * context.number("llm_estimated_input_tokens_per_call")
+                + float(price_out) * context.number("llm_estimated_output_tokens")
+            ),
+            typical_latency_seconds=float(latency),
+        )
 
     def read_requests():
         for record in records.payloads():
