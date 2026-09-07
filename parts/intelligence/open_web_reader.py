@@ -252,12 +252,22 @@ def run_open_web_reader(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No fetcher is installed on this machine: the box has no outbound web
-    client configured for this part, so every gap is answered with
-    FETCH_FAILED by name and nothing is published. The budget and the
-    backlog bound are real and apply the moment a fetcher is installed
-    through `install_fetcher`; a reader that fetched without them would be
-    collecting, not learning.
+    **A fetcher is installed since 2026-09-07.** Until then none was, and this
+    docstring said so: every gap was answered FETCH_FAILED by name, 380,660 of
+    them on one live session. The whole chain behind this part was inert as a
+    result -- no `web-idea`, so no `research-finding` and no `skill`, so
+    `prompt-template-author` had no evidence, so `prompt-renderer` refused
+    210,951 real `llm-request`s for want of an active prompt version.
+
+    `runtime.open_web_sources.web_search_fetcher` is keyless on purpose: a
+    research reader that needs a secret nobody installed reads as configured and
+    fetches nothing, which is the same failure one layer along. A GitHub result is
+    answered with its README through GitHub's own API rather than a search
+    snippet, because `github-strategy-miner` mines condition lines out of this
+    part's content and no snippet carries one.
+
+    The budget and the backlog bound were always real and now actually bind: a
+    reader that fetched without them would be collecting, not learning.
     """
     from runtime.input_assembly import Batch
 
@@ -268,6 +278,9 @@ def start_part(context) -> int:
         window_seconds=context.number("web_fetch_window_seconds"),
         maximum_untested_backlog=int(context.number("web_maximum_untested_backlog")),
     )
+    from runtime.open_web_sources import web_search_fetcher
+
+    reader.install_fetcher(web_search_fetcher())
 
     def read_skill_gaps(_reader):
         return tuple(gap for gap in gaps.payloads() if getattr(gap, "query", None))

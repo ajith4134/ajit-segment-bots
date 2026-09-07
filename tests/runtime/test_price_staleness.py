@@ -144,3 +144,34 @@ def test_a_price_that_is_not_a_price_is_ignored():
     subject.observe_price("v", "S", -1.0, 1_000_000_000)
 
     assert subject.symbols_measured == 0
+
+
+def test_a_symbol_that_never_moved_is_bounded_by_the_ceiling_not_a_crash():
+    """A quiet option strike prints the same premium hundreds of times, and its
+    95th-percentile one-second move is exactly 0.0.
+
+    `(materiality / 0) ** 2` raised ZeroDivisionError, and it raised it inside
+    `describe()` -- the health read -- so `instrument-selector` died once a second
+    on the live spine of 2026-09-07 while every counter it managed to publish
+    looked ordinary. Nothing had ever been that still on a crypto perpetual, so
+    the branch became reachable only when the prior and the materiality were
+    re-derived for Indian option premiums.
+
+    A price that is not moving cannot drift past what a round trip costs, so the
+    longest believable age is the honest answer and the ceiling still bounds it.
+    """
+    estimator = PriceStalenessEstimator(
+        materiality_fraction=0.008532, anchor_seconds=1.0, quantile=0.95,
+        window=3_600, observations_needed=1, prior_one_second_move=0.002324,
+        minimum_age_seconds=1.0, maximum_age_seconds=60.0,
+    )
+    for tick in range(6):
+        estimator.observe_price("upstox", "QUIET", 3.20, at_ns=(tick + 1) * 2_000_000_000)
+
+    estimate = estimator.believable_age_seconds("upstox", "QUIET")
+
+    assert estimate.value == 60.0
+    assert estimate.was_clamped
+    assert "printed the same price" in estimate.reason
+    # The health read is where it actually crashed, so that is what must not.
+    assert estimator.describe()["believable_age_seconds"]["upstox|QUIET"] == 60.0

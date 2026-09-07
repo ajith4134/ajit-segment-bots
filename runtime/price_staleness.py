@@ -148,6 +148,29 @@ class PriceStalenessEstimator:
         price that old cannot place a stop at all.
         """
         move = self.one_second_move(venue_id, symbol)
+        if move.value <= 0.0:
+            # **Every measured move was zero: the symbol printed the same price
+            # over and over.** A price that is not moving cannot drift past what a
+            # round trip costs, so the longest believable age is the honest answer
+            # and the ceiling still bounds it.
+            #
+            # This divided by zero and crash-looped `instrument-selector` on
+            # 2026-09-07, on the *health read* rather than in a decision, so the
+            # part died once a second while every counter it published looked
+            # ordinary. It became reachable when the prior and the materiality
+            # were re-derived for Indian options that day: a quiet strike prints
+            # the same premium hundreds of times, and its p95 one-second move is
+            # exactly 0.0. Nothing had ever been that still on a crypto perpetual.
+            return Estimate(
+                value=self._maximum_age, is_fitted=move.is_fitted,
+                observations=move.observations, prior=(self._materiality / self._prior) ** 2,
+                was_clamped=True, bound_low=self._minimum_age, bound_high=self._maximum_age,
+                reason=(
+                    f"every one of {move.observations} measured moves was zero -- this symbol "
+                    f"printed the same price throughout, so nothing can make its price stale "
+                    f"except the {self._maximum_age:g}s ceiling"
+                ),
+            )
         age = (self._materiality / move.value) ** 2
         clamped = min(max(age, self._minimum_age), self._maximum_age)
         reason = (

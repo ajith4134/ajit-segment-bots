@@ -50,6 +50,7 @@ dependencies = [
     # approach to this; see docs/secrets.md for where the credentials it
     # needs are stored.
     "upstox-totp==1.0.8",
+    "ddgs>=9.16.0",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +66,12 @@ testpaths = ["tests"]
 markers = [
     "cgroup: places a process in a systemd transient scope and reads its cgroup files",
     "slow: takes more than a second because it forks, kills, or waits on writeback",
+    # Calls a real public service. RL-063 says a verdict rests on real data, and
+    # the three research readers spent a whole live session failing 380,660
+    # fetches each with every checker green -- so their sources are tested
+    # against the services themselves. Deselect with -m "not network" on a box
+    # with no egress.
+    "network: calls a real public service (arXiv, Crossref, GitHub, DuckDuckGo)",
 ]
 # Import `runtime` from the repository root rather than from wherever pytest was
 # invoked. Declared here so no test needs a sys.path line of its own.

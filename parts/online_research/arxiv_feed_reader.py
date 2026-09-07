@@ -336,9 +336,17 @@ def run_arxiv_feed_reader(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No search is installed on this box, so every gap is answered
-    FETCH_FAILED by name and nothing is fetched; `install_search` is the
-    one way a search gets in, and the fetch budget applies from then.
+    **A search is installed since 2026-09-07**, arXiv's own public API, which
+    needs no key. Until then none was and every gap was answered FETCH_FAILED by
+    name: 380,660 fetches attempted and 0 papers, all of them
+    `refused_no_search_installed`.
+
+    Sorted by relevance rather than by submission date. Sorted by date, arXiv's
+    `all:` search answered "options implied volatility" with "Two extremely
+    irradiated volatile-rich sub-Neptunes" -- it matched "volatile" and the newest
+    paper in all of arXiv won. A reader answering a skill gap with the newest
+    astronomy preprint is exactly the decoration this project's third goal exists
+    to find.
     """
     from runtime.input_assembly import Batch
 
@@ -349,6 +357,9 @@ def start_part(context) -> int:
         window_seconds=context.number("research_fetch_window_seconds"),
         minimum_word_overlap=int(context.number("arxiv_minimum_word_overlap")),
     )
+    from runtime.open_web_sources import arxiv_search
+
+    reader.install_search(arxiv_search())
 
     return run_arxiv_feed_reader(
         reader=reader,

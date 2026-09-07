@@ -254,10 +254,20 @@ def run_book_and_paper_fetcher(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No fetcher is installed on this box, so every gap worth fetching
-    against is answered NO_FETCHER by name and no document is published;
-    `install_fetcher` is the one way one gets in. Web ideas are read and
-    drained: a fetch is for a gap, and an idea is upstream of one.
+    **A fetcher is installed since 2026-09-07**: Crossref first, which indexes
+    the published literature including books, then arXiv for the preprints
+    Crossref does not carry. Both are keyless. Until then none was installed and
+    every gap was answered NO_FETCHER by name -- 380,660 failures out of 380,660
+    on one live session.
+
+    A Crossref record with no published abstract is returned as content `None`
+    with a reference, which is what this part already reads as a paywall: the
+    work exists and its text is not free. That is a different fact from finding
+    nothing, and collapsing the two would make an unreadable paper look like an
+    absent one.
+
+    Web ideas are read and drained: a fetch is for a gap, and an idea is upstream
+    of one.
     """
     from runtime.input_assembly import Batch
 
@@ -268,6 +278,9 @@ def start_part(context) -> int:
         fetches_per_host_per_window=int(context.number("research_fetches_per_window")),
         window_seconds=context.number("research_fetch_window_seconds"),
     )
+    from runtime.open_web_sources import paper_fetcher
+
+    fetcher.install_fetcher(paper_fetcher())
 
     def read_gaps(_fetcher):
         ideas.payloads()
