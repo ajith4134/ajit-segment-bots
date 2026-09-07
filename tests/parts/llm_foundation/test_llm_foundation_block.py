@@ -1194,3 +1194,69 @@ def test_a_source_inside_the_margin_is_matched_wording_not_help():
     for index in range(4):
         subject.observe_answer(f"b-{index}", was_good=index % 2 == 0)
     assert subject.score("neutral").state == NOT_USEFUL
+
+
+def test_a_purposes_first_template_is_written_before_any_evidence_exists():
+    """Otherwise the chain can never start, and nothing says so.
+
+    The evidence bar's own reason is about rewriting -- "rewriting from opinion is
+    how a prompt gets worse in a way nothing detects" -- which is right for a
+    replacement and cannot apply to a template that does not exist. And waiting
+    does not help: on this system the evidence is skills, and a skill can only be
+    distilled by a model that cannot be called until a template exists.
+
+    Measured on the live spine 2026-09-07: `prompt_minimum_evidence` 3, evidence
+    held 0, `prompt-renderer` refusing all 132 requests it saw, and
+    `llm-request-router` holding 12,154 it could not route.
+    """
+    author = PromptTemplateAuthor(minimum_evidence=3)
+
+    written = author.write(
+        template_id="template:distil-a-source-into-structure",
+        purpose="distil-a-source-into-structure",
+        instruction="Using only the measured facts given, state what they show.",
+        output_schema={"venue_id": "str", "symbol": "str", "text": "str"},
+        required_context_kinds=("verified-facts",),
+        is_the_first_for_this_purpose=True,
+    )
+
+    assert written.state == WRITTEN, written.reason
+    assert written.is_usable
+    assert author.standing.first_templates_written_before_any_evidence == 1
+    # Counted apart from an evidence-derived template, because they are different
+    # objects and a board showing them as one would hide which is which.
+    assert author.standing.rejected_no_evidence == 0
+
+
+def test_every_other_guard_still_applies_to_a_first_template():
+    """Only the evidence count is waived. A first template that asks the model to
+    decide something this system decides is still refused."""
+    author = PromptTemplateAuthor(minimum_evidence=3)
+
+    refused = author.write(
+        template_id="template:x", purpose="argue-against-this-trade",
+        instruction="Given the facts, should we buy this one? Pick the position size.",
+        output_schema={"text": "str"},
+        required_context_kinds=("verified-facts",),
+        is_the_first_for_this_purpose=True,
+    )
+
+    assert refused.state != WRITTEN and not refused.is_usable
+    assert author.standing.rejected_asks_to_decide == 1
+
+
+def test_a_rewrite_still_needs_evidence():
+    """The bar it was written for is untouched: a replacement derived from nothing
+    measured is exactly the drift the counter exists to catch."""
+    author = PromptTemplateAuthor(minimum_evidence=3)
+
+    refused = author.write(
+        template_id="template:x", purpose="argue-against-this-trade",
+        instruction="Using only the measured facts given, state what they show.",
+        output_schema={"text": "str"},
+        required_context_kinds=("verified-facts",),
+        is_the_first_for_this_purpose=False,
+    )
+
+    assert refused.state != WRITTEN and not refused.is_usable
+    assert author.standing.rejected_no_evidence == 1

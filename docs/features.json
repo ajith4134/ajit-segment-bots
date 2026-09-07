@@ -11909,7 +11909,8 @@
         "research-finding",
         "skill",
         "prompt-score",
-        "validated-llm-output"
+        "validated-llm-output",
+        "llm-request"
       ],
       "produces": [
         "prompt-template",

@@ -46,7 +46,7 @@ PART_ID = "prompt-template-author"
 
 PART_DECLARATION = PartDeclaration(
     part_id="prompt-template-author",
-    consumes=("research-finding", "skill", "prompt-score", "validated-llm-output"),
+    consumes=("research-finding", "skill", "prompt-score", "validated-llm-output", "llm-request"),
     produces=("prompt-template", "llm-request", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -103,6 +103,11 @@ class AuthorStanding:
     rejected_asks_to_recall: int = 0
     rejected_asks_to_decide: int = 0
     rejected_no_evidence: int = 0
+    # A purpose's first template, written before any evidence bore on it. Counted
+    # rather than folded into templates_written: a template derived from measured
+    # findings and one written to get the chain moving are different objects, and
+    # a board that showed them as one would hide which is which.
+    first_templates_written_before_any_evidence: int = 0
     unchanged_rewrites: int = 0
     requests_made: int = 0
 
@@ -173,11 +178,38 @@ class PromptTemplateAuthor:
     def write(
         self, template_id: str, purpose: str, instruction: str, output_schema,
         required_context_kinds, written_by: str = PART_ID,
+        is_the_first_for_this_purpose: bool = False,
     ) -> AuthoredTemplate:
+        """One template, refusing the five known mistakes.
+
+        `is_the_first_for_this_purpose` exempts a purpose's very first template
+        from the evidence bar, and nothing else.
+
+        **The bar's own reason is about rewriting**: "rewriting from opinion is
+        how a prompt gets worse in a way nothing detects". That is exactly right
+        for a replacement and cannot apply to a template that does not exist --
+        there is nothing to make worse, and no amount of waiting produces the
+        evidence, because on this system the evidence *is* skills and a skill can
+        only be distilled by a model that cannot be called until a template
+        exists. Measured 2026-09-07: `prompt_minimum_evidence` is 3, the author
+        held 0, and `prompt-renderer` refused all 132 requests it saw while
+        `llm-request-router` held 12,154 it could not route.
+
+        A first template is not ungrounded. It declares `required_context_kinds`,
+        and the facts it reasons over arrive with each request -- the grounding is
+        per call, not prior research. Every other guard still applies to it: it
+        must declare an output shape, name the context it needs, not ask the model
+        to recall a number, and not ask it to decide something this system
+        decides. Only the evidence count is waived, and it is counted separately
+        so a board can tell a template written from evidence from one written
+        before any existed.
+        """
         self.standing.templates_attempted += 1
         evidence = self.evidence_for(purpose)
 
-        if len(evidence) < self._minimum_evidence:
+        if is_the_first_for_this_purpose and len(evidence) < self._minimum_evidence:
+            self.standing.first_templates_written_before_any_evidence += 1
+        elif len(evidence) < self._minimum_evidence:
             self.standing.rejected_no_evidence += 1
             return self._authored(
                 None, NO_EVIDENCE_TO_WRITE_FROM, evidence, (), None,
@@ -292,6 +324,12 @@ def describe_template_authoring(author: PromptTemplateAuthor) -> dict:
         "rejected_asks_the_model_to_recall": author.standing.rejected_asks_to_recall,
         "rejected_asks_for_a_trading_decision": author.standing.rejected_asks_to_decide,
         "rejected_no_evidence": author.standing.rejected_no_evidence,
+        "first_templates_written_before_any_evidence": (
+            author.standing.first_templates_written_before_any_evidence
+        ),
+        "first_templates_written_before_any_evidence": (
+            author.standing.first_templates_written_before_any_evidence
+        ),
         "unchanged_rewrites": author.standing.unchanged_rewrites,
         "requests_made": author.standing.requests_made,
         "activates_a_template": False,
@@ -336,6 +374,7 @@ def start_part(context) -> int:
     """
     from runtime.input_assembly import Batch
 
+    requests = Batch(read=context.bus.reader("llm-request"))
     findings = Batch(read=context.bus.reader("research-finding"))
     skills = Batch(read=context.bus.reader("skill"))
     scores = Batch(read=context.bus.reader("prompt-score"))
@@ -344,10 +383,36 @@ def start_part(context) -> int:
     publish_requests = context.bus.publisher_for("llm-request")
     author = PromptTemplateAuthor(minimum_evidence=int(context.number("prompt_minimum_evidence")))
     purposes_with_evidence: dict[str, int] = {}
+    # Every purpose this system has actually been asked to answer, learned from
+    # the requests themselves rather than from a list that would go stale the day
+    # a twelfth part was added.
+    purposes_asked_for: set[str] = set()
     written_for: set[str] = set()
     output_schema = {"venue_id": "str", "symbol": "str", "text": "str"}
 
     def read_work(_author):
+        # **What a template is needed FOR comes from what is actually asked**
+        # (2026-09-07). This part keyed its purposes off a finding's topic and a
+        # skill's title -- free text out of research -- while every request that
+        # will ever be made names one of eleven fixed purposes declared as a
+        # constant by the part making it (`distil-a-source-into-structure`,
+        # `argue-against-this-trade`, ...). Those two sets cannot intersect, so no
+        # template this part wrote could ever answer a real request: measured on
+        # the live spine that day, `prompt-renderer` refused all 132 requests it
+        # saw for `refused_no_active_version` while `llm-request-router` held
+        # 12,154 it could not route. Breaking the bootstrap cycle would not have
+        # fixed it -- it would have produced a template for a purpose nobody asks.
+        #
+        # The purpose is on the request. Nothing else here has to change: the
+        # evidence, the declared `verified-facts` context and the output schema
+        # are the same whichever purpose is being written for.
+        for request in requests.payloads():
+            purpose = getattr(request, "purpose", "")
+            # This part's own drafting requests come back round on the same wire;
+            # writing a template for "draft-a-prompt-for-x" would be a prompt for
+            # writing the prompt it is already writing.
+            if purpose and not purpose.startswith("draft-a-prompt-for-"):
+                purposes_asked_for.add(purpose)
         for finding in findings.payloads():
             author.observe_finding(finding)
             purposes_with_evidence[finding.topic] = purposes_with_evidence.get(finding.topic, 0) + 1
@@ -361,17 +426,29 @@ def start_part(context) -> int:
             if output.purpose.startswith("draft-a-prompt-for-"):
                 drafts[output.purpose[len("draft-a-prompt-for-"):]] = output.text
         jobs = []
-        for purpose, count in purposes_with_evidence.items():
+        # A purpose somebody asked for, or a purpose evidence named. The first is
+        # what makes the chain carry; the second is kept because a topic worth
+        # writing about before anything asks is still worth writing about.
+        for purpose in (*purposes_asked_for, *purposes_with_evidence):
             if purpose in written_for:
                 continue
             evidence = author.evidence_for(purpose)
-            if not evidence:
+            # A purpose that has actually been asked for gets its first template
+            # whether or not evidence bears on it yet; anything else still waits
+            # for evidence, because a template nobody asked for and nothing
+            # measured is decoration.
+            if not evidence and purpose not in purposes_asked_for:
                 continue
             written_for.add(purpose)
-            instruction = drafts.get(purpose) or "Using only the measured facts given, state what they show about " + purpose + ". " + " ".join(str(item) for item in evidence)
+            instruction = drafts.get(purpose) or (
+                "Using only the measured facts given, state what they show about "
+                + purpose + "."
+                + (" " + " ".join(str(item) for item in evidence) if evidence else "")
+            )
             jobs.append({
                 "template_id": f"template:{purpose}", "purpose": purpose, "instruction": instruction,
                 "output_schema": dict(output_schema), "required_context_kinds": ("verified-facts",),
+                "is_the_first_for_this_purpose": True,
             })
         return tuple(jobs)
 
