@@ -72,13 +72,20 @@ master.
 
 ## Progress
 
-**5 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
+**8 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
 
-    hand-judged                4 serving their purpose, 1 skeleton (cointegration-pair-finder)
-    PRODUCES REAL OUTPUT     136   fed, publishing, own work counters above zero
+    hand-judged                6 serving their purpose, 2 skeletons
+    PRODUCES REAL OUTPUT     133   fed, publishing, own work counters above zero
     FED BUT PRODUCES NOTHING  64   fed and nothing has ever come of it
-    ONLY REFUSALS             26   fed, and everything above zero is a refusal or an attempt
+    ONLY REFUSALS             25   fed, and everything above zero is a refusal or an attempt
     NOT MEASURED             142   nothing has reached it, or it is not running
+
+The two new skeletons and two new serving verdicts are the first rows judged by a
+person reading the actual output rather than by the probe: `arxiv-feed-reader`
+(60,780 fetches attempted, nothing ever published), and the two exit-plan
+proposers, which build real plans and are starved by a horizon that was measured
+on a market printing forty times faster
+(`measurements/2026-09-07-exit-plan-starvation/`).
 
 Measured against the live spine on a real trading day, 2026-09-07, over a 45
 second observed window with the cumulative counters since the spine started at
@@ -456,7 +463,7 @@ The user said 370; the blueprint holds **373** parts across 29 categories, and e
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `arxiv-feed-reader` | ONLY REFUSALS | skill-gap 91,840 | nothing published — work: refused_no_search_installed 91,840 |
+| `arxiv-feed-reader` | SKELETON | 60,780 skill-gap messages | nothing published, ever. Every one of 60,780 fetches counted `refused_no_search_installed` — the counter that climbs is `fetches_attempted`, which is why a counter reader called it healthy until publishing-nothing was made disqualifying |
 | `copy-latency-estimator` | FED BUT PRODUCES NOTHING | symbol-price-frame 6,060 | nothing published |
 | `copy-worthiness-scorer` | NOT MEASURED | nothing has reached it | nothing published |
 | `edge-comparator` | NOT MEASURED | nothing has reached it | nothing published |
@@ -540,7 +547,7 @@ The user said 370; the blueprint holds **373** parts across 29 categories, and e
 | `bull-conviction-calibrator` | PRODUCES REAL OUTPUT | market-regime 59,684; bull-raw-conviction 1,553; training-label 17 | bull-calibrated-conviction 6,212 — work: convictions_calibrated 1,553; passed_through_unfitted 1,553 |
 | `bull-conviction-model` | PRODUCES REAL OUTPUT | kline-window 102,171; price-forecast 102,162; forecast-out-of-distribution-flag 102,104; +6 more | bull-raw-conviction 3,106 — work: challenger.observations 97,255; champion.observations 97,255; labels_trained_on 97,255; challenger.positives 48,127; +8 more |
 | `bull-entry-timer` | PRODUCES REAL OUTPUT | symbol-price-frame 6,088; bull-side-candidate 1,701; bull-calibrated-conviction 1,553 | bull-entry-timing 3,276 — work: decisions 1,638; entered_now 1,638; detectors_with_an_entry_quality_record 2 |
-| `bull-exit-plan-proposer` | PRODUCES REAL OUTPUT | symbol-profile 101,174; excursion-profile 99,152; symbol-price-frame 6,072; +4 more | bull-exit-plan 774 — work: plans_requested 1,681; plans_built 258; plans_from_the_live_range 258; detectors_with_a_horizon_profile 5 |
+| `bull-exit-plan-proposer` | SERVING ITS PURPOSE — starved by a crypto-length horizon | 2,141 plan requests on live NSE options, real symbol-price-frame prints | 290 plans built, all from the live range; 1,406 refused for no excursion record and 445 for too few prints. The plans it does build are right; the refusals are the detectors' 60s horizon against an option that prints every 9.25s (measurements/2026-09-07-exit-plan-starvation/) |
 | `bull-feature-builder` | PRODUCES REAL OUTPUT | broker-open-interest 162,141; order-book-snapshot 105,968; symbol-profile 103,331; +3 more | bull-feature-vector 8,505 — work: vectors_built 1,701; book_snapshots_absent 374 |
 | `bull-opinion-composer` | PRODUCES REAL OUTPUT | bull-feature-vector 1,701; bull-entry-timing 1,638; bull-calibrated-conviction 1,553; +1 more | directional-opinion 4,754 — work: opinions_composed 406 |
 | `bull-outlier-rejector` | PRODUCES REAL OUTPUT | bull-feature-vector 1,701 | bull-feature-out-of-distribution-flag 1,701 — work: vectors_judged 612,291; flagged_out_of_distribution 149; checkpoints_written 68; features_with_a_learned_normal 14 |
@@ -556,7 +563,7 @@ The user said 370; the blueprint holds **373** parts across 29 categories, and e
 | `bear-conviction-calibrator` | PRODUCES REAL OUTPUT | market-regime 59,645; bear-raw-conviction 56,927; training-label 17 | bear-calibrated-conviction 225,867 — work: convictions_calibrated 56,927; fell_back_to_the_overall_record 56,927; passed_through_unfitted 56,927 |
 | `bear-conviction-model` | PRODUCES REAL OUTPUT | kline-window 102,091; price-forecast 102,090; forecast-out-of-distribution-flag 102,032; +6 more | bear-raw-conviction 113,854 — work: convictions_formed 56,927; challenger.observations 45,831; champion.observations 45,831; labels_trained_on 45,831; +6 more |
 | `bear-entry-timer` | PRODUCES REAL OUTPUT | bear-side-candidate 58,445; bear-calibrated-conviction 56,927; symbol-price-frame 6,082 | bear-entry-timing 116,664 — work: decisions 58,332; entered_now 11,261; detectors_with_an_entry_quality_record 2 |
-| `bear-exit-plan-proposer` | PRODUCES REAL OUTPUT | excursion-profile 94,576; symbol-profile 86,024; bear-side-candidate 56,046; +4 more | bear-exit-plan 60 — work: plans_requested 55,970; plans_built 20; detectors_with_a_horizon_profile 5 |
+| `bear-exit-plan-proposer` | SERVING ITS PURPOSE — starved by a crypto-length horizon | 68,443 plan requests on live NSE options | 43 plans built; 57,702 refused 'too-few-prints-in-the-window' (84%) and 10,698 for no excursion record. The 20-print bar is statistically right — it recovers 92.9% of the true range at the median, against 80% at ten — so the number to re-derive is the horizon, not the bar |
 | `bear-feature-builder` | PRODUCES REAL OUTPUT | broker-open-interest 161,496; order-book-snapshot 105,540; symbol-profile 102,947; +3 more | bear-feature-vector 291,510 — work: vectors_built 58,302; book_snapshots_absent 76 |
 | `bear-opinion-composer` | PRODUCES REAL OUTPUT | bear-entry-timing 58,332; bear-feature-vector 58,302; bear-calibrated-conviction 56,927; +1 more | directional-opinion 84,501 — work: opinions_composed 7,286 |
 | `bear-outlier-rejector` | PRODUCES REAL OUTPUT | bear-feature-vector 58,302 | bear-feature-out-of-distribution-flag 58,302 — work: vectors_judged 2,113,027; flagged_out_of_distribution 1,389; features_with_a_learned_normal 15 |
@@ -638,5 +645,5 @@ The user said 370; the blueprint holds **373** parts across 29 categories, and e
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `instrument-selector` | PRODUCES REAL OUTPUT | broker-market-data 157,259; broker-option-greeks 153,112; liquidity-grade 101,282; +8 more | instrument-choice 48,918 — work: chosen 14,882; chosen_by_kind.option 14,882; priced_from_a_quote 5,415; price_staleness.symbols_measured 590; +2 more |
+| `instrument-selector` | SERVING ITS PURPOSE | live broker-market-data, broker-option-greeks, liquidity-grade and symbol-universe on real NSE instruments | 3,122 of 3,122 intents chosen with 0 refused and 0 without a price for the contract, after the price and cost-threshold fixes of 2026-09-07; before them, 753 of 2,257 chosen and 84.5% of those carrying no price for the contract they named |
 
