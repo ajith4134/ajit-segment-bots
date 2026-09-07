@@ -73,7 +73,7 @@ master.
 
 ## Progress
 
-**18 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
+**38 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
 
 **Silence is often the correct output, and the probe cannot know that.** Ten
 parts were reported as receiving every input they declare and publishing
@@ -93,7 +93,8 @@ is now buildable rather than blocked — the tape already carries an
 `open_interest` stream per contract and `operate/nse_fo_bhavcopy.py` carries
 volume and open interest for every NSE option.
 
-    hand-judged                        19   6 serving, 4 skeletons, 9 correctly silent
+    hand-judged                        38   6 serving, 7 skeletons, 25 starved or
+                                            correctly silent, each naming its cause
     PRODUCES REAL OUTPUT              143   fed, publishing, own work counters above zero
     WAITING FOR AN INPUT NEVER SEEN    49   produces nothing and one of its declared inputs
                                             has never arrived -- starved, not broken
@@ -153,6 +154,49 @@ a plan without the contract it was priced for; a symbol with no instrument behin
 it; a rank with no measurement under it. Each was invisible to the contract
 checkers, to the dataflow audit and to this ledger's own per-part probe, because
 every part involved was individually healthy.
+
+
+## One missing fetcher makes twelve parts inert
+
+Measured 2026-09-07. Twelve parts, about **2.5 million messages in and zero
+out**, all from one cause:
+
+| part | in | out |
+|---|---|---|
+| open-web-reader | 380,660 | 0 — every fetch counted `fetch_failures` |
+| arxiv-feed-reader | 380,660 | 0 — every fetch `refused_no_search_installed` |
+| book-and-paper-fetcher | 380,660 | 0 — every fetch a failure |
+| github-strategy-miner | 380,660 | 0 |
+| prompt-template-author | **0** | 0 — it receives nothing at all |
+| prompt-registry | 0 | 0 — `templates_seen` 0, `versions_registered` 0 |
+| prompt-promotion-gate | 0 | 0 — `decisions` 0 |
+| prompt-renderer | 210,951 | 0 — every one `refused_no_active_version` |
+| llm-request-router | 195,832 | 0 |
+| llm-model-picker | 210,943 | 0 |
+| semantic-fact-store | 289,926 | 0 |
+| instruction-writer | 67,289 | 0 |
+
+The chain reads in one line: **no web fetcher → no `research-finding` and no
+`skill` → `prompt-template-author` has no evidence → no `prompt-template` → the
+registry has no version → no version is active → `prompt-renderer` refuses every
+one of 210,951 `llm-request`s → nothing downstream of an LLM call has ever run.**
+
+`open-web-reader`'s own docstring says it plainly: *"No fetcher is installed on
+this machine: the box has no outbound web search."* The three readers are
+honestly empty rather than decorative — the rate limit, the budget and the
+backlog bound are all real and apply the moment a fetcher is installed through
+`install_fetcher`. But the effect on the ledger is large and would otherwise read
+as twelve separate problems.
+
+**This is an operator decision, not a code fix.** The box has outbound network —
+Upstox, NSE and Yahoo are all reached every session — so what is missing is a
+search provider, not connectivity. Installing one makes an unattended 24/7 system
+fetch from the open web on its own initiative, which is outward-facing in a way
+nothing else here is. It is left for the operator to say yes to.
+
+Until then these twelve rows are `SKELETON` for the three readers that have a
+source to be given and `NOT MEASURED` for the nine downstream of them, each
+naming this as the reason rather than appearing to be nine independent failures.
 
 ## The parts, by block
 
@@ -289,7 +333,7 @@ every part involved was individually healthy.
 | `idea-generator` | NOT MEASURED | regime-memory 57,756 | llm-request 124,596 |
 | `market-anomaly-detector` | PRODUCES REAL OUTPUT | feed-coverage 920,148; market-data 386,262; order-book-snapshot 376,167; +1 more | market-anomaly 2,021,534 — work: checks 700,518; anomalies 109,591; anomaly_this_venue_has_stopped_updating 100,501; by_anomaly.this-venue-has-stopped-updating 100,501; +3 more |
 | `market-event-reader` | NOT MEASURED | nothing has reached it | nothing published |
-| `open-web-reader` | ONLY REFUSALS | skill-gap 380,660 | nothing published — work: fetch_failures 380,660 |
+| `open-web-reader` | SKELETON | 380,660 skill-gap messages | nothing, ever: `fetch_failures` 380,660 of 380,660 because `self._fetcher is None`. No web-search provider is installed on this box (the docstring says so). Honestly empty, and the rate limit, budget and backlog bound are real the moment one is installed |
 | `regime-break-detector` | WAITING FOR AN INPUT IT HAS NEVER SEEN | journal-entry 289,838; symbol-price-frame 11,583 | nothing published |
 | `self-model-reporter` | PRODUCES REAL OUTPUT | coverage-report 347,794 | competence-map 273,082 — work: maps_produced 70,150 |
 | `trial-count-accountant` | NOT MEASURED | nothing has reached it | nothing published — work: nominal_significance 0 |
@@ -367,7 +411,7 @@ every part involved was individually healthy.
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `book-and-paper-fetcher` | ONLY REFUSALS | skill-gap 380,660 | nothing published — work: failures 380,660 |
+| `book-and-paper-fetcher` | SKELETON | 380,660 skill-gap messages | nothing, ever: `failures` 380,660 of 380,660, same missing fetcher as open-web-reader |
 | `community-chat-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `skill-composer` | NOT MEASURED | nothing has reached it | nothing published |
 | `skill-conflict-detector` | NOT MEASURED | nothing has reached it | nothing published — work: checks 1,905 |
@@ -395,10 +439,10 @@ every part involved was individually healthy.
 | `part-token-budgeter` | WAITING FOR AN INPUT IT HAS NEVER SEEN | llm-quota-state 1,904; llm-spend-state 1,904 | nothing published |
 | `prompt-drift-monitor` | NOT MEASURED | nothing has reached it | nothing published |
 | `prompt-evaluator` | NOT MEASURED | nothing has reached it | nothing published |
-| `prompt-promotion-gate` | NOT MEASURED | nothing has reached it | nothing published |
-| `prompt-registry` | NOT MEASURED | nothing has reached it | nothing published |
-| `prompt-renderer` | ONLY REFUSALS | llm-request 210,951 | nothing published — work: refused_no_active_version 210,951 |
-| `prompt-template-author` | NOT MEASURED | nothing has reached it | nothing published |
+| `prompt-promotion-gate` | NOT MEASURED — starved by the missing fetcher | nothing: `decisions` 0 | nothing. There is no version to promote |
+| `prompt-registry` | NOT MEASURED — starved by the missing fetcher | nothing: `templates_seen` 0 | `versions_registered` 0, `purposes_with_an_active_version` 0. Nothing authors a template for it to register |
+| `prompt-renderer` | NOT MEASURED — starved by the missing fetcher | 210,951 llm-request messages, real ones from live parts | nothing: all 210,951 `refused_no_active_version`. The requests are genuine and the registry has no active version to render them against, so every LLM call this system wants to make is dropped here |
+| `prompt-template-author` | NOT MEASURED — starved by the missing fetcher | nothing at all: 0 research-finding, 0 skill, 0 prompt-score, 0 validated-llm-output | nothing. It writes a template once enough evidence names a purpose, and no evidence exists because the three web readers cannot fetch |
 | `retrieval-index` | WAITING FOR AN INPUT IT HAS NEVER SEEN | retrieval-query 31,149 | nothing published |
 | `retrieval-quality-scorer` | NOT MEASURED | nothing has reached it | nothing published |
 | `retrieval-querier` | PRODUCES REAL OUTPUT | llm-request 210,943 | retrieval-query 31,148 — work: queries_made 31,148 |
@@ -460,7 +504,7 @@ every part involved was individually healthy.
 | `knowledge-snapshot-versioner` | NOT MEASURED | nothing has reached it | knowledge-snapshot 2 — work: snapshots_taken 1 |
 | `procedural-playbook` | NOT MEASURED | nothing has reached it | nothing published |
 | `regime-memory-store` | PRODUCES REAL OUTPUT | market-regime 197,387; regime-transition-flag 3 | regime-memory 274,482 — work: too_few_occurrences 57,759 |
-| `semantic-fact-store` | WAITING FOR AN INPUT IT HAS NEVER SEEN | journal-entry 289,926 | nothing published |
+| `semantic-fact-store` | NOT MEASURED — starved by the missing fetcher | 289,926 messages | nothing: the facts it stores come from LLM output that is never produced |
 | `symbol-profile-store` | PRODUCES REAL OUTPUT | market-data 385,755; order-book-snapshot 375,806 | symbol-profile 3,009,755 — work: absent_fields.funding-interval-seconds 371,298; absent_fields.tick-size 371,298; new_listings 371,298; profiles_built 371,298; +3 more |
 
 
@@ -492,7 +536,7 @@ every part involved was individually healthy.
 | `hypothesis-ranker` | NOT MEASURED | nothing has reached it | nothing published — work: maximum_reachable_trades 10,000; rankings 1,904 |
 | `hypothesis-regime-tagger` | WAITING FOR AN INPUT IT HAS NEVER SEEN | market-regime 197,387 | nothing published |
 | `instruction-retirer` | NOT MEASURED | nothing has reached it | nothing published |
-| `instruction-writer` | WAITING FOR AN INPUT IT HAS NEVER SEEN | regime-memory 57,759; horizon-profile 9,530 | nothing published |
+| `instruction-writer` | NOT MEASURED — starved by the missing fetcher | 67,289 messages | nothing: `written` 0, `requests` 0, `instructions_live` 0 |
 | `loss-inverter` | NOT MEASURED | nothing has reached it | nothing published |
 | `power-estimator` | NOT MEASURED | nothing has reached it | nothing published — work: maximum_testable_trades 10,000; power 1 |
 | `symbolic-hypothesis-miner` | WAITING FOR AN INPUT IT HAS NEVER SEEN | kline-window 369,011; training-label 26 | nothing published |
@@ -524,7 +568,7 @@ every part involved was individually healthy.
 | `copy-worthiness-scorer` | NOT MEASURED | nothing has reached it | nothing published |
 | `edge-comparator` | NOT MEASURED | nothing has reached it | nothing published |
 | `exchange-announcement-reader` | SKELETON | 102,731 broker-instrument-listing messages | nothing, ever: `read_rows` observes the universe and returns `()`. Same shape as options-flow-reader -- a reader with no source wired to it |
-| `github-strategy-miner` | WAITING FOR AN INPUT IT HAS NEVER SEEN | skill-gap 380,660 | nothing published |
+| `github-strategy-miner` | SKELETON | 380,660 messages | nothing, ever, and it has never seen an input it declares. Same missing fetcher |
 | `leaderboard-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `onchain-position-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `options-flow-reader` | SKELETON | 135,175 symbol-universe messages | nothing, ever, and by construction: `read_rows` returns `()` and the docstring says 'no options flow feed is connected on this box'. It is honestly empty rather than decorative -- but the data now exists here (the tape carries an `open_interest` stream per contract, and operate/nse_fo_bhavcopy.py carries volume and OI for every NSE option), so this is buildable rather than blocked |
@@ -554,8 +598,8 @@ every part involved was individually healthy.
 |---|---|---|---|
 | `ground-truth-snapshot-builder` | PRODUCES REAL OUTPUT | market-data 386,382; order-book-snapshot 376,379 | verified-snapshot 4,129,384 — work: snapshots_built 589,912 |
 | `llm-backpressure-gauge` | PRODUCES REAL OUTPUT | survival-tier 201,156; llm-quota-state 1,904; llm-spend-state 1,904 | llm-backpressure 192,047 — work: readings 192,047; times_bound_by_quota 191,546; times_open 191,546; times_bound_by_survival_tier 500; +1 more |
-| `llm-model-picker` | WAITING FOR AN INPUT IT HAS NEVER SEEN | llm-request 210,943 | nothing published |
-| `llm-request-router` | WAITING FOR AN INPUT IT HAS NEVER SEEN | llm-backpressure 192,024; llm-quota-state 1,904; llm-spend-state 1,904 | nothing published |
+| `llm-model-picker` | NOT MEASURED — starved by the missing fetcher | 210,943 messages | nothing: `choices_made` 0, `models_declared` 0 |
+| `llm-request-router` | NOT MEASURED — starved by the missing fetcher | 195,832 messages | nothing: it never sees a rendered request, because prompt-renderer publishes none |
 | `llm-response-cache` | NOT MEASURED | nothing has reached it | nothing published |
 | `local-model-caller` | NOT MEASURED | nothing has reached it | nothing published |
 | `metered-api-caller` | NOT MEASURED | nothing has reached it | nothing published |
