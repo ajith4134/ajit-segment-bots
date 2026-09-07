@@ -94,6 +94,7 @@ HEARTBEAT = pathlib.Path.home() / ".local/share/ajit-segment-bots/heartbeat-tabl
 # number is *right*, and a state called SERVING ITS PURPOSE would claim it did.
 PRODUCES = "PRODUCES REAL OUTPUT"
 PRODUCES_NOTHING = "FED BUT PRODUCES NOTHING"
+STARVED = "WAITING FOR AN INPUT IT HAS NEVER SEEN"
 ONLY_REFUSALS = "ONLY REFUSALS"
 NOT_MEASURED = "NOT MEASURED"
 
@@ -143,6 +144,22 @@ def blueprint_parts() -> list[tuple[str, str]]:
     return parts
 
 
+def declared_inputs() -> dict[str, tuple[str, ...]]:
+    """What each part declares it consumes, `part-health` excluded.
+
+    Compared against what actually arrived, this splits the parts that produce
+    nothing into two very different findings: one that has never seen an input it
+    declares is waiting for something upstream, and one that has received every
+    input it asked for and still publishes nothing is a defect. Only the second
+    is worth a person's time first.
+    """
+    document = json.loads(BLUEPRINT.read_text())
+    return {
+        part["id"]: tuple(t for t in part.get("consumes", []) if t != "part-health")
+        for part in document["features"]
+    }
+
+
 def declared_outputs() -> dict[str, tuple[str, ...]]:
     """What each part declares it produces, `part-health` excluded.
 
@@ -186,7 +203,8 @@ def total(counter: dict | None) -> float:
     return float(sum(v for v in counter.values() if isinstance(v, (int, float))))
 
 
-def judge(before: dict | None, after: dict | None, declares_output: bool = True) -> dict:
+def judge(before: dict | None, after: dict | None, declares_output: bool = True,
+          consumes: tuple[str, ...] = ()) -> dict:
     """One part's verdict, with the evidence that produced it.
 
     **The verdict is cumulative and the window is only liveness.** An early
@@ -271,11 +289,24 @@ def judge(before: dict | None, after: dict | None, declares_output: bool = True)
             "input": inputs_now, "output": outputs_now, "work": {},
         }
 
+    never_seen = tuple(sorted(set(consumes) - set(inputs_now)))
+    if never_seen:
+        return {
+            "verdict": STARVED, "live": live,
+            "why": (
+                f"{sum(inputs_now.values()):,.0f} message(s) in and nothing out, and it has never "
+                f"seen {len(never_seen)} of the input(s) it declares: {', '.join(never_seen[:4])}"
+                + (f" (+{len(never_seen) - 4} more)" if len(never_seen) > 4 else "")
+            ),
+            "input": inputs_now, "output": outputs_now, "work": {},
+        }
+
     return {
         "verdict": PRODUCES_NOTHING, "live": live,
         "why": (
-            f"{sum(inputs_now.values()):,.0f} message(s) have reached it and nothing has ever come "
-            f"of them: nothing published, and no counter of its own work above zero"
+            f"{sum(inputs_now.values()):,.0f} message(s) have reached it on EVERY input it "
+            f"declares and nothing has ever come of them: nothing published, and no counter of "
+            f"its own work above zero"
         ),
         "input": inputs_now, "output": outputs_now, "work": {},
     }
@@ -315,11 +346,15 @@ def main() -> int:
             print(f"no block named {arguments.block!r} in {BLUEPRINT}", file=sys.stderr)
             return 2
 
-    produces = declared_outputs()
+    produces, consumes = declared_outputs(), declared_inputs()
     results = {
         part: {
             "block": block,
-            **judge(before.get(part), after.get(part), declares_output=bool(produces.get(part))),
+            **judge(
+                before.get(part), after.get(part),
+                declares_output=bool(produces.get(part)),
+                consumes=consumes.get(part, ()),
+            ),
         }
         for block, part in parts
     }
@@ -344,7 +379,7 @@ def main() -> int:
     print("Is each part serving its purpose?\n")
     print(f"  parts in the blueprint  {len(results)}")
     print(f"  window observed         {window:.1f}s")
-    for verdict in (PRODUCES, PRODUCES_NOTHING, ONLY_REFUSALS, NOT_MEASURED):
+    for verdict in (PRODUCES, PRODUCES_NOTHING, STARVED, ONLY_REFUSALS, NOT_MEASURED):
         print(f"  {verdict:22s}  {counts.get(verdict, 0)}")
 
     for verdict in (PRODUCES_NOTHING, ONLY_REFUSALS):
