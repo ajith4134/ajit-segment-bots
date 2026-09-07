@@ -323,6 +323,7 @@ class OpinionArbiter:
                 best.exit_plan.horizon_seconds if best.exit_plan is not None else 0.0
             ),
             stop_price=best.exit_plan.stop_price if best.exit_plan is not None else None,
+            risk_fraction=best.exit_plan.risk_fraction if best.exit_plan is not None else None,
             agreement=agreement,
             contributing_bots=tuple(sorted(opinion.bot for opinion in acting)),
             dissenting_bots=dissenting,

@@ -75,6 +75,16 @@ class TradeIntent:
     evidence: dict
     reason: str
     formed_at_ns: int
+    # How far the stop sits from entry, as a fraction of entry -- not the
+    # absolute stop_price above, which the exit-plan proposer computed against
+    # the *underlying's* price (symbol-price-frame). A fraction survives the
+    # instrument-selector's translation from underlying to option contract;
+    # an absolute price does not. Measured on the live spine 2026-09-07: with
+    # the option premium (~220) sized against an underlying-scale stop
+    # (~24,450), the stop read as being on the wrong side of entry on 23,654
+    # of 43,635 actionable intents (54%) and no options trade could open.
+    # None when no exit plan was behind this intent.
+    risk_fraction: float | None = None
 
     @property
     def is_long(self) -> bool:

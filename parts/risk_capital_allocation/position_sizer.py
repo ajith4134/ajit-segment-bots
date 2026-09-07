@@ -443,6 +443,42 @@ def entry_price_for(plan, instrument) -> float | None:
     return getattr(instrument, "reference_price", None)
 
 
+def stop_price_for(plan, intent, entry_price: float | None, side: str) -> float | None:
+    """The stop to size against, in the same price scale as `entry_price`.
+
+    Preferred, same as `entry_price_for`: the refined stop-target-plan's own
+    stop_price -- it does not exist before any trade has closed.
+
+    Otherwise: `intent.risk_fraction`, reapplied to `entry_price`. The exit-plan
+    proposer computes that fraction against the *underlying's* price
+    (symbol-price-frame), but a fraction is scale-free, unlike the absolute
+    `intent.stop_price` it was derived from. `entry_price_for` above may return
+    the underlying's own price or an option contract's premium -- two different
+    scales the instrument-selector chooses between -- and only the fraction
+    survives that choice intact.
+
+    Falling back to `intent.stop_price` when no fraction was carried keeps the
+    old behaviour for whatever produced an intent without one; it is right
+    whenever entry_price is the same instrument the stop was computed against
+    (the case before instrument-selector could choose a contract at all), and
+    it is exactly the bug otherwise. Measured on the live spine 2026-09-07:
+    an option premium of ~220 sized against an underlying-scale stop of
+    ~24,450 read as "on the wrong side of entry" on 23,654 of 43,635
+    actionable intents (54%), and no options trade could open. Re-deriving
+    the stop from the fraction and the actual entry_price fixes that without
+    changing anything for a segment whose instrument already is the
+    underlying (cash-equity-intraday), where the fraction and the absolute
+    stop agree to begin with.
+    """
+    refined = getattr(plan, "stop_price", None)
+    if refined:
+        return refined
+    fraction = getattr(intent, "risk_fraction", None)
+    if entry_price is not None and entry_price > 0 and fraction is not None and 0 < fraction < 1:
+        return entry_price * (1.0 - fraction) if side == BUY else entry_price * (1.0 + fraction)
+    return getattr(intent, "stop_price", None)
+
+
 def describe_sizing(sizer: PositionSizer) -> dict:
     return {
         "part_id": PART_ID,
@@ -707,7 +743,6 @@ def start_part(context) -> int:
             instrument = instrument_by_symbol.get(key)
 
             entry_price = entry_price_for(plan, instrument)
-            stop_price = getattr(plan, "stop_price", None) or getattr(intent, "stop_price", None)
             # Whose account this order is sized against. The selector's choice is
             # what names the segment -- a NIFTY option is an index-options order
             # because that is the segment whose settings claim it -- and this part
@@ -751,6 +786,7 @@ def start_part(context) -> int:
             if entry_price is None:
                 sizer.standing.missing_entry_price += 1
                 continue
+            stop_price = stop_price_for(plan, intent, entry_price, order_side)
             if stop_price is None:
                 sizer.standing.missing_stop_price += 1
                 continue

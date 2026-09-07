@@ -225,6 +225,7 @@ class ExplorationPairOpener:
                 opinion.exit_plan.horizon_seconds if opinion.exit_plan is not None else 0.0
             ),
             stop_price=opinion.exit_plan.stop_price if opinion.exit_plan is not None else None,
+            risk_fraction=opinion.exit_plan.risk_fraction if opinion.exit_plan is not None else None,
             agreement=RULED,
             contributing_bots=(opinion.bot,),
             dissenting_bots=(opposing_bot,),

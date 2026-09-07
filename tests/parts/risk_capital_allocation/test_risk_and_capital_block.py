@@ -56,6 +56,7 @@ from parts.risk_capital_allocation.participation_capped_order_splitter import (
 from parts.risk_capital_allocation.position_sizer import (
     REFUSED_NO_INCREMENT, REFUSED_NO_LIMIT, REFUSED_STOP_INVALID, REFUSED_TOO_SMALL,
     SIZED, SHRUNK_TO_FIT, PositionSizer, entry_price_for, opening_order_target,
+    stop_price_for,
 )
 from parts.risk_capital_allocation.profit_lock import (
     HELD, MOVED_TO_BREAK_EVEN, NOT_YET_PROFITABLE, TRAILED, ProfitLock,
@@ -978,6 +979,44 @@ def test_a_refusal_cannot_be_overridden_by_an_absent_plan():
 def test_no_choice_at_all_is_not_a_price():
     assert entry_price_for(None, None) is None
     assert entry_price_for(Plan(entry_price=101.0), None) == 101.0
+
+
+class Intent:
+    def __init__(self, stop_price=None, risk_fraction=None):
+        self.stop_price = stop_price
+        self.risk_fraction = risk_fraction
+
+
+def test_a_fraction_is_reapplied_to_the_actual_entry_price():
+    """The defect this closes, live on 2026-09-07: the exit-plan proposer sets
+    both `stop_price` and `risk_fraction` against the *underlying's* price
+    (NIFTY spot ~24,500), but entry_price_for may return the option contract's
+    own premium (~220) once instrument-selector has chosen one. Reading the
+    absolute stop_price against that premium put it on the wrong side of entry
+    on 23,654 of 43,635 actionable intents and no options trade could open.
+    The fraction is scale-free and gives a stop in the entry's own scale."""
+    intent = Intent(stop_price=24_450.0, risk_fraction=0.02)
+    assert stop_price_for(None, intent, entry_price=220.0, side=BUY) == pytest.approx(215.6)
+
+
+def test_a_refined_plan_still_wins_over_the_fraction():
+    assert stop_price_for(Plan(stop_price=210.0), Intent(risk_fraction=0.02), 220.0, BUY) == 210.0
+
+
+def test_a_sell_stop_sits_above_entry_not_below():
+    intent = Intent(risk_fraction=0.02)
+    assert stop_price_for(None, intent, entry_price=220.0, side=SELL) == pytest.approx(224.4)
+
+
+def test_no_fraction_falls_back_to_the_intents_own_stop_price():
+    """What every intent without an exit plan behind it already carried."""
+    intent = Intent(stop_price=99.0, risk_fraction=None)
+    assert stop_price_for(None, intent, entry_price=100.0, side=BUY) == 99.0
+
+
+def test_no_entry_price_cannot_be_reconstructed_from_a_fraction():
+    intent = Intent(stop_price=99.0, risk_fraction=0.02)
+    assert stop_price_for(None, intent, entry_price=None, side=BUY) == 99.0
 
 
 
