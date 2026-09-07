@@ -476,15 +476,45 @@ def entry_price_for(plan, instrument) -> float | None:
     produced a sized order. Read by shape rather than by import, because this part
     knows the data it consumes and not the part that produces it (T-4).
     """
-    refined = getattr(plan, "entry_price", None)
-    if refined:
-        return refined
+    if plan_prices_this_instrument(plan, instrument):
+        refined = getattr(plan, "entry_price", None)
+        if refined:
+            return refined
     if instrument is None or not getattr(instrument, "is_actionable", False):
         return None
     return getattr(instrument, "reference_price", None)
 
 
-def stop_price_for(plan, intent, entry_price: float | None, side: str) -> float | None:
+def plan_prices_this_instrument(plan, instrument) -> bool:
+    """Whether the plan's prices are on the same contract's scale as this choice.
+
+    A `stop-target-plan` is keyed by the intent's symbol, which is the
+    **underlying**, while every price on it is a **contract's** premium. The ATM
+    strike moves during a session, so one underlying's plan can outlive the
+    contract it was priced for -- and pairing that plan's entry with the choice
+    that is current now puts one contract's price on another contract's order.
+
+    Measured on the live spine 2026-09-07: 477 orders for `NIFTY 23750 CE 08 SEP
+    26` carried a decided price of **1.30** while that contract traded 100-120 all
+    session and was never once near 1.30. The 1.30 was the premium of the deep
+    out-of-the-money strike that had been at the money when the plan was made,
+    before NIFTY moved from 23,781 to 23,750. Not one of those 477 filled.
+
+    A plan that names no contract is trusted, because that is what every plan
+    built before the field existed looks like, and because a choice that names no
+    contract has nothing to disagree with.
+    """
+    priced_for = getattr(plan, "priced_for_contract", None)
+    if not priced_for:
+        return True
+    chosen = getattr(instrument, "chosen", None)
+    contract = getattr(chosen, "contract_symbol", None)
+    return contract is None or contract == priced_for
+
+
+def stop_price_for(
+    plan, intent, entry_price: float | None, side: str, instrument=None,
+) -> float | None:
     """The stop to size against, in the same price scale as `entry_price`.
 
     Preferred, same as `entry_price_for`: the refined stop-target-plan's own
@@ -511,9 +541,10 @@ def stop_price_for(plan, intent, entry_price: float | None, side: str) -> float 
     underlying (cash-equity-intraday), where the fraction and the absolute
     stop agree to begin with.
     """
-    refined = getattr(plan, "stop_price", None)
-    if refined:
-        return refined
+    if plan_prices_this_instrument(plan, instrument):
+        refined = getattr(plan, "stop_price", None)
+        if refined:
+            return refined
     fraction = getattr(intent, "risk_fraction", None)
     if entry_price is not None and entry_price > 0 and fraction is not None and 0 < fraction < 1:
         return entry_price * (1.0 - fraction) if side == BUY else entry_price * (1.0 + fraction)
@@ -840,7 +871,7 @@ def start_part(context) -> int:
             if entry_price is None:
                 sizer.standing.missing_entry_price += 1
                 continue
-            stop_price = stop_price_for(plan, intent, entry_price, order_side)
+            stop_price = stop_price_for(plan, intent, entry_price, order_side, instrument)
             source = stop_price_source(plan, intent, entry_price)
             if source == "refined-plan":
                 sizer.standing.stop_from_refined_plan += 1

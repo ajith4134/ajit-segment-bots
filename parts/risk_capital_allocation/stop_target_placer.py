@@ -139,7 +139,13 @@ def priced_target_for(
 
 @dataclass(frozen=True)
 class StopTargetPlan:
-    """Where the stop and target go, and what put them there."""
+    """Where the stop and target go, and what put them there.
+
+    **`symbol` is the intent's -- the underlying -- and `entry_price` is a
+    *contract's* premium.** Those are two different instruments whenever the
+    intent is on an option chain, and the pair is only meaningful together with
+    `priced_for_contract` below.
+    """
 
     venue_id: str
     symbol: str
@@ -154,6 +160,21 @@ class StopTargetPlan:
     distance_estimate: Estimate | None
     reason: str
     planned_at_ns: int
+    # The contract `entry_price`, `stop_price` and `target_price` are all on the
+    # scale of -- `InstrumentChoice.chosen.contract_symbol`, not `symbol`.
+    #
+    # **Carried since 2026-09-07 because the ATM strike moves during a session.**
+    # `symbol` is the underlying, so `plan_by_symbol[(upstox, "NIFTY")]` matches
+    # any NIFTY plan whatever contract it was priced for, and `position-sizer`
+    # pairs the plan's entry with whatever choice is current *now*. Measured on
+    # the live spine that day: 477 orders for `NIFTY 23750 CE 08 SEP 26` left
+    # carrying a decided price of 1.30 while that contract traded 100-120 all
+    # session and had never once been near 1.30 -- 1.30 was the premium of the
+    # deep out-of-the-money strike that had been at the money when the plan was
+    # made, before NIFTY moved from 23,781 to 23,750. Not one of those orders
+    # filled. None means the plan was built before this field existed, or from a
+    # choice that named no contract.
+    priced_for_contract: str | None = None
 
     @property
     def is_placeable(self) -> bool:
@@ -218,6 +239,7 @@ class StopTargetPlacer:
         volatility_forecast: float | None,
         target_price: float | None = None,
         proposed_stop_distance_fraction: float | None = None,
+        priced_for_contract: str | None = None,
     ) -> StopTargetPlan:
         """Where risk puts the stop, given what the bot proposed and what is known.
 
@@ -240,6 +262,7 @@ class StopTargetPlacer:
                 venue_id, symbol, side, entry_price, None, None, REFUSED_NO_DISTANCE,
                 None, None, None, None,
                 "neither a volatility forecast nor enough excursion history to place a stop",
+                priced_for_contract=priced_for_contract,
             )
 
         distance = min(estimate.value, self._maximum_stop)
@@ -258,6 +281,7 @@ class StopTargetPlacer:
                 None, None, None, estimate,
                 f"the distance measured for {symbol} puts the stop at {stop:.8g} against an "
                 f"entry of {entry_price:.8g}, which is not beyond it",
+                priced_for_contract=priced_for_contract,
             )
 
         moved, nearest = self._clear_of_clusters(key, side, entry_price, stop)
@@ -282,6 +306,7 @@ class StopTargetPlacer:
                     REFUSED_REWARD_TOO_THIN, distance, reward_to_risk, nearest, estimate,
                     f"reward-to-risk of {reward_to_risk:.2f} is below the {self._minimum_reward:.2f} "
                     f"this trade must clear to be worth its stop",
+                    priced_for_contract=priced_for_contract,
                 )
 
         return self._plan(
@@ -290,6 +315,7 @@ class StopTargetPlacer:
             f"stop {distance:.2%} away, from "
             f"{'measured excursions' if estimate.is_fitted else 'the volatility forecast'}"
             + (f"; moved clear of the cluster at {nearest:g}" if outcome == MOVED_CLEAR_OF_CLUSTER else ""),
+            priced_for_contract=priced_for_contract,
         )
 
     def _distance_estimate(
@@ -373,7 +399,7 @@ class StopTargetPlacer:
 
     def _plan(
         self, venue_id, symbol, side, entry, stop, target, outcome,
-        distance, reward_to_risk, nearest, estimate, reason
+        distance, reward_to_risk, nearest, estimate, reason, priced_for_contract=None
     ) -> StopTargetPlan:
         return StopTargetPlan(
             venue_id=venue_id, symbol=symbol, side=side, entry_price=entry,
@@ -381,6 +407,7 @@ class StopTargetPlacer:
             stop_distance_fraction=distance, reward_to_risk=reward_to_risk,
             nearest_cluster_price=nearest, distance_estimate=estimate,
             reason=reason, planned_at_ns=self._now_ns(),
+            priced_for_contract=priced_for_contract,
         )
 
 
@@ -594,6 +621,12 @@ def start_part(context) -> int:
                 "volatility_forecast": getattr(forecast, "expected_volatility", None),
                 "target_price": target_price,
                 "proposed_stop_distance_fraction": plan.risk_fraction,
+                # The contract every price above is on the scale of. `symbol` is
+                # the underlying, so without this the plan is a premium with no
+                # way to say whose premium it is.
+                "priced_for_contract": getattr(
+                    getattr(instrument, "chosen", None), "contract_symbol", None
+                ),
             })
         return tuple(requests)
 

@@ -2182,3 +2182,63 @@ def test_the_gate_caps_to_the_step_the_sizer_used():
 
     assert bounded.quantity % 65 == 0, bounded.quantity
     assert bounded.quantity * 48.75 <= 10_000.0
+
+
+class PlanFor:
+    """A stop-target-plan, as the sizer reads it -- by shape, never by import."""
+
+    def __init__(self, entry_price=None, stop_price=None, priced_for_contract=None):
+        self.entry_price = entry_price
+        self.stop_price = stop_price
+        self.priced_for_contract = priced_for_contract
+
+
+class ChoiceOf:
+    def __init__(self, contract_symbol, reference_price=None):
+        self.chosen = type("C", (), {"contract_symbol": contract_symbol})()
+        self.reference_price = reference_price
+        self.state = "chosen"
+
+    @property
+    def is_actionable(self):
+        return True
+
+
+def test_a_plan_priced_for_another_contract_is_not_used():
+    """The ATM strike moves during a session and the plan outlives it.
+
+    `stop-target-plan` is keyed by the intent's symbol, which is the underlying,
+    while every price on it is a contract's premium. Measured on the live spine
+    2026-09-07: 477 orders for `NIFTY 23750 CE 08 SEP 26` carried a decided price
+    of 1.30 while that contract traded 100-120 all session and was never near
+    1.30 -- it was the premium of the strike that had been at the money before
+    NIFTY moved from 23,781 to 23,750. None of the 477 filled.
+    """
+    plan = PlanFor(entry_price=1.30, stop_price=1.25,
+                   priced_for_contract="NIFTY 24800 CE 08 SEP 26")
+    choice = ChoiceOf("NIFTY 23750 CE 08 SEP 26", reference_price=104.75)
+
+    # The plan's 1.30 is refused and the contract's own price is used instead.
+    assert entry_price_for(plan, choice) == 104.75
+    assert stop_price_for(plan, PlacerIntent(side=LONG, action="open"),
+                          104.75, BUY, choice) != 1.25
+
+
+def test_a_plan_priced_for_this_contract_is_still_preferred():
+    """The refined plan is what should be used whenever it is about this
+    contract -- the fix must not throw away the plan it was built for."""
+    plan = PlanFor(entry_price=104.75, stop_price=99.0,
+                   priced_for_contract="NIFTY 23750 CE 08 SEP 26")
+    choice = ChoiceOf("NIFTY 23750 CE 08 SEP 26", reference_price=104.75)
+
+    assert entry_price_for(plan, choice) == 104.75
+    assert stop_price_for(plan, PlacerIntent(side=LONG, action="open"),
+                          104.75, BUY, choice) == 99.0
+
+
+def test_a_plan_naming_no_contract_is_trusted():
+    """Every plan built before the field existed names none, and a choice that
+    names no contract has nothing to disagree with."""
+    plan = PlanFor(entry_price=22.5, stop_price=21.0, priced_for_contract=None)
+    choice = ChoiceOf("RELIANCE 1320 PE 29 SEP 26", reference_price=22.85)
+    assert entry_price_for(plan, choice) == 22.5
