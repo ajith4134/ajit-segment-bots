@@ -3918,6 +3918,11 @@ value = 3
 unit  = "consecutive request failures"
 note  = "operator, 2026-08-24: dormant until an input carries request results -- none does yet -- but the number a venue is declared down at must be set where the operator can see it, not invented the day the input appears."
 
+[per_side_trading_cost_fraction]
+value = 0.004266
+unit  = "fraction of price"
+note  = "Claude, 2026-09-07: what ONE side of a trade costs on the instruments this project trades, as a fraction of the price traded. Half of reference_price_materiality_fraction (0.008532), which is the measured round trip -- Upstox's real six-line options charge stack plus two crossings of the touch spread, derived in measurements/2026-09-07-indian-price-staleness/. Exists because runtime/edge_arithmetic.round_trip_cost_in_risk_units takes a PER-SIDE rate and doubles it, and every caller was passing taker_fee_rate -- Bybit's published 0.055% perpetual taker rate. That understated what a trade costs here by about eight times, and it feeds ConvictionFloor, so all six bots were computing the probability at which a trade breaks even against a cost that is not theirs. **Correcting it RAISES the conviction a trade needs, it does not lower it** -- at a 0.85% round trip an option trade genuinely needs a stronger view than at 0.11%, and a floor built on the cheaper number was letting through trades that cannot pay for themselves. Not folded into reference_price_materiality_fraction because these are two different questions asked of one measurement: how old a price may be, and what one crossing costs; a caller that wanted the round trip and got a per-side rate, or the reverse, is exactly the confusion this pair of names prevents."
+
 [reference_price_materiality_fraction]
 value = 0.008532
 unit  = "fraction of price"

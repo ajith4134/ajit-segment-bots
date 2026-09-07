@@ -590,7 +590,12 @@ def start_part(context) -> int:
     return run_opinion_arbiter(
         arbiter=OpinionArbiter(
             conviction_floor=ConvictionFloor(
-                fee_rate=context.number("taker_fee_rate"),
+                # What one crossing costs here, not Bybit's perpetual taker rate.
+                # round_trip_cost_in_risk_units doubles this, and every caller
+                # passed taker_fee_rate until 2026-09-07 -- eight times light,
+                # so the break-even probability every bot judged against was
+                # computed from a cost that is not this market's.
+                fee_rate=context.number("per_side_trading_cost_fraction"),
                 margin=context.number("arbiter_conviction_margin_over_break_even"),
                 fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
             ),
