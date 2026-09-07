@@ -73,7 +73,7 @@ master.
 
 ## Progress
 
-**38 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
+**43 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
 
 **Silence is often the correct output, and the probe cannot know that.** Ten
 parts were reported as receiving every input they declare and publishing
@@ -93,8 +93,13 @@ is now buildable rather than blocked — the tape already carries an
 `open_interest` stream per contract and `operate/nse_fo_bhavcopy.py` carries
 volume and open interest for every NSE option.
 
-    hand-judged                        38   6 serving, 7 skeletons, 25 starved or
+    hand-judged                        43   11 serving, 4 skeletons, 28 starved or
                                             correctly silent, each naming its cause
+
+Four of the seven skeletons stopped being skeletons on 2026-09-07: the three web
+readers were given the fetcher they were built to be handed, and
+`fact-provenance-tracker` came alive the moment a document existed for it to
+track.
     PRODUCES REAL OUTPUT              143   fed, publishing, own work counters above zero
     WAITING FOR AN INPUT NEVER SEEN    49   produces nothing and one of its declared inputs
                                             has never arrived -- starved, not broken
@@ -197,6 +202,44 @@ nothing else here is. It is left for the operator to say yes to.
 Until then these twelve rows are `SKELETON` for the three readers that have a
 source to be given and `NOT MEASURED` for the nine downstream of them, each
 naming this as the reason rather than appearing to be nine independent failures.
+
+
+## The knowledge chain has a bootstrap cycle, and no model to break it
+
+Wiring the readers on 2026-09-07 moved the wall four parts further along and then
+hit something a fetcher cannot fix.
+
+    open-web-reader          380,660 failures -> 0, 120 web-idea published
+    book-and-paper-fetcher   0 documents -> 10 of 10 fetches, 0 paywalls
+    arxiv-feed-reader        0 papers -> publishing
+    skill-distiller          0 -> 88 llm-request
+    fact-provenance-tracker  0 -> 44 published
+
+`skill-distiller` turns a document into a skill **by asking a model**, so it
+publishes an `llm-request` rather than a `skill`. `prompt-template-author` needs a
+`skill` or a `research-finding` before it will write a template.
+`prompt-registry` needs a template before it has a version. `prompt-renderer`
+needs an active version before it will render the request. So:
+
+**a model is needed to make a skill, a skill to write the prompt template, and
+the template to call the model.**
+
+`research-finding` is the one input that could break the cycle without a model,
+and neither of its two producers can supply one right now:
+`github-strategy-miner` has mined 0 repositories because the searches returned
+web pages rather than github.com URLs, and `strategy-decoder` has received
+nothing at all.
+
+**And there is no model either way.** `llm-model-picker` reports
+`models_declared` **0**, `local-model-caller` reports `is_available` **0**, and
+neither `metered-api-caller` nor `subscription-session-caller` has ever made a
+call. Installing a local model is a multi-GB download and CPU inference on a box
+already running 323 parts; a paid API is spend. Rule 3 says confirm the cost
+rather than the concept, so both are left for the operator.
+
+Until one exists, the twenty-odd parts downstream of an LLM call are `NOT
+MEASURED` with this as the named reason, rather than appearing to be twenty
+independent failures.
 
 ## The parts, by block
 
@@ -333,7 +376,7 @@ naming this as the reason rather than appearing to be nine independent failures.
 | `idea-generator` | NOT MEASURED | regime-memory 57,756 | llm-request 124,596 |
 | `market-anomaly-detector` | PRODUCES REAL OUTPUT | feed-coverage 920,148; market-data 386,262; order-book-snapshot 376,167; +1 more | market-anomaly 2,021,534 — work: checks 700,518; anomalies 109,591; anomaly_this_venue_has_stopped_updating 100,501; by_anomaly.this-venue-has-stopped-updating 100,501; +3 more |
 | `market-event-reader` | NOT MEASURED | nothing has reached it | nothing published |
-| `open-web-reader` | SKELETON | 380,660 skill-gap messages | nothing, ever: `fetch_failures` 380,660 of 380,660 because `self._fetcher is None`. No web-search provider is installed on this box (the docstring says so). Honestly empty, and the rate limit, budget and backlog bound are real the moment one is installed |
+| `open-web-reader` | SERVING ITS PURPOSE | 293 real skill-gap queries, searched against DuckDuckGo and the pages themselves | 120 web-idea published, 50 ideas returned, `fetch_failures` **0** against 380,660 of 380,660 before it was given a fetcher on 2026-09-07. `fetcher_is_installed` 1. Its own rate limit binds (`refused_rate_limited` 186), which is the reader working rather than failing |
 | `regime-break-detector` | WAITING FOR AN INPUT IT HAS NEVER SEEN | journal-entry 289,838; symbol-price-frame 11,583 | nothing published |
 | `self-model-reporter` | PRODUCES REAL OUTPUT | coverage-report 347,794 | competence-map 273,082 — work: maps_produced 70,150 |
 | `trial-count-accountant` | NOT MEASURED | nothing has reached it | nothing published — work: nominal_significance 0 |
@@ -411,11 +454,11 @@ naming this as the reason rather than appearing to be nine independent failures.
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `book-and-paper-fetcher` | SKELETON | 380,660 skill-gap messages | nothing, ever: `failures` 380,660 of 380,660, same missing fetcher as open-web-reader |
+| `book-and-paper-fetcher` | SERVING ITS PURPOSE | 41 skill-gaps worth fetching against, answered from Crossref then arXiv | 80 source-document published, `documents_returned` 10 of 10 fetches with `paywalled` **0** -- it was 0 documents and 10 paywalls until Crossref records with no abstract were made to fall through to arXiv |
 | `community-chat-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `skill-composer` | NOT MEASURED | nothing has reached it | nothing published |
 | `skill-conflict-detector` | NOT MEASURED | nothing has reached it | nothing published — work: checks 1,905 |
-| `skill-distiller` | NOT MEASURED | nothing has reached it | nothing published |
+| `skill-distiller` | NOT MEASURED — blocked by the bootstrap cycle below | 22 source-document, the first this system has ever fetched | 88 llm-request published and 0 skills. It distils a document into a skill by asking a model, and no model can answer -- see the cycle below |
 | `skill-gap-finder` | PRODUCES REAL OUTPUT | llm-request 210,939 | skill-gap 1,522,640 — work: gaps_open 380,660; by_reason.nothing-in-the-index-addresses-it 210,939 |
 | `skill-index` | NOT MEASURED | nothing has reached it | nothing published |
 | `skill-loader` | NOT MEASURED | nothing has reached it | nothing published — work: budget 4,000 |
@@ -496,7 +539,7 @@ naming this as the reason rather than appearing to be nine independent failures.
 | `contradiction-detector` | NOT MEASURED | nothing has reached it | nothing published — work: checks 1,907 |
 | `episode-embedder` | NOT MEASURED | nothing has reached it | nothing published — work: is_deterministic 1 |
 | `episodic-trade-store` | NOT MEASURED | nothing has reached it | nothing published |
-| `fact-provenance-tracker` | NOT MEASURED | nothing has reached it | nothing published |
+| `fact-provenance-tracker` | SERVING ITS PURPOSE | 22 source-document from the live readers | 44 messages published, where it had never published one. It came alive the moment a document existed to track the provenance of |
 | `forgetting-curve-scheduler` | NOT MEASURED | nothing has reached it | nothing published — work: half_lives_days.listing-age-seconds 365; half_lives_days.tick-size 365; half_lives_days.funding-interval-seconds 180; half_lives_days.liquidation-behaviour 90; +5 more |
 | `instruction-archive` | NOT MEASURED | nothing has reached it | nothing published |
 | `knowledge-graph-linker` | NOT MEASURED | nothing has reached it | nothing published |
@@ -563,7 +606,7 @@ naming this as the reason rather than appearing to be nine independent failures.
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `arxiv-feed-reader` | SKELETON | 60,780 skill-gap messages | nothing published, ever. Every one of 60,780 fetches counted `refused_no_search_installed` — the counter that climbs is `fetches_attempted`, which is why a counter reader called it healthy until publishing-nothing was made disqualifying |
+| `arxiv-feed-reader` | SERVING ITS PURPOSE | 293 skill-gaps, searched against arXiv's own public API, sorted by relevance | 8 source-document published, 1 paper fetched, 9 already held, 0 failures. `refused_no_search_installed` fell from 380,660 to **0**. Sorted by date it answered 'options implied volatility' with an astronomy preprint; by relevance it returns option-pricing papers |
 | `copy-latency-estimator` | WAITING FOR AN INPUT IT HAS NEVER SEEN | symbol-price-frame 9,816 | nothing published |
 | `copy-worthiness-scorer` | NOT MEASURED | nothing has reached it | nothing published |
 | `edge-comparator` | NOT MEASURED | nothing has reached it | nothing published |
