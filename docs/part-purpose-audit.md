@@ -126,6 +126,34 @@ finding rather than a refresh.
 The user said 370; the blueprint holds **373** parts across 29 categories, and every part is what the instruction means.
 
 
+## What the walk found on 2026-09-07, beyond the per-part rows
+
+Four defects that no per-part row could have shown, because each is a **pair** of
+parts disagreeing rather than one part failing:
+
+1. **`instrument-selector` priced the intent's symbol, not the contract it
+   chose.** Every options order left on the underlying's scale -- INFY 1200 CE at
+   1,088.40 against a premium of 21.10 -- and 84.6% of orders reaching a verdict
+   were refused as `decision-price-stale`.
+2. **A `stop-target-plan` carried one contract's price onto another's order.**
+   The plan is keyed by the underlying while every price on it is a contract's
+   premium, and the ATM strike moves during a session: 477 orders for
+   `NIFTY 23750 CE` carried a decided price of 1.30 while that contract traded
+   100-120 all day. None filled.
+3. **`instrument-selector` registered no share at all**, so
+   cash-equity-intraday could not express a view even in principle -- and
+   recorded **zero** refusals, which reads exactly like nothing being wrong.
+4. **The cash-equity shortlist had sealed itself shut**, ranking the alphabet
+   because `percentile_rank` assigns a position and every signal was `None` on a
+   cold start.
+
+The shape they share is worth more than any of them: **a value and the thing it
+describes travelling separately.** A price without the contract it is a price of;
+a plan without the contract it was priced for; a symbol with no instrument behind
+it; a rank with no measurement under it. Each was invisible to the contract
+checkers, to the dataflow audit and to this ledger's own per-part probe, because
+every part involved was individually healthy.
+
 ## The parts, by block
 
 
