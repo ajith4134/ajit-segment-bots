@@ -6909,7 +6909,8 @@
         "excursion-profile",
         "bull-exit-plan",
         "bear-exit-plan",
-        "tail-exit-plan"
+        "tail-exit-plan",
+        "instrument-choice"
       ],
       "produces": [
         "stop-target-plan",

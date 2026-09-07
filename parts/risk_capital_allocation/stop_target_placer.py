@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from runtime.learned_estimator import Estimate, QuantileEstimator
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
-from runtime.trading_types import BUY, LONG, SELL
+from runtime.trade_intent import OPEN
+from runtime.trading_types import BUY, LONG, SELL, order_side_for
 
 PART_ID = "stop-target-placer"
 
@@ -38,6 +39,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "trade-intent", "volatility-forecast", "liquidation-map", "symbol-profile",
         "stop-audit", "excursion-profile", "bull-exit-plan", "bear-exit-plan", "tail-exit-plan",
+        "instrument-choice",
     ),
     produces=("stop-target-plan", "part-health"),
     resource_class="compute-bound",
@@ -54,6 +56,71 @@ REFUSED_REWARD_TOO_THIN = "refused-reward-does-not-justify-risk"
 # inside the ordinary noise of a winning trade converts winners into losers, and
 # that failure is invisible in the equity curve -- it looks like a bad strategy.
 ADVERSE_EXCURSION_QUANTILE = 0.85
+
+
+def order_side_for_intent(intent, instrument) -> str | None:
+    """The side the venue order actually opens on -- not the intent's own
+    long/short.
+
+    An open on an options segment is buy-only: a bearish view is expressed by
+    *buying a put*, never by selling to open, so `intent.is_long` alone reads
+    a short view as a sell and places the stop above an entry the order never
+    sits above. `instrument-selector` already resolved this once
+    (`InstrumentChoice.order_side`, T-4's one place this rule lives); this
+    part mirrors `position_sizer.opening_order_target`'s translation instead
+    of importing it, because a part reads another's data, never its code.
+
+    Measured on the live spine 2026-09-07: every stop-target-plan sourced
+    from a refined plan was refused as being "on the wrong side of entry" --
+    stop_from_refined_plan and refused_stop_invalid matched exactly, 2,040 of
+    2,040 -- because this part had been deriving BUY/SELL from the intent's
+    own side while the actual order for a short view was a bought put.
+
+    Only an open is translated through the choice; `reduce` and `close` act
+    on the contract already held, which is the intent's own translated side,
+    not a fresh selection. None when an open names no instrument choice --
+    the alternative is guessing a side for a contract nothing selected.
+    """
+    if intent.action != OPEN:
+        return order_side_for(intent.side)
+    return getattr(instrument, "order_side", None)
+
+
+def priced_entry_for(instrument, underlying_entry: float | None) -> float | None:
+    """The price to actually place a stop against.
+
+    The chosen instrument's own reference price when one was chosen and is
+    actionable -- the option's premium, not the underlying's spot -- because
+    that is the scale the order and the stop both live on. Falls back to the
+    underlying's own price (recovered from the bot's exit plan) only when
+    nothing has been selected yet, which is the bookkeeping case: no order
+    can be placed either way, and a stop against *some* number is what the
+    fallback in `position_sizer.stop_price_for` still needs to snap to a
+    fraction.
+    """
+    reference = getattr(instrument, "reference_price", None)
+    if instrument is not None and getattr(instrument, "is_actionable", False) and reference:
+        return reference
+    return underlying_entry
+
+
+def priced_target_for(
+    nearest_underlying_target: float | None, underlying_entry: float | None, priced_entry: float | None,
+) -> float | None:
+    """The nearest target, translated onto `priced_entry`'s scale.
+
+    A target is scale-free the same way a stop is: `(target - entry) / entry`
+    is the fraction of entry the trade is aiming for, and reapplying that
+    fraction to whatever entry is actually being sized against carries the
+    reward-to-risk ratio through unchanged, since both the reward and the
+    risk it is measured against scale by the same factor. Absolute targets
+    from the underlying's own price would put a NIFTY-spot target next to an
+    option premium and make every reward-to-risk check meaningless.
+    """
+    if nearest_underlying_target is None or not underlying_entry or priced_entry is None:
+        return None
+    fraction = (nearest_underlying_target - underlying_entry) / underlying_entry
+    return priced_entry * (1.0 + fraction)
 
 
 @dataclass(frozen=True)
@@ -380,6 +447,10 @@ def start_part(context) -> int:
         read=context.bus.reader("volatility-forecast"),
         key_of=lambda forecast: (forecast.venue_id, forecast.symbol),
     )
+    instruments = LatestByKey(
+        read=context.bus.reader("instrument-choice"),
+        key_of=lambda choice: (choice.venue_id, choice.symbol),
+    )
     maps = Batch(read=context.bus.reader("liquidation-map"))
     profiles = Batch(read=context.bus.reader("symbol-profile"))
     audits = Batch(read=context.bus.reader("stop-audit"))
@@ -396,8 +467,15 @@ def start_part(context) -> int:
         window=int(context.number("stop_excursion_window")),
     )
 
-    def entry_price_of(plan) -> float | None:
-        """The price the bot's stop was computed against, recovered from the plan."""
+    def underlying_entry_price_of(plan) -> float | None:
+        """The price the bot's exit plan was computed against, recovered from it.
+
+        Always the *underlying's* price (symbol-price-frame) -- bull/bear-exit-
+        plan-proposer reason in that scale, not the option contract's own
+        premium. Used to translate the plan's targets into a fraction of entry
+        (scale-free), and as the entry itself only when nothing has chosen a
+        tradeable instrument yet.
+        """
         if not plan.risk_fraction or plan.risk_fraction >= 1.0:
             return None
         if plan.side in (LONG, BUY):
@@ -444,6 +522,7 @@ def start_part(context) -> int:
         for mapping in (tail_plans.mapping(), bear_plans.mapping(), bull_plans.mapping()):
             by_symbol.update(mapping)
         forecast_by_symbol = forecasts.mapping()
+        instrument_by_symbol = instruments.mapping()
 
         requests = []
         for intent in intents.payloads():
@@ -455,25 +534,36 @@ def start_part(context) -> int:
                 # guessed: the alternative is a stop placed around a price this
                 # part invented.
                 continue
-            entry_price = entry_price_of(plan)
-            if entry_price is None:
+            underlying_entry = underlying_entry_price_of(plan)
+            if underlying_entry is None:
                 continue
+            instrument = instrument_by_symbol.get(key)
+            side = order_side_for_intent(intent, instrument)
+            if side is None:
+                # An open names no instrument choice: the same refusal
+                # position-sizer counts as opens_without_an_instrument_choice.
+                # Guessing BUY or SELL here is exactly the defect this fixes.
+                continue
+            entry_price = priced_entry_for(instrument, underlying_entry)
             targets = tuple(sorted(
                 (target.price for target in plan.targets),
                 reverse=intent.is_short,
             ))
+            target_price = priced_target_for(
+                targets[0] if targets else None, underlying_entry, entry_price,
+            )
             forecast = forecast_by_symbol.get(key)
             requests.append({
                 "venue_id": intent.venue_id,
                 "symbol": intent.symbol,
-                "side": BUY if intent.is_long else SELL,
+                "side": side,
                 "entry_price": entry_price,
                 # `expected_volatility` is the field VolatilityForecast carries.
                 # This read `expected_move_fraction`, which it has never had, so
                 # the getattr default meant every stop was sized as though no
                 # forecast existed -- silently, because a default is not an error.
                 "volatility_forecast": getattr(forecast, "expected_volatility", None),
-                "target_price": targets[0] if targets else None,
+                "target_price": target_price,
                 "proposed_stop_distance_fraction": plan.risk_fraction,
             })
         return tuple(requests)

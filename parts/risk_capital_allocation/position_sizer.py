@@ -153,6 +153,15 @@ class SizerStanding:
     opens_without_an_instrument_choice: int = 0
     missing_account_balance: int = 0
     missing_risk_limit: int = 0
+    # Which of the three sources actually priced the stop -- added 2026-09-07
+    # to verify the risk_fraction fix rather than assume it: a refined
+    # stop-target-plan (does not exist before any trade has closed), the
+    # fraction reapplied to entry_price (the fix), or the intent's own
+    # absolute stop_price (the pre-fix path, wrong wherever entry_price is
+    # not on the same scale the stop was computed on).
+    stop_from_refined_plan: int = 0
+    stop_from_risk_fraction: int = 0
+    stop_from_absolute_fallback: int = 0
 
 
 class PositionSizer:
@@ -479,6 +488,16 @@ def stop_price_for(plan, intent, entry_price: float | None, side: str) -> float 
     return getattr(intent, "stop_price", None)
 
 
+def stop_price_source(plan, intent, entry_price: float | None) -> str:
+    """Which branch `stop_price_for` took, for the standing counters alone."""
+    if getattr(plan, "stop_price", None):
+        return "refined-plan"
+    fraction = getattr(intent, "risk_fraction", None)
+    if entry_price is not None and entry_price > 0 and fraction is not None and 0 < fraction < 1:
+        return "risk-fraction"
+    return "absolute-fallback"
+
+
 def describe_sizing(sizer: PositionSizer) -> dict:
     return {
         "part_id": PART_ID,
@@ -509,6 +528,9 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         ),
         "missing_account_balance": sizer.standing.missing_account_balance,
         "missing_risk_limit": sizer.standing.missing_risk_limit,
+        "stop_from_refined_plan": sizer.standing.stop_from_refined_plan,
+        "stop_from_risk_fraction": sizer.standing.stop_from_risk_fraction,
+        "stop_from_absolute_fallback": sizer.standing.stop_from_absolute_fallback,
     }
 
 
@@ -787,6 +809,13 @@ def start_part(context) -> int:
                 sizer.standing.missing_entry_price += 1
                 continue
             stop_price = stop_price_for(plan, intent, entry_price, order_side)
+            source = stop_price_source(plan, intent, entry_price)
+            if source == "refined-plan":
+                sizer.standing.stop_from_refined_plan += 1
+            elif source == "risk-fraction":
+                sizer.standing.stop_from_risk_fraction += 1
+            else:
+                sizer.standing.stop_from_absolute_fallback += 1
             if stop_price is None:
                 sizer.standing.missing_stop_price += 1
                 continue

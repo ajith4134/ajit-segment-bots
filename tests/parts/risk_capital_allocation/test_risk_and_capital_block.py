@@ -65,7 +65,7 @@ from parts.risk_capital_allocation.profit_lock import (
 from parts.risk_capital_allocation.stop_frequency_breaker import StopFrequencyBreaker
 from parts.risk_capital_allocation.stop_target_placer import (
     MOVED_CLEAR_OF_CLUSTER, PLACED, REFUSED_NO_DISTANCE, REFUSED_REWARD_TOO_THIN,
-    StopTargetPlacer,
+    StopTargetPlacer, order_side_for_intent, priced_entry_for, priced_target_for,
 )
 from parts.risk_capital_allocation.trade_capital_bounds_gate import (
     BUMPED_TO_MINIMUM, CAPPED_AT_MAXIMUM, REFUSED_BUMP_BREACHES_RISK,
@@ -876,6 +876,63 @@ def test_no_forecast_and_no_history_places_nothing():
     plan = placer().place(VENUE, SYMBOL, BUY, entry_price=100.0, volatility_forecast=None)
     assert plan.outcome == REFUSED_NO_DISTANCE
     assert plan.stop_price is None
+
+
+class PlacerIntent:
+    def __init__(self, side=SHORT, action="open"):
+        self.side = side
+        self.action = action
+
+
+def test_a_bearish_open_on_an_option_is_a_buy_not_a_sell():
+    """The defect this closes, live on 2026-09-07: this part derived BUY/SELL
+    from the intent's own long/short, so a bearish view (SHORT) read as SELL
+    -- but a buy-only options segment expresses a bearish view by *buying* a
+    put. stop_from_refined_plan and refused_stop_invalid matched exactly,
+    2,040 of 2,040: every stop this part placed for a short view sat above an
+    entry the BUY order never traded above."""
+    instrument = Choice(chosen=Contract("NIFTY24500PE"), order_side=BUY)
+    assert order_side_for_intent(PlacerIntent(side=SHORT, action="open"), instrument) == BUY
+
+
+def test_an_open_with_no_instrument_choice_has_no_side_to_guess():
+    assert order_side_for_intent(PlacerIntent(action="open"), Choice(chosen=None)) is None
+    assert order_side_for_intent(PlacerIntent(action="open"), None) is None
+
+
+def test_a_close_keeps_its_own_translated_side():
+    """Not a fresh selection -- reduce/close act on the contract already
+    held, so they use the intent's own side, the same rule opening_order_target
+    applies in position_sizer."""
+    assert order_side_for_intent(PlacerIntent(side=SHORT, action="close"), None) == SELL
+    assert order_side_for_intent(PlacerIntent(side=LONG, action="close"), None) == BUY
+
+
+def test_the_chosen_instruments_own_price_is_what_gets_priced():
+    """An option's premium (~220), not the underlying's spot the bot reasoned
+    in (~24,500) -- the scale the order and the stop actually live on."""
+    instrument = Choice(reference_price=220.0, chosen=Contract())
+    assert priced_entry_for(instrument, underlying_entry=24_500.0) == 220.0
+
+
+def test_no_instrument_chosen_yet_falls_back_to_the_underlying():
+    assert priced_entry_for(Choice(chosen=None), underlying_entry=24_500.0) == 24_500.0
+    assert priced_entry_for(None, underlying_entry=24_500.0) == 24_500.0
+
+
+def test_a_target_is_translated_by_the_same_fraction_not_carried_over_raw():
+    """A 2% target above a 24,500 underlying entry is a 2% target above
+    whatever entry is actually being sized against -- not 24,990 sitting next
+    to a 220 option premium."""
+    target = priced_target_for(
+        nearest_underlying_target=24_990.0, underlying_entry=24_500.0, priced_entry=220.0,
+    )
+    assert target == pytest.approx(220.0 * 1.02)
+
+
+def test_no_underlying_entry_is_not_a_target():
+    assert priced_target_for(24_990.0, underlying_entry=None, priced_entry=220.0) is None
+    assert priced_target_for(None, underlying_entry=24_500.0, priced_entry=220.0) is None
 
 
 # ---- position-sizer ----------------------------------------------------------
