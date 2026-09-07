@@ -30,6 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from runtime.knowledge_types import SourceDocument
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -287,7 +288,38 @@ def start_part(context) -> int:
         return tuple(gap for gap in gaps.payloads() if getattr(gap, "is_worth_fetching_against", False))
 
     def publish(results) -> None:
-        documents = tuple(result for result in results if result is not None and result.is_a_document)
+        """A fetched result, as the `source-document` wire's own type.
+
+        This published raw `FetchResult`s until 2026-09-07, and every consumer of
+        `source-document` -- `skill-distiller`, `fact-provenance-tracker` --
+        reads a `SourceDocument`. The two share `title`, `content`, `kind`,
+        `source_reference` and `fetched_at_ns` and differ in the one field a
+        consumer indexes by, so the mismatch was invisible until the first
+        document was ever fetched: `AttributeError: 'FetchResult' object has no
+        attribute 'document_id'`, crash-looping both consumers within seconds of
+        this part being given a fetcher.
+
+        It is the shape this project has been bitten by before -- one wire name
+        carrying several payload shapes defeats both static checkers, which is
+        what splitting `candle` out of `market-data` was about. The check that
+        would have caught it cannot run against a producer that never produced.
+        """
+        documents = tuple(
+            SourceDocument(
+                # The reference is the venue's own identity for the work -- a DOI
+                # URL or an arXiv id -- so two fetches of one paper are one
+                # document rather than two, which is what `already_held` and the
+                # provenance tracker both depend on.
+                document_id=f"paper:{result.source_reference}",
+                title=result.title or "",
+                content=result.content or "",
+                kind=result.kind or "paper",
+                source_reference=result.source_reference or "",
+                fetched_at_ns=result.fetched_at_ns,
+            )
+            for result in results
+            if result is not None and result.is_a_document
+        )
         if documents:
             publish_documents(documents)
 

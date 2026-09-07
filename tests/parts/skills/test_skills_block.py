@@ -965,3 +965,38 @@ def test_nothing_is_inferred_from_the_title():
     reading = subject.read("v-1")
     assert reading.state == NOTHING_RETRIEVED
     assert "written to be clicked on" in reading.reason
+
+
+def test_a_fetched_paper_is_published_as_the_wires_own_type():
+    """`source-document` carries `SourceDocument`, not `FetchResult`.
+
+    This part published raw FetchResults until 2026-09-07, and every consumer of
+    that wire -- skill-distiller, fact-provenance-tracker -- reads a
+    SourceDocument. The two share title, content, kind, source_reference and
+    fetched_at_ns and differ in the one field a consumer indexes by, so nothing
+    could see it until the first document was ever fetched: both consumers
+    crash-looped on `AttributeError: 'FetchResult' object has no attribute
+    'document_id'` within seconds of this part being given a fetcher.
+
+    One wire name carrying several payload shapes defeats both static checkers,
+    and a checker cannot run against a producer that has never produced.
+    """
+    from runtime.knowledge_types import SourceDocument
+
+    fetcher = a_fetcher(per_host=10)
+    fetcher.install_fetcher(
+        lambda query: ("A Paper", "real abstract text", "https://doi.org/10.1/x",
+                       "journal-article", "api.crossref.org")
+    )
+    result = fetcher.fetch(Gap(gap_id="g1", query="volatility"))
+
+    assert result.is_a_document
+    document = SourceDocument(
+        document_id=f"paper:{result.source_reference}",
+        title=result.title or "", content=result.content or "",
+        kind=result.kind or "paper", source_reference=result.source_reference or "",
+        fetched_at_ns=result.fetched_at_ns,
+    )
+    assert document.document_id == "paper:https://doi.org/10.1/x"
+    assert document.can_be_rechecked
+    assert document.content == "real abstract text"
