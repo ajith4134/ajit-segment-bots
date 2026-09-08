@@ -14,14 +14,19 @@
 // carried in the payload and rendered, never inferred.
 import { useEffect, useRef, useState } from 'react'
 
-// The board payload measures the filesystem for all 327 parts and takes about
-// eleven seconds to produce. Polling it every five started a new scan before the
-// last had finished; the requests piled up, the server saturated, and Cloudflare
-// answered HTTP 524 while every part underneath was healthy.
+// The board payload measures the filesystem for every part and used to take about
+// eleven seconds at 327; measured 71.1s quiet at 373 (2026-09-08,
+// part_health_api.py's BOARD_FRESH_FOR_SECONDS). Polling it every five started a
+// new scan before the last had finished; the requests piled up, the server
+// saturated, and Cloudflare answered HTTP 524 while every part underneath was
+// healthy.
 //
 // The server now caches it, so this poll is cheap either way -- but the interval is
 // still set above the measurement's own cost rather than below it, because a
-// client that asks faster than the truth can change is asking for nothing.
+// client that asks faster than the truth can change is asking for nothing. Below
+// the server's own cache window (currently 180s) that just means most polls are
+// cache hits, which is fine -- the two numbers do not have to match, only POLL_MS
+// must never be the thing forcing a fresh scan on its own.
 const POLL_MS = 30000
 
 export function useBoard() {

@@ -70,12 +70,26 @@ BUILT_RUNGS = (IMPLEMENTED, TESTED, RUNNING)
 ACTIVITY_READER = ActivityReader()
 
 # How long a measurement of the *code* may be reused. The board payload scans the
-# filesystem for all 327 parts and takes about eleven seconds; the shape it
-# describes changes on deploy, not between two polls a second apart. Without this
-# the frontend's five-second poll started a new eleven-second scan before the last
-# had finished, the server saturated, and Cloudflare answered the operator HTTP 524
-# while every part underneath was healthy.
-BOARD_FRESH_FOR_SECONDS = 30.0
+# filesystem for all parts (327 when this cache was built, "about eleven
+# seconds"); the shape it describes changes on deploy, not between two polls a
+# second apart. Without this the frontend's five-second poll started a new scan
+# before the last had finished, the server saturated, and Cloudflare answered the
+# operator HTTP 524 while every part underneath was healthy.
+#
+# MEASURED 2026-09-08 at 373 parts: build_board_payload("live") took 71.1s, quiet
+# -- no concurrent request, no contention with the live spine's own disk I/O. At
+# 30s that is exactly the trap TRADES_FRESH_FOR_SECONDS's own comment already
+# names: an interval below a measurement's own cost is not a fast board, it is a
+# board permanently mid-scan. Every request landing after the 30s window expired
+# paid a fresh 71s+ refresh -- and MeasuredCache correctly coalesces concurrent
+# callers onto that one refresh rather than starting a second, so the *symptom*
+# was never a stampede, it was every caller queued behind a single refresh that
+# had become slower than the window meant to protect it. Confirmed live: curl and
+# an in-page fetch() both hung past 100s against the running board API before this
+# was raised. Set to 180s -- 2.5x the quiet measurement, because the same scan
+# under real contention (373 parts' own filesystem probes competing with the
+# spine's tape writes) is the case that actually hung, not the quiet one.
+BOARD_FRESH_FOR_SECONDS = 180.0
 # The trades payload marks every held symbol against the tape and reads the
 # attribution journal, so its cost grows with open positions rather than with the
 # universe -- measured at about four seconds with fifteen positions held.
