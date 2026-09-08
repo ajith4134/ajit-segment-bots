@@ -1651,11 +1651,31 @@ Board restart deliberately not forced to pick up the `build_trade_board.py`
 fix — it would hit the `/api/board` hang above, and that's a separate
 problem to solve first, not paper over with a lucky restart.
 
-**Still open for a future session:** the `/api/board` hang under load
-(Finding 2 above), and the 59.7% `this-symbol-has-no-recent-trade-and-no-
-recent-quote` refusal rate across all segments today — real, not yet traced
-to a cause, and now that zero-to-hero's own contract is actually a
-candidate, worth re-measuring first to see how much of that number was this
-bug's own downstream shadow (a contract nobody could ever really price
-because it was never the one being asked about) versus a genuine live-price
-gap.
+**Fixed, partially — `/api/board` hang.** `BOARD_FRESH_FOR_SECONDS` was 30.0
+against a cost measured today at 71.1s quiet (373 parts; the comment beside
+it still said "about eleven seconds" from 327). Not a stampede —
+`MeasuredCache`'s coalescing lock always worked — every caller was correctly
+queued behind one refresh that had become slower than the window meant to
+protect it. Raised to 180s. Verified after restarting `ajit-board`: 5/5
+requests fast (0.1-5.5s), and the live board's Trading tab — gated behind
+`/api/board` for every tab regardless of whether that tab needs board data —
+rendered end to end with real prices, confirming this fix and the
+`build_trade_board.py` fix above both live in production. **Does not fully
+close it**: re-checked minutes later at load average 82-87 on 12 cores (the
+373-part spine's own real steady-state cost, confirmed via `vmstat` and
+`ps`, unrelated to this session), and even a 200s timeout wasn't enough. A
+cache-window fix cannot buy CPU the box does not have spare — that's the
+machine-capacity tension RL-072 already tracks ("the board should show parts
+off with the reason, not a coverage number that quietly excludes them"), not
+something to solve here.
+
+**Still open for a future session:** the 59.7% `this-symbol-has-no-recent-
+trade-and-no-recent-quote` refusal rate across all segments today — real,
+not yet traced to a cause, and now that zero-to-hero's own contract is
+actually a candidate, worth re-measuring first to see how much of that
+number was this bug's own downstream shadow (a contract nobody could ever
+really price because it was never the one being asked about) versus a
+genuine live-price gap. And, larger: whether `/api/board`'s per-part
+filesystem scan can be made cheaper, or moved off the request-serving path
+entirely (background refresh thread), rather than only widening the window
+around it — the 373-part cost will only grow as more parts land.
