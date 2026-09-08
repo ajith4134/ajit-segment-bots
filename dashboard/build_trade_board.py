@@ -618,21 +618,50 @@ class PriceWindow:
         return max(0.0, datetime.now(timezone.utc).timestamp() - self.read_at_ns / 1e9)
 
 
+def _upstox_last_traded_price(payload: bytes) -> float | None:
+    """Decode one TRADE-stream record broker-market-tape-writer wrote for Upstox.
+
+    Not a `VenueAdapter.read_trades()` call (2026-09-08 fix): `runtime/venues/`
+    holds only `binance_usdm` and `bybit_linear` -- crypto capture adapters this
+    project's Indian broker path never plugged into (`captured_venues` still
+    names only those two). Upstox's own `runtime/brokers/broker_adapter.py`
+    exposes no `read_trades`, and there is nothing to normalise anyway: the
+    tape writer already stores this project's own `LtpUpdate`, one JSON object
+    per record, in a file scoped to exactly one symbol -- unlike the crypto
+    tape, which shares one file across a venue's whole capture and needs the
+    adapter to pick a symbol back out of a shared binary wire format.
+
+    Real incident: `read_price_window`/`read_last_price` called
+    `load_venue_adapter("upstox")` here, which always raised
+    `VenueAdapterMissing`, caught by a bare `except Exception: return None` --
+    every open position on the trade board read `NOT MEASURED: the tape has no
+    record for this symbol today` regardless of whether the tape had one,
+    because the failure was in loading a venue that was never added, not in
+    reading the tape.
+    """
+    try:
+        record = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    price = record.get("last_traded_price")
+    return float(price) if isinstance(price, (int, float)) else None
+
+
 def read_price_window(venue_id: str, symbol: str, since_ns: int | None) -> PriceWindow | None:
     """The last price for a symbol, and its high and low since a moment.
-
-    Reads the venue's own payloads back through that venue's adapter rather than
-    re-deriving a price format here: what a trade message means is the adapter's
-    business everywhere else in this system, and a board that parsed it itself
-    would be a second definition to keep in step.
 
     Only today's file is read. A position older than midnight would have its
     excursion measured from the start of the day, which is why the window says how
     many trades it actually saw -- an excursion over 40 trades and one over 40 000
     are not the same claim.
+
+    Upstox only: the tape this board reads is written by broker-market-tape-writer,
+    which writes nothing else (see `_upstox_last_traded_price`).
     """
-    from runtime.tape import day_of_timestamp_ns, read_payload, read_tape_index, tape_paths_for
-    from runtime.venues.adapter_registry import load_venue_adapter
+    from runtime.tape import day_of_timestamp_ns, read_tape_index, tape_paths_for
+
+    if venue_id != "upstox":
+        return None
 
     now_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
     index_path, blob_path = tape_paths_for(
@@ -642,11 +671,6 @@ def read_price_window(venue_id: str, symbol: str, since_ns: int | None) -> Price
         return None
     index = read_tape_index(index_path)
     if len(index) == 0:
-        return None
-
-    try:
-        adapter = load_venue_adapter(venue_id)
-    except Exception:
         return None
 
     first = 0
@@ -663,18 +687,14 @@ def read_price_window(venue_id: str, symbol: str, since_ns: int | None) -> Price
         for record in index[first:]:
             handle.seek(int(record["blob_offset"]))
             payload = handle.read(int(record["blob_length"]))
-            try:
-                trades = adapter.read_trades(payload)
-            except Exception:
+            price = _upstox_last_traded_price(payload)
+            if price is None:
                 continue
-            for trade in trades:
-                if trade.symbol != symbol:
-                    continue
-                seen += 1
-                last_price = trade.price
-                read_at_ns = int(record["received_at_ns"])
-                highest = trade.price if highest is None else max(highest, trade.price)
-                lowest = trade.price if lowest is None else min(lowest, trade.price)
+            seen += 1
+            last_price = price
+            read_at_ns = int(record["received_at_ns"])
+            highest = price if highest is None else max(highest, price)
+            lowest = price if lowest is None else min(lowest, price)
 
     if last_price is None:
         return None
@@ -699,15 +719,19 @@ def read_last_price(venue_id: str, symbol: str, records_to_try: int = 4000):
     board is slow.
 
     This reads backwards from the newest record instead and stops at the first
-    trade for this symbol. `records_to_try` bounds how far back it will look
-    before giving up, so a symbol whose tape is written by a different stream
-    cannot turn a fast path into a full scan; giving up returns None, which the
-    caller renders as NOT MEASURED rather than as a price.
+    priced one. `records_to_try` bounds how far back it will look before giving
+    up, so a symbol whose tape is thin cannot turn a fast path into a full scan;
+    giving up returns None, which the caller renders as NOT MEASURED rather than
+    as a price.
+
+    Upstox only: see `_upstox_last_traded_price`.
 
     Returns `(price, read_at_ns)`, or None.
     """
     from runtime.tape import day_of_timestamp_ns, read_tape_index, tape_paths_for
-    from runtime.venues.adapter_registry import load_venue_adapter
+
+    if venue_id != "upstox":
+        return None
 
     now_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
     index_path, blob_path = tape_paths_for(
@@ -718,23 +742,15 @@ def read_last_price(venue_id: str, symbol: str, records_to_try: int = 4000):
     index = read_tape_index(index_path)
     if len(index) == 0:
         return None
-    try:
-        adapter = load_venue_adapter(venue_id)
-    except Exception:
-        return None
 
     first = max(0, len(index) - records_to_try)
     with open(blob_path, "rb") as handle:
         for record in reversed(index[first:]):
             handle.seek(int(record["blob_offset"]))
             payload = handle.read(int(record["blob_length"]))
-            try:
-                trades = adapter.read_trades(payload)
-            except Exception:
-                continue
-            for trade in reversed(trades):
-                if trade.symbol == symbol:
-                    return trade.price, int(record["received_at_ns"])
+            price = _upstox_last_traded_price(payload)
+            if price is not None:
+                return price, int(record["received_at_ns"])
     return None
 
 
