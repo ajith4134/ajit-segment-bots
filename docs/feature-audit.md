@@ -1572,3 +1572,65 @@ subscription.
 - `intent_timing_maximum_price_drift` and `limit_walk_maximum_total_fraction`
   were still 0.004 while both notes say they **are**
   `maximum_decision_price_drift`, re-derived to 0.06 on 2026-09-05.
+
+### 2026-09-08 — live spine verification, requested by the user
+
+Checked the trade board's open-positions table live, on the user's request.
+10 of 16 open stock-options positions read `NOT MEASURED: the tape has no
+record for this symbol today`, real capital in every one.
+
+- **Fixed:** `broker-market-tape-writer` wrote the tape under Upstox's raw
+  `instrument_key` (`tape/upstox/NSE_FO|56316/...`); every reader looks it up
+  by `trading_symbol`. Now resolves via `broker-subscribed-instrument-listing`
+  before writing (`unresolved_writes` counts what still can't resolve).
+- **Fixed:** `broker-symbol-universe-bridge` could drop an already-held
+  position out of the universe once its strike/expiry aged out of the
+  nearest-expiry ranking window meant only to bound new buys. Now reads
+  `position` and forces every held symbol's listing in unconditionally.
+- **Fixed, found while verifying the first two:** even with the tape
+  correctly resolved, the board still read `NOT MEASURED` for everything.
+  `dashboard/build_trade_board.py`'s `read_last_price`/`read_price_window`
+  called `load_venue_adapter("upstox")` — `runtime/venues/` only has
+  `binance_usdm`/`bybit_linear` (`captured_venues` still names only those
+  two crypto venues); Upstox was never added there and lives under a
+  different class (`runtime/brokers/broker_adapter.py`, no `read_trades()`).
+  The load always raised, caught by a bare `except Exception: return None`,
+  so a crash read as "no record". Fixed by decoding the tape's own JSON
+  (`LtpUpdate`) directly for `venue_id == "upstox"`, bypassing the crypto
+  adapter registry entirely. Verified against today's live tape (AXISBANK,
+  INFY contracts resolve real prices) and 59/59 `test_build_trade_board.py`
+  passing. **Not yet verified through the live board API itself** — see next.
+- **Found, not fixed — separate, real, currently live:** `/api/board`
+  (`dashboard/part_health_api.py`) hangs under load. Confirmed by direct
+  `curl` (>100s, no response) and by an in-page `fetch()` from a real
+  browser (`document.hidden` false, ruling out the headless-tab-visibility
+  explanation) — both hung. Cold start (`warm_caches()`, synchronous before
+  the port opens) measured **285s** against 373 parts; the code's own comment
+  still assumes "about ten seconds" at 327. Once warm it answered twice in
+  ~10ms, then hung again under a handful of concurrent requests (13
+  established connections, 28 threads stuck). Blocks the *entire* live
+  frontend, not just Trading — `App.jsx` gates every tab behind `useBoard()`'s
+  data even though Trading/Machine/Settings only need their own endpoints,
+  which answer fine on their own (`/api/trades` 10ms, `/api/activity` fast).
+  Not investigated further this session. `/api/board`'s current caching
+  strategy needs to either coalesce concurrent rebuilds or move `warm_caches`
+  off the accept path; `App.jsx` should not block unrelated tabs on it either
+  way.
+- **Found, partially traced — zero-to-hero / NIFTY expiry day:** the user
+  asked why these trades aren't opening. 2026-09-08 (Tuesday) is a genuine
+  NIFTY weekly expiry day — `expiry-day-zero-to-hero-detector` correctly
+  found 176 instruments expiring today and fired 1,643,296 of 3,559,693
+  detections into real `entry-candidate`s. But `index-options`'s paper
+  account shows 2 fills *lifetime*, 0 open. Downstream, `instrument-selector`
+  refuses 59.7% of all trade-intents today (15,607 of 26,134,
+  `this-symbol-has-no-recent-trade-and-no-recent-quote`) — but its own price
+  lookup keys by `instrument_key` correctly in code, unlike the trade-board
+  bug above, so the cause is not yet confirmed. Left open for the next
+  session: trace `instrument-selector`'s option-price observation path
+  (`observe_option_price`, `broker-market-data` → `instrument-selector`) for
+  why so many contracts arrive with no recent trade/quote on a day the feed
+  is clearly delivering data.
+
+Board restart deliberately not forced to pick up the `build_trade_board.py`
+fix — it would hit the same `/api/board` hang above, and that's a separate
+problem to solve first, not paper over with a lucky restart.
