@@ -123,6 +123,39 @@ class AtmStrikeTracker:
         record = self._contracts.get(instrument_key)
         return record[0] if record is not None else None
 
+    def contract_by_symbol(self, trading_symbol: str, now_ms: int | None = None) -> AtmChoice | None:
+        """The contract this exact trading_symbol names, not the nearest to ATM.
+
+        Added 2026-09-08: a candidate that names a specific far-OTM contract
+        (expiry-day-zero-to-hero-detector's whole thesis is a strike chosen
+        *because* it is cheap and far from 0.5 delta) has no way to become a
+        selectable instrument through `atm_call_for`/`atm_put_for` -- those
+        deliberately return only the strike closest to 0.5 delta, so the
+        contract the detector actually wants was never even a candidate.
+        `instrument-selector` silently substituted the ATM pair for it
+        instead, which is the opposite bet.
+
+        None under the same two conditions `_atm_for` already refuses on: no
+        delta observed yet for this contract, or its expiry has passed (or,
+        given `now_ms`, has already happened) -- a stale symbol from a rolled
+        contract is not resolved into an order.
+        """
+        key = self._key_by_trading_symbol.get(trading_symbol)
+        if key is None or key not in self._latest_delta:
+            return None
+        record = self._contracts.get(key)
+        if record is None or record[0] is None:
+            return None
+        _, side, name, strike, expiry_ms = record
+        if now_ms is not None and (expiry_ms is None or expiry_ms <= now_ms):
+            return None
+        delta = self._latest_delta[key]
+        return AtmChoice(
+            instrument_key=key, trading_symbol=name, strike_price=strike,
+            expiry_ms=expiry_ms, delta=delta,
+            distance_from_atm=abs(delta - ATM_TARGET_DELTA[side]),
+        )
+
     def contract_named(self, trading_symbol: str) -> tuple[str, str] | None:
         """(underlying_symbol, "CE" or "PE") for a contract, by the name it trades under.
 

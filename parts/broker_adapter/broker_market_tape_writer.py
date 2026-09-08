@@ -55,8 +55,8 @@ PART_ID = "broker-market-tape-writer"
 PART_DECLARATION = PartDeclaration(
     part_id="broker-market-tape-writer",
     consumes=(
-        "broker-market-data", "broker-candle", "broker-order-book-snapshot",
-        "broker-open-interest", "broker-option-greeks",
+        "broker-candle", "broker-market-data", "broker-open-interest",
+        "broker-option-greeks", "broker-order-book-snapshot",
         "broker-subscribed-instrument-listing",
     ),
     produces=("part-health",),

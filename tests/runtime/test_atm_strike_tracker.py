@@ -191,6 +191,48 @@ def test_the_atm_pick_does_not_walk_every_contract_it_has_ever_seen():
     )
 
 
+def test_contract_by_symbol_returns_a_far_otm_strike_atm_call_for_never_would():
+    """expiry-day-zero-to-hero-detector names a strike chosen because it is
+    far from 0.5 delta -- atm_call_for/atm_put_for structurally cannot ever
+    return it. This is the path that lets instrument-selector consider the
+    exact contract a candidate named."""
+    tracker = AtmStrikeTracker()
+    tracker.observe_listing(NIFTY_UNDERLYING)
+    tracker.observe_listing(_call("NSE_FO|1001", 24500.0))
+    tracker.observe_listing(_call("NSE_FO|9001", 26000.0))
+    tracker.observe_greeks(_greeks("NSE_FO|1001", 0.51))
+    tracker.observe_greeks(_greeks("NSE_FO|9001", 0.03))
+
+    choice = tracker.contract_by_symbol("NIFTY 26000 CE")
+    assert choice is not None
+    assert choice.instrument_key == "NSE_FO|9001"
+    assert choice.strike_price == 26000.0
+    assert choice.delta == 0.03
+
+    # atm_call_for on the same book only ever returns the near-0.5 strike.
+    assert tracker.atm_call_for("NIFTY").instrument_key == "NSE_FO|1001"
+
+
+def test_contract_by_symbol_is_none_without_a_delta_observed():
+    tracker = AtmStrikeTracker()
+    tracker.observe_listing(NIFTY_UNDERLYING)
+    tracker.observe_listing(_call("NSE_FO|9001", 26000.0))
+    assert tracker.contract_by_symbol("NIFTY 26000 CE") is None
+
+
+def test_contract_by_symbol_is_none_for_an_unknown_symbol():
+    tracker = AtmStrikeTracker()
+    assert tracker.contract_by_symbol("NIFTY 99999 CE") is None
+
+
+def test_contract_by_symbol_is_none_once_its_expiry_has_passed():
+    tracker = AtmStrikeTracker()
+    tracker.observe_listing(NIFTY_UNDERLYING)
+    tracker.observe_listing(_call("NSE_FO|9001", 26000.0, expiry_ms=1_000_000_000_000))
+    tracker.observe_greeks(_greeks("NSE_FO|9001", 0.03))
+    assert tracker.contract_by_symbol("NIFTY 26000 CE", now_ms=1_500_000_000_000) is None
+
+
 def test_a_contract_whose_underlying_arrives_late_is_still_indexed():
     """A contract listed before its underlying is held pending, then filed.
 

@@ -598,6 +598,52 @@ class InstrumentSelector:
                 )
             )
 
+    def _register_named_contract(self, venue_id: str, underlying_symbol: str, trading_symbol: str) -> None:
+        """Register the exact contract an intent named as a candidate, alongside
+        whatever ATM entries already carry this underlying.
+
+        Same construction as `_refresh_atm_instruments`, against
+        `AtmStrikeTracker.contract_by_symbol` instead of the nearest-to-0.5-delta
+        pick -- the one path that can return a contract far from ATM. A no-op
+        (via `observe_listed_instrument`'s own same-contract_symbol replace) once
+        this contract is already registered, so calling it on every `select()`
+        for a repeatedly-named contract costs nothing extra.
+        """
+        contract = self._atm_tracker.contract_by_symbol(trading_symbol)
+        if contract is None:
+            return
+        is_call = contract.delta >= 0
+        spot = self._prices.get((venue_id, underlying_symbol))
+        option_price = self._option_prices.get(contract.instrument_key)
+        premium_fraction = (
+            option_price.price / spot.price
+            if option_price is not None and spot is not None and spot.price > 0
+            else None
+        )
+        seconds_to_expiry = (
+            (contract.expiry_ms - self._deciding_at_ns / 1_000_000) / 1000.0
+            if contract.expiry_ms is not None
+            else None
+        )
+        self.observe_listed_instrument(
+            ListedInstrument(
+                venue_id=venue_id, symbol=underlying_symbol, instrument_kind=OPTION,
+                contract_symbol=contract.trading_symbol,
+                venue_instrument_id=contract.instrument_key,
+                quantity_increment=self._lot_sizes.get(contract.instrument_key),
+                funding_rate_per_settlement=None, settlements_per_day=None,
+                basis_fraction=None,
+                premium_fraction=premium_fraction,
+                seconds_to_expiry=seconds_to_expiry,
+                supports_short=not is_call,
+                supports_long=is_call,
+                supports_convexity=True,
+                round_trip_cost_fraction=self._round_trip_cost_fraction,
+                absorbable_quote=None,
+                seconds_to_fill=None,
+            )
+        )
+
     def _evict_listed_instrument(self, venue_id: str, symbol: str, contract_symbol: str) -> None:
         """Removes one no-longer-ATM strike, the counterpart to
         observe_listed_instrument's same-contract_symbol replace."""
@@ -911,6 +957,19 @@ class InstrumentSelector:
             if resolved is not None:
                 underlying, contract_type = resolved
                 key = (intent.venue_id, underlying)
+                # The exact contract the intent named is not necessarily one of
+                # the (at most two) ATM entries `_refresh_atm_instruments` keeps
+                # registered for this underlying -- expiry-day-zero-to-hero-
+                # detector names a strike *because* it is far from 0.5 delta,
+                # which is exactly what atm_call_for/atm_put_for can never
+                # return. Without this, every such intent had its named
+                # contract silently swapped for the ATM pair: the opposite bet
+                # (highest premium, ~0.5 delta) from the one the candidate was
+                # built on. Registered alongside whatever is already listed,
+                # not in place of it -- the cheapest-cost comparison below
+                # decides which one actually carries the intent, same as it
+                # already does between the ATM call and put.
+                self._register_named_contract(intent.venue_id, underlying, intent.symbol)
                 listed = self._listed.get(key, [])
                 # A view on a contract is a view on what the contract is a claim
                 # on, and which way round depends on both halves. Buying a call

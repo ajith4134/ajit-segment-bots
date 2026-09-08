@@ -157,6 +157,71 @@ def test_a_long_intent_is_never_carried_by_a_put():
     assert choice.rejected["NIFTY 24500 PE"] == "it cannot express a long view"
 
 
+def test_an_intent_naming_a_far_otm_contract_is_carried_by_that_contract_not_the_atm_pair():
+    """expiry-day-zero-to-hero-detector names a strike *because* it is cheap
+    and far from 0.5 delta -- the exact shape atm_call_for could never
+    return. Before this, select() resolved a contract-named intent to its
+    underlying and picked only from the registered ATM pair, silently
+    substituting the opposite bet (highest premium, ~0.5 delta) for the one
+    the intent actually named."""
+    selector = a_selector()
+    selector.observe_option_listing(NIFTY_UNDERLYING)
+    selector.observe_option_listing(_call("NSE_FO|1001", 24500.0, 1_740_100_000_000))
+    selector.observe_option_listing(_call("NSE_FO|9001", 26000.0, 1_740_100_000_000))
+    selector.observe_option_greeks(_greeks("NSE_FO|1001", 0.51))
+    selector.observe_option_greeks(_greeks("NSE_FO|9001", 0.03))
+    selector.observe_price(VENUE, "NIFTY", 24500.0, 1_740_000_000_000_000_000)
+    selector.observe_option_price("NSE_FO|1001", 220.0, 1_740_000_000_000_000_000)
+    selector.observe_option_price("NSE_FO|9001", 8.0, 1_740_000_000_000_000_000)
+
+    choice = selector.select(
+        a_long_intent(symbol="NIFTY 26000 CE"), now_ns=1_740_000_000_000_000_000
+    )
+    assert choice.state == CHOSEN
+    assert choice.chosen.contract_symbol == "NIFTY 26000 CE"
+    assert choice.chosen.premium_fraction == pytest.approx(8.0 / 24500.0)
+
+
+def test_the_atm_pair_stays_selectable_alongside_a_named_far_otm_contract():
+    """Registering the named contract does not evict the ATM entry -- both
+    stay candidates, and the existing cheapest-cost rule (unchanged by this
+    fix) picks between them same as it always has between the ATM call and
+    put."""
+    selector = a_selector()
+    selector.observe_option_listing(NIFTY_UNDERLYING)
+    selector.observe_option_listing(_call("NSE_FO|1001", 24500.0, 1_740_100_000_000))
+    selector.observe_option_listing(_call("NSE_FO|9001", 26000.0, 1_740_100_000_000))
+    selector.observe_option_greeks(_greeks("NSE_FO|1001", 0.51))
+    selector.observe_option_greeks(_greeks("NSE_FO|9001", 0.03))
+    selector.observe_price(VENUE, "NIFTY", 24500.0, 1_740_000_000_000_000_000)
+    selector.observe_option_price("NSE_FO|1001", 220.0, 1_740_000_000_000_000_000)
+    selector.observe_option_price("NSE_FO|9001", 8.0, 1_740_000_000_000_000_000)
+
+    selector.select(a_long_intent(symbol="NIFTY 26000 CE"), now_ns=1_740_000_000_000_000_000)
+    symbols = {i.contract_symbol for i in selector._listed[(VENUE, "NIFTY")]}
+    assert symbols == {"NIFTY 24500 CE", "NIFTY 26000 CE"}, symbols
+
+
+def test_a_named_contract_with_no_delta_yet_falls_back_to_whatever_is_listed():
+    """Mirrors contract_by_symbol's own refusal: a contract this part has not
+    yet seen greeks for cannot be registered, so the ATM entries -- if any --
+    are what select() has to work with, same as before this fix."""
+    selector = a_selector()
+    selector.observe_option_listing(NIFTY_UNDERLYING)
+    selector.observe_option_listing(_call("NSE_FO|1001", 24500.0, 1_740_100_000_000))
+    selector.observe_option_listing(_call("NSE_FO|9001", 26000.0, 1_740_100_000_000))
+    selector.observe_option_greeks(_greeks("NSE_FO|1001", 0.51))
+    # No greeks observed yet for NSE_FO|9001.
+    selector.observe_price(VENUE, "NIFTY", 24500.0, 1_740_000_000_000_000_000)
+    selector.observe_option_price("NSE_FO|1001", 220.0, 1_740_000_000_000_000_000)
+
+    choice = selector.select(
+        a_long_intent(symbol="NIFTY 26000 CE"), now_ns=1_740_000_000_000_000_000
+    )
+    assert choice.state == CHOSEN
+    assert choice.chosen.contract_symbol == "NIFTY 24500 CE"
+
+
 def test_no_price_yet_leaves_the_option_honestly_unpriceable():
     selector = a_selector()
     selector.observe_option_listing(NIFTY_UNDERLYING)
