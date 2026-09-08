@@ -1616,21 +1616,46 @@ record for this symbol today`, real capital in every one.
   strategy needs to either coalesce concurrent rebuilds or move `warm_caches`
   off the accept path; `App.jsx` should not block unrelated tabs on it either
   way.
-- **Found, partially traced — zero-to-hero / NIFTY expiry day:** the user
-  asked why these trades aren't opening. 2026-09-08 (Tuesday) is a genuine
-  NIFTY weekly expiry day — `expiry-day-zero-to-hero-detector` correctly
-  found 176 instruments expiring today and fired 1,643,296 of 3,559,693
-  detections into real `entry-candidate`s. But `index-options`'s paper
-  account shows 2 fills *lifetime*, 0 open. Downstream, `instrument-selector`
-  refuses 59.7% of all trade-intents today (15,607 of 26,134,
-  `this-symbol-has-no-recent-trade-and-no-recent-quote`) — but its own price
-  lookup keys by `instrument_key` correctly in code, unlike the trade-board
-  bug above, so the cause is not yet confirmed. Left open for the next
-  session: trace `instrument-selector`'s option-price observation path
-  (`observe_option_price`, `broker-market-data` → `instrument-selector`) for
-  why so many contracts arrive with no recent trade/quote on a day the feed
-  is clearly delivering data.
+- **Fixed — zero-to-hero / NIFTY expiry day:** traced to completion. 2026-09-08
+  (Tuesday) is a genuine NIFTY weekly expiry day —
+  `expiry-day-zero-to-hero-detector` correctly found 176 instruments expiring
+  today and fired 1,643,296 of 3,559,693 detections into real
+  `entry-candidate`s. But `index-options`'s paper account showed 2 fills
+  *lifetime*, 0 open. Root cause: `instrument-selector`'s
+  `_refresh_atm_instruments` registers exactly two candidates per underlying
+  — the current ATM call and put — and nothing else. When a trade-intent
+  names a specific far-OTM contract (the detector's whole thesis: cheap
+  *because* it's far from 0.5 delta), `select()` resolves it to its
+  underlying via `contract_named()` and then picks from whatever is listed
+  there, which was only ever the ATM pair. The exact contract the detector
+  wanted was never a candidate — every such trade was silently the opposite
+  bet (highest premium, ~0.5 delta) from the one it was supposed to be. The
+  59.7% "no recent trade/quote" refusal rate traced earlier is a separate,
+  real, still-open number (mixed across all segments, not isolated to
+  zero-to-hero) — not the cause of this one.
+
+  Fixed by teaching `AtmStrikeTracker` to answer for one exact contract
+  (`contract_by_symbol`, new) instead of only the nearest-to-0.5-delta pick,
+  and having `instrument-selector` register the named contract alongside the
+  ATM pair — not in place of it — whenever an intent resolves to one. The
+  existing cheapest-cost comparison (unchanged) decides which one actually
+  carries the intent, so a genuinely cheap far-OTM contract wins on its own
+  economics. `parts/segment_bot/instrument_selector.py`,
+  `runtime/atm_strike_tracker.py`. 4735/4739 of the full suite passing (the
+  4 failures: 2 were this same investigation's own pre-existing
+  `broker-market-tape-writer` PART_DECLARATION order mismatch, fixed
+  alongside; 2 are unrelated and pre-existing — confirmed by stashing and
+  re-running against the branch before today's changes).
 
 Board restart deliberately not forced to pick up the `build_trade_board.py`
-fix — it would hit the same `/api/board` hang above, and that's a separate
+fix — it would hit the `/api/board` hang above, and that's a separate
 problem to solve first, not paper over with a lucky restart.
+
+**Still open for a future session:** the `/api/board` hang under load
+(Finding 2 above), and the 59.7% `this-symbol-has-no-recent-trade-and-no-
+recent-quote` refusal rate across all segments today — real, not yet traced
+to a cause, and now that zero-to-hero's own contract is actually a
+candidate, worth re-measuring first to see how much of that number was this
+bug's own downstream shadow (a contract nobody could ever really price
+because it was never the one being asked about) versus a genuine live-price
+gap.
