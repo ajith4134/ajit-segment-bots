@@ -1740,17 +1740,53 @@ earlier restarts today. The fix is structurally verified (unit tests, no
 crashes, `position` wire confirmed flowing) but not yet watched carry a real
 order through `bound()` → `paper-fill-simulator` → a closed position.
 
-**A fourth, separate defect found while waiting, not fixed:**
-`bull-opinion-composer` stood down 100% of 360 opinions this restart
-(`stood_down_by_reason.conviction-below-threshold`), with
-`last_floor: 1.0` — a conviction floor of 100%, uncrossable by construction.
-`ConvictionFloor.for_plan()` computes `min(1.0, break_even_probability(...) +
-margin)` and is hitting the cap. `bull-exit-plan-proposer`'s standing shows
-every one of its 360 plans came from `plans_from_the_live_range` (the
-fallback path, not a learned distance) — plausibly producing too tight a
-reward:risk ratio to ever clear break-even plus margin. Not traced further:
-this blocks OPEN specifically and is unrelated to the CLOSE fix above. Next
-session: read `bull-exit-plan-proposer`'s live-range fallback and
-`round_trip_cost_in_risk_units`'s inputs against real numbers from a warmed
-run, the same way the reward-to-risk-ratio class of bug was chased down
-2026-09-07.
+**A fourth, separate issue found while waiting — traced deep, not fixed, needs
+a design decision rather than a number.** `bull-opinion-composer` stood down
+100% of 810 opinions this restart (`conviction-below-threshold`), with
+`last_floor: 1.0` pinned — sustained, not transient.
+
+Traced the math exactly. `_cold_start_targets` makes reward-to-risk
+*structurally constant* — `reach = stop_fraction * multiple`, so
+`stop_fraction` cancels out of `reward_to_risk = Σ(multiple·fraction)`.
+With `bull_cold_start_reward_multiples=[1,2,3]` and
+`bull_exit_target_fractions=[0.4,0.4,0.2]`: R = 1×0.4+2×0.4+3×0.2 = **1.8**,
+fixed, always. So `break_even = (1+cost)/(1+1.8) = (1+cost)/2.8`, and
+`cost = 2·fee_rate/stop_fraction` with `fee_rate =
+per_side_trading_cost_fraction = 0.4266%` (correctly re-derived for NSE
+options, 2026-09-07). Floor clears (< 1.0) only when `stop_fraction >
+0.474%`; comfortable headroom (floor ≤ 0.85) needs `stop_fraction ≥ 0.62%`.
+`stop_fraction = bull_cold_start_stop_range_multiple (1.5, still dated
+2026-08-23) × live_range_fraction`.
+
+**First hypothesis, measured and refuted:** guessed the live-range
+measurement itself was too tight for illiquid options and re-derived from
+real captured tape data — 60 real option contracts, 19,723 real prints,
+horizons 30-300s. Median range fraction 1.2-2.9%, far more than enough to
+clear the floor at the *current* 1.5x multiplier. Contradicted the live
+100% stand-down rate, so the hypothesis was wrong, not the fix.
+
+**Root traced instead: `candidate.symbol` for the opinions actually forming
+today is the *underlying stock*, not an option.** Checked real
+entry-candidates in the journal: `volatility-gap-detector -> AXISBANK` (bare
+stock symbol, no CE/PE) is what feeds `bull-feature-builder` →
+`bull-conviction-model` → `bull-exit-plan-proposer`, so
+`live_range_fraction` measures **the stock's own price range**, not the
+option's — stocks move far less per second than options do (no
+leverage/gamma), so the cold-start stop this segment computes is
+structurally too tight almost regardless of the multiplier, while it is
+compared against `per_side_trading_cost_fraction`, a cost **derived
+specifically for the options segment's real spread and fees**.
+
+This is not a settings typo to correct — it is a real question about which
+space the cold-start stop should be measured in when a directional bot's
+underlying-based signal is expressed through an options-segment instrument
+(index-options, stock-options) versus directly (cash-equity-intraday, where
+underlying-range and traded-instrument-range are the same thing and this
+mismatch does not exist). Left open for the next session, with the exact
+math and the refuted hypothesis both recorded here so neither has to be
+re-derived: should the cold-start stop be measured against the chosen
+instrument's own range once one exists (circular — instrument-selector runs
+after the opinion is formed), against a segment-specific fee/cost pairing
+matched to what actually produced the range (stock fee for a stock range,
+option fee for an option range), or something else. A decision for the
+user, not a number for Claude to pick.
