@@ -15,6 +15,26 @@ OHLC, open interest and greeks together, and the blueprint already commits
 this part to consuming the five *decomposed* bus types, not a raw payload.
 So `payload` here is a JSON encoding of the already-normalised record this
 part received, not the broker's raw bytes.
+
+**Written under trading_symbol, resolved from instrument_key (2026-09-08).**
+The five decoded record kinds this part consumes only ever carry Upstox's own
+`instrument_key` -- broker_history_reader.py's own `_symbol_by_key` docstring
+states why: that is genuinely all the raw feed has, T-4's "the venue's own
+naming, translated by a bridge" applying here as much as anywhere else. But
+every *reader* of this tape -- dashboard/build_trade_board.py's
+`read_last_price`, called with a Position's own `symbol` -- looks the file up
+by `trading_symbol`, the shared name broker-symbol-universe-bridge's own
+docstring calls out as "the shared name" for exactly this reason. Writing
+under instrument_key was a silent second convention this file invented for
+itself: real incident, 2026-09-08, ten open stock-options positions with real
+capital in them had a live tick every second under
+`tape/upstox/NSE_FO|56316/...` and `NOT MEASURED` on the board, because the
+board asked for `tape/upstox/AXISBANK 1260 CE 29 SEP 26/...` and nothing was
+there. Resolved via `broker-subscribed-instrument-listing`, the same type
+`expiry-day-zero-to-hero-detector` already reads for the same purpose. A tick
+for a key not yet resolved still writes -- under the instrument_key, as
+before -- rather than being dropped; `unresolved_writes` says how often, so a
+resolution gap that never closes is visible rather than silently wrong.
 """
 
 from __future__ import annotations
@@ -37,6 +57,7 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "broker-market-data", "broker-candle", "broker-order-book-snapshot",
         "broker-open-interest", "broker-option-greeks",
+        "broker-subscribed-instrument-listing",
     ),
     produces=("part-health",),
     resource_class="io-bound",
@@ -94,8 +115,31 @@ def _payload_for(record) -> bytes:
     return json.dumps(dataclasses.asdict(record), default=str).encode("utf-8")
 
 
+def observe_subscribed_listing(symbol_by_key: dict[str, str], listing) -> None:
+    """Learn one instrument_key -> trading_symbol mapping.
+
+    Last one wins, matching every other instrument_key-keyed dict in this
+    project -- a listing republished with the same key simply restates the
+    same mapping in practice, since an instrument_key never changes trading
+    symbol mid-life.
+    """
+    symbol_by_key[listing.instrument_key] = listing.trading_symbol
+
+
+def symbol_for(symbol_by_key: dict[str, str], instrument_key: str) -> str:
+    """The trading_symbol this instrument_key resolves to, or the
+    instrument_key itself when nothing has resolved it yet.
+
+    The fallback exists so a tick that arrives before its listing is known
+    still gets written -- real data, just temporarily unlabelled -- rather
+    than dropped. Callers count how often this happens (`unresolved_writes`):
+    a rate that never falls to zero is a resolution bug, not a cold start.
+    """
+    return symbol_by_key.get(instrument_key, instrument_key)
+
+
 def start_part(context) -> int:
-    """One TapeWriter per (instrument_key, StreamKind), opened lazily on
+    """One TapeWriter per (symbol, StreamKind), opened lazily on
     first message -- same discipline as the crypto StreamTapeRecorder's own
     _writer_for, so a symbol that never sends one of the five kinds never
     gets a hollow empty tape for it. At up to ~200 symbols x 5 kinds this can
@@ -108,14 +152,34 @@ def start_part(context) -> int:
     writeback_interval_bytes = int(context.number("writeback_interval"))
 
     writers: dict[tuple[str, StreamKind], TapeWriter] = {}
-    counts = {"records_written": 0, "last_failure": None}
+    # instrument_key -> trading_symbol, the shared name every reader of this
+    # tape uses -- built the same way broker_history_reader.py's own
+    # _symbol_by_key is, from the same narrowed, already-resolved listing.
+    symbol_by_key: dict[str, str] = {}
+    counts = {
+        "records_written": 0, "last_failure": None,
+        "symbols_resolved": 0, "unresolved_writes": 0,
+    }
 
-    def writer_for(instrument_key: str, kind: StreamKind) -> TapeWriter:
-        key = (instrument_key, kind)
+    listing_reader = context.bus.reader("broker-subscribed-instrument-listing")
+
+    def learn_listings() -> None:
+        # A message's payload is a tuple slice most of the time, same
+        # RestatementConveyor pacing subscribed-instrument-listing-filter uses
+        # everywhere else it is read (expiry-day-zero-to-hero-detector's own
+        # tick does the identical isinstance check for the same reason).
+        for message in listing_reader():
+            payload = message.payload
+            for listing in payload if isinstance(payload, tuple) else (payload,):
+                observe_subscribed_listing(symbol_by_key, listing)
+        counts["symbols_resolved"] = len(symbol_by_key)
+
+    def writer_for(symbol: str, kind: StreamKind) -> TapeWriter:
+        key = (symbol, kind)
         writer = writers.get(key)
         if writer is None:
             writer = TapeWriter(
-                tape_root, "upstox", instrument_key, writeback_interval_bytes,
+                tape_root, "upstox", symbol, writeback_interval_bytes,
                 stream_kind=kind,
             )
             writers[key] = writer
@@ -123,7 +187,10 @@ def start_part(context) -> int:
 
     def write_one(record) -> None:
         kind = stream_kind_for(type(record))
-        writer_for(record.instrument_key, kind).append(
+        if record.instrument_key not in symbol_by_key:
+            counts["unresolved_writes"] += 1
+        symbol = symbol_for(symbol_by_key, record.instrument_key)
+        writer_for(symbol, kind).append(
             stream_kind=kind,
             payload=_payload_for(record),
             venue_time_ns=venue_time_ns_of(record),
@@ -140,6 +207,7 @@ def start_part(context) -> int:
 
     def write_all_pending() -> None:
         try:
+            learn_listings()
             for read in readers:
                 for message in read():
                     write_one(message.payload)
@@ -169,7 +237,9 @@ def start_part(context) -> int:
 __all__ = [
     "PART_DECLARATION",
     "PART_ID",
+    "observe_subscribed_listing",
     "start_part",
     "stream_kind_for",
+    "symbol_for",
     "venue_time_ns_of",
 ]

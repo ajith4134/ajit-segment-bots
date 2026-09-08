@@ -708,7 +708,7 @@
       "scope": "per-segment",
       "scope_origin": "user",
       "contract_recomputed": {
-        "on": "2026-09-06",
+        "on": "2026-09-08",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -1626,6 +1626,7 @@
         "broker-open-interest",
         "broker-option-greeks",
         "broker-order-book-snapshot",
+        "broker-subscribed-instrument-listing",
         "broker-subscription-state",
         "broker-token-standing",
         "market-session-state",
@@ -1652,7 +1653,7 @@
       "scope": "global",
       "scope_origin": "claude-flagged",
       "contract_recomputed": {
-        "on": "2026-09-05",
+        "on": "2026-09-08",
         "from": "its parts",
         "origin": "proposed"
       }
@@ -12611,11 +12612,12 @@
       "role": "persist every decomposed broker feed record to the tape before anything else reads it",
       "category": "broker-adapter",
       "consumes": [
-        "broker-market-data",
         "broker-candle",
-        "broker-order-book-snapshot",
+        "broker-market-data",
         "broker-open-interest",
-        "broker-option-greeks"
+        "broker-option-greeks",
+        "broker-order-book-snapshot",
+        "broker-subscribed-instrument-listing"
       ],
       "produces": [
         "part-health"
@@ -13689,7 +13691,8 @@
       "consumes": [
         "broker-instrument-listing",
         "broker-price-frame",
-        "cash-equity-shortlist"
+        "cash-equity-shortlist",
+        "position"
       ],
       "produces": [
         "symbol-universe",
@@ -14757,5 +14760,17 @@
     "proposal": [
       "docs/proposals/the-arbiter-does-not-weigh-maturity.md"
     ]
+  },
+  "_proposal_2026-09-08_broker_symbol_universe_bridge_holds_positions": {
+    "what": "broker-symbol-universe-bridge now reads `position` and forces every currently-held symbol's own listing into the published universe, unconditionally -- no distance-from-the-money rank, no nearest-expiry filter, no chain-width cap. Those three correctly bound what a segment might newly buy; they were also, until this date, capable of dropping a position already holding real capital out of the universe forever once the market moved past the window they define. Measured live 2026-09-08: 10 of 16 open stock-options positions had no tape record for today at all under their own venue+symbol path.",
+    "origin": "found and fixed by Claude during a live-spine verification the user asked for, 2026-09-08",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-08_broker_symbol_universe_bridge_holds_positions.py",
+    "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
+  },
+  "_proposal_2026-09-08_broker_market_tape_writer_resolves_symbol": {
+    "what": "broker-market-tape-writer now resolves instrument_key to trading_symbol via broker-subscribed-instrument-listing before writing to the tape, instead of writing under the venue's own instrument_key. Every reader of this tape (the trade board's read_last_price included) looks the file up by trading_symbol -- the writer was the one part out of step. A tick for an unresolved key still writes, under the instrument_key as before, and unresolved_writes counts how often, so a resolution gap that never closes stays visible.",
+    "origin": "found and fixed by Claude during a live-spine verification the user asked for, 2026-09-08",
+    "applied_by": "dashboard/blueprint_edits/apply_2026-09-08_broker_market_tape_writer_resolves_symbol.py",
+    "proposal": "docs/proposals/broker-symbol-universe-bridge.md"
   }
 }

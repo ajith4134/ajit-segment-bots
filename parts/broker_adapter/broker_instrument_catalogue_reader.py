@@ -8,13 +8,7 @@ symbol-catalogue-reader followed. No cursor loop, no per-page request.
 
 from __future__ import annotations
 
-import gzip
-import json
-import urllib.error
-import urllib.request
-
-from runtime.brokers.broker_adapter import BrokerAdapter, InstrumentListing
-from runtime.brokers.broker_http_request import build_broker_request
+from runtime.brokers.instrument_master import fetch_and_parse_listings, fetch_bytes
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.restatement_conveyor import RestatementConveyor
@@ -29,27 +23,6 @@ PART_DECLARATION = PartDeclaration(
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
-
-
-def fetch_bytes(url: str, timeout_seconds: float = 30.0) -> bytes:
-    request = build_broker_request(url, accept="application/gzip")
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-        return response.read()
-
-
-def fetch_and_parse_listings(
-    adapter: BrokerAdapter, fetch=fetch_bytes
-) -> tuple[InstrumentListing, ...]:
-    """Every listing from every URL the adapter names, gunzipped and parsed.
-
-    One call per URL, never a cursor loop -- these are whole files, not
-    paginated responses (spec section 4)."""
-    listings: list[InstrumentListing] = []
-    for url in adapter.instrument_listing_urls():
-        raw = fetch(url)
-        rows = json.loads(gzip.decompress(raw).decode("utf-8"))
-        listings.extend(adapter.read_instrument_listings(rows))
-    return tuple(listings)
 
 
 def describe_standing(

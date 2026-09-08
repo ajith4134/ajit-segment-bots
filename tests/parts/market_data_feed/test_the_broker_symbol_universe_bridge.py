@@ -29,8 +29,10 @@ from parts.broker_adapter.broker_price_level_sampler import BrokerPriceFrame, Br
 from parts.market_data_feed.broker_symbol_universe_bridge import (
     PART_DECLARATION,
     BrokerSymbolUniverseBridge,
+    warm_start_from_the_masters_own_file,
 )
 from runtime.brokers.upstox import UpstoxAdapter
+from runtime.trading_types import Position
 
 CAPTURED = (
     pathlib.Path(__file__).resolve().parents[3]
@@ -178,6 +180,113 @@ def test_the_price_increment_is_carried_from_the_master(real_listings):
     options = [e for e in universe if e.instrument_kind == "option"]
 
     assert all(entry.price_increment is not None for entry in options)
+
+
+def test_a_held_position_on_the_far_expiry_still_gets_priced(real_listings):
+    """Real incident, 2026-09-08: 10 of 16 open stock-options positions had no
+    live price at all, because their contract was not the CURRENT nearest
+    expiry -- `test_only_the_nearest_expiry_is_published` above proves that
+    chain is dropped by design. A position does not stop existing when the
+    market rolls past its expiry window; it needs its own price to compute
+    unrealised P&L and to let its stop trigger, same as any other holding.
+    """
+    bridge = a_fed_bridge(real_listings, contracts_per_underlying=8)
+    # NIFTY 24200 CE 15 SEP 26 -- the fixture's second, farther expiry, already
+    # proven excluded from the ranked chain by test_only_the_nearest_expiry_is_published.
+    far_expiry_symbol = "NIFTY 24200 CE 15 SEP 26"
+    bridge.observe_position(Position(
+        venue_id="upstox", symbol=far_expiry_symbol, quantity=50.0,
+        average_entry_price=120.0, realised_pnl=0.0, fees_paid=0.0,
+        opened_at_ns=1, updated_at_ns=1,
+    ))
+
+    universe = bridge.universe()
+
+    symbols = {e.symbol for e in universe}
+    assert far_expiry_symbol in symbols
+    assert bridge.standing.held_positions_forced_in == 1
+    assert bridge.standing.held_positions_without_a_listing == 0
+
+
+def test_a_flat_position_is_not_forced_in(real_listings):
+    """A closed position has no capital in it -- forcing its listing back into
+    the universe would mean a round trip never lets go of connection budget."""
+    bridge = a_fed_bridge(real_listings, contracts_per_underlying=8)
+    far_expiry_symbol = "NIFTY 24200 CE 15 SEP 26"
+    bridge.observe_position(Position(
+        venue_id="upstox", symbol=far_expiry_symbol, quantity=0.0,
+        average_entry_price=120.0, realised_pnl=45.0, fees_paid=1.0,
+        opened_at_ns=1, updated_at_ns=1,
+    ))
+
+    universe = bridge.universe()
+
+    assert far_expiry_symbol not in {e.symbol for e in universe}
+    assert bridge.standing.held_positions_forced_in == 0
+
+
+def test_a_held_symbol_with_no_listing_yet_is_counted_not_silently_dropped(real_listings):
+    """The listing may not have come round the catalogue conveyor yet -- absence
+    is its own state (Rule 8), not zero indistinguishable from 'nothing held'."""
+    bridge = a_fed_bridge(real_listings, contracts_per_underlying=8)
+    bridge.observe_position(Position(
+        venue_id="upstox", symbol="NIFTY 99999 CE 15 SEP 26", quantity=50.0,
+        average_entry_price=1.0, realised_pnl=0.0, fees_paid=0.0,
+        opened_at_ns=1, updated_at_ns=1,
+    ))
+
+    bridge.universe()
+
+    assert bridge.standing.held_positions_forced_in == 0
+    assert bridge.standing.held_positions_without_a_listing == 1
+
+
+def test_the_part_now_consumes_position():
+    assert "position" in PART_DECLARATION.consumes
+
+
+def test_warm_start_forces_a_held_positions_listing_in_without_waiting_for_the_bus(
+    monkeypatch, real_listings,
+):
+    """The whole point of the 2026-09-08 fix, measured live: 8 minutes after a
+    restart, only 2 of 10 held positions had found their listing through the
+    paced bus alone. This proves warm start does not need to wait at all --
+    one synchronous read of the same file, at start, before the first tick.
+    """
+    monkeypatch.setattr(
+        "runtime.brokers.instrument_master.fetch_and_parse_listings",
+        lambda adapter: real_listings,
+    )
+    bridge = a_bridge()
+    far_expiry_symbol = "NIFTY 24200 CE 15 SEP 26"
+    bridge.observe_position(Position(
+        venue_id="upstox", symbol=far_expiry_symbol, quantity=50.0,
+        average_entry_price=120.0, realised_pnl=0.0, fees_paid=0.0,
+        opened_at_ns=1, updated_at_ns=1,
+    ))
+
+    warm_start_from_the_masters_own_file(bridge)
+
+    assert bridge.standing.warm_start_listings_loaded == len(real_listings)
+    assert bridge.standing.warm_start_failure is None
+    assert far_expiry_symbol in {e.symbol for e in bridge.universe()}
+
+
+def test_warm_start_records_its_own_failure_rather_than_crashing(monkeypatch):
+    """Best-effort: a network hiccup here must leave the bridge exactly as it
+    would have been without this function, not take the part down."""
+    def always_fails(adapter):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(
+        "runtime.brokers.instrument_master.fetch_and_parse_listings", always_fails,
+    )
+    bridge = a_bridge()
+
+    warm_start_from_the_masters_own_file(bridge)  # must not raise
+
+    assert bridge.standing.warm_start_listings_loaded == 0
+    assert "OSError" in bridge.standing.warm_start_failure
 
 
 def test_an_empty_tracked_list_is_refused():

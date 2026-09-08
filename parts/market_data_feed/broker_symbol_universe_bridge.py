@@ -70,7 +70,10 @@ OPTION_INSTRUMENT_TYPES = (CALL, PUT)
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-symbol-universe-bridge",
-    consumes=("broker-instrument-listing", "broker-price-frame", "cash-equity-shortlist"),
+    consumes=(
+        "broker-instrument-listing", "broker-price-frame", "cash-equity-shortlist",
+        "position",
+    ),
     produces=("symbol-universe", "part-health"),
     resource_class="bandwidth-bound",
     rate_risk="changes-the-answer",
@@ -150,6 +153,27 @@ class BridgeStanding:
     # already uses one line above.
     equity_universe_is_waiting_for_a_shortlist: bool = True
     equities_outside_the_shortlist: int = 0
+    # A position survives the money-distance ranking and the nearest-expiry
+    # filter that bound everything else this bridge publishes (2026-09-08).
+    # Real incident: ten open stock-options positions went unpriced for their
+    # entire remaining life because contracts_for() only ever publishes the
+    # CURRENT nearest-expiry chain, ranked by distance from the underlying's
+    # price -- a position opened weeks earlier, on a strike the price has since
+    # moved away from or an expiry that has since rolled, falls out of that
+    # window and stays out permanently. Nothing evicts a held position from the
+    # book, so nothing should be allowed to evict its listing from the universe.
+    held_positions_forced_in: int = 0
+    # A held symbol whose listing has not arrived yet, or whose venue is not
+    # this bridge's (paper positions on a venue this broker never listed). Not
+    # an error -- the same "absence is its own state" the rest of this file
+    # already applies to underlyings_without_a_price.
+    held_positions_without_a_listing: int = 0
+    # Whether start_part's own direct read of the master (see
+    # warm_start_from_the_masters_own_file) succeeded, and how many listings it
+    # loaded -- 0 while it has not run yet or failed, which reads identically to
+    # "never tried" (Rule 8 -- see warm_start_failure for which one it was).
+    warm_start_listings_loaded: int = 0
+    warm_start_failure: str | None = None
 
 
 class BrokerSymbolUniverseBridge:
@@ -252,11 +276,30 @@ class BrokerSymbolUniverseBridge:
         self._contracts_by_underlying_key: dict[str, dict[str, object]] = {}
         # What each underlying last traded at, by its own key.
         self._price_by_underlying_key: dict[str, float] = {}
+        # Every listing seen, by its trading_symbol -- the same name a Position
+        # carries, so a held position can be looked up without knowing its
+        # instrument_key up front. Last listing wins, matching the whole file's
+        # instrument_key-keyed dicts; two exchanges listing the same trading
+        # symbol is the same rare case those already accept.
+        self._listing_by_trading_symbol: dict[str, object] = {}
+        # The latest Position per (venue_id, symbol), replaced whole on every
+        # message -- a level, not an event, matching how fill-reconciler and
+        # position-close-detector publish it. A closed position (is_flat) stays
+        # in this dict rather than being removed: keeping the entry read-only
+        # is simpler than deleting on the specific message shape that means
+        # flat, and universe() already skips flat positions by reading
+        # is_flat itself.
+        self._position_by_key: dict[tuple[str, str], object] = {}
         self.standing = BridgeStanding()
 
     def observe_listing(self, listing) -> None:
         """One instrument listing: a tracked underlying, one of its contracts, or neither."""
         self.standing.listings_seen += 1
+        # Indexed by trading_symbol unconditionally, before any of the filters
+        # below -- a held position's listing may be an equity, an option whose
+        # underlying is not tracked, or a contract whose expiry has already
+        # rolled past nearest, and universe() must still be able to find it.
+        self._listing_by_trading_symbol[listing.trading_symbol] = listing
 
         if self._first_listing_key is None:
             self._first_listing_key = listing.instrument_key
@@ -305,6 +348,15 @@ class BrokerSymbolUniverseBridge:
         this is a level, and yesterday's top 50 has no standing once today's
         has arrived."""
         self._shortlist_symbols = frozenset(shortlist.symbols)
+
+    def observe_position(self, position) -> None:
+        """One position, replacing whatever this bridge last knew about it.
+
+        Read for one thing only: which symbols currently have real capital in
+        them and must stay priced no matter where the ranking would otherwise
+        put them.
+        """
+        self._position_by_key[(position.venue_id, position.symbol)] = position
 
     def nearest_expiry_for(self, underlying_key: str) -> int | None:
         """The soonest expiry on this underlying that has not already passed.
@@ -460,7 +512,47 @@ class BrokerSymbolUniverseBridge:
         self.standing.underlyings_without_a_price = without_price
         self.standing.underlyings_with_no_live_expiry = no_expiry
         self.standing.contracts_published = contracts
+
+        already_covered = {entry.symbol for entry in entries}
+        held_entries, forced_in, without_a_listing = self._held_entries(already_covered)
+        entries.extend(held_entries)
+        self.standing.held_positions_forced_in = forced_in
+        self.standing.held_positions_without_a_listing = without_a_listing
+
         return tuple(entries)
+
+    def _held_entries(
+        self, already_covered: set[str],
+    ) -> tuple[list[CapturableSymbol], int, int]:
+        """Every currently-held symbol the ranking above did not already publish.
+
+        Unlike `contracts_for`, this reads a position's own listing directly --
+        no distance-from-the-money rank, no nearest-expiry filter, no chain
+        width cap. Those three bound what a segment might *newly* buy, which is
+        legitimately small; a position already holding real capital is not a
+        candidate to be ranked, it is a fact this bridge is not allowed to stop
+        stating just because the market moved since it opened.
+        """
+        out: list[CapturableSymbol] = []
+        forced_in = without_a_listing = 0
+        for (venue_id, symbol), position in sorted(self._position_by_key.items()):
+            if venue_id != UPSTOX_VENUE_ID or position.is_flat or symbol in already_covered:
+                continue
+            listing = self._listing_by_trading_symbol.get(symbol)
+            if listing is None:
+                without_a_listing += 1
+                continue
+            if listing.instrument_type in OPTION_INSTRUMENT_TYPES and listing.underlying_key is not None:
+                underlying_listing = self._underlying_by_key.get(listing.underlying_key)
+                underlying_symbol = (
+                    underlying_listing.trading_symbol if underlying_listing is not None else ""
+                )
+                out.append(self._entry_for_contract(listing, underlying_symbol, listing.underlying_key))
+            else:
+                out.append(self._entry_for_underlying(listing))
+            already_covered.add(symbol)
+            forced_in += 1
+        return out, forced_in, without_a_listing
 
 
 def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
@@ -486,7 +578,54 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
         "equity_universe_is_waiting_for_a_shortlist": (
             bridge.standing.equity_universe_is_waiting_for_a_shortlist
         ),
+        "held_positions_forced_in": bridge.standing.held_positions_forced_in,
+        "held_positions_without_a_listing": bridge.standing.held_positions_without_a_listing,
+        "warm_start_listings_loaded": bridge.standing.warm_start_listings_loaded,
+        "warm_start_failure": bridge.standing.warm_start_failure,
     }
+
+
+def warm_start_from_the_masters_own_file(bridge: BrokerSymbolUniverseBridge) -> None:
+    """Feed the whole instrument master into the bridge once, synchronously,
+    before the first tick -- the same static gzip file
+    broker-instrument-catalogue-reader fetches, read a second time here rather
+    than waited for.
+
+    That reader already holds every listing in memory the instant it starts;
+    what is slow is its *paced* republish onto the bus, deliberately paced
+    (`RestatementConveyor`) to protect the bounded bus buffer from exactly the
+    103,078-listing flood that dropped 13.6% of `broker-instrument-listing` on
+    2026-09-05. That protection is correct for the steady state and wrong for
+    the one thing that cannot wait for it: a position already holding real
+    capital, whose price a full conveyor cycle can take twenty-plus minutes to
+    reach after every restart. Measured live 2026-09-08: 10 open stock-options
+    positions, 8 minutes in, only 2 had found their listing through the paced
+    bus alone.
+
+    A second parse of the same ~15 MB gzip is a one-time, part-start cost, not
+    a per-tick one, and it changes nothing about what gets published --
+    observe_listing() is the same call the paced bus drives, so a listing that
+    arrives twice (once here, once again later off the bus) is simply written
+    twice, not double-counted incorrectly (BridgeStanding.listings_seen sees
+    both, honestly, since both really were listings observed).
+
+    Best-effort: a fetch failure here leaves the bridge exactly as it would
+    have been without this function -- still fed by the paced bus, just
+    without the head start. Recorded rather than raised, because a symbol
+    universe with no warm start is a real, running bridge and a crash here
+    would make it not one.
+    """
+    from runtime.brokers.instrument_master import fetch_and_parse_listings
+    from runtime.brokers.upstox import UpstoxAdapter
+
+    try:
+        listings = fetch_and_parse_listings(UpstoxAdapter())
+    except Exception as failure:
+        bridge.standing.warm_start_failure = f"{type(failure).__name__}: {failure}"
+        return
+    for listing in listings:
+        bridge.observe_listing(listing)
+    bridge.standing.warm_start_listings_loaded = len(listings)
 
 
 def start_part(context) -> int:
@@ -497,6 +636,7 @@ def start_part(context) -> int:
     listings = Batch(read=context.bus.reader("broker-instrument-listing"))
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     shortlists = Batch(read=context.bus.reader("cash-equity-shortlist"))
+    positions = Batch(read=context.bus.reader("position"))
     publish_universe = context.bus.publisher_for("symbol-universe")
 
     # The segment's own universe, not the machine's. `segment_id` already
@@ -526,6 +666,10 @@ def start_part(context) -> int:
             else None
         ),
     )
+    # Held positions cannot wait for the paced conveyor -- see
+    # warm_start_from_the_masters_own_file's own docstring for why this is a
+    # second read of the same file rather than a change to that pacing.
+    warm_start_from_the_masters_own_file(bridge)
 
     # `symbol-universe` is a level: these are the symbols this system captures,
     # now. Restated on an interval as well as on change, because a consumer that
@@ -544,6 +688,8 @@ def start_part(context) -> int:
             bridge.observe_price_frame(price_frame)
         for shortlist in shortlists.payloads():
             bridge.observe_shortlist(shortlist)
+        for position in positions.payloads():
+            bridge.observe_position(position)
         universe = bridge.universe()
         if universe:
             # An empty universe is never published: never read and lists nothing
@@ -576,6 +722,7 @@ __all__ = [
     "PART_ID",
     "PUT",
     "UPSTOX_VENUE_ID",
+    "warm_start_from_the_masters_own_file",
     "describe_bridge",
     "start_part",
 ]
