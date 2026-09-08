@@ -1679,3 +1679,78 @@ genuine live-price gap. And, larger: whether `/api/board`'s per-part
 filesystem scan can be made cheaper, or moved off the request-serving path
 entirely (background refresh thread), rather than only widening the window
 around it — the 373-part cost will only grow as more parts land.
+
+### 2026-09-08, later — "also no new trades did not open today"
+
+The user's own words, mid-session. Confirmed real via the position journal:
+last position opened 2026-09-07T09:44 UTC; nothing opened all of today's
+session (03:45 UTC onward, ~4 hours in when checked).
+
+**Root cause, traced with a temporary diagnostic on `position-sizer` (added,
+verified, removed):** every actionable trade-intent the live spine formed all
+session was `action: "close"` — a wide 80MB journal sample found 4,483
+actionable intents and **zero** were `open`. `position-sizer` sized every
+intent through the entry/stop risk-budget path built for OPEN, and a CLOSE
+carries neither by construction (`bull-opinion-composer.compose()` refuses to
+form an opinion without a complete `exit_plan`, and there's nowhere new to
+enter when closing). Confirmed live: a real close (`ICICIBANK 1440 PE 29 SEP
+26`) priced correctly (`reference_price=22.525`) but then fell through to
+`intent.stop_price = None` — refused as `missing_stop_price`, 100% of the
+time, every close, all session. Separately, `opening_order_target()` only
+checks the instrument choice for `action == OPEN`, so
+`opens_without_an_instrument_choice` stayed 0 throughout and never surfaced
+the real gap.
+
+**Fixed** (`docs/proposals/position-sizer-closes-what-is-held.md`):
+`position-sizer` now consumes `position` and sizes CLOSE/REDUCE through a new
+`close_order()` — quantity from the held position, side opposite what's held,
+no stop or risk budget. `trade-capital-bounds-gate` now skips its
+capital-ceiling economics for a close (it was checking a closing order's
+notional against the position's own already-committed capital, backwards for
+an order that reduces it). Both `SizedOrder`/`BoundedOrder` carry a new
+`action` field. 10/10 new unit tests pass, full `risk_capital_allocation`
+suite (294) passes, contracts hold.
+
+**Two more real defects found and fixed while deploying it:**
+- `trade-capital-bounds-gate` crash-looped (`AttributeError: 'NoneType'
+  object has no attribute 'minimum_capital'`) the moment it was restarted —
+  pre-existing, not caused by this change: `_bounded()` read `bounds.*`
+  unconditionally even on the `REFUSED_SETTINGS_INVALID` path, which is
+  reachable with `bounds=None` on any cold start before this segment's
+  `trade-capital-bounds` has ever been read. Fixed with `getattr(bounds,
+  ..., 0.0)`. 11 crash-restarts before caught.
+- **Per-part restart does not add a new bus subscription.** After
+  individually restarting `position-sizer` (picking up the code, including
+  the new `position` consumption), its own `messages_received` never showed
+  a single `position` message despite `fill-reconciler` publishing 540,600
+  of them. Bus subscriptions (file descriptors) are wired once when the
+  whole spine starts; a per-part kill+respawn re-execs the same part with
+  the same wiring the spine handed it at spine-start, not a fresh one
+  matching the part's current `consumes`. Needed a **full spine restart** to
+  actually wire the new type in — confirmed after: `position` received
+  (3,310) within minutes. Worth remembering for every future
+  consumes-widening change: a per-part restart proves the code runs: it does
+  not prove the wire exists.
+
+**Verified partially, not fully end-to-end:** as of this entry, no real
+(non-stand-aside) trade-intent has formed since the full spine restart, so no
+close has yet been observed completing through the fixed path live — the
+bull/bear conviction pipeline needs to warm up again, same as after the
+earlier restarts today. The fix is structurally verified (unit tests, no
+crashes, `position` wire confirmed flowing) but not yet watched carry a real
+order through `bound()` → `paper-fill-simulator` → a closed position.
+
+**A fourth, separate defect found while waiting, not fixed:**
+`bull-opinion-composer` stood down 100% of 360 opinions this restart
+(`stood_down_by_reason.conviction-below-threshold`), with
+`last_floor: 1.0` — a conviction floor of 100%, uncrossable by construction.
+`ConvictionFloor.for_plan()` computes `min(1.0, break_even_probability(...) +
+margin)` and is hitting the cap. `bull-exit-plan-proposer`'s standing shows
+every one of its 360 plans came from `plans_from_the_live_range` (the
+fallback path, not a learned distance) — plausibly producing too tight a
+reward:risk ratio to ever clear break-even plus margin. Not traced further:
+this blocks OPEN specifically and is unrelated to the CLOSE fix above. Next
+session: read `bull-exit-plan-proposer`'s live-range fallback and
+`round_trip_cost_in_risk_units`'s inputs against real numbers from a warmed
+run, the same way the reward-to-risk-ratio class of bug was chased down
+2026-09-07.
