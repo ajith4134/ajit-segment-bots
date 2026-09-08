@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED
-from runtime.trade_intent import OPEN
+from runtime.trade_intent import CLOSE, OPEN, REDUCE
 from runtime.trading_types import BUY, LONG, SELL, SHORT, order_side_for
 
 PART_ID = "position-sizer"
@@ -40,9 +40,10 @@ PART_ID = "position-sizer"
 PART_DECLARATION = PartDeclaration(
     part_id="position-sizer",
     consumes=(
-        "trade-intent", "instrument-choice", "leverage-choice", "stop-target-plan",
-        "account-balance", "risk-limit", "slippage-profile", "locked-allocation",
-        "price-increment", "size-hint", "timed-intent",
+        "account-balance", "instrument-choice", "leverage-choice",
+        "locked-allocation", "position", "price-increment", "risk-limit",
+        "size-hint", "slippage-profile", "stop-target-plan", "timed-intent",
+        "trade-intent",
     ),
     produces=("sized-order", "part-health"),
     resource_class="compute-bound",
@@ -57,6 +58,8 @@ REFUSED_TOO_SMALL = "refused-smallest-size-risks-too-much"
 REFUSED_NO_INCREMENT = "refused-no-price-increment"
 REFUSED_NO_FREE_CAPITAL = "refused-free-capital-funds-nothing-tradeable"
 SHRUNK_TO_FIT = "shrunk-to-fit"
+CLOSED = "closed"
+REFUSED_NO_POSITION_TO_CLOSE = "refused-no-position-to-close"
 
 # How many times the size is re-solved against fees before giving up. Each pass
 # converges quickly because fees are a small fraction of risk; the bound exists
@@ -105,10 +108,19 @@ class SizedOrder:
     # sized to: two parts snapping one quantity to two different steps is how an
     # order leaves the gate in a size the sizer would never have produced.
     quantity_increment: float = 0.0
+    # What this order does to the position, not what it costs to hold -- OPEN,
+    # ADD_TO, REDUCE or CLOSE, from the intent it was sized from. Added
+    # 2026-09-08 so `trade-capital-bounds-gate` can tell a close from an open:
+    # a close order's own notional was being checked against the position's
+    # already-committed capital as though it were adding more, and a position
+    # sized exactly at the ceiling refused the one order that would have
+    # brought it under. Defaults to OPEN so every pre-existing call site is
+    # unchanged.
+    action: str = OPEN
 
     @property
     def is_tradeable(self) -> bool:
-        return self.outcome in (SIZED, SHRUNK_TO_FIT) and self.quantity > 0
+        return self.outcome in (SIZED, SHRUNK_TO_FIT, CLOSED) and self.quantity > 0
 
 
 @dataclass
@@ -168,6 +180,16 @@ class SizerStanding:
     stop_from_refined_plan: int = 0
     stop_from_risk_fraction: int = 0
     stop_from_absolute_fallback: int = 0
+    # CLOSE and REDUCE intents, sized against the held position rather than a
+    # risk budget -- added 2026-09-08. Real incident that day: every CLOSE
+    # intent this part saw (100% of the actionable intents formed all
+    # session) fell through the OPEN-shaped entry/stop path, which a close
+    # never carries (there is nowhere new to enter, and nothing to close
+    # against but the position's own quantity) -- refused as
+    # missing_stop_price, so nothing this project already held could ever be
+    # exited through this part.
+    closed: int = 0
+    refused_no_position_to_close: int = 0
 
 
 class PositionSizer:
@@ -342,6 +364,58 @@ class PositionSizer:
             sized_at_ns=self._now_ns(),
         )
 
+    def close_order(
+        self,
+        venue_id: str,
+        symbol: str,
+        position_quantity: float,
+        position_side: str,
+        entry_price: float | None,
+        quantity_increment: float,
+        action: str = CLOSE,
+        intent_id: str = "",
+        segment: str = "",
+    ) -> SizedOrder:
+        """Zero out a held position, rather than size a fresh risk.
+
+        A close order is not a smaller version of an open: it has no stop to
+        risk against (the position is being closed on the bot's own opinion,
+        not because a stop was hit -- that path is stop-order-manager's), and
+        its quantity is dictated by what is held, not by a risk budget. Sizing
+        it through `size()` was the 2026-09-08 defect: every CLOSE intent
+        carries no exit_plan by construction (there is nowhere new to enter),
+        so `entry_price_for`/`stop_price_for` always found nothing and every
+        close was refused as missing_stop_price -- for the whole session,
+        nothing this project already held could be exited through this part.
+
+        The side is the *opposite* of what is held, not the intent's own side:
+        the intent's side is the bot's directional view (long, even when the
+        view is "close this long"), and an order built from that view would
+        add to the position rather than close it.
+        """
+        if position_quantity == 0:
+            self.standing.refused_no_position_to_close += 1
+            return self._refusal(
+                venue_id, symbol, order_side_for(position_side), 0.0, 0.0,
+                REFUSED_NO_POSITION_TO_CLOSE, 1.0,
+                "the intent asks to close a position this part has no record of holding",
+                intent_id, segment, action,
+            )
+        side = SELL if position_side == LONG else BUY
+        quantity = self._snap_quantity(abs(position_quantity), quantity_increment)
+        price = entry_price or 0.0
+        self.standing.closed += 1
+        return SizedOrder(
+            venue_id=venue_id, symbol=symbol, side=side, quantity=quantity,
+            entry_price=price, stop_price=0.0, outcome=CLOSED,
+            risk_allowed=0.0, risk_at_stop=0.0,
+            fees_charged=quantity * price * self._fee_rate,
+            notional=quantity * price, leverage=1.0,
+            reason=f"closing the {abs(position_quantity):g} held, at the venue's own last price",
+            sized_at_ns=self._now_ns(), intent_id=intent_id, segment=segment,
+            quantity_increment=quantity_increment, action=action,
+        )
+
     def _quantity_free_capital_funds(self, free_capital: float, leverage: float, entry: float) -> float:
         """The largest position the unlocked balance pays the margin for.
 
@@ -374,14 +448,14 @@ class PositionSizer:
 
     def _refusal(
         self, venue_id, symbol, side, entry, stop, outcome, leverage, reason,
-        intent_id="", segment="",
+        intent_id="", segment="", action=OPEN,
     ) -> SizedOrder:
         return SizedOrder(
             venue_id=venue_id, symbol=symbol, side=side, quantity=0.0,
             entry_price=entry, stop_price=stop, outcome=outcome,
             risk_allowed=0.0, risk_at_stop=0.0, fees_charged=0.0, notional=0.0,
             leverage=leverage, reason=reason, sized_at_ns=self._now_ns(),
-            intent_id=intent_id, segment=segment,
+            intent_id=intent_id, segment=segment, action=action,
         )
 
 
@@ -594,6 +668,8 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "stop_from_refined_plan": sizer.standing.stop_from_refined_plan,
         "stop_from_risk_fraction": sizer.standing.stop_from_risk_fraction,
         "stop_from_absolute_fallback": sizer.standing.stop_from_absolute_fallback,
+        "closed": sizer.standing.closed,
+        "refused_no_position_to_close": sizer.standing.refused_no_position_to_close,
     }
 
 
@@ -604,7 +680,12 @@ def run_position_sizer(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        publish_sized_orders(tuple(sizer.size(**intent) for intent in read_intents()))
+        # Each entry names the method that sizes it -- sizer.size for a fresh
+        # open, sizer.close_order for a close/reduce -- so one heterogeneous
+        # tick can carry both without either path pretending to be the other.
+        publish_sized_orders(
+            tuple(method(**kwargs) for method, kwargs in read_intents())
+        )
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -693,6 +774,17 @@ def start_part(context) -> int:
     increments = by_symbol("price-increment")
     hints = by_symbol("size-hint")
     slippage = by_symbol("slippage-profile")
+    # What is currently held, so a CLOSE/REDUCE intent can be sized against the
+    # position itself rather than against a risk budget it was never going to
+    # carry (2026-09-08). Age-bounded on the same setting
+    # trade-capital-bounds-gate already reads `position` under, for the same
+    # reason: a position that stopped being restated must stop being
+    # answerable for, not bind this part forever on a stale quantity.
+    positions = LatestByKey(
+        read=context.bus.reader("position"),
+        key_of=lambda p: (p.venue_id, p.symbol),
+        maximum_age_seconds=context.number("capital_bounds_maximum_age_seconds"),
+    )
     allotments = LatestByKey(
         read=context.bus.reader("account-balance"),
         key_of=lambda balance: balance.segment,
@@ -780,6 +872,7 @@ def start_part(context) -> int:
         plan_by_symbol = stop_plans.mapping()
         increment_by_symbol = increments.mapping()
         hint_by_symbol = hints.mapping()
+        position_by_symbol = positions.mapping()
         slippage.mapping()
         free_capital = free_capital_from_locks(locked.mapping().values())
         balance_by_segment = allotments.mapping()
@@ -822,6 +915,39 @@ def start_part(context) -> int:
                 sizer.standing.stood_aside += 1
                 continue
             key = (intent.venue_id, intent.symbol)
+
+            # CLOSE and REDUCE act on what is held, not on a fresh entry --
+            # sized against the position itself rather than through the
+            # OPEN-shaped risk/stop path below, which a close never carries
+            # (2026-09-08; see close_order's own docstring for the incident).
+            # REDUCE is not distinguished from a full close here: TradeIntent
+            # carries no reduce fraction, and closing the whole position is
+            # the safe direction until a partial-reduce size is a decision
+            # this project has actually observed a bot ask for.
+            if intent.action in (CLOSE, REDUCE):
+                position = position_by_symbol.get(key)
+                instrument = instrument_by_symbol.get(key)
+                price = entry_price_for(plan_by_symbol.get(key), instrument)
+                if price is None:
+                    price = getattr(position, "average_entry_price", None)
+                sizable.append((
+                    sizer.close_order,
+                    {
+                        "venue_id": intent.venue_id,
+                        "symbol": intent.symbol,
+                        "position_quantity": getattr(position, "quantity", 0.0),
+                        "position_side": getattr(position, "direction", LONG),
+                        "entry_price": price,
+                        "quantity_increment": quantity_increment_for(
+                            instrument, quantity_increment
+                        ),
+                        "action": intent.action,
+                        "intent_id": intent.decision_id,
+                        "segment": getattr(position, "segment", "") or "",
+                    },
+                ))
+                continue
+
             plan = plan_by_symbol.get(key)
             hint = hint_by_symbol.get(key)
             increment = increment_by_symbol.get(key)
@@ -888,7 +1014,8 @@ def start_part(context) -> int:
             if binding is None:
                 sizer.standing.missing_risk_limit += 1
                 continue
-            sizable.append(
+            sizable.append((
+                sizer.size,
                 {
                     "venue_id": intent.venue_id,
                     # The contract the selector chose, not the symbol the intent
@@ -936,8 +1063,8 @@ def start_part(context) -> int:
                     # a NIFTY option is only an index-options order because that is
                     # the segment whose settings claim it.
                     "segment": order_segment,
-                }
-            )
+                },
+            ))
         return tuple(sizable)
 
     return run_position_sizer(

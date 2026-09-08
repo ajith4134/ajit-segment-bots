@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.trade_intent import CLOSE, OPEN, REDUCE
 from runtime.trading_types import (
     UNLEVERED,
     capital_committed_by,
@@ -101,6 +102,12 @@ class BoundedOrder:
     # reports nothing. Empty means the producer named no segment, which is what a
     # spine trading one segment looked like before this.
     segment: str = ""
+    # OPEN, ADD_TO, REDUCE or CLOSE, straight through from the sized order.
+    # Added 2026-09-08 alongside the reason it matters here: `bound()` reads it
+    # to skip the capital-ceiling economics entirely for a close, which is
+    # answered by what is held, not by what the operator allows a fresh trade
+    # to commit.
+    action: str = OPEN
 
     @property
     def may_be_sent(self) -> bool:
@@ -123,6 +130,13 @@ class GateStanding:
     refused_position_already_at_the_ceiling: int = 0
     capped_to_the_room_left: int = 0
     largest_capital_used: float = 0.0
+    # A close/reduce order, passed straight through -- added 2026-09-08. Real
+    # incident that day: a close order's own notional was checked against the
+    # position's already-committed capital as though it were adding more,
+    # which is backwards for an order that reduces what is held; a position
+    # sized exactly at the ceiling refused the one order that would have
+    # brought it under.
+    closed: int = 0
 
 
 class TradeCapitalBoundsGate:
@@ -179,6 +193,32 @@ class TradeCapitalBoundsGate:
             return self._refusal(
                 sized_order, bounds, REFUSED_NOT_TRADEABLE,
                 f"the sizer produced no tradeable order: {sized_order.reason}",
+            )
+
+        # A close/reduce is answered by what is held, not by what a fresh
+        # trade may commit -- the ceiling below exists to bound a *new*
+        # position, and applying it to an order that shrinks one treats
+        # "already committed" as a reason to refuse the very order that
+        # would reduce it. Passed through at the size the sizer already
+        # computed from the position itself.
+        if getattr(sized_order, "action", OPEN) in (CLOSE, REDUCE):
+            self.standing.closed += 1
+            self.standing.largest_capital_used = max(
+                self.standing.largest_capital_used,
+                capital_committed_by(
+                    sized_order.quantity, sized_order.entry_price,
+                    leverage_behind(sized_order),
+                ),
+            )
+            return self._bounded(
+                sized_order, bounds, sized_order.quantity,
+                capital_committed_by(
+                    sized_order.quantity, sized_order.entry_price,
+                    leverage_behind(sized_order),
+                ),
+                WITHIN_BOUNDS, sized_order.risk_at_stop,
+                f"closing {sized_order.quantity:g} of what is held; the capital ceiling "
+                f"bounds new commitment, not an order that reduces it",
             )
 
         leverage = leverage_behind(sized_order)
@@ -299,6 +339,13 @@ class TradeCapitalBoundsGate:
         return round(math.floor(quantity / step) * step, 12)
 
     def _bounded(self, sized_order, bounds, quantity, capital, outcome, risk, reason) -> BoundedOrder:
+        # `bounds` is None whenever this segment's `trade-capital-bounds` has
+        # never been read -- real, live, 2026-09-08: a cold-started gate's
+        # very first tick reaches REFUSED_SETTINGS_INVALID (no verdict read
+        # yet either) with no bounds behind it, and unconditional attribute
+        # reads here crashed the whole part on every restart. The refusal
+        # itself is correct -- nothing may be bounded before its bounds are
+        # known -- only reading through a None to report it was the bug.
         return BoundedOrder(
             venue_id=sized_order.venue_id,
             symbol=sized_order.symbol,
@@ -308,8 +355,8 @@ class TradeCapitalBoundsGate:
             stop_price=sized_order.stop_price,
             capital_used=capital,
             outcome=outcome,
-            minimum_capital=bounds.minimum_capital,
-            maximum_capital=bounds.maximum_capital,
+            minimum_capital=getattr(bounds, "minimum_capital", 0.0),
+            maximum_capital=getattr(bounds, "maximum_capital", 0.0),
             risk_at_stop=risk,
             risk_allowed=sized_order.risk_allowed,
             reason=reason,
@@ -324,6 +371,7 @@ class TradeCapitalBoundsGate:
             # per segment now, and an order that arrived there unnamed would be
             # matched against whichever segment published last (2026-09-05).
             segment=getattr(sized_order, "segment", ""),
+            action=getattr(sized_order, "action", OPEN),
         )
 
     def _refusal(self, sized_order, bounds, outcome, reason) -> BoundedOrder:
@@ -345,6 +393,7 @@ def describe_bounding(gate: TradeCapitalBoundsGate) -> dict:
         "capped_to_the_room_left": gate.standing.capped_to_the_room_left,
         "refused_maximum_buys_nothing": gate.standing.refused_maximum_buys_nothing,
         "largest_capital_used": gate.standing.largest_capital_used,
+        "closed": gate.standing.closed,
     }
 
 
