@@ -127,6 +127,7 @@ class BrokerMarginQuoter:
         venue_id: str,
         instruments_per_call: int,
         requote_after_seconds: float,
+        wait_after_a_refusal_seconds: float,
         now_ns=time.time_ns,
     ) -> None:
         if instruments_per_call < 1:
@@ -139,6 +140,11 @@ class BrokerMarginQuoter:
                 "a requote interval of zero asks the broker on every tick, which spends "
                 f"the rate limit the trade path needs; got {requote_after_seconds!r}"
             )
+        if wait_after_a_refusal_seconds <= 0:
+            raise ValueError(
+                "a refused call retried immediately is what caused the refusal; got "
+                f"{wait_after_a_refusal_seconds!r}"
+            )
         self._venue_id = venue_id
         self._per_call = instruments_per_call
         self._requote_after_ns = int(requote_after_seconds * 1_000_000_000)
@@ -148,6 +154,14 @@ class BrokerMarginQuoter:
         self._lot_by_key: dict[str, float] = {}
         self._price_by_key: dict[str, float] = {}
         self._quoted_at_ns: dict[str, int] = {}
+        self._wait_after_a_refusal_ns = int(wait_after_a_refusal_seconds * 1_000_000_000)
+        # When the broker last refused. A failed call leaves `_quoted_at_ns`
+        # unset for every instrument it asked about, so without this the same
+        # instruments are due again on the very next tick and the retry is what
+        # keeps the refusal alive -- see `instruments_due_a_quote`.
+        self._refused_at_ns: int | None = None
+        self.calls_refused_for_rate = 0
+        self.ticks_waiting_out_a_refusal = 0
         self.universe_entries_seen = 0
         self.entries_with_no_instrument_key = 0
         self.prices_seen = 0
@@ -189,6 +203,20 @@ class BrokerMarginQuoter:
         than skipped silently.
         """
         at = self._now_ns() if at_ns is None else at_ns
+        # **A refused ask is not repeated until it could have been answered.**
+        # Measured on the live spine 2026-09-08: 18,946 calls made and 18,943 of
+        # them failed, every one HTTP 429 `UDAPI10005 Too Many Request Sent`,
+        # because a failed call marks nothing as quoted and so is due again on
+        # the very next tick. The part spent a whole session asking faster than
+        # the broker would answer and never once got out of the hole; the
+        # `unattended-run-warden` escalated it four times as
+        # `taking-longer-every-tick`. The 429 is self-inflicted and the retry is
+        # the cause, not the cure.
+        if self._refused_at_ns is not None:
+            if at - self._refused_at_ns < self._wait_after_a_refusal_ns:
+                self.ticks_waiting_out_a_refusal += 1
+                return ()
+            self._refused_at_ns = None
         due = []
         without_price = 0
         for key in sorted(self._symbol_by_key):
@@ -201,6 +229,12 @@ class BrokerMarginQuoter:
             due.append(key)
         self.quotes_with_no_price = without_price
         return tuple(due[: self._per_call])
+
+    def note_a_refusal(self, at_ns: int | None = None, was_rate_limited: bool = False) -> None:
+        """The broker would not answer. Nothing is asked again until the wait passes."""
+        self._refused_at_ns = self._now_ns() if at_ns is None else at_ns
+        if was_rate_limited:
+            self.calls_refused_for_rate += 1
 
     def requirements_from(self, quotes, at_ns: int | None = None) -> tuple:
         """The broker's answers, as requirements this system can size against."""
@@ -252,6 +286,13 @@ def describe_quoting(quoter: BrokerMarginQuoter) -> dict:
         "instruments_quotable": len(quoter._symbol_by_key),
         "calls_made": quoter.calls_made,
         "calls_failed": quoter.calls_failed,
+        # Rule 8: a call the broker rate-limited and a call that failed for any
+        # other reason are different faults with different answers, and a board
+        # that merged them cannot tell "asking too fast" from "cannot reach the
+        # broker at all". The waiting count is what says the backoff is working
+        # rather than that the part has stopped.
+        "calls_refused_for_asking_too_fast": quoter.calls_refused_for_rate,
+        "ticks_waiting_out_a_refusal": quoter.ticks_waiting_out_a_refusal,
         "quotes_read": quoter.quotes_read,
         "quotes_with_no_price": quoter.quotes_with_no_price,
         "quotes_refused_no_margin": quoter.quotes_refused_no_margin,
@@ -291,6 +332,9 @@ def start_part(context) -> int:
         venue_id=adapter.broker_id,
         instruments_per_call=int(context.number("margin_quote_instruments_per_call")),
         requote_after_seconds=context.number("margin_requote_interval_seconds"),
+        wait_after_a_refusal_seconds=context.number(
+            "margin_quote_wait_after_a_refusal_seconds"
+        ),
     )
     timeout_seconds = context.number("broker_connection_open_timeout")
 
@@ -332,6 +376,7 @@ def start_part(context) -> int:
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as failure:
             quoter.calls_failed += 1
             quoter.last_failure = f"{type(failure).__name__}: {failure}"
+            quoter.note_a_refusal(was_rate_limited=getattr(failure, "code", None) == 429)
             return
 
         quotes = adapter.read_margin_quotes(response, due)

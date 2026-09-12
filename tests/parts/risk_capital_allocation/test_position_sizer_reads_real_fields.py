@@ -22,7 +22,11 @@ from __future__ import annotations
 import pytest
 
 from parts.portfolio_state.fund_lock_ledger import LOCKED, RELEASED, LockedAllocation
-from parts.risk_capital_allocation.position_sizer import free_capital_from_locks
+from parts.risk_capital_allocation.position_sizer import (
+    free_capital_from_locks, opening_order_target,
+)
+from runtime.trade_intent import OPEN
+from runtime.trading_types import BUY, LONG
 
 
 def allocation(order_id: str, free_after: float, at_ns: int, state: str = LOCKED):
@@ -67,7 +71,10 @@ def test_no_lock_ever_seen_is_not_a_free_balance_of_zero():
 def sizer():
     from parts.risk_capital_allocation.position_sizer import PositionSizer
 
-    return PositionSizer(taker_fee_rate=0.0005, slippage_fraction=0.0, now_ns=lambda: 1)
+    return PositionSizer(
+        taker_fee_rate=0.0005, slippage_fraction=0.0,
+        close_restated_after_seconds=30.0, now_ns=lambda: 1,
+    )
 
 
 def size_with(free_capital, leverage=1.0):
@@ -147,3 +154,46 @@ def test_a_hint_above_the_risk_ceiling_is_clipped_and_counted():
     )
     assert hinted.quantity == full.quantity
     assert one.standing.hints_above_the_risk_ceiling == 1
+
+
+def test_a_refused_choice_and_no_choice_at_all_are_different_facts():
+    """`opens_without_an_instrument_choice` hid the diagnosis it was meant to give.
+
+    `instrument-selector` publishes every verdict, refusals included, so a
+    choice carrying `chosen=None` is the selector saying no with a named reason
+    -- while no choice at all is the selector never having spoken. Measured on
+    the live spine 2026-09-08: 5,268 opens counted as "no instrument choice"
+    against 13,729 intents the selector had refused by name, the largest of them
+    `this-symbol-has-no-recent-trade-and-no-recent-quote` at 10,612. One counter
+    pointed at the wrong part.
+    """
+    assert opening_order_target(_AnOpen(), None) is None
+    assert opening_order_target(_AnOpen(), _ARefusedChoice()) is None
+    # And a choice that names a contract still resolves, unchanged.
+    contract, side = opening_order_target(_AnOpen(), _AChosenChoice())
+    assert contract == "NIFTY 23650 CE 15 SEP 26"
+    assert side == BUY
+
+
+class _AnOpen:
+    """A trade-intent asking to open, as this part reads one (T-4)."""
+
+    action = OPEN
+    symbol = "NIFTY"
+    side = LONG
+
+
+class _ARefusedChoice:
+    """What instrument-selector publishes when it will not choose."""
+
+    chosen = None
+    order_side = None
+    state = "this-symbol-has-no-recent-trade-and-no-recent-quote"
+
+
+class _AChosenChoice:
+    class chosen:  # noqa: N801 - a stub matching the payload's shape
+        contract_symbol = "NIFTY 23650 CE 15 SEP 26"
+
+    order_side = BUY
+    state = "chosen"

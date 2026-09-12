@@ -55,6 +55,7 @@ from runtime.price_frames import levels_in
 from runtime.bot_opinion import LONG, ExitPlan, ExitTarget
 from runtime.knowledge_types import TICK_SIZE
 from runtime.part_declaration import PartDeclaration
+from runtime.range_from_a_small_sample import RangeFromASmallSample
 # Defined once, in the substrate. They were defined here and again in the
 # peer bot's proposer, and the bus pickles -- so a profile produced against
 # one definition arrived at the other as a class it did not recognise.
@@ -107,6 +108,12 @@ class ProposerStanding:
     plans_from_the_excursion_record: int = 0
     plans_from_the_live_range: int = 0
     widest_live_range_fraction: float = 0.0
+    # How few prints a range was ever measured over, and the largest correction
+    # that produced. Rule 8: a stop built from a five-print range corrected 1.66x
+    # and one built from fifty prints uncorrected are different claims, and a
+    # board that showed only "plans built" could not tell them apart.
+    smallest_range_sample: int = 0
+    largest_small_sample_correction: float = 0.0
 
 
 class BullExitPlanProposer:
@@ -122,6 +129,7 @@ class BullExitPlanProposer:
         cold_start_reward_multiples: tuple,
         cold_start_minimum_prints: int,
         cold_start_price_window: int,
+        range_recovery: RangeFromASmallSample,
         now_ns=time.time_ns,
     ) -> None:
         if stop_safety_multiple <= 1.0:
@@ -161,6 +169,7 @@ class BullExitPlanProposer:
         self._cold_start_stop_multiple = cold_start_stop_range_multiple
         self._cold_start_reward_multiples = tuple(cold_start_reward_multiples)
         self._cold_start_minimum_prints = cold_start_minimum_prints
+        self._range_recovery = range_recovery
         self._cold_start_price_window = cold_start_price_window
         self._prices: dict[tuple[str, str], float] = {}
         # Recent prints per symbol, with when they arrived, so the range over the
@@ -214,7 +223,24 @@ class BullExitPlanProposer:
         highest, lowest, last = max(inside), min(inside), inside[-1]
         if last <= 0 or highest <= lowest:
             return None
-        return (highest - lowest) / last, len(inside)
+        measured = (highest - lowest) / last
+        # What the window's whole range probably was, given how few prints
+        # measured it. A range over five prints spans about 60% of the range over
+        # all of them (runtime/range_from_a_small_sample.py), and using it raw
+        # places the stop that much too tight -- the direction that stops a trade
+        # out of a move it was right about. None here means the sample is below
+        # anything measured, so no claim is made rather than a guessed one.
+        corrected = self._range_recovery.corrected(measured, len(inside))
+        if corrected is None:
+            return None
+        self.standing.smallest_range_sample = (
+            len(inside) if self.standing.smallest_range_sample == 0
+            else min(self.standing.smallest_range_sample, len(inside))
+        )
+        self.standing.largest_small_sample_correction = max(
+            self.standing.largest_small_sample_correction, corrected / measured
+        )
+        return corrected, len(inside)
 
     def observe_symbol_profile(self, venue_id: str, symbol: str, price_step: float) -> None:
         """The venue's tick size: a stop that is not on one is not a stop the venue will take."""
@@ -462,6 +488,11 @@ def describe_exit_planning(proposer: BullExitPlanProposer) -> dict:
         "plans_from_the_live_range": proposer.standing.plans_from_the_live_range,
         "widest_live_range_fraction": proposer.standing.widest_live_range_fraction,
         "widest_stop_fraction": proposer.standing.widest_stop_fraction,
+        # Rule 8: the smallest sample any stop was measured from, and how much it
+        # had to be corrected. A board that showed only "plans built" could not
+        # tell a stop from fifty prints from one from five.
+        "smallest_range_sample": proposer.standing.smallest_range_sample,
+        "largest_small_sample_correction": proposer.standing.largest_small_sample_correction,
         "symbols_with_an_excursion_profile": len(proposer._excursions),
         "detectors_with_a_horizon_profile": len(proposer._horizons),
     }
@@ -578,6 +609,16 @@ def start_part(context) -> int:
             cold_start_reward_multiples=tuple(
                 float(multiple)
                 for multiple in context.setting("bull_cold_start_reward_multiples").value
+            ),
+            range_recovery=RangeFromASmallSample(
+                print_counts=tuple(
+                    int(count)
+                    for count in context.setting("cold_start_range_recovery_print_counts").value
+                ),
+                recovered_fractions=tuple(
+                    float(fraction)
+                    for fraction in context.setting("cold_start_range_recovery_fractions").value
+                ),
             ),
             cold_start_minimum_prints=int(context.number("bull_cold_start_minimum_prints")),
             cold_start_price_window=int(context.number("bull_cold_start_price_window")),

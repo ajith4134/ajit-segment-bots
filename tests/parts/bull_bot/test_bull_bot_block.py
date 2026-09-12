@@ -59,6 +59,8 @@ from runtime.market_signal import CONTINUATION, REVERSION, make_candidate
 from runtime.online_learner import (
     OnlineLogisticModel, ProbabilityCalibrator, RunningMoments, logistic, log_odds,
 )
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
+from runtime.range_from_a_small_sample import RangeFromASmallSample
 from runtime.part_declaration import load_declaration_from_blueprint
 
 BLOCK_PARTS = {
@@ -101,6 +103,46 @@ class Clock:
 
     def advance_seconds(self, seconds):
         self.now_ns += int(seconds * 1e9)
+
+
+# The deployed values, so a test that does exercise the measured path is
+# exercising the same arithmetic the spine runs.
+CHARGE_STACK_ROUND_TRIP_FRACTION = 0.002341
+LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS = 60.0
+
+
+
+# The deployed table, so a test exercises the same correction the spine applies.
+COLD_START_RANGE_RECOVERY_PRINT_COUNTS = (3, 4, 5, 6, 8, 10, 15, 20, 30)
+COLD_START_RANGE_RECOVERY_FRACTIONS = (
+    0.414, 0.529, 0.602, 0.657, 0.730, 0.769, 0.851, 0.892, 0.942,
+)
+
+
+def a_range_recovery():
+    """How much of a window's real range a sample of n prints spans, measured.
+
+    runtime/range_from_a_small_sample.py, from this project's own tape for
+    2026-09-08 -- 300 symbols, 1,974 windows, 9,070 draws per sample size.
+    """
+    return RangeFromASmallSample(
+        print_counts=COLD_START_RANGE_RECOVERY_PRINT_COUNTS,
+        recovered_fractions=COLD_START_RANGE_RECOVERY_FRACTIONS,
+    )
+
+
+def an_ungraded_cost():
+    """A round-trip cost holder that has been handed no grade.
+
+    The floor then falls back to the ConvictionFloor's own fee_rate, which is
+    what every one of these tests was written against. A test that wants the
+    measured path hands it a real `liquidity-grade` -- see
+    tests/runtime/test_symbol_round_trip_cost.py for what that changes.
+    """
+    return SymbolRoundTripCost(
+        charge_stack_round_trip_fraction=CHARGE_STACK_ROUND_TRIP_FRACTION,
+        maximum_age_seconds=LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS,
+    )
 
 
 def an_estimate(value, observations, is_fitted, reason):
@@ -942,6 +984,7 @@ def a_proposer(minimum_reward=1.0, cold_start_minimum_prints=COLD_START_MINIMUM_
         cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
         cold_start_minimum_prints=cold_start_minimum_prints,
         cold_start_price_window=COLD_START_PRICE_WINDOW,
+        range_recovery=a_range_recovery(),
     )
 
 
@@ -1020,6 +1063,45 @@ def test_a_wider_symbol_gets_a_wider_stop_without_anyone_tuning_it():
     assert wide_plan.risk_fraction > narrow_plan.risk_fraction * 5, (
         "a symbol swinging 4% must not get the same stop as one swinging 0.1%"
     )
+
+
+def test_a_stop_from_five_prints_is_widened_for_what_those_five_could_not_see():
+    """The starvation fix, and the half of it that keeps the stop honest.
+
+    The bar was 20 prints, measured on BTCUSDT at ~4 prints a second; the median
+    NSE option prints five in a minute, so `bull-exit-plan-proposer` refused
+    **84,838 of 86,943** requests on the live spine 2026-09-08 as
+    `too-few-prints-in-the-window-to-measure-a-range`. Lowering the bar alone
+    would place the stop ~40% too tight -- the direction that stops a trade out
+    of a move it was right about -- so the range is corrected for how few prints
+    measured it (measurements/2026-09-08-a-range-from-a-small-sample/).
+    """
+    five = a_proposer(cold_start_minimum_prints=5)
+    feed_a_range(five, prints=4)  # 4 alternating + the closing print = 5
+    five.observe_horizon_profile(a_horizon())
+    plan, outcome = five.propose(a_side_candidate(), ConvictionStub(0.8))
+
+    assert plan is not None, outcome
+    # The raw span is 0.8 on a last price of 100, and five prints span 60.2% of
+    # what the window really covered, so the stop sits at the corrected range.
+    raw_range_fraction = 0.8 / 100.0
+    assert plan.risk_fraction == pytest.approx(
+        (raw_range_fraction / 0.602) * COLD_START_STOP_MULTIPLE, rel=0.02
+    )
+    assert five.standing.smallest_range_sample == 5
+    assert five.standing.largest_small_sample_correction == pytest.approx(1 / 0.602, rel=0.02)
+
+
+def test_a_range_from_too_few_prints_to_correct_is_still_refused():
+    """A 2.4x correction from two prints is guesswork wearing a measurement's clothes."""
+    subject = a_proposer(cold_start_minimum_prints=2)
+    feed_a_range(subject, prints=1)  # 1 alternating + the closing print = 2
+    subject.observe_horizon_profile(a_horizon())
+
+    plan, outcome = subject.propose(a_side_candidate(), ConvictionStub(0.8))
+
+    assert plan is None
+    assert outcome == NO_RANGE
 
 
 def test_a_measured_record_replaces_the_live_range_the_moment_it_fits():
@@ -1138,6 +1220,7 @@ def test_a_plan_that_never_takes_profit_is_refused_at_construction():
             cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
             cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
             cold_start_price_window=COLD_START_PRICE_WINDOW,
+            range_recovery=a_range_recovery(),
         )
 
 
@@ -1150,6 +1233,7 @@ def test_targets_that_do_not_close_the_position_are_refused_at_construction():
             cold_start_reward_multiples=(1.0,),
             cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
             cold_start_price_window=COLD_START_PRICE_WINDOW,
+            range_recovery=a_range_recovery(),
         )
 
 
@@ -1157,8 +1241,8 @@ def test_targets_that_do_not_close_the_position_are_refused_at_construction():
 
 def a_composer(margin=0.0, missing=1, require_measured=False):
     return BullOpinionComposer(
-        conviction_floor=a_floor(margin), maximum_missing_features=missing,
-        require_trained_model=require_measured,
+        conviction_floor=a_floor(margin), round_trip_cost=an_ungraded_cost(),
+        maximum_missing_features=missing, require_trained_model=require_measured,
     )
 
 

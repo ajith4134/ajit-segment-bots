@@ -21,6 +21,21 @@ and how much is the sizer's business, not a gate's.
 What this module refuses to be: a place for a margin. The margin over break-even
 is an operator's setting with its own provenance, passed in and added here so
 every gate applies the same arithmetic and the same margin.
+
+**The cost and the risk must be measured on the same instrument.** `c` is the
+round trip expressed in units of the risk, and the risk is a fraction of the
+price of whatever symbol the plan was written on. Charging one global options
+cost against every plan is what pinned the floor at 1.0 for a whole session on
+2026-09-08: `volatility-gap-detector -> ICICIBANK` produces a stop measured as a
+fraction of ICICIBANK's price, and it was charged
+`per_side_trading_cost_fraction`, a rate derived for an NSE option premium. A
+stock's range over a minute and an option's are two different sizes of number,
+so the ratio between them was meaningless and the floor it produced was
+uncrossable by construction. `for_plan` therefore takes the round trip actually
+measured for that symbol -- `liquidity-grade.round_trip_cost_fraction`, this
+project's own reading of that symbol's book -- and falls back to the setting only
+where nothing has graded it. measurements/2026-09-08-conviction-floor-name-mismatch/
+carries the numbers.
 """
 
 from __future__ import annotations
@@ -41,12 +56,26 @@ def round_trip_cost_in_risk_units(fee_rate: float, risk_fraction: float) -> floa
     """
     if fee_rate < 0.0:
         raise FloorUncomputable(f"a negative fee rate ({fee_rate}) is not a cost")
+    return cost_in_risk_units(2.0 * fee_rate, risk_fraction)
+
+
+def cost_in_risk_units(round_trip_cost_fraction: float, risk_fraction: float) -> float:
+    """A whole round trip, already measured, against how far the stop is.
+
+    Both are fractions of the same symbol's price, which is the only way the
+    ratio means anything -- see the module docstring for what charging one
+    instrument's cost against another's risk did.
+    """
+    if round_trip_cost_fraction < 0.0:
+        raise FloorUncomputable(
+            f"a negative round trip ({round_trip_cost_fraction}) is not a cost"
+        )
     if risk_fraction <= 0.0:
         raise FloorUncomputable(
             f"a stop {risk_fraction} of the price away risks nothing, so no cost can be "
             f"measured against it"
         )
-    return 2.0 * fee_rate / risk_fraction
+    return round_trip_cost_fraction / risk_fraction
 
 
 def break_even_probability(reward_to_risk: float, round_trip_cost: float = 0.0) -> float:
@@ -89,15 +118,37 @@ class ConvictionFloor:
                 f"a fallback reward-to-risk of {self.fallback_reward_to_risk} pays nothing"
             )
 
-    def for_plan(self, reward_to_risk: float | None, risk_fraction: float | None) -> tuple[float, str]:
-        """The floor and the sentence that says where it came from."""
+    def for_plan(
+        self,
+        reward_to_risk: float | None,
+        risk_fraction: float | None,
+        round_trip_cost_fraction: float | None = None,
+    ) -> tuple[float, str]:
+        """The floor and the sentence that says where it came from.
+
+        `round_trip_cost_fraction` is what a round trip in **this plan's own
+        symbol** costs, as a fraction of that symbol's price -- the measured
+        reading from its own book plus the broker's charge stack. Absent it, the
+        fallback is twice `fee_rate`, which is one rate for every instrument and
+        is right only where the plan happens to be written on the instrument that
+        rate was derived for.
+        """
         if reward_to_risk is None or risk_fraction is None:
             return self.before_any_plan()
-        cost = round_trip_cost_in_risk_units(self.fee_rate, risk_fraction)
+        if round_trip_cost_fraction is None:
+            cost = round_trip_cost_in_risk_units(self.fee_rate, risk_fraction)
+            source = (
+                f"the {2.0 * self.fee_rate:.3%} round trip every plan is charged where its own "
+                f"symbol has not been graded"
+            )
+        else:
+            cost = cost_in_risk_units(round_trip_cost_fraction, risk_fraction)
+            source = f"this symbol's own measured {round_trip_cost_fraction:.3%} round trip"
         floor = min(1.0, break_even_probability(reward_to_risk, cost) + self.margin)
         return floor, (
             f"break-even {break_even_probability(reward_to_risk, cost):.1%} at {reward_to_risk:.2f} "
-            f"reward to risk with fees {cost:.3f} of the risk, plus a margin of {self.margin:.1%}"
+            f"reward to risk with {source} costing {cost:.3f} of the risk, plus a margin of "
+            f"{self.margin:.1%}"
         )
 
     def before_any_plan(self) -> tuple[float, str]:
@@ -113,5 +164,6 @@ __all__ = [
     "ConvictionFloor",
     "FloorUncomputable",
     "break_even_probability",
+    "cost_in_risk_units",
     "round_trip_cost_in_risk_units",
 ]

@@ -64,6 +64,7 @@ from runtime.claim_verification import (
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.llm_types import VerifiedSnapshot
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, RULED, SOLE_OPINION, STAND_ASIDE, UNANIMOUS,
@@ -102,6 +103,26 @@ class Clock:
 
     def advance_seconds(self, seconds):
         self.now_ns += int(seconds * 1e9)
+
+
+# The deployed values, so a test that does exercise the measured path is
+# exercising the same arithmetic the spine runs.
+CHARGE_STACK_ROUND_TRIP_FRACTION = 0.002341
+LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS = 60.0
+
+
+def an_ungraded_cost():
+    """A round-trip cost holder that has been handed no grade.
+
+    The floor then falls back to the ConvictionFloor's own fee_rate, which is
+    what every one of these tests was written against. A test that wants the
+    measured path hands it a real `liquidity-grade` -- see
+    tests/runtime/test_symbol_round_trip_cost.py for what that changes.
+    """
+    return SymbolRoundTripCost(
+        charge_stack_round_trip_fraction=CHARGE_STACK_ROUND_TRIP_FRACTION,
+        maximum_age_seconds=LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS,
+    )
 
 
 def an_estimate(value, observations=100, is_fitted=True, reason="measured"):
@@ -408,7 +429,8 @@ def an_arbiter(
     regime_memory_distrust=0.05,
 ):
     return OpinionArbiter(
-        conviction_floor=a_floor(margin), agreement_bonus=agreement_bonus,
+        conviction_floor=a_floor(margin), round_trip_cost=an_ungraded_cost(),
+        agreement_bonus=agreement_bonus,
         sole_opinion_penalty=sole_penalty, maximum_forecast_shade=shade,
         minimum_competence=minimum_competence, minimum_coverage=minimum_coverage,
         strategy_review_distrust_discount=strategy_review_discount,
@@ -487,7 +509,8 @@ def test_the_forecast_can_shade_a_decision_and_never_make_one():
 def test_a_shade_of_half_the_range_is_refused_at_construction():
     with pytest.raises(ValueError):
         OpinionArbiter(
-            conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
+            conviction_floor=a_floor(), round_trip_cost=an_ungraded_cost(),
+            agreement_bonus=0.05, sole_opinion_penalty=0.2,
             maximum_forecast_shade=0.5, minimum_competence=0.3, minimum_coverage=0.3,
             strategy_review_distrust_discount=0.3, regime_memory_maximum_distrust=0.05,
         )
@@ -496,7 +519,8 @@ def test_a_shade_of_half_the_range_is_refused_at_construction():
 def test_a_distrust_of_half_the_range_is_refused_at_construction():
     with pytest.raises(ValueError):
         OpinionArbiter(
-            conviction_floor=a_floor(), agreement_bonus=0.05, sole_opinion_penalty=0.2,
+            conviction_floor=a_floor(), round_trip_cost=an_ungraded_cost(),
+            agreement_bonus=0.05, sole_opinion_penalty=0.2,
             maximum_forecast_shade=0.1, minimum_competence=0.3, minimum_coverage=0.3,
             strategy_review_distrust_discount=0.3, regime_memory_maximum_distrust=0.5,
         )

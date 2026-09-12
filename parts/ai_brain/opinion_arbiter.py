@@ -47,6 +47,7 @@ from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
 from runtime.trade_intent import (
     ADD_TO, CLOSE, MAJORITY, NO_OPINION, OPEN, REDUCE, RULED, SOLE_OPINION, UNANIMOUS,
     UNDERPERFORMING, TradeIntent, no_intent,
@@ -61,9 +62,14 @@ PART_DECLARATION = PartDeclaration(
         # rather than binding it is docs/proposals/the-arbiter-does-not-weigh-maturity.md.
         # How proven a bot is gates what the system may do (live-switch-guard,
         # autonomy-boundary), it is not one of the things weighed above.
-        "directional-opinion", "market-regime", "regime-break-alert",
-        "forecast-bias", "competence-map", "coverage-report", "conflict-ruling",
-        "bot-weight", "counter-argument", "regime-memory", "strategy-review",
+        # `liquidity-grade` is what a round trip in the opinion's own symbol
+        # costs, measured from its own book. The floor divides a cost by a risk
+        # and the two have to be measured on the same instrument --
+        # runtime/symbol_round_trip_cost.py.
+        "bot-weight", "competence-map", "conflict-ruling", "counter-argument",
+        "coverage-report", "directional-opinion", "forecast-bias",
+        "liquidity-grade", "market-regime", "regime-break-alert",
+        "regime-memory", "strategy-review",
     ),
     produces=("trade-intent", "part-health"),
     resource_class="compute-bound",
@@ -97,6 +103,7 @@ class OpinionArbiter:
     def __init__(
         self,
         conviction_floor: ConvictionFloor,
+        round_trip_cost: SymbolRoundTripCost,
         agreement_bonus: float,
         sole_opinion_penalty: float,
         maximum_forecast_shade: float,
@@ -124,6 +131,7 @@ class OpinionArbiter:
         # the highest of them: an intent acts on every plan behind it, so it must
         # be worth taking against the most demanding one (runtime/edge_arithmetic.py).
         self._floor = conviction_floor
+        self._round_trip_cost = round_trip_cost
         self._agreement_bonus = agreement_bonus
         self._sole_penalty = sole_opinion_penalty
         self._maximum_shade = maximum_forecast_shade
@@ -280,7 +288,7 @@ class OpinionArbiter:
                 COUNTER_ARGUMENT_STANDS,
             )
 
-        floor, floor_reason = self._floor_for(acting)
+        floor, floor_reason = self._floor_for(acting, venue_id, symbol)
         if conviction < floor:
             return self._stand_aside(
                 venue_id, symbol, agreement,
@@ -377,15 +385,32 @@ class OpinionArbiter:
         planned = [opinion for opinion in acting if opinion.exit_plan is not None]
         return max(planned or acting, key=lambda opinion: opinion.conviction.value)
 
-    def _floor_for(self, acting) -> tuple[float, str]:
-        """The highest break-even among the acting opinions' plans, with its reason."""
+    def observe_liquidity_grade(self, grade) -> None:
+        """One symbol's measured book cost, held as the level it is."""
+        self._round_trip_cost.observe_liquidity_grade(grade)
+
+    def describe_round_trip_costs(self) -> dict:
+        """What the floors were charged with, so a board can tell measured from fallback."""
+        return self._round_trip_cost.describe()
+
+    def _floor_for(self, acting, venue_id: str, symbol: str) -> tuple[float, str]:
+        """The highest break-even among the acting opinions' plans, with its reason.
+
+        The cost charged is this symbol's own measured round trip, because the
+        risk fraction each plan carries is a fraction of this symbol's price. One
+        global rate against every plan is what pinned this floor at 1.0 for a
+        whole session -- runtime/symbol_round_trip_cost.py carries the numbers.
+        """
+        round_trip = self._round_trip_cost.for_symbol(venue_id, symbol)
         floors = []
         for opinion in acting:
             plan = opinion.exit_plan
             if plan is None:
                 floors.append(self._floor.before_any_plan())
             else:
-                floors.append(self._floor.for_plan(plan.reward_to_risk, plan.risk_fraction))
+                floors.append(
+                    self._floor.for_plan(plan.reward_to_risk, plan.risk_fraction, round_trip)
+                )
         return max(floors, key=lambda pair: pair[0])
 
     def _weighted_conviction(self, acting, weights: dict, agreement: str) -> float:
@@ -469,6 +494,9 @@ def describe_arbitration(arbiter: OpinionArbiter) -> dict:
         "bot_weights_held": len(arbiter._weights),
         "strategy_reviews_held": len(arbiter._strategy_reviews),
         "regime_memories_held": len(arbiter._regime_memories),
+        # Rule 8: a floor from a symbol's own measured book and one from the
+        # fallback rate are different claims, and a board must not merge them.
+        **arbiter.describe_round_trip_costs(),
     }
 
 
@@ -534,6 +562,9 @@ def start_part(context) -> int:
     competences = Batch(read=context.bus.reader("competence-map"))
     coverages = Batch(read=context.bus.reader("coverage-report"))
     memories = Batch(read=context.bus.reader("regime-memory"))
+    # Read as a Batch and held with the grade's own `graded_at_ns` rather than as
+    # a LatestByKey: what makes a grade go away is its age.
+    grades = Batch(read=context.bus.reader("liquidity-grade"))
     publish_intents = context.bus.publisher_for("trade-intent")
 
     # Every opinion currently held, by symbol and then by bot. Held across ticks
@@ -566,6 +597,8 @@ def start_part(context) -> int:
                 arbiter.observe_coverage(report.venue_id, report.symbol, report.coverage)
         for memory in memories.payloads():
             arbiter.observe_regime_memory(memory)
+        for grade in grades.payloads():
+            arbiter.observe_liquidity_grade(grade)
 
         regime_by_symbol = regimes.mapping()
         ruling_by_symbol = rulings.mapping()
@@ -589,12 +622,17 @@ def start_part(context) -> int:
 
     return run_opinion_arbiter(
         arbiter=OpinionArbiter(
+            round_trip_cost=SymbolRoundTripCost(
+                charge_stack_round_trip_fraction=context.number(
+                    "broker_charge_stack_round_trip_fraction"
+                ),
+                maximum_age_seconds=context.number("liquidity_grade_maximum_age_seconds"),
+            ),
             conviction_floor=ConvictionFloor(
-                # What one crossing costs here, not Bybit's perpetual taker rate.
-                # round_trip_cost_in_risk_units doubles this, and every caller
-                # passed taker_fee_rate until 2026-09-07 -- eight times light,
-                # so the break-even probability every bot judged against was
-                # computed from a cost that is not this market's.
+                # The fallback rate, for a symbol nothing recent has graded. Every
+                # caller passed taker_fee_rate -- Bybit's perpetual rate -- until
+                # 2026-09-07, eight times light; since 2026-09-08 a graded symbol
+                # is charged its own measured round trip instead.
                 fee_rate=context.number("per_side_trading_cost_fraction"),
                 margin=context.number("arbiter_conviction_margin_over_break_even"),
                 fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),

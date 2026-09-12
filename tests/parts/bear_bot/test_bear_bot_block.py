@@ -55,6 +55,8 @@ from runtime.bot_opinion import (
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.market_signal import CONTINUATION, make_candidate
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
+from runtime.range_from_a_small_sample import RangeFromASmallSample
 from runtime.part_declaration import load_declaration_from_blueprint
 
 BLOCK_PARTS = {
@@ -98,6 +100,46 @@ class Clock:
 
     def advance_seconds(self, seconds):
         self.now_ns += int(seconds * 1e9)
+
+
+# The deployed values, so a test that does exercise the measured path is
+# exercising the same arithmetic the spine runs.
+CHARGE_STACK_ROUND_TRIP_FRACTION = 0.002341
+LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS = 60.0
+
+
+
+# The deployed table, so a test exercises the same correction the spine applies.
+COLD_START_RANGE_RECOVERY_PRINT_COUNTS = (3, 4, 5, 6, 8, 10, 15, 20, 30)
+COLD_START_RANGE_RECOVERY_FRACTIONS = (
+    0.414, 0.529, 0.602, 0.657, 0.730, 0.769, 0.851, 0.892, 0.942,
+)
+
+
+def a_range_recovery():
+    """How much of a window's real range a sample of n prints spans, measured.
+
+    runtime/range_from_a_small_sample.py, from this project's own tape for
+    2026-09-08 -- 300 symbols, 1,974 windows, 9,070 draws per sample size.
+    """
+    return RangeFromASmallSample(
+        print_counts=COLD_START_RANGE_RECOVERY_PRINT_COUNTS,
+        recovered_fractions=COLD_START_RANGE_RECOVERY_FRACTIONS,
+    )
+
+
+def an_ungraded_cost():
+    """A round-trip cost holder that has been handed no grade.
+
+    The floor then falls back to the ConvictionFloor's own fee_rate, which is
+    what every one of these tests was written against. A test that wants the
+    measured path hands it a real `liquidity-grade` -- see
+    tests/runtime/test_symbol_round_trip_cost.py for what that changes.
+    """
+    return SymbolRoundTripCost(
+        charge_stack_round_trip_fraction=CHARGE_STACK_ROUND_TRIP_FRACTION,
+        maximum_age_seconds=LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS,
+    )
 
 
 def an_estimate(value, observations, is_fitted, reason="measured"):
@@ -779,6 +821,7 @@ def a_proposer(minimum_reward=1.0, maximum_stop=0.15, clock=None):
         cold_start_reward_multiples=COLD_START_REWARD_MULTIPLES,
         cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
         cold_start_price_window=COLD_START_PRICE_WINDOW,
+        range_recovery=a_range_recovery(),
         **({"now_ns": clock} if clock is not None else {}),
     )
 
@@ -883,6 +926,7 @@ def test_a_proposer_with_no_risk_ceiling_is_refused_at_construction():
             cold_start_reward_multiples=(1.0,),
             cold_start_minimum_prints=COLD_START_MINIMUM_PRINTS,
             cold_start_price_window=COLD_START_PRICE_WINDOW,
+            range_recovery=a_range_recovery(),
         )
 
 
@@ -890,7 +934,8 @@ def test_a_proposer_with_no_risk_ceiling_is_refused_at_construction():
 
 def a_composer(margin=0.0, missing=1, maximum_risk=0.1, require_measured=False):
     return BearOpinionComposer(
-        conviction_floor=a_floor(margin), maximum_missing_features=missing,
+        conviction_floor=a_floor(margin), round_trip_cost=an_ungraded_cost(),
+        maximum_missing_features=missing,
         maximum_risk_fraction=maximum_risk, require_trained_model=require_measured,
     )
 
@@ -946,7 +991,8 @@ def test_the_usual_refusals_still_apply():
 def test_a_composer_with_no_risk_ceiling_is_refused_at_construction():
     with pytest.raises(ValueError):
         BearOpinionComposer(
-            conviction_floor=a_floor(), maximum_missing_features=1,
+            conviction_floor=a_floor(), round_trip_cost=an_ungraded_cost(),
+            maximum_missing_features=1,
             maximum_risk_fraction=0.0, require_trained_model=False,
         )
 

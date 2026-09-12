@@ -1095,7 +1095,10 @@ def test_no_entry_price_cannot_be_reconstructed_from_a_fraction():
 
 
 def sizer(fee=0.0004, slippage=0.0):
-    return PositionSizer(taker_fee_rate=fee, slippage_fraction=slippage)
+    return PositionSizer(
+        taker_fee_rate=fee, slippage_fraction=slippage,
+        close_restated_after_seconds=30.0,
+    )
 
 
 def a_size(**overrides):
@@ -1172,7 +1175,9 @@ def test_a_refusal_for_no_risk_names_the_limiter_that_bound_it():
     sized nothing said nothing about which part to go and look at -- measured on
     the live spine at 20:05 on 2026-08-26, 4,724 of 13,185 actionable intents.
     """
-    sizer = PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0)
+    sizer = PositionSizer(
+        taker_fee_rate=0.0004, slippage_fraction=0.0, close_restated_after_seconds=30.0,
+    )
     result = sizer.size(
         venue_id=VENUE, symbol=SYMBOL, side=BUY, entry_price=100.0, stop_price=98.0,
         allotment=10_000.0, risk_limit_fraction=0.0, leverage=1.0,
@@ -1187,7 +1192,9 @@ def test_a_refusal_for_no_risk_names_the_limiter_that_bound_it():
 
 def test_a_limit_that_names_no_author_is_still_counted_as_one():
     """Silence about the author is its own state, not an absent refusal."""
-    sizer = PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0)
+    sizer = PositionSizer(
+        taker_fee_rate=0.0004, slippage_fraction=0.0, close_restated_after_seconds=30.0,
+    )
     sizer.size(
         venue_id=VENUE, symbol=SYMBOL, side=BUY, entry_price=100.0, stop_price=98.0,
         allotment=10_000.0, risk_limit_fraction=0.0, leverage=1.0,

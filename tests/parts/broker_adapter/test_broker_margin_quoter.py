@@ -47,10 +47,21 @@ class _Clock:
         self.at_ns += int(seconds * 1e9)
 
 
-def a_quoter(clock, per_call=20, requote_after=3600.0):
+WAIT_AFTER_A_REFUSAL_SECONDS = 60.0
+
+
+def _learn_one_priced_instrument(quoter):
+    """One instrument the quoter can ask about: it needs a key and a price."""
+    quoter.observe_universe_entry(_Entry("RELIANCE", "NSE_EQ|INE002A01018"))
+    quoter.observe_price("NSE_EQ|INE002A01018", 1400.0)
+
+
+def a_quoter(clock, per_call=20, requote_after=3600.0,
+             wait_after_a_refusal=WAIT_AFTER_A_REFUSAL_SECONDS):
     return BrokerMarginQuoter(
         venue_id="upstox", instruments_per_call=per_call,
-        requote_after_seconds=requote_after, now_ns=clock,
+        requote_after_seconds=requote_after,
+        wait_after_a_refusal_seconds=wait_after_a_refusal, now_ns=clock,
     )
 
 
@@ -239,3 +250,46 @@ def test_a_universe_nobody_can_be_quoted_for_reads_differently_from_a_refusing_b
     assert reported["instruments_quotable"] == 0
     assert reported["calls_made"] == 0
     assert reported["calls_failed"] == 0
+
+
+def test_a_refused_call_is_not_retried_until_the_wait_has_passed():
+    """18,943 failed calls out of 18,946, in one live session.
+
+    A failed call marks nothing as quoted, so without a backoff every instrument
+    it asked about is due again on the very next tick. Measured on the live spine
+    2026-09-08: every failure was HTTP 429 `UDAPI10005 Too Many Request Sent`
+    (reproduced by hand against the real endpoint), `quotes_read` reached 60 for
+    a whole session, and `unattended-run-warden` escalated the part four times as
+    `taking-longer-every-tick`. The retry was the cause of the refusal.
+    """
+    clock = _Clock()
+    subject = a_quoter(clock)
+    _learn_one_priced_instrument(subject)
+    assert subject.instruments_due_a_quote(), "nothing was due, so nothing is being tested"
+
+    subject.note_a_refusal(was_rate_limited=True)
+
+    assert subject.instruments_due_a_quote() == ()
+    assert subject.calls_refused_for_rate == 1
+    assert subject.ticks_waiting_out_a_refusal == 1
+
+
+def test_the_quoter_asks_again_once_the_wait_has_passed():
+    """A backoff that never ends is a part that has stopped, which is worse."""
+    clock = _Clock()
+    subject = a_quoter(clock)
+    _learn_one_priced_instrument(subject)
+    subject.note_a_refusal(was_rate_limited=True)
+    assert subject.instruments_due_a_quote() == ()
+
+    clock.advance_seconds(WAIT_AFTER_A_REFUSAL_SECONDS + 1.0)
+
+    assert subject.instruments_due_a_quote() != ()
+
+
+def test_a_quoter_with_no_wait_after_a_refusal_is_refused_at_construction():
+    with pytest.raises(ValueError):
+        BrokerMarginQuoter(
+            venue_id="upstox", instruments_per_call=20, requote_after_seconds=3600.0,
+            wait_after_a_refusal_seconds=0.0,
+        )

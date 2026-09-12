@@ -4,6 +4,7 @@ does arithmetic; no live Indian option-chain data has been captured yet, so
 this is the honest boundary until it has (spec section 4)."""
 
 import collections
+import dataclasses
 import datetime
 import pathlib
 
@@ -11,7 +12,7 @@ import pytest
 
 from parts.opportunity_scanner.expiry_day_zero_to_hero_detector import (
     NOT_AN_OPTION, NOT_EXPIRY_DAY, NOT_FAR_ENOUGH_OTM, NO_DELTA, NO_LISTING,
-    NO_PREMIUM, PREMIUM_TOO_HIGH, ZeroToHeroDetector,
+    NO_PREMIUM, NO_TRADING_SYMBOL, PREMIUM_TOO_HIGH, ZeroToHeroDetector,
 )
 from runtime.brokers.broker_adapter import (
     BrokerOptionGreeks, InstrumentListing, LtpUpdate,
@@ -28,10 +29,26 @@ CALL_KEY = "NSE_FO|CALL1"
 PUT_KEY = "NSE_FO|PUT1"
 
 
+def trading_symbol_for(instrument_key, instrument_type, strike):
+    """The contract's own name, in the shape Upstox states it."""
+    if instrument_type == "INDEX":
+        return instrument_key.split("|")[-1]
+    return f"NIFTY {strike:g} {instrument_type} 01 SEP 26 [{instrument_key.split('|')[-1]}]"
+
+
 def a_listing(instrument_key, expiry_ms, instrument_type="CE", strike=25000.0):
+    """A listing whose trading_symbol is deliberately NOT its instrument_key.
+
+    They were the same string here until 2026-09-08, and that is exactly why no
+    test noticed that the detector published the key as the candidate's symbol --
+    a name nothing downstream can price. Upstox never states them equal on a real
+    contract ("NSE_FO|42631" against "NIFTY 24500 CE 08 SEP 26"), so a fixture
+    that does is a fixture that hides this class of defect.
+    """
     return InstrumentListing(
         instrument_key=instrument_key, exchange="NSE", segment="NSE_FO",
-        instrument_type=instrument_type, trading_symbol=instrument_key,
+        instrument_type=instrument_type,
+        trading_symbol=trading_symbol_for(instrument_key, instrument_type, strike),
         lot_size=50, tick_size=0.05, freeze_quantity=None,
         expiry_ms=expiry_ms, strike_price=strike, underlying_key="NSE_INDEX|Nifty 50",
         intraday_margin_percent=None, intraday_leverage=None,
@@ -173,7 +190,11 @@ def test_a_cheap_far_otm_call_expiring_today_fires_long():
     candidate, reason = subject.detect(CALL_KEY)
     assert candidate is not None
     assert candidate.direction == LONG
-    assert candidate.symbol == CALL_KEY
+    # The contract's own trading_symbol, which is the name market-data,
+    # symbol-price-frame and the tape are all keyed by -- never the broker's key.
+    assert candidate.symbol == trading_symbol_for(CALL_KEY, "CE", 25000.0)
+    assert candidate.symbol != CALL_KEY
+    assert candidate.evidence["instrument_key"] == CALL_KEY
 
 
 def test_a_cheap_far_otm_put_expiring_today_fires_short():
@@ -331,3 +352,88 @@ def test_maximum_abs_delta_must_be_between_zero_and_one():
             maximum_premium=5.0, maximum_abs_delta=1.5, horizon_seconds=3600.0,
             calibrator=calibrator(),
         )
+
+
+def test_a_candidate_is_named_by_the_contract_the_price_feed_knows():
+    """The defect that cost the bull bot its whole 2026-09-08 session.
+
+    RL-063: the listings here are the broker's own instrument master, read by
+    the venue's own adapter, and the tape directory names are what this
+    project's own feed actually keyed 2026-09-08's prints by. Both are real,
+    and the assertion is that the name this detector publishes is in the second
+    set rather than the first.
+
+    Measured live that day, before the fix: this detector raised 494,125 of the
+    bull bot's 498,952 accepted candidates, and `bull-exit-plan-proposer`
+    refused 216,227 of 218,520 plan requests as `no-price-for-this-symbol`
+    while `bull-entry-timer` stood down 493,388 of 498,056 for the same reason.
+    Every downstream part looks a candidate's price up by its symbol, and an
+    instrument_key is a name none of them holds a price under.
+    """
+    import json as _json
+
+    from runtime.brokers.upstox import UpstoxAdapter
+
+    captured = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "tests/captured/upstox/2026-09-04-nse-instrument-master-nifty-slice.json"
+    )
+    adapter = UpstoxAdapter.__new__(UpstoxAdapter)
+    listings = tuple(
+        UpstoxAdapter.read_instrument_listings(adapter, _json.loads(captured.read_text()))
+    )
+    options = [listing for listing in listings if listing.expiry_ms is not None]
+    assert options, "the captured master carries no option contract to name"
+
+    expiry_day = datetime.datetime.fromtimestamp(options[0].expiry_ms / 1000, tz=IST).date()
+    noon_ns = int(
+        datetime.datetime(
+            expiry_day.year, expiry_day.month, expiry_day.day, 12, 0, tzinfo=IST
+        ).timestamp() * 1e9
+    )
+    subject = a_detector(now_ns=lambda: noon_ns)
+    for listing in listings:
+        subject.observe_listing(listing)
+
+    named = 0
+    for listing in options:
+        if listing.expiry_ms is None or listing.strike_price is None:
+            continue
+        subject.observe_ltp(LtpUpdate(
+            instrument_key=listing.instrument_key, last_traded_price=1.5,
+            last_traded_quantity=50.0, last_traded_time_ms=1, close_price=None,
+            broker_time_ns=noon_ns,
+        ))
+        subject.observe_greeks(BrokerOptionGreeks(
+            instrument_key=listing.instrument_key, delta=0.02, theta=-1.0, gamma=0.001,
+            vega=0.5, rho=0.1, implied_volatility=0.3, broker_time_ns=noon_ns,
+        ))
+        candidate, _ = subject.detect(listing.instrument_key, now_ns=noon_ns)
+        if candidate is None:
+            continue
+        named += 1
+        assert candidate.symbol == listing.trading_symbol
+        assert not candidate.symbol.startswith("NSE_FO|")
+        assert candidate.evidence["instrument_key"] == listing.instrument_key
+
+    assert named > 0, "no contract in the captured master fired, so nothing was named"
+
+
+def test_a_listing_with_no_trading_symbol_is_refused_rather_than_named_by_its_key():
+    """Falling back to the key would republish the very defect the refusal exists for."""
+    subject = a_detector()
+    listing = a_listing(CALL_KEY, TODAY_EXPIRY_MS, "CE")
+    subject.observe_listing(dataclasses.replace(listing, trading_symbol=""))
+    subject.observe_ltp(LtpUpdate(
+        instrument_key=CALL_KEY, last_traded_price=2.5, last_traded_quantity=50.0,
+        last_traded_time_ms=1, close_price=None, broker_time_ns=TODAY_NS,
+    ))
+    subject.observe_greeks(BrokerOptionGreeks(
+        instrument_key=CALL_KEY, delta=0.04, theta=-1.0, gamma=0.001,
+        vega=0.5, rho=0.1, implied_volatility=0.3, broker_time_ns=TODAY_NS,
+    ))
+
+    candidate, reason = subject.detect(CALL_KEY)
+    assert candidate is None
+    assert reason == NO_TRADING_SYMBOL
+    assert subject.standing.no_trading_symbol == 1

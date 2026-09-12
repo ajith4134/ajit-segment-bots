@@ -31,6 +31,7 @@ from runtime.bot_opinion import (
 )
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -39,7 +40,12 @@ BOT = "profit-tailgating-bot"
 
 PART_DECLARATION = PartDeclaration(
     part_id="tail-opinion-composer",
-    consumes=("tail-calibrated-conviction", "tail-exit-plan", "follow-candidate"),
+    consumes=(
+        # `liquidity-grade` is what a round trip in the plan's own symbol costs,
+        # measured from its own book -- runtime/symbol_round_trip_cost.py.
+        "follow-candidate", "liquidity-grade", "tail-calibrated-conviction",
+        "tail-exit-plan",
+    ),
     produces=("directional-opinion", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -68,13 +74,23 @@ class TailOpinionComposer:
     def __init__(
         self,
         conviction_floor: ConvictionFloor,
+        round_trip_cost: SymbolRoundTripCost,
         require_trained_model: bool,
         now_ns=time.time_ns,
     ) -> None:
         self._floor = conviction_floor
+        self._round_trip_cost = round_trip_cost
         self._require_trained_model = require_trained_model
         self._now_ns = now_ns
         self.standing = ComposerStanding()
+
+    def observe_liquidity_grade(self, grade) -> None:
+        """One symbol's measured book cost, held as the level it is."""
+        self._round_trip_cost.observe_liquidity_grade(grade)
+
+    def describe_round_trip_costs(self) -> dict:
+        """What the floors were charged with, so a board can tell measured from fallback."""
+        return self._round_trip_cost.describe()
 
     def compose(self, candidate, conviction, exit_plan) -> DirectionalOpinion:
         self.standing.opinions_composed += 1
@@ -94,7 +110,11 @@ class TailOpinionComposer:
             )
 
         plan_floor = (
-            self._floor.for_plan(exit_plan.reward_to_risk, exit_plan.risk_fraction)
+            self._floor.for_plan(
+                exit_plan.reward_to_risk,
+                exit_plan.risk_fraction,
+                self._round_trip_cost.for_symbol(venue_id, symbol),
+            )
             if exit_plan is not None and exit_plan.is_complete else self._floor.before_any_plan()
         )
         floor, floor_reason = plan_floor
@@ -200,6 +220,9 @@ def describe_opinions(composer: TailOpinionComposer) -> dict:
         "plans_naming_a_target_refused": composer.standing.targets_refused,
         "stood_down_by_reason": dict(composer.standing.by_refusal),
         "strongest_conviction_acted_on": composer.standing.strongest_conviction_acted_on,
+        # Rule 8: a floor from a symbol's own measured book and one from the
+        # fallback rate are different claims, and a board must not merge them.
+        **composer.describe_round_trip_costs(),
     }
 
 
@@ -237,15 +260,21 @@ def start_part(context) -> int:
     convictions = Batch(read=context.bus.reader("tail-calibrated-conviction"))
     plans = LatestByKey(read=context.bus.reader("tail-exit-plan"), key_of=lambda p: (p.venue_id, p.symbol))
     candidates = LatestByKey(read=context.bus.reader("follow-candidate"), key_of=lambda c: (c.venue_id, c.symbol))
+    grades = Batch(read=context.bus.reader("liquidity-grade"))
     publish_opinions = context.bus.publisher_for("directional-opinion")
     composer = TailOpinionComposer(
+        round_trip_cost=SymbolRoundTripCost(
+            charge_stack_round_trip_fraction=context.number(
+                "broker_charge_stack_round_trip_fraction"
+            ),
+            maximum_age_seconds=context.number("liquidity_grade_maximum_age_seconds"),
+        ),
         conviction_floor=ConvictionFloor(
-            # What one crossing costs here, not Bybit's perpetual taker rate.
-                # round_trip_cost_in_risk_units doubles this, and every caller
-                # passed taker_fee_rate until 2026-09-07 -- eight times light,
-                # so the break-even probability every bot judged against was
-                # computed from a cost that is not this market's.
-                fee_rate=context.number("per_side_trading_cost_fraction"),
+            # The fallback rate, for a symbol nothing recent has graded. Every
+            # caller passed taker_fee_rate -- Bybit's perpetual rate -- until
+            # 2026-09-07, eight times light; since 2026-09-08 a graded symbol is
+            # charged its own measured round trip instead of any global rate.
+            fee_rate=context.number("per_side_trading_cost_fraction"),
             margin=context.number("bull_conviction_margin_over_break_even"),
             fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
         ),
@@ -253,6 +282,8 @@ def start_part(context) -> int:
     )
 
     def read_judgements():
+        for grade in grades.payloads():
+            composer.observe_liquidity_grade(grade)
         plan_by_symbol = plans.mapping()
         candidate_by_symbol = candidates.mapping()
         jobs = []

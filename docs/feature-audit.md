@@ -1790,3 +1790,191 @@ after the opinion is formed), against a segment-specific fee/cost pairing
 matched to what actually produced the range (stock fee for a stock range,
 option fee for an option range), or something else. A decision for the
 user, not a number for Claude to pick.
+
+---
+
+## 2026-09-08 — the conviction floor answered, and all three segments walked
+
+The user: *"fix the last session finding on the issue"*, then *"fix all the
+design questions and errors of no new trades opening in 3 segments"*, then
+*"intraday cash stocks did not open once with leverage"* and
+*"cash-equity-intraday … see zero trades opened find the reason"*.
+
+**The state this session opened in.** Every trade intent the live spine formed
+that day was `stand-aside`: 9,085 of 9,085, 100% for
+`conviction-below-threshold`, both bots, with
+`bull-opinion-composer.last_floor` pinned at 1.0. Nothing downstream of the
+arbiter had been exercised at all.
+
+### 1. The conviction floor was two defects wearing one symptom
+
+**A name.** `expiry-day-zero-to-hero-detector` published Upstox's
+`instrument_key` (`NSE_FO|42631`) as the candidate's `symbol`, while
+`market-data`, `symbol-price-frame` and the tape are all keyed by
+`trading_symbol` — `broker-market-data-bridge` resolves the key on the way in.
+It raised **494,125 of the bull bot's 498,952** accepted candidates, and:
+
+    bull-exit-plan-proposer   216,227 of 218,520 refused no-price-for-this-symbol   99.0%
+    bull-entry-timer          493,388 of 498,056 stood down, same reason            99.1%
+
+The 837 plans that *did* get built therefore came from the other three
+detectors, which name **underlyings** — and that is what pinned the floor.
+
+**A space mismatch, which was the design question 2026-09-07 left open.**
+`ConvictionFloor` divides a round-trip cost by a risk fraction, and the ratio
+means nothing unless both are fractions of the same instrument's price. Every
+gate passed `per_side_trading_cost_fraction` — derived for an NSE **option
+premium** — against risk fractions measured on a **stock**.
+`widest_live_range_fraction` was 1.01% across all 837 plans, so even the widest
+stop gave a floor of 55.8% against a model reporting 50.0%.
+
+Resolved by measuring both on the same instrument:
+`liquidity-grade.round_trip_cost_fraction` (that symbol's own book, spread plus
+the walk on each side) plus `broker_charge_stack_round_trip_fraction`. Grades
+expire on `liquidity_grade_maximum_age_seconds`; a symbol nothing has graded
+falls back to exactly what it was charged before. A book that costs 192% to
+cross still pins the floor at 1.0, and that is the right answer, not a clamp.
+`runtime/symbol_round_trip_cost.py`,
+`docs/proposals/the-floor-charges-the-symbols-own-cost.md`,
+`measurements/2026-09-08-conviction-floor-name-mismatch/`.
+
+**Measured live the same session, with only the naming fix deployed:**
+
+| | before | after |
+|---|---|---|
+| `bull-opinion-composer` calls to act | 0 | 47 |
+| `bear-opinion-composer` calls to act | 8 | 7,784 |
+| `opinion-arbiter` intents formed | 0 | 27,484 |
+| `paper-fill-simulator` filled | 0 | 56 |
+| `fill-reconciler` fills applied | 0 | 88 |
+| `position-close-detector` trades closed | 3 | 13 |
+| `bull-exit-plan-proposer` no-price refusals | 99.0% | 0 of 546 in the first window |
+
+### 2. cash-equity-intraday: why it opened zero trades, ever
+
+`broker-symbol-universe-bridge` published **every** non-contract with
+`instrument_kind=None`, shares included. Run against the deployed segment
+settings:
+
+    SPOT IFCI (shortlisted)         -> cash-equity-intraday
+    None IFCI (what was published)  -> unknown
+
+`unknown` is `UNKNOWN_SEGMENT`, so the selector answers
+`the-best-instrument-is-in-a-segment-that-is-not-built`. Worse, a kindless
+listing matches the *"an underlying: what every contract on it resolves
+through"* branch, so each share went into the ATM strike tracker instead of into
+the book of instruments an intent can be expressed through. The bridge published
+47 shares and `instrument-selector.chosen_by_kind` held **17,089 `option` and
+nothing else**.
+
+The selector's own SPOT branch — written 2026-09-07 precisely so an equity
+intent could be expressed — was unreachable code. **Both halves were tested and
+the join between them was not:** the selector's test typed a
+`CapturableSymbol(instrument_kind=SPOT)` by hand, and the bridge never produced
+one.
+
+Shares are published as `SPOT` now; an index stays kindless, because NIFTY is a
+number and not something anyone can buy. The two groups are disjoint already —
+`entries()` skips any share a derivative is written on, which is the
+double-exposure rule this universe already carries. A new test drives the real
+bridge into the real selector and asserts a chosen share.
+
+Leverage was never the problem: `leverage-selector` chose 5x, 22 times,
+`held_at_ceiling` on every one.
+
+### 3. Three more defects, all found in the same live session
+
+- **`broker-margin-quoter` was rate-limiting itself.** 18,943 of 18,946 calls
+  failed, every one HTTP 429 `UDAPI10005 Too Many Request Sent` — reproduced by
+  hand against the real endpoint. A failed call marks nothing as quoted, so the
+  same instruments were due again on the very next tick and the retry *was* the
+  cause. `unattended-run-warden` escalated it four times as
+  `taking-longer-every-tick`. After the backoff, measured live: **2 calls made,
+  2 refused, 1,183 ticks waiting it out.**
+- **Every close sold the whole position, over and over.** 12,168 closes against
+  16 open symbols; `position-close-detector` refused 10,005 units as an
+  unmatched exit and `paper-account-index-options` held **-1,042.29** of
+  `NIFTY 23650 CE 15 SEP 26` — a short option written in a buy-only segment. A
+  close is not restated while one for the same held quantity is outstanding; a
+  quantity that *changes* re-opens the ask immediately, because a partial fill
+  deserves its own smaller order.
+- **Fractional option quantities.** `paper-account-stock-options` held
+  **12,207.81406719471** units of `AXISBANK 1260 CE 29 SEP 26`. The
+  option-listing path never recorded the venue's lot size, so the global
+  `order_quantity_increment` (0.001) applied — the same defect fixed once on the
+  `symbol-universe` path on 2026-09-07, in the other doorway.
+
+### 4. The exit-plan starvation, corrected rather than waived
+
+`bull-exit-plan-proposer` refused **84,838 of 86,943** requests as
+`too-few-prints-in-the-window-to-measure-a-range`; the bear peer 71,211 of
+77,282. The bar was 20 prints, measured on BTCUSDT at ~4 prints a second; the
+median NSE option prints five in a minute.
+
+Re-derived on this project's own tape — 300 symbols, 1,974 windows, 9,070 draws
+per sample size — the share of a window's true range a sample of n prints spans
+at the median is 41.4% at 3, **60.2% at 5**, 73.0% at 8, 89.2% at 20. It
+reproduces the 2026-09-07 table whose script was never saved, independently.
+
+So the bar drops to 5 **and** the range is divided by the recovery at its own
+sample size (`runtime/range_from_a_small_sample.py`). Lowering it alone would
+have placed stops ~40% too tight, which is exactly why 2026-09-07 refused to
+move it. The **median** is used and not a lower quantile, because
+over-correcting is not the safe direction it looks like: a wider stop is a
+larger risk fraction, which makes the round trip cheaper in units of risk and so
+*lowers* the conviction floor.
+`measurements/2026-09-08-a-range-from-a-small-sample/`.
+
+### Still open after this session
+
+- The detectors' **horizons** are still the crypto ones for three of four
+  (`spread_reversion_horizon` 60 s, `mean_reversion_horizon` and
+  `momentum_burst_horizon` 300 s). Correcting the estimator makes a short
+  horizon survivable; it does not make it right. `signal-horizon-profiler`
+  measures what would settle each.
+- `broker_charge_stack_round_trip_fraction` is the **options** stack charged to
+  every symbol; on a cash equity it overstates the charges, which raises the
+  floor and so refuses rather than over-trades. It stops being an approximation
+  when `liquidity-grade` carries the instrument kind.
+- `position-sizer.opens_without_an_instrument_choice` reached **5,268 of 5,268**
+  actionable intents in the session's last window. Traced far enough to find
+  that **the counter was hiding its own diagnosis**: `instrument-selector`
+  publishes every verdict, refusals included
+  (`publish_choices(tuple(select(intent) for ...))`), so a choice carrying
+  `chosen=None` is the selector saying no *with a named reason* — and the sizer
+  counted that identically to no choice ever arriving. Two faults, two different
+  parts to go and look at, one number. Split now into
+  `opens_the_selector_refused` with the selector's own reason beside it, which
+  is what will name the real cause next session; the selector's own refusals
+  that day were led by `this-symbol-has-no-recent-trade-and-no-recent-quote`
+  (10,612 of 30,517 intents seen). The underlying leak is **not** fixed — only
+  made visible. The selector's own docstring already states the rule this broke:
+  *a refusal that cannot be seen from outside is indistinguishable from an input
+  that never arrived.*
+- **`signal_label_move_fraction` is still the crypto-era barrier (0.002), and
+  the bound derived from it has collapsed onto its floor.** Found by completing
+  a test stub that had been raising `KeyError` — and therefore asserting nothing
+  — since `price_staleness_from` began reading
+  `reference_price_materiality_fraction` on 2026-09-07. On the crypto numbers
+  the trading bound is 1.50 s and the labelling bound 4.96 s, which is the
+  property the test protects: the labeller judges against its own barrier, wider
+  than a fee. On the numbers actually deployed for NSE the trading bound is
+  13.48 s and the labelling bound is **1.00 s, its floor** — a claim is marked
+  right or wrong on a 0.2% move when a round trip on an NSE option costs 0.8532%,
+  four times more. `signal-outcome-labeller` produces `training-label`, which
+  every conviction model learns from, and those models show it:
+  `bull-conviction-calibrator` reported `fitted_calibrations 0` against
+  `passed_through_unfitted 448,423`, and `bull-conviction-model`
+  `mean_absolute_training_error 0.496` on 97,420 labels — a model that has
+  learned nothing, whose output never leaves the coin flip the conviction floor
+  then has to be cleared from. Re-deriving that barrier for NSE is its own
+  change with its own evidence; the test now names the collapse rather than
+  asserting a number nobody derived.
+- `tail_crowding_funding_deviation_threshold` and
+  `tail_crowding_sentiment_deviation_threshold` are in the example settings and
+  **missing from the deployed file** (pre-existing, not touched here).
+- `paper-account-futures` still holds BTCUSDT on binance-usdm. The audit said it
+  was removed 2026-09-06 and did not return through a restart; it has returned.
+- cash-equity-intraday's fix is proven by unit test and by the real segment
+  resolver, **not yet live** — NSE was closed when it landed. Monday's open is
+  its first real test.

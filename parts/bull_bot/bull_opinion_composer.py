@@ -31,6 +31,7 @@ from runtime.bot_opinion import (
 )
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -42,6 +43,10 @@ PART_DECLARATION = PartDeclaration(
     consumes=(
         "bull-calibrated-conviction", "bull-entry-timing",
         "bull-exit-plan", "bull-feature-vector",
+        # What a round trip in the plan's own symbol costs, measured from its
+        # own book. The floor divides a cost by a risk and the two have to be
+        # measured on the same instrument -- runtime/symbol_round_trip_cost.py.
+        "liquidity-grade",
     ),
     produces=("directional-opinion", "part-health"),
     resource_class="compute-bound",
@@ -68,6 +73,7 @@ class BullOpinionComposer:
     def __init__(
         self,
         conviction_floor: ConvictionFloor,
+        round_trip_cost: SymbolRoundTripCost,
         maximum_missing_features: int,
         require_trained_model: bool,
         now_ns=time.time_ns,
@@ -78,10 +84,19 @@ class BullOpinionComposer:
         # literal: 0.55 refused 325 of 327 intents on 2026-08-23 against a model
         # whose measured output never left 0.44-0.50 (runtime/edge_arithmetic.py).
         self._floor = conviction_floor
+        self._round_trip_cost = round_trip_cost
         self._maximum_missing = maximum_missing_features
         self._require_trained_model = require_trained_model
         self._now_ns = now_ns
         self.standing = ComposerStanding()
+
+    def observe_liquidity_grade(self, grade) -> None:
+        """One symbol's measured book cost, held as the level it is."""
+        self._round_trip_cost.observe_liquidity_grade(grade)
+
+    def describe_round_trip_costs(self) -> dict:
+        """What the floors were charged with, so a board can tell measured from fallback."""
+        return self._round_trip_cost.describe()
 
     def compose(self, vector, conviction, timing, exit_plan) -> DirectionalOpinion:
         self.standing.opinions_composed += 1
@@ -108,7 +123,11 @@ class BullOpinionComposer:
                 conviction.calibrated,
             )
 
-        floor, floor_reason = self._floor.for_plan(exit_plan.reward_to_risk, exit_plan.risk_fraction)
+        floor, floor_reason = self._floor.for_plan(
+            exit_plan.reward_to_risk,
+            exit_plan.risk_fraction,
+            self._round_trip_cost.for_symbol(venue_id, symbol),
+        )
         self.standing.last_floor = floor
         if conviction.probability < floor:
             return self._stand_down(
@@ -187,6 +206,10 @@ def describe_opinions(composer: BullOpinionComposer) -> dict:
         "stood_down_by_reason": dict(composer.standing.by_refusal),
         "strongest_conviction_acted_on": composer.standing.strongest_conviction_acted_on,
         "last_floor": composer.standing.last_floor,
+        # Rule 8: a floor computed from a symbol's own measured book and one
+        # computed from the fallback rate are different claims, and a board that
+        # added them would report a precision this bot does not have.
+        **composer.describe_round_trip_costs(),
     }
 
 
@@ -242,9 +265,42 @@ def start_part(context) -> int:
     convictions = by_symbol("bull-calibrated-conviction")
     timings = by_symbol("bull-entry-timing")
     exit_plans = by_symbol("bull-exit-plan")
+    # Read as a Batch and held by the composer with the grade's own
+    # `graded_at_ns`, rather than as a LatestByKey: what makes a grade go away is
+    # its age, and the composer is the thing that has to say "too old to charge
+    # a plan with" instead of silently holding one for ever.
+    grades = Batch(read=context.bus.reader("liquidity-grade"))
     publish_opinions = context.bus.publisher_for("directional-opinion")
 
+    composer = BullOpinionComposer(
+        round_trip_cost=SymbolRoundTripCost(
+            charge_stack_round_trip_fraction=context.number(
+                "broker_charge_stack_round_trip_fraction"
+            ),
+            maximum_age_seconds=context.number("liquidity_grade_maximum_age_seconds"),
+        ),
+        conviction_floor=ConvictionFloor(
+            # What one crossing costs where this symbol has not been graded, not
+            # Bybit's perpetual taker rate. round_trip_cost_in_risk_units doubles
+            # this, and every caller passed taker_fee_rate until 2026-09-07 --
+            # eight times light, so the break-even probability every bot judged
+            # against was computed from a cost that is not this market's. Since
+            # 2026-09-08 it is the fallback rather than the rate: a plan whose
+            # symbol has a recent liquidity grade is charged that symbol's own
+            # measured round trip instead.
+            fee_rate=context.number("per_side_trading_cost_fraction"),
+            margin=context.number("bull_conviction_margin_over_break_even"),
+            fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
+        ),
+        maximum_missing_features=int(context.number("bull_opinion_maximum_missing_features")),
+        require_trained_model=bool(
+            context.setting("bull_opinion_require_trained_model").value
+        ),
+    )
+
     def read_judgements():
+        for grade in grades.payloads():
+            composer.observe_liquidity_grade(grade)
         belief = convictions.mapping()
         timing_by_symbol = timings.mapping()
         plan_by_symbol = exit_plans.mapping()
@@ -260,22 +316,7 @@ def start_part(context) -> int:
         return tuple(judgements)
 
     return run_bull_opinion_composer(
-        composer=BullOpinionComposer(
-            conviction_floor=ConvictionFloor(
-                # What one crossing costs here, not Bybit's perpetual taker rate.
-                # round_trip_cost_in_risk_units doubles this, and every caller
-                # passed taker_fee_rate until 2026-09-07 -- eight times light,
-                # so the break-even probability every bot judged against was
-                # computed from a cost that is not this market's.
-                fee_rate=context.number("per_side_trading_cost_fraction"),
-                margin=context.number("bull_conviction_margin_over_break_even"),
-                fallback_reward_to_risk=context.number("bull_exit_minimum_reward_to_risk"),
-            ),
-            maximum_missing_features=int(context.number("bull_opinion_maximum_missing_features")),
-            require_trained_model=bool(
-                context.setting("bull_opinion_require_trained_model").value
-            ),
-        ),
+        composer=composer,
         control_socket=context.control_socket,
         read_judgements=read_judgements,
         publish_opinions=publish_opinions,

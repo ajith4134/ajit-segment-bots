@@ -61,6 +61,10 @@ NO_LISTING = "no-listing-known"
 NOT_AN_OPTION = "not-an-option-instrument"
 NO_PREMIUM = "no-premium-observed"
 NO_DELTA = "no-delta-observed"
+# A listing with no trading_symbol is refused rather than fallen back to its
+# instrument_key: the key is a name nothing downstream can price, so a fallback
+# would republish the very defect this refusal exists to make visible.
+NO_TRADING_SYMBOL = "listing-carries-no-trading-symbol"
 
 _CALL = "CE"
 _PUT = "PE"
@@ -88,6 +92,7 @@ class DetectorStanding:
     not_an_option: int = 0
     no_premium: int = 0
     no_delta: int = 0
+    no_trading_symbol: int = 0
 
 
 class ZeroToHeroDetector:
@@ -245,6 +250,21 @@ class ZeroToHeroDetector:
             self.standing.not_far_enough_otm += 1
             return None, NOT_FAR_ENOUGH_OTM
 
+        # The contract's own trading_symbol, never Upstox's instrument_key. A
+        # candidate's symbol is the name every downstream part looks its price
+        # up by, and market-data, symbol-price-frame and the tape are all keyed
+        # by trading_symbol (broker-market-data-bridge resolves the key on the
+        # way in). Naming the key here published a symbol nothing could price:
+        # measured live on 2026-09-08, this detector raised 494,125 of the bull
+        # bot's 498,952 accepted candidates and bull-exit-plan-proposer refused
+        # 216,227 of 218,520 plan requests as `no-price-for-this-symbol` while
+        # bull-entry-timer stood down 493,388 of 498,056 for the same reason --
+        # 99% of the flow, on a name mismatch alone.
+        trading_symbol = listing.trading_symbol
+        if not trading_symbol:
+            self.standing.no_trading_symbol += 1
+            return None, NO_TRADING_SYMBOL
+
         direction = LONG if listing.instrument_type == _CALL else SHORT
         # Cheaper and further OTM both read as "more room to multiply" --
         # blended as the average of how far under each cutoff this
@@ -260,7 +280,7 @@ class ZeroToHeroDetector:
             make_candidate(
                 detector=PART_ID,
                 venue_id="upstox",
-                symbol=instrument_key,
+                symbol=trading_symbol,
                 direction=direction,
                 expectation="continuation",
                 signal_strength=signal_strength,
@@ -273,9 +293,14 @@ class ZeroToHeroDetector:
                     "strike_price": listing.strike_price,
                     "expiry_ms": listing.expiry_ms,
                     "underlying_key": listing.underlying_key,
+                    # The broker's own key for the contract, kept as evidence
+                    # rather than as the name: it is what the greeks and the
+                    # listing were read under, so a reader tracing this
+                    # candidate back to Upstox still has it.
+                    "instrument_key": instrument_key,
                 },
                 reason=(
-                    f"{instrument_key} expires today at premium {premium:.2f} (cutoff "
+                    f"{trading_symbol} expires today at premium {premium:.2f} (cutoff "
                     f"{self._maximum_premium:.2f}) and delta {delta:+.3f} (cutoff "
                     f"{self._maximum_abs_delta:.2f}) -- {confidence.value:.0%} of this "
                     f"underlying's past calls have held within the horizon "
@@ -313,6 +338,7 @@ def describe_detector(detector: ZeroToHeroDetector) -> dict:
         "not_an_option": s.not_an_option,
         "no_premium": s.no_premium,
         "no_delta": s.no_delta,
+        "no_trading_symbol": s.no_trading_symbol,
     }
 
 
