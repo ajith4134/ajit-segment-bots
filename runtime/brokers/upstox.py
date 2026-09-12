@@ -72,6 +72,33 @@ class OrderRequest:
 
 
 @dataclasses.dataclass(frozen=True)
+class ModifyRequest:
+    """One change to a live order, in the fields Upstox's modify API takes.
+
+    Source: upstox.com/developer/api-documentation/v3/modify-order, fetched
+    2026-09-12. `order_id` is the BROKER's id, not the client order id -- the
+    caller has to have kept it from the place response, which is why
+    broker-order-router remembers the mapping.
+
+    Upstox's own required/optional split is preserved rather than tidied:
+    `validity`, `price`, `order_type` and `trigger_price` are all REQUIRED even
+    when unchanged, because the API assumes the original order's value only for
+    fields left out entirely and these four are not among them. A modify that
+    omitted `price` on a limit order would not keep the old price; it would be
+    refused.
+    """
+
+    order_id: str
+    order_type: str
+    validity: str
+    price: float = 0.0
+    trigger_price: float = 0.0
+    quantity: int | None = None
+    disclosed_quantity: int | None = None
+    market_protection: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
 class OrderResult:
     order_id: str
 
@@ -543,6 +570,55 @@ class UpstoxAdapter(BrokerAdapter):
             "is_amo": order.is_amo,
             "market_protection": order.market_protection,
         }
+
+    def cancel_endpoint_url(self, order_id: str) -> str:
+        """Where one open order is cancelled.
+
+        Source: upstox.com/developer/api-documentation/v3/cancel-order, fetched
+        2026-09-12. A DELETE with the order id as a QUERY PARAMETER and no body
+        -- not a JSON field, which is what a caller reaching for the place-order
+        shape would assume. Percent-encoded because an order id is the broker's
+        string and this method is what states that it goes in the query.
+
+        **v3 here while place is v2**, which is Upstox's own shape rather than
+        an oversight of this project's: /v2/order/place is the documented
+        low-latency place endpoint and cancel and modify are documented at v3 on
+        the same host. Both take the same broker order id.
+        """
+        return (
+            "https://api-hft.upstox.com/v3/order/cancel"
+            f"?order_id={urllib.parse.quote(str(order_id), safe='')}"
+        )
+
+    def modify_endpoint_url(self) -> str:
+        """Where one live order is changed. A PUT with a JSON body.
+
+        Source: upstox.com/developer/api-documentation/v3/modify-order, fetched
+        2026-09-12.
+        """
+        return "https://api-hft.upstox.com/v3/order/modify"
+
+    def build_modify_request_payload(self, request: ModifyRequest) -> dict:
+        """The body Upstox's modify API actually takes.
+
+        The optional fields are omitted when unset rather than sent as zero:
+        Upstox assumes the original order's value for a field left out, and
+        `disclosed_quantity` in particular "must be non-zero if provided", so a
+        defaulted 0 is not the same message as saying nothing.
+        """
+        payload = {
+            "order_id": request.order_id,
+            "order_type": request.order_type,
+            "validity": request.validity,
+            "price": request.price,
+            "trigger_price": request.trigger_price,
+            "market_protection": request.market_protection,
+        }
+        if request.quantity is not None:
+            payload["quantity"] = request.quantity
+        if request.disclosed_quantity is not None:
+            payload["disclosed_quantity"] = request.disclosed_quantity
+        return payload
 
     def read_order_result(self, response: dict) -> OrderResult:
         if response.get("status") != "success":

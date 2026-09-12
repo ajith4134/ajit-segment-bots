@@ -13920,7 +13920,9 @@
     "order-request",
     "broker-token-standing",
     "money-mode",
-    "symbol-universe"
+    "symbol-universe",
+    "cancel-decision",
+    "order-reprice"
    ],
    "produces": [
     "raw-venue-order-status",

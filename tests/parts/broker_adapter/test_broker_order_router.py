@@ -21,7 +21,8 @@ import types
 import pytest
 
 from parts.broker_adapter.broker_order_router import (
-    BROKER_REFUSED, CLIENT_ORDER_ID_LENGTH, FAILED, PART_DECLARATION, PLACED,
+    BROKER_REFUSED, CANCELLED, CLIENT_ORDER_ID_LENGTH, FAILED, PART_DECLARATION, PLACED,
+    REFUSED_NO_BROKER_ORDER_ID, REPRICED,
     REFUSED_DUPLICATE, REFUSED_NOT_LIVE_DESTINATION, REFUSED_NO_INSTRUMENT_KEY,
     REFUSED_NO_TOKEN, REFUSED_SEGMENT_IS_ON_PAPER, BrokerOrderRouter, describe_router,
 )
@@ -288,12 +289,147 @@ def test_every_refusal_is_published_rather_than_dropped():
     assert all(s.client_order_id and s.reason for s in statuses)
 
 
-def test_the_standing_names_what_this_part_does_not_do():
-    """Cancel, reprice and poll are absent by design, and say so."""
+def test_the_standing_names_what_this_part_does_and_does_not_do():
+    """Cancel and reprice landed 2026-09-12; polling is still another part's."""
     standing = describe_router(a_router())
-    assert standing["cancels_orders"] is False
-    assert standing["reprices_orders"] is False
-    assert standing["polls_for_status"] is False
+    assert standing["cancels_orders"] is True
+    assert standing["reprices_orders"] is True
+    assert standing["polls_for_status"] is False, "order-state-poller is that part"
+
+
+# ---- cancel and reprice ------------------------------------------------------
+#
+# Both take the BROKER's order id, and both decisions name the CLIENT's -- the
+# only id the parts that form them ever saw. The router is the one place that
+# holds both, because it learned the broker's from its own place response.
+
+def a_decision(order_id, to_price=None):
+    decision = types.SimpleNamespace(
+        order_id=order_id, venue_id="upstox", symbol="NIFTY 24550 CE 08 SEP 26",
+    )
+    if to_price is not None:
+        decision.to_price = to_price
+    return decision
+
+
+def a_router_that_has_placed(**kwargs):
+    """A router that placed one order and knows the broker's id for it."""
+    calls = {"cancel": [], "modify": []}
+
+    def cancelled(url, token):
+        calls["cancel"].append({"url": url, "token": token})
+        return {"status": "success", "data": {"order_id": "241212000000001"}}
+
+    def modified(url, payload, token):
+        calls["modify"].append({"url": url, "payload": payload, "token": token})
+        return {"status": "success", "data": {"order_id": "241212000000001"}}
+
+    router = a_router(**kwargs)
+    router._cancel = cancelled
+    router._modify = modified
+    router.calls = calls
+    placed = router.route(an_order())
+    assert placed.outcome == PLACED
+    return router, placed.client_order_id
+
+
+def test_a_cancel_reaches_the_brokers_own_cancel_endpoint():
+    router, client_order_id = a_router_that_has_placed()
+    status = router.cancel(a_decision(client_order_id))
+
+    assert status.outcome == CANCELLED
+    assert status.action == "cancel"
+    # Upstox cancels by DELETE with the order id as a QUERY PARAMETER, and the
+    # id is the BROKER's, not ours.
+    assert router.calls["cancel"][0]["url"] == (
+        UpstoxAdapter().cancel_endpoint_url("241212000000001")
+    )
+    assert "order_id=241212000000001" in router.calls["cancel"][0]["url"]
+    assert router.standing.cancelled == 1
+
+
+def test_a_reprice_sends_the_fields_upstox_requires_even_when_unchanged():
+    """Upstox assumes the original order only for fields left OUT entirely.
+
+    order_type, validity, price and trigger_price are all required on a modify,
+    so a request that omitted price would not keep the old one -- it would be
+    refused.
+    """
+    router, client_order_id = a_router_that_has_placed()
+    status = router.reprice(a_decision(client_order_id, to_price=12.5))
+
+    assert status.outcome == REPRICED
+    payload = router.calls["modify"][0]["payload"]
+    assert payload["order_id"] == "241212000000001"
+    assert payload["price"] == 12.5
+    assert payload["order_type"] == "LIMIT"
+    assert payload["validity"] == "DAY"
+    assert "trigger_price" in payload
+    assert router.calls["modify"][0]["url"] == UpstoxAdapter().modify_endpoint_url()
+    assert router.standing.repriced == 1
+
+
+def test_a_cancel_for_an_order_this_part_never_placed_is_refused_by_name():
+    router = a_router()
+    router._cancel = lambda url, token: pytest.fail("nothing may reach the broker")
+    status = router.cancel(a_decision("an-id-nobody-placed"))
+
+    assert status.outcome == REFUSED_NO_BROKER_ORDER_ID
+    assert router.standing.refused_no_broker_order_id == 1
+
+
+def test_a_reprice_for_an_order_this_part_never_placed_is_refused_by_name():
+    router = a_router()
+    router._modify = lambda url, payload, token: pytest.fail("nothing may reach the broker")
+    status = router.reprice(a_decision("an-id-nobody-placed", to_price=9.0))
+
+    assert status.outcome == REFUSED_NO_BROKER_ORDER_ID
+
+
+def test_a_cancel_without_a_valid_token_is_refused():
+    router, client_order_id = a_router_that_has_placed()
+    router._read_token = lambda: a_token(valid=False)
+    router._cancel = lambda url, token: pytest.fail("nothing may reach the broker")
+    status = router.cancel(a_decision(client_order_id))
+
+    assert status.outcome == REFUSED_NO_TOKEN
+
+
+def test_a_reprice_without_a_valid_token_is_refused():
+    """A modify can RAISE a price or a quantity, so it is a spend.
+
+    Guarding the place path and not this one would be exactly as dangerous as
+    guarding neither, while looking safer.
+    """
+    router, client_order_id = a_router_that_has_placed()
+    router._read_token = lambda: a_token(valid=False)
+    router._modify = lambda url, payload, token: pytest.fail("nothing may reach the broker")
+    status = router.reprice(a_decision(client_order_id, to_price=99.0))
+
+    assert status.outcome == REFUSED_NO_TOKEN
+
+
+def test_a_broker_refusal_of_a_cancel_is_reported_not_raised():
+    router, client_order_id = a_router_that_has_placed()
+    router._cancel = lambda url, token: {"status": "error", "errors": ["gone"]}
+    status = router.cancel(a_decision(client_order_id))
+
+    assert status.outcome == BROKER_REFUSED
+    assert status.venue_response == {"status": "error", "errors": ["gone"]}
+
+
+def test_a_failed_cancel_does_not_claim_the_order_is_gone():
+    router, client_order_id = a_router_that_has_placed()
+
+    def times_out(url, token):
+        raise TimeoutError("no response")
+
+    router._cancel = times_out
+    status = router.cancel(a_decision(client_order_id))
+
+    assert status.outcome == FAILED
+    assert "may still be live" in status.reason
+    assert router.standing.cancelled == 0
 
 
 # ---- it must not be startable by accident ------------------------------------

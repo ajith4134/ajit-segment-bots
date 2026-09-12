@@ -41,13 +41,33 @@ its own named outcome comes out of each one. An order that vanishes silently is
 the shape this project keeps being bitten by: a gate, a router and a book each
 reporting nothing wrong while no order exists.
 
-## What this deliberately does not do
+## Cancel and reprice
 
-It places orders. It does not cancel or reprice them — Upstox has separate
-endpoints for both and neither is on the adapter yet, and declaring a consume
-for a capability that would then refuse everything is how a part comes to look
-built. It does not poll for status; `order-state-poller` is that part. Its
-standing names all three as absent rather than leaving them to be assumed.
+Both landed 2026-09-12, read from Upstox's own v3 documentation rather than
+guessed:
+
+    cancel  DELETE /v3/order/cancel?order_id=...   query parameter, no body
+    modify  PUT    /v3/order/modify                JSON body
+
+**Both take the BROKER's order id, and both decisions name the CLIENT's** — the
+only id `resting-order-cancel-policy` and `limit-price-walker` ever saw. This
+part is the one place that holds both, because it learned the broker's from its
+own place response, so it keeps that mapping. Without it the two halves cannot
+be joined at all: the decision parts never see the broker's response, and the
+broker knows our id only as a `tag`.
+
+A cancel or reprice for an id this part never placed is refused by name rather
+than failed — the decision came from a part that cannot know what reached the
+broker, and "we never had one" is the honest answer.
+
+**A reprice goes through the same token gate as a place**, because a modify can
+raise a price or a quantity and is therefore a spend. Guarding one path and not
+the other would be exactly as dangerous as guarding neither, while looking
+safer.
+
+A failed cancel says the order may still be live rather than assuming it is
+gone. It does not poll for status; `order-state-poller` is that part, and the
+standing says so rather than leaving it to be inferred.
 
 **It is not on the live spine.** Declared, built and tested, and
 `operate/run_live_spine.py` does not start it: both segments are on paper, so a
@@ -74,7 +94,10 @@ PART_ID = "broker-order-router"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-order-router",
-    consumes=("order-request", "broker-token-standing", "money-mode", "symbol-universe"),
+    consumes=(
+        "order-request", "broker-token-standing", "money-mode", "symbol-universe",
+        "cancel-decision", "order-reprice",
+    ),
     produces=("raw-venue-order-status", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -87,6 +110,13 @@ REFUSED_SEGMENT_IS_ON_PAPER = "refused-this-segment-is-not-in-live-money-mode"
 REFUSED_NO_TOKEN = "refused-no-valid-broker-token"
 REFUSED_NO_INSTRUMENT_KEY = "refused-no-instrument-key-for-this-symbol"
 REFUSED_DUPLICATE = "refused-an-order-with-this-id-has-already-been-sent"
+CANCELLED = "cancelled"
+REPRICED = "repriced"
+# A cancel or reprice names a client order id this part never placed, or placed
+# and never heard a broker id back for. Its own outcome rather than a failure:
+# the decision was formed by a part that does not know what reached the broker,
+# and "we never had one" is the honest answer rather than an error.
+REFUSED_NO_BROKER_ORDER_ID = "refused-no-broker-order-id-is-known-for-this-order"
 BROKER_REFUSED = "the-broker-refused-the-order"
 FAILED = "the-call-to-the-broker-failed"
 
@@ -138,14 +168,21 @@ class RouterStanding:
     refused_no_token: int = 0
     refused_no_instrument_key: int = 0
     refused_duplicate: int = 0
+    cancelled: int = 0
+    repriced: int = 0
+    refused_no_broker_order_id: int = 0
     broker_refused: int = 0
     failures: int = 0
     last_failure: str | None = None
     # Named rather than left to be assumed: this part places orders and does
     # none of these, and a reader of the standing should not have to infer that
     # from their absence.
-    cancels_orders: bool = False
-    reprices_orders: bool = False
+    # Cancel and reprice landed 2026-09-12 once Upstox's own v3 endpoints were
+    # read. Polling is still somebody else's job: order-state-poller is that
+    # part, and it is off the spine with the rest of the crypto execution
+    # cluster.
+    cancels_orders: bool = True
+    reprices_orders: bool = True
     polls_for_status: bool = False
 
 
@@ -161,10 +198,17 @@ class BrokerOrderRouter:
         read_token,
         product: str,
         validity: str,
+        # Defaulted because a caller that only places orders is a legitimate
+        # shape -- and because a cancel transport that is None makes the two
+        # paths fail loudly at the call rather than quietly doing nothing.
+        cancel=None,
+        modify=None,
         now_ns=time.time_ns,
     ) -> None:
         self._adapter = adapter
         self._place = place
+        self._cancel = cancel
+        self._modify = modify
         self._read_money_mode = read_money_mode
         self._read_instrument_key = read_instrument_key
         self._read_token = read_token
@@ -172,6 +216,14 @@ class BrokerOrderRouter:
         self._validity = validity
         self._now_ns = now_ns
         self._sent: set[str] = set()
+        # client order id -> the BROKER's order id, learned from the place
+        # response. Cancel and reprice decisions name the client id, because
+        # that is the only id the parts that form them ever saw; Upstox's
+        # cancel and modify endpoints take its own. Without this map the two
+        # halves cannot be joined, and there is nowhere else to keep it: the
+        # decision parts do not see the broker's response and the broker does
+        # not know our id except as a `tag`.
+        self._broker_order_ids: dict[str, str] = {}
         self.standing = RouterStanding()
 
     def client_order_id(self, order) -> str:
@@ -285,9 +337,146 @@ class BrokerOrderRouter:
             )
 
         self.standing.placed += 1
+        self._broker_order_ids[client_order_id] = result.order_id
         return answer(
             PLACED,
             f"the broker accepted it as order {result.order_id}",
+            response=response,
+            responded=self._now_ns(),
+        )
+
+    def _live_gate(self, decision, action: str, client_order_id: str, requested_at_ns: int):
+        """The gates a cancel or a reprice shares with a place, in one place.
+
+        Deliberately the SAME two live-money gates and the same token gate. A
+        cancel is not a spend, but a modify is -- it can raise a price or a
+        quantity -- and a part that guarded one path and not the other would be
+        exactly as dangerous as not guarding at all, while looking safer.
+        """
+        def answer(outcome: str, reason: str, response=None, responded=None):
+            return RawVenueOrderStatus(
+                client_order_id=client_order_id,
+                venue_id=getattr(decision, "venue_id", ""),
+                symbol=getattr(decision, "symbol", ""),
+                action=action,
+                outcome=outcome,
+                venue_response=response,
+                reason=reason,
+                requested_at_ns=requested_at_ns,
+                responded_at_ns=responded,
+            )
+
+        broker_order_id = self._broker_order_ids.get(client_order_id)
+        if broker_order_id is None:
+            self.standing.refused_no_broker_order_id += 1
+            return None, None, answer(
+                REFUSED_NO_BROKER_ORDER_ID,
+                f"no broker order id is known for {client_order_id}; this part either "
+                f"never placed that order or never heard an id back for it, and there "
+                f"is nothing at the broker to act on",
+            )
+
+        token = self._read_token()
+        if token is None or not token.is_still_valid():
+            self.standing.refused_no_token += 1
+            return None, None, answer(
+                REFUSED_NO_TOKEN,
+                "no valid broker token; a change to a live order cannot be "
+                "authenticated and must not be attempted unauthenticated",
+            )
+        return broker_order_id, token, answer
+
+    def cancel(self, decision) -> RawVenueOrderStatus:
+        """Pull one resting order at the broker."""
+        requested_at_ns = self._now_ns()
+        client_order_id = str(getattr(decision, "order_id", ""))
+        broker_order_id, token, answer = self._live_gate(
+            decision, "cancel", client_order_id, requested_at_ns
+        )
+        if broker_order_id is None:
+            return answer
+
+        try:
+            response = self._cancel(
+                self._adapter.cancel_endpoint_url(broker_order_id), token.access_token
+            )
+        except Exception as failure:  # noqa: BLE001 - every failure is one fact
+            self.standing.failures += 1
+            self.standing.last_failure = f"{type(failure).__name__}: {failure}"
+            return answer(
+                FAILED,
+                f"the cancel call failed: {type(failure).__name__}: {failure}. The order "
+                f"may still be live at the broker; nothing here assumes it is gone",
+                responded=self._now_ns(),
+            )
+
+        try:
+            self._adapter.read_order_result(response)
+        except Exception as refusal:  # noqa: BLE001 - the broker said no
+            self.standing.broker_refused += 1
+            return answer(
+                BROKER_REFUSED, str(refusal), response=response, responded=self._now_ns()
+            )
+
+        self.standing.cancelled += 1
+        return answer(
+            CANCELLED,
+            f"the broker cancelled {broker_order_id}",
+            response=response,
+            responded=self._now_ns(),
+        )
+
+    def reprice(self, decision) -> RawVenueOrderStatus:
+        """Move one resting order's price at the broker."""
+        from runtime.brokers.upstox import ModifyRequest
+
+        requested_at_ns = self._now_ns()
+        client_order_id = str(getattr(decision, "order_id", ""))
+        broker_order_id, token, answer = self._live_gate(
+            decision, "reprice", client_order_id, requested_at_ns
+        )
+        if broker_order_id is None:
+            return answer
+
+        # A reprice is only ever a limit order's price moving -- a market order
+        # has no price to walk -- so the type is stated rather than carried.
+        # Upstox requires order_type, validity, price and trigger_price on every
+        # modify even when unchanged: it assumes the original only for fields
+        # left OUT entirely, and these four are not among them.
+        payload = self._adapter.build_modify_request_payload(
+            ModifyRequest(
+                order_id=broker_order_id,
+                order_type=BROKER_LIMIT,
+                validity=self._validity,
+                price=float(decision.to_price),
+            )
+        )
+        try:
+            response = self._modify(
+                self._adapter.modify_endpoint_url(), payload, token.access_token
+            )
+        except Exception as failure:  # noqa: BLE001
+            self.standing.failures += 1
+            self.standing.last_failure = f"{type(failure).__name__}: {failure}"
+            return answer(
+                FAILED,
+                f"the modify call failed: {type(failure).__name__}: {failure}. The order "
+                f"is at whichever price the broker last accepted, which may be either",
+                responded=self._now_ns(),
+            )
+
+        try:
+            self._adapter.read_order_result(response)
+        except Exception as refusal:  # noqa: BLE001
+            self.standing.broker_refused += 1
+            return answer(
+                BROKER_REFUSED, str(refusal), response=response, responded=self._now_ns()
+            )
+
+        self.standing.repriced += 1
+        return answer(
+            REPRICED,
+            f"the broker moved {broker_order_id} to {decision.to_price:g}",
             response=response,
             responded=self._now_ns(),
         )
@@ -350,6 +539,30 @@ def place_order(url: str, payload: dict, access_token: str, timeout_seconds: flo
         return json.loads(response.read())
 
 
+def cancel_order(url: str, access_token: str, timeout_seconds: float) -> dict:
+    """One DELETE to the broker's cancel endpoint.
+
+    No body: Upstox takes the order id as a query parameter, which
+    `cancel_endpoint_url` has already put there.
+    """
+    request = build_broker_request(url, access_token=access_token, method="DELETE")
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        return json.loads(response.read())
+
+
+def modify_order(url: str, payload: dict, access_token: str, timeout_seconds: float) -> dict:
+    """One PUT to the broker's modify endpoint."""
+    request = build_broker_request(
+        url,
+        access_token=access_token,
+        body=json.dumps(payload).encode("utf-8"),
+        content_type="application/json",
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        return json.loads(response.read())
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.brokers.upstox import UpstoxAdapter
@@ -375,6 +588,8 @@ def start_part(context) -> int:
         read=context.bus.reader("symbol-universe"),
         key_of=lambda entry: entry.symbol,
     )
+    cancels = Batch(read=context.bus.reader("cancel-decision"))
+    reprices = Batch(read=context.bus.reader("order-reprice"))
     publish_statuses = context.bus.publisher_for("raw-venue-order-status")
     timeout_seconds = context.number("broker_order_timeout_seconds")
 
@@ -385,6 +600,8 @@ def start_part(context) -> int:
     router = BrokerOrderRouter(
         adapter=adapter,
         place=lambda url, payload, token: place_order(url, payload, token, timeout_seconds),
+        cancel=lambda url, token: cancel_order(url, token, timeout_seconds),
+        modify=lambda url, payload, token: modify_order(url, payload, token, timeout_seconds),
         read_money_mode=lambda segment: modes.mapping().get(segment),
         read_instrument_key=read_instrument_key,
         read_token=lambda: tokens.mapping().get(adapter.broker_id),
@@ -396,7 +613,13 @@ def start_part(context) -> int:
         tokens.take_in_what_arrived()
         modes.take_in_what_arrived()
         universe.take_in_what_arrived()
-        statuses = [router.route(order) for order in orders.payloads()]
+        # Cancels first, then reprices, then new orders. A cancel of something
+        # resting is the instruction that frees capital and risk, and running it
+        # behind a batch of new placements would hold it up behind exactly the
+        # orders it may have been raised because of.
+        statuses = [router.cancel(decision) for decision in cancels.payloads()]
+        statuses += [router.reprice(decision) for decision in reprices.payloads()]
+        statuses += [router.route(order) for order in orders.payloads()]
         if statuses:
             publish_statuses(tuple(statuses))
 
@@ -428,6 +651,8 @@ __all__ = [
     "RawVenueOrderStatus",
     "RouterStanding",
     "describe_router",
+    "cancel_order",
+    "modify_order",
     "place_order",
     "start_part",
 ]

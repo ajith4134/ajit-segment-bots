@@ -24,7 +24,7 @@ Same contract as `ccxt-order-router`, so nothing downstream changes:
 
 | | |
 |---|---|
-| consumes | `order-request`, `broker-token-standing`, `money-mode`, `symbol-universe` |
+| consumes | `order-request`, `broker-token-standing`, `money-mode`, `symbol-universe`, `cancel-decision`, `order-reprice` |
 | produces | `raw-venue-order-status`, `part-health` |
 
 `raw-venue-order-status` is deliberately the **same data type** the crypto
@@ -79,11 +79,15 @@ and stating it rather than hardcoding is what lets a future intraday segment say
 
 ## What this deliberately does NOT do
 
-- **It places orders. It does not cancel or reprice them.** `ccxt-order-router`
-  also consumes `cancel-decision` and `order-reprice`; Upstox has separate
-  endpoints for both and neither is on the adapter yet. Adding a consume for a
-  capability that would then refuse everything is how a part comes to look
-  built. Its standing names them as absent.
+- ~~It places orders. It does not cancel or reprice them.~~ **Both landed the
+  same day**, once Upstox's own v3 docs were read rather than guessed at:
+  `DELETE /v3/order/cancel?order_id=...` (query parameter, no body) and
+  `PUT /v3/order/modify` (JSON body, with `order_type`, `validity`, `price` and
+  `trigger_price` all required even when unchanged — the API assumes the
+  original order only for fields left out entirely). Both take the broker's
+  order id while both decisions name the client's, so the router keeps the
+  mapping it learned from its own place response; it is the only part that ever
+  holds both.
 - **It does not poll for status.** `order-state-poller` is that part and is off
   the spine with the rest of the crypto execution cluster.
 - **It is not on the live spine.** It is declared, built and tested, and
