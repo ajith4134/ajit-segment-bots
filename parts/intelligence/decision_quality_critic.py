@@ -192,6 +192,7 @@ class DecisionQualityCritic:
             facts=self.facts_for(episode, rationale, premortem, argument, counterfactual),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def components_for(

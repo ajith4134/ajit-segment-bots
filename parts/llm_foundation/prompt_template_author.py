@@ -280,6 +280,7 @@ class PromptTemplateAuthor:
             facts={"measured-inputs": float(len(evidence))},
             maximum_sentences=6,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
         self.standing.requests_made += 1
         return request

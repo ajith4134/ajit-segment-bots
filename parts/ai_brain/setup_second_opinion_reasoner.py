@@ -126,6 +126,7 @@ class SetupSecondOpinionReasoner:
             facts=self.facts_for(candidate),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def review(self, candidate: DirectionalOpinion, model_output: str | None = None) -> DirectionalOpinion:

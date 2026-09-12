@@ -62,6 +62,7 @@ PART_DECLARATION = PartDeclaration(
 
 ROUTED = "routed"
 PART_OUT_OF_BUDGET = "the-asking-part-has-spent-its-allowance"
+NO_ASKING_PART = "the-request-does-not-name-the-part-that-asked"
 SHED_BY_BACKPRESSURE = "shed-because-the-subsystem-is-being-slowed-down"
 NOTHING_CAN_PAY = "no-pocket-can-pay-for-this-call"
 WOULD_NEED_A_WEAKER_MODEL = "only-a-model-this-purpose-does-not-accept-is-available"
@@ -90,6 +91,7 @@ class RouterStanding:
     routed_to_local: int = 0
     routed_to_paid: int = 0
     refused_part_budget: int = 0
+    refused_no_asking_part: int = 0
     shed_by_backpressure: int = 0
     refused_nothing_can_pay: int = 0
     deferred_would_need_a_weaker_model: int = 0
@@ -153,6 +155,18 @@ class LlmRequestRouter:
             else (SUBSCRIPTION, LOCAL, METERED)
         )
 
+        if not part_id:
+            # A request that does not say which part asked cannot be given an
+            # allowance, because an allowance is per part. Counted under its own
+            # name rather than as a budget refusal: the two have different fixes,
+            # and one of them is a producer that has not been updated.
+            self.standing.refused_no_asking_part += 1
+            return self._decision(
+                rendered.rendered_id, NO_ASKING_PART, None, None, (),
+                "the request does not name the part that asked, so there is no budget to "
+                "look up -- an allowance is per part. A producer that has not been updated "
+                "to say who it is lands here",
+            )
         budget = self._budgets.get(part_id)
         if budget is None or budget.is_spent:
             self.standing.refused_part_budget += 1
@@ -275,6 +289,7 @@ def describe_routing(router: LlmRequestRouter) -> dict:
         "routed_to_local": router.standing.routed_to_local,
         "routed_to_paid": router.standing.routed_to_paid,
         "refused_part_out_of_budget": router.standing.refused_part_budget,
+        "refused_no_asking_part": router.standing.refused_no_asking_part,
         "shed_by_backpressure": router.standing.shed_by_backpressure,
         "refused_nothing_can_pay": router.standing.refused_nothing_can_pay,
         "deferred_rather_than_downgraded": (
@@ -350,7 +365,16 @@ def start_part(context) -> int:
             router.observe_budget(budget)
         for choice in choices.payloads():
             router.observe_model_choice(choice)
-        return tuple((rendered, str(rendered.context_id), None) for rendered in rendered_requests.payloads())
+        # **The asking part, not the context id.** Until 2026-09-12 this read
+        # `str(rendered.context_id)` -- the id of an assembled prompt context --
+        # and looked a per-part budget up under it. A context id is never a part
+        # id, so the lookup missed every time and `refused_part_out_of_budget`
+        # was the only outcome this router could reach, whatever the budgeter
+        # issued. It was invisible because no request has ever been rendered.
+        return tuple(
+            (rendered, str(getattr(rendered, "asked_by", "") or ""), None)
+            for rendered in rendered_requests.payloads()
+        )
 
     return run_llm_request_router(
         router=router,

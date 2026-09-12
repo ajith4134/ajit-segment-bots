@@ -186,6 +186,11 @@ class RenderedLlmRequest:
     characters: int
     fingerprint: str
     rendered_at_ns: int
+    # Carried through from the request that asked. `llm-request-router` needs it
+    # to find the asking part's budget: until 2026-09-12 it looked the budget up
+    # by `str(context_id)`, which is the id of an assembled context and never a
+    # part id, so the lookup could not have succeeded even once budgets existed.
+    asked_by: str = ""
 
 
 @dataclass(frozen=True)

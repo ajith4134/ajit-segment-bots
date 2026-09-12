@@ -151,6 +151,10 @@ class PromptRenderer:
             characters=len(text),
             fingerprint=fingerprint,
             rendered_at_ns=self._now_ns(),
+            # Carried, not re-derived: the router needs to know which part is
+            # asking to find its budget, and this is the only place that knows
+            # both the request and what it became.
+            asked_by=str(getattr(request, "asked_by", "") or ""),
         )
         self.standing.rendered += 1
         return self._outcome(

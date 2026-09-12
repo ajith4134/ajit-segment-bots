@@ -146,6 +146,7 @@ class BrainSelfReflector:
             facts=self.facts_for(episode),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def judge_the_reasoning(self, episode: TradeEpisode) -> tuple[bool | None, str]:

@@ -12254,8 +12254,9 @@
    "category": "llm-foundation",
    "consumes": [
     "llm-call-record",
-    "llm-spend-state",
-    "llm-quota-state"
+    "llm-quota-state",
+    "llm-request",
+    "llm-spend-state"
    ],
    "produces": [
     "llm-part-budget",

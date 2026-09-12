@@ -275,6 +275,10 @@ def start_part(context) -> int:
             purpose=evaluation_purpose, venue_id=str(facts.get("venue_id", "")), symbol=str(facts.get("symbol", "")),
             instruction=f"{version.instruction}\n[case:{case.case_id}][version:{version.version_id}]",
             facts=dict(facts), maximum_sentences=maximum_sentences, requested_at_ns=int(case.added_at_ns),
+            # This part's evaluation calls are its own, so they draw on its own
+            # allowance rather than on the allowance of whichever part happens
+            # to own the version being scored.
+            asked_by=PART_ID,
         )
 
     def read_runs():

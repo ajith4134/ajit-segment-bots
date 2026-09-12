@@ -192,6 +192,7 @@ class MarketThesisReasoner:
             facts=self.facts_for((venue_id, symbol)),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def review(self, venue_id: str, symbol: str, model_output: str | None = None) -> DirectionalOpinion:

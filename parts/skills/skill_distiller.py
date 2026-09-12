@@ -114,6 +114,7 @@ class SkillDistiller:
             facts={"document_id": document.document_id, "length": len(document.content)},
             maximum_sentences=60,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def traceable_to(self, item_text: str, document: SourceDocument) -> str:

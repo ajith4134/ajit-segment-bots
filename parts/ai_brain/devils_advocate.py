@@ -144,6 +144,7 @@ class DevilsAdvocate:
             facts=self.facts_for(intent, opinions),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def measured_objections(self, intent, opinions, regime: str) -> list:

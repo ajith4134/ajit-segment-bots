@@ -53,10 +53,25 @@ class LlmRequest:
     facts: dict
     maximum_sentences: int
     requested_at_ns: int
+    # Which part is asking. Added 2026-09-12 because a budget is per part and
+    # nothing on this wire named one: `part-token-budgeter` learned a part
+    # existed only from an `llm-call-record`, a record needs a call, and a call
+    # needs a budget -- so no part could ever get its first allowance. Measured:
+    # 0 budgets issued, ever.
+    #
+    # Defaulted rather than required so a producer that has not been updated
+    # keeps working instead of crash-looping; the parts that cannot be budgeted
+    # because they did not say who they are are counted by name in
+    # `llm-request-router`'s standing rather than silently refused.
+    asked_by: str = ""
 
     @property
     def is_answerable_from_facts(self) -> bool:
         return bool(self.facts)
+
+    @property
+    def names_the_asking_part(self) -> bool:
+        return bool(self.asked_by)
 
 
 @dataclass(frozen=True)
@@ -188,8 +203,14 @@ def make_request(
     facts: dict,
     maximum_sentences: int,
     now_ns=time.time_ns,
+    asked_by: str = "",
 ) -> LlmRequest:
-    """One request, carrying the facts its answer will be checked against."""
+    """One request, carrying the facts its answer will be checked against.
+
+    `asked_by` is the asking part's own id. A request that does not name it
+    cannot be given an allowance -- budgets are per part -- so it will be
+    refused by the router and counted there rather than quietly dropped.
+    """
     if not facts:
         raise ValueError(
             "a request with no facts asks the model to recall rather than to phrase, and "
@@ -205,6 +226,7 @@ def make_request(
         facts=dict(facts),
         maximum_sentences=maximum_sentences,
         requested_at_ns=now_ns(),
+        asked_by=asked_by,
     )
 
 

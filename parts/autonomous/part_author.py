@@ -227,6 +227,7 @@ class PartAuthor:
             facts={"evidence-count": float(len(gap.evidence))},
             maximum_sentences=200,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
         self.standing.requests_made += 1
         return request

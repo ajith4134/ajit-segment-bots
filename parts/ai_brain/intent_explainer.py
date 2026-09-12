@@ -137,6 +137,7 @@ class IntentExplainer:
             facts=self.facts_for(intent, opinions),
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def explain(self, intent, opinions, model_output: str | None) -> DecisionRationale:

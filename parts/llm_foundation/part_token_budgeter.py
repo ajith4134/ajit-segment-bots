@@ -41,7 +41,8 @@ PART_ID = "part-token-budgeter"
 
 PART_DECLARATION = PartDeclaration(
     part_id="part-token-budgeter",
-    consumes=("llm-call-record", "llm-spend-state", "llm-quota-state"),
+    # In the blueprint's own order (RL-067: what is built matches the diagrams).
+    consumes=("llm-call-record", "llm-quota-state", "llm-request", "llm-spend-state"),
     produces=("llm-part-budget", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -318,6 +319,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     records = Batch(read=context.bus.reader("llm-call-record"))
+    requests = Batch(read=context.bus.reader("llm-request"))
     spends = Batch(read=context.bus.reader("llm-spend-state"))
     quotas = Batch(read=context.bus.reader("llm-quota-state"))
     publish_budgets = context.bus.publisher_for("llm-part-budget")
@@ -341,12 +343,33 @@ def start_part(context) -> int:
             budgeter.observe_spend(spend)
             changed = True
         touched: set[str] = set()
+        # **A part is known when it asks, not when it has already called.**
+        # Measured 2026-09-12: 0 budgets issued, ever, because the only way a
+        # part got here was through an `llm-call-record` -- and a record needs a
+        # call, a call needs this budget. `llm_budget_starting_share` exists for
+        # exactly the part nothing is yet measured about, and could never be
+        # applied to anyone. Nothing about the allocation changes: `share_for`
+        # already answers with the starting share for a part it has not seen.
+        for request in requests.payloads():
+            asking_part = str(getattr(request, "asked_by", "") or "")
+            if asking_part:
+                parts_seen.add(asking_part)
+                touched.add(asking_part)
         for record in records.payloads():
             budgeter.observe_call(record)
             budgeter.observe_usefulness(record.part_id, bool(record.succeeded))
             parts_seen.add(record.part_id)
             touched.add(record.part_id)
-        budgeter.roll_window()
+        # **The window is NOT rolled here.** It was, unconditionally, on every
+        # tick: measured on the live spine 2026-09-12, `windows_rolled` reached
+        # 103 in five minutes and 855 over a few hours. Rolling clears
+        # `calls_used`, `tokens_used` and `money_used`, so every part's usage was
+        # zero every time it was looked at, `budget.is_spent` could never be
+        # true, and `refused_part_out_of_budget` was a refusal this system could
+        # not reach -- a guard that cannot fire, which is the same shape as a
+        # board that cannot render red. `issue` rolls the window itself when
+        # `window_seconds` have actually elapsed, which is the only thing that
+        # should end a window.
         return tuple(sorted(parts_seen if changed else touched))
 
     def publish(issue) -> None:

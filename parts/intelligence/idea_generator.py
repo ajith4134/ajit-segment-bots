@@ -158,6 +158,7 @@ class IdeaGenerator:
             facts=self._facts or {"trials_so_far": self.trials_in(family)},
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
+            asked_by=PART_ID,
         )
 
     def propose(
