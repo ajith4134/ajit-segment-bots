@@ -69,3 +69,62 @@ Read off the live settings before the switch was flipped:
 At the measured $0.041 per stripped haiku call that is about $0.82 an hour at the
 cap, against the operator's own subscription rather than a card.
 `prompt_seeding_is_allowed = 0` closes the ring again.
+
+## The chain end to end, and the three defects only a real answer could show
+
+Added later the same day. The live spine still cannot do this — the market is
+shut and `ground-truth-snapshot-builder` correctly refuses a stale snapshot — so
+the chain was driven through the real parts in
+`tests/integration/test_a_market_fact_becomes_a_validated_llm_output.py` on real
+captured prints:
+
+    tests/captured/upstox/2026-09-08-reliance-book-and-trade-at-one-moment.json
+    bid 1298.1   ask 1298.2   last 1298.2   -- the book's top level and the trade
+    print that landed in the SAME NANOSECOND, off this project's own tape
+
+One moment matters: the snapshot builder refuses two facts that contradict each
+other, so a bid from one second beside an ask from another is how a test would
+fake its way past that check.
+
+Eight parts, in order: `ground-truth-snapshot-builder` → `part-token-budgeter` →
+`context-assembler` → `prompt-registry` + `seed-prompt-promoter` →
+`prompt-renderer` → `llm-model-picker` → `llm-request-router` →
+`subscription-session-caller` (**the real call**) → `structured-output-enforcer`.
+
+It failed three times before it passed, and every failure was a real defect
+between two parts of the same block that no test could have found without an
+answer from a model:
+
+**1. `prompt-template-author` wrote a schema the enforcer crashes on.** It wrote
+`{"venue_id": "str", ...}`; `structured-output-enforcer` does `rule.get("type")`,
+so every template it has ever written raises `AttributeError: 'str' object has no
+attribute 'get'` the moment a real answer arrives. Two of those templates are
+promoted and active on the live spine right now. The enforcer would have
+crash-looped on this system's first ever reply.
+
+**2. The prompt never stated the shape the enforcer demands.** The rendered text
+carried the instruction, the facts and the retrieved material, and nothing about
+the output schema — while the enforcer refuses anything that is not that schema.
+Every answer this system could ever have received would have been refused as "not
+the declared structure", and a model cannot be blamed for not guessing a schema
+nobody showed it.
+
+**3. The prompt never said what the question was about.** The schema requires
+`venue_id` and `symbol` in the answer. The first real answer was:
+
+    {"symbol": null, "text": "bid=1298.1, ask=1298.2, last-trade=1298.2", "venue_id": null}
+
+— correct, and null on both, because nothing in the prompt named them. The
+request had carried both all along.
+
+A fourth thing was fixed rather than found: the answer above arrived inside a
+` ```json ` fence and the enforcer refused it as not-JSON. Every model fences
+JSON when asked for JSON, so the fence is read now and **counted**
+(`answers_arriving_in_a_code_fence`) — tolerating it silently would be the
+opposite mistake, and that counter is what says how often the prompt's own "no
+code fence" is ignored.
+
+After all four: the chain passes, one real call, and the validated output carries
+no unsupported claims — every number in it is one of the six measured facts it
+was given.
+

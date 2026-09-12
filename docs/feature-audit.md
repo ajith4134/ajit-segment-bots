@@ -2163,3 +2163,33 @@ one reading at Monday's open to tell those apart, and that reading is the next
 thing to take: if `unresolved_writes` is still 100% with the market open, every
 price lookup by symbol is broken again.
 
+### The test suite cannot be run whole — 279 failures that per-module runs do not show (2026-09-12)
+
+Measured while verifying the LLM chain work, and recorded because "the suite is
+green" has quietly been unverifiable:
+
+    tests/parts + tests/runtime                      4,378 passed, 0 failed
+    tests/parts + tests/runtime + tests/integration    279 failed, 4,495 passed
+    tests/integration/test_every_launchable_part_starts.py alone
+                                                       353 passed, 3 failed
+
+So roughly 276 of those 279 exist only when the whole tree runs in one process.
+They are all `test_the_part_starts_and_reports_on[...]` failing with
+`FileNotFoundError` from `runtime/bus.py`'s inbox bind — the module-scoped
+`bus_root` lives under `$XDG_RUNTIME_DIR/every-part-test`, and something in an
+earlier module's teardown takes it away. A single one of those tests passes on its
+own in four seconds.
+
+**Three of the failures are real** and were there before today's work:
+`symbol-catalogue-reader` (its `captured_venues` setting names no venue this build
+has an adapter for — a crypto-era setting against the Indian adapters, so it
+belongs to the retirement), `probe-runner` and `stream-budget-planner`. Two more
+are the network-dependent `tests/runtime/test_open_web_sources.py` reaching arXiv
+and Crossref.
+
+Nothing here was caused by the LLM foundation changes: that module passes 353 of
+356 on its own, and the live spine starts all 330 parts with the edited modules
+and reports 0 silent. But a suite that cannot be run whole is a suite whose green
+is an assumption, and pinning the fixture interaction is worth a session of its
+own.
+

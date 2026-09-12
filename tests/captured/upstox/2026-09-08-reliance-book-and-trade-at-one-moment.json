@@ -1,0 +1,60 @@
+{
+ "book": {
+  "payload": {
+   "broker_time_ns": 1788844695765000000,
+   "instrument_key": "NSE_EQ|INE002A01018",
+   "levels": [
+    {
+     "ask_price": 1298.2,
+     "ask_quantity": 7,
+     "bid_price": 1298.1,
+     "bid_quantity": 90
+    },
+    {
+     "ask_price": 1298.3,
+     "ask_quantity": 78,
+     "bid_price": 1298.0,
+     "bid_quantity": 1010
+    },
+    {
+     "ask_price": 1298.4,
+     "ask_quantity": 435,
+     "bid_price": 1297.9,
+     "bid_quantity": 298
+    },
+    {
+     "ask_price": 1298.5,
+     "ask_quantity": 403,
+     "bid_price": 1297.8,
+     "bid_quantity": 1525
+    },
+    {
+     "ask_price": 1298.6,
+     "ask_quantity": 570,
+     "bid_price": 1297.7,
+     "bid_quantity": 1622
+    }
+   ]
+  },
+  "received_at_ns": 1788844695813586580,
+  "venue_time_ns": 1788844695765000000
+ },
+ "captured_from": "this project's own tape, tape/upstox/RELIANCE/2026-09-08.{book,index}",
+ "instrument_key": "NSE_EQ|INE002A01018",
+ "milliseconds_between_the_two_prints": 0.0,
+ "symbol": "RELIANCE",
+ "tick_size_rupees": 0.05,
+ "trade": {
+  "payload": {
+   "broker_time_ns": 1788844695765000000,
+   "close_price": 1309.5,
+   "instrument_key": "NSE_EQ|INE002A01018",
+   "last_traded_price": 1298.2,
+   "last_traded_quantity": 1,
+   "last_traded_time_ms": 1788844695663
+  },
+  "received_at_ns": 1788844695785050953,
+  "venue_time_ns": 1788844695765000000
+ },
+ "venue_id": "upstox"
+}

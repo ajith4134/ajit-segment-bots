@@ -72,6 +72,12 @@ markers = [
     # against the services themselves. Deselect with -m "not network" on a box
     # with no egress.
     "network: calls a real public service (arXiv, Crossref, GitHub, DuckDuckGo)",
+    # Spends the operator's own LLM allowance. One stripped haiku call through the
+    # Claude Code session transport is about $0.041 (measured 2026-09-07), and the
+    # chain it proves -- a real market fact to a validated model answer -- could
+    # not be proved any other way while the market is shut. Deselect with
+    # -m "not spends_real_money".
+    "spends_real_money: makes a real LLM call against the operator's subscription",
 ]
 # Import `runtime` from the repository root rather than from wherever pytest was
 # invoked. Declared here so no test needs a sys.path line of its own.

@@ -389,7 +389,18 @@ def start_part(context) -> int:
     # a twelfth part was added.
     purposes_asked_for: set[str] = set()
     written_for: set[str] = set()
-    output_schema = {"venue_id": "str", "symbol": "str", "text": "str"}
+    # **In `structured-output-enforcer`'s own vocabulary**, which is a rule per
+    # field and not a type name. Until 2026-09-12 this wrote `{"venue_id": "str"}`
+    # and the enforcer does `rule.get("type")`, so every template this part has
+    # ever written raised `AttributeError: 'str' object has no attribute 'get'`
+    # the moment a real answer reached the enforcer -- which is to say it would
+    # have crash-looped the first time this system ever got a reply, and nothing
+    # could show it while no reply had ever arrived.
+    output_schema = {
+        "venue_id": {"type": "string", "required": True},
+        "symbol": {"type": "string", "required": True},
+        "text": {"type": "string", "required": True},
+    }
 
     def read_work(_author):
         # **What a template is needed FOR comes from what is actually asked**

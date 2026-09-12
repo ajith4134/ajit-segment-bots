@@ -55,6 +55,21 @@ NO_FACTS = "the-request-carries-no-facts-to-check-the-answer-against"
 FACTS_HEADING = "MEASURED FACTS (the only numbers you may use)"
 CONTEXT_HEADING = "RETRIEVED MATERIAL (may be wrong; the facts above are not)"
 INSTRUCTION_HEADING = "INSTRUCTION"
+# **What the question is about.** The schema every template declares requires
+# `venue_id` and `symbol` in the answer, and until 2026-09-12 the rendered text
+# never said what they were: the first real call this project made answered
+# `"venue_id": null, "symbol": null`, correctly, because nothing had told it. The
+# request has carried both all along.
+SUBJECT_HEADING = "THIS IS ABOUT"
+# **The shape the answer must arrive in, stated in the prompt itself.** Until
+# 2026-09-12 the rendered text never mentioned it, while
+# `structured-output-enforcer` refuses anything that is not the declared
+# structure -- so every answer this system could ever have received would have
+# been refused as "not the declared structure", and a model cannot be blamed for
+# not guessing a schema nobody showed it. Found by the first real call ever made.
+OUTPUT_HEADING = (
+    "ANSWER WITH ONE JSON OBJECT AND NOTHING ELSE (no prose, no code fence)"
+)
 
 
 @dataclass(frozen=True)
@@ -80,6 +95,36 @@ class RendererStanding:
     refused_no_schema: int = 0
     refused_no_facts: int = 0
     identical_fingerprints: int = 0
+
+
+def describe_output_shape(schema) -> str:
+    """The declared schema as a line per field, for the model to answer in.
+
+    `structured-output-enforcer`'s own vocabulary -- a rule per field, with
+    `type` and optionally `one_of`, `minimum` and `maximum` -- written out so the
+    prompt asks for exactly what the enforcer will check. Anything else is a
+    prompt and a checker disagreeing about the contract, which is what they did
+    until the first real call was made.
+    """
+    lines = []
+    for name, rule in sorted((schema or {}).items()):
+        if not isinstance(rule, dict):
+            # An older template whose schema is a bare type name. Said plainly
+            # rather than crashing the render: the enforcer will refuse the
+            # answer and name the template, which is the right place to notice.
+            lines.append(f'  "{name}": {rule}')
+            continue
+        described = str(rule.get("type", "string"))
+        options = rule.get("one_of")
+        if options:
+            described += " and one of " + ", ".join(repr(option) for option in options)
+        low, high = rule.get("minimum"), rule.get("maximum")
+        if low is not None or high is not None:
+            described += f" between {low} and {high}"
+        if not rule.get("required", True):
+            described += ", optional"
+        lines.append(f'  "{name}": {described}')
+    return "{\n" + "\n".join(lines) + "\n}"
 
 
 class PromptRenderer:
@@ -170,6 +215,16 @@ class PromptRenderer:
     @staticmethod
     def _render_text(request, version, context) -> str:
         blocks = [f"{INSTRUCTION_HEADING}\n{version.instruction}"]
+        subject = "\n".join(
+            f"{name} = {value}"
+            for name, value in (
+                ("venue_id", getattr(request, "venue_id", "")),
+                ("symbol", getattr(request, "symbol", "")),
+            )
+            if value
+        )
+        if subject:
+            blocks.append(f"{SUBJECT_HEADING}\n{subject}")
         # Facts as a labelled block, never interpolated into prose: a number inside
         # a sentence cannot be matched back reliably.
         facts = "\n".join(f"{name} = {value}" for name, value in sorted(request.facts.items()))
@@ -182,6 +237,7 @@ class PromptRenderer:
             )
             if retrieved:
                 blocks.append(f"{CONTEXT_HEADING}\n{retrieved}")
+        blocks.append(f"{OUTPUT_HEADING}\n{describe_output_shape(version.output_schema)}")
         return "\n\n".join(blocks)
 
     @staticmethod

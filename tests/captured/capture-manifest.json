@@ -490,6 +490,15 @@
    "how": "one authenticated REST call with this project's own broker token, kept verbatim. The 30 underlyings are DERIVED, not typed: NSE indices and shares that some option is written on, ranked by contract count off the real instrument master -- NIFTY, BANKNIFTY, FINNIFTY, RELIANCE, TCS, ICICIBANK and the rest. The response carries no credential and that is asserted before this file is written",
    "records": 42,
    "why_it_matters": "the 2-underlying capture has 13 gaps between stories and its nearest-rank 95th percentile EQUALS its maximum, so news-source-health-monitor's middle state was unreachable on it -- a Rule 8 defect found by a test failing. This one carries 31 stories in 42 rows over 167.08 hours and 30 gaps (median 1.8h, p95 17.9h, longest 28.4h), which separates all three delivery states. It also re-confirms the deduplicator's 0.8 threshold on a 3x wider real sample: 11 rows collapse by url, 0 by headline, and the closest pair it refuses to collapse still scores 0.600"
+  },
+  {
+   "path": "upstox/2026-09-08-reliance-book-and-trade-at-one-moment.json",
+   "venue": "upstox",
+   "source": "this project's own tape, tape/upstox/RELIANCE/2026-09-08.{book,index} and .{blob,index}",
+   "captured_on": "2026-09-12",
+   "how": "the book's top level and the trade print that landed in the SAME NANOSECOND, picked by minimising the gap between the two venue timestamps across 2,838 book records and 2,717 trade prints. bid 1298.1, ask 1298.2, last 1298.2. tick_size 0.05 rupees from the real NSE master, as runtime/brokers/upstox.py converts it from paise",
+   "records": 2,
+   "why_it_matters": "ground-truth-snapshot-builder refuses two facts that contradict each other, so a bid from one second beside an ask from another is how a test fakes its way past that check. This is the input to the only proof that the LLM chain works end to end -- eight parts and one real model call -- while the market is shut and the live spine correctly cannot build a snapshot at all"
   }
  ]
 }

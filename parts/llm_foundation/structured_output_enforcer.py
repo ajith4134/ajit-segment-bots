@@ -80,6 +80,7 @@ class EnforcerStanding:
     responses_seen: int = 0
     validated: int = 0
     rejected_not_json: int = 0
+    answers_arriving_in_a_code_fence: int = 0
     rejected_missing_field: int = 0
     rejected_wrong_type: int = 0
     rejected_out_of_bounds: int = 0
@@ -89,6 +90,25 @@ class EnforcerStanding:
     repairs_exhausted: int = 0
     sentences_removed: int = 0
     defaults_filled_in: int = 0
+
+
+def json_text_of(answer: str) -> tuple[str, bool]:
+    """The JSON in an answer, and whether it arrived inside a code fence.
+
+    A model asked for JSON returns JSON inside ```json more often than not. The
+    fence is not part of the answer and stripping it is not leniency about the
+    structure -- everything inside is still checked field by field. Refusing the
+    fence outright was refusing correct answers: the first real call this project
+    ever made returned exactly the declared object, fenced, and was rejected as
+    "not the declared structure".
+    """
+    text = (answer or "").strip()
+    if not text.startswith("```"):
+        return text, False
+    without_opening = text.split("\n", 1)[1] if "\n" in text else ""
+    closing = without_opening.rfind("```")
+    inside = without_opening[:closing] if closing != -1 else without_opening
+    return inside.strip(), True
 
 
 class StructuredOutputEnforcer:
@@ -157,8 +177,17 @@ class StructuredOutputEnforcer:
                 "answer fails even when it parses",
             )
 
+        text, was_fenced = json_text_of(response.text)
+        if was_fenced:
+            # Counted, not ignored. Every model wraps JSON in a fence when asked
+            # for JSON, and a parser that refuses a fence refuses nearly every
+            # real answer -- measured on the first real call this project ever
+            # made, 2026-09-12, whose answer was a correct object inside
+            # ```json. Tolerating it silently would be the other mistake: this
+            # number says how often the prompt's "no code fence" is ignored.
+            self.standing.answers_arriving_in_a_code_fence += 1
         try:
-            value = json.loads(response.text) if response.text.strip().startswith(("{", "[")) else None
+            value = json.loads(text) if text.startswith(("{", "[")) else None
         except json.JSONDecodeError:
             value = None
 
@@ -281,6 +310,9 @@ def describe_enforcement(enforcer: StructuredOutputEnforcer) -> dict:
         "responses_seen": enforcer.standing.responses_seen,
         "validated": enforcer.standing.validated,
         "rejected_not_the_declared_structure": enforcer.standing.rejected_not_json,
+        "answers_arriving_in_a_code_fence": (
+            enforcer.standing.answers_arriving_in_a_code_fence
+        ),
         "rejected_missing_field": enforcer.standing.rejected_missing_field,
         "rejected_wrong_type": enforcer.standing.rejected_wrong_type,
         "rejected_out_of_bounds": enforcer.standing.rejected_out_of_bounds,
