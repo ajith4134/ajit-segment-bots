@@ -39,6 +39,7 @@ SETTINGS = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.tom
 CONVERTED_MARKER = "REFITTED 2026-09-12"
 INERT_MARKER = "INERT 2026-09-12"
 MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
+INDEPENDENT_MARKER = "MARKET-INDEPENDENT 2026-09-12"
 MEASURED = "measurements/2026-09-12-indian-order-sizes/"
 TAPE = "this project's own captured tape for 2026-09-08"
 
@@ -49,7 +50,8 @@ TAPE = "this project's own captured tape for 2026-09-08"
 # used because a crypto bot's order was near the median print.
 DESK_ORDER_SIZE = 150_000.0
 
-REFITS: dict[str, tuple[str, str]] = {
+# (value, provenance) or (value, provenance, unit) where the unit changes too.
+REFITS: dict[str, tuple] = {
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -149,6 +151,97 @@ REFITS: dict[str, tuple[str, str]] = {
         "they are the tiers that may not trade at all, and that is not a "
         "currency question.",
     ),
+    # Anchored to taker_fee_rate by their own notes, so correcting that fee
+    # without these would leave three numbers pointing at a rate that no longer
+    # exists -- the shape of drift where one fix makes a neighbour wrong.
+    "bull_entry_prior_entry_cost_fraction": (
+        "0.004266",
+        "Claude, 2026-09-12: what the entry timer assumes a fill costs before it "
+        "has measured its own. Was 0.0005, and its own note says why: 'anchored "
+        "to the taker fee it will also pay'. That fee was bybit-linear's 0.00055 "
+        "and is now Upstox's real per-side options cost, 0.004266, so the anchor "
+        "moved and this follows it. Left un-updated it would assume an entry "
+        "costs an eighth of what the same file says it costs -- and the timer "
+        "would wait for an edge it had already decided was affordable.",
+    ),
+    "bear_entry_prior_entry_cost_fraction": (
+        "0.004266",
+        "Claude, 2026-09-12: mirrored for the short side from "
+        "bull_entry_prior_entry_cost_fraction, same anchor and same reason.",
+    ),
+    "liquidity_deep_cost_fraction": (
+        "0.004266",
+        "Claude, 2026-09-12: the walk cost at the reference order size below "
+        "which liquidity-grader calls a symbol deep. Was 0.001 -- 'ten basis "
+        "points, the cost of a single taker fee' in its own note, against a "
+        "crypto fee of 5.5 basis points. On NSE one side really costs 0.4266%, "
+        "so a symbol whose walk is under ten basis points is not merely deep, it "
+        "is cheaper than the charge stack allows any Indian option to be. At the "
+        "old figure this grade was unreachable and every symbol read thinner "
+        "than it is.",
+    ),
+    # The seven settings whose UNIT still said USDT. A rupee amount labelled in a
+    # crypto stablecoin is half-converted, and the label is what a reader trusts.
+    "whale_minimum_quote_value": (
+        "1000000.0",
+        "Claude, 2026-09-12: see the sentence above -- the digits are unchanged "
+        "and the meaning is not. The unit is what was actually wrong.",
+        "INR",
+    ),
+    "options_minimum_premium": (
+        "10000.0",
+        "Claude, 2026-09-12: the premium below which an options trade is not flow "
+        "worth recording. The figure survives the change of market and the unit "
+        "does not: ten thousand USDT is roughly 8.5 lakh, which would discard "
+        "almost every option print on NSE, while ten thousand rupees sits just "
+        "below the median Indian option print of 13,722 measured on this "
+        "project's own tape for 2026-09-08 -- so it keeps the ordinary flow and "
+        "drops the noise, which is what the operator asked it for.",
+        "INR",
+    ),
+    "fund_conservation_tolerance": (
+        "0.01",
+        "Claude, 2026-09-12: how far the books may disagree before it is a fault. "
+        "The number is right for rupees by luck of scale and the unit was wrong: "
+        "one paisa is the smallest amount an Indian account can differ by, since "
+        "rupee amounts settle to two decimals, so this is exactly one tick of "
+        "the currency rather than an arbitrary tolerance.",
+        "INR",
+    ),
+    "pnl_reconciliation_tolerance": (
+        "0.01",
+        "Claude, 2026-09-12: same as fund_conservation_tolerance -- one paisa, "
+        "the smallest difference an Indian account can hold, not a rounded USDT.",
+        "INR",
+    ),
+    "replay_fee_tolerance": (
+        "1e-6",
+        "Claude, 2026-09-12: how far a replayed fee may differ from the real one "
+        "before the replay is not reproducing the run. A millionth of a rupee is "
+        "far below one paisa, which is the point: this is a floating-point "
+        "tolerance rather than a money tolerance, and it is unchanged because "
+        "arithmetic error does not depend on the currency. Only the unit was "
+        "wrong.",
+        "INR",
+    ),
+    "llm_metered_per_call_ceiling": (
+        "0.05",
+        "Claude, 2026-09-12: the most one metered LLM call may cost. NOT "
+        "converted to rupees, and that is the finding: every provider this "
+        "project can call bills in US DOLLARS, so the amount was always right "
+        "and the unit was always wrong -- USDT is a crypto stablecoin, USD is "
+        "what Anthropic and OpenAI actually charge. Relabelled, not re-derived.",
+        "USD",
+    ),
+    "llm_spend_ceiling": (
+        "1.0",
+        "Claude, 2026-09-12: the most the whole system may spend on metered LLM "
+        "calls. Same as llm_metered_per_call_ceiling -- billed in US dollars, so "
+        "the number stands and the unit was the error. A settlement currency and "
+        "a supplier's billing currency are different questions, and this file "
+        "had them as one.",
+        "USD",
+    ),
     "taker_fee_rate": (
         "0.004266",
         "Claude, 2026-09-12: what crossing the spread costs per side. Was "
@@ -203,6 +296,9 @@ ALREADY_INDIAN: dict[str, str] = {
     "reference_price_prior_one_second_move": (
         "measurements/2026-08-24-reference-price-staleness/measure_price_drift_by_age.py"
     ),
+    # Proved by pointing at another setting that is itself proved.
+    "intent_timing_maximum_price_drift": "measurements/2026-09-05-why-upstox-never-fills/",
+    "tail_crowding_order_flow_deviation_threshold": "runtime/underlying_open_interest.py",
     # Indian identities. The value itself is the market, so there is nothing to
     # measure -- "INR" is not a number fitted to anything.
     "segment_id": "the value names an Indian segment",
@@ -267,6 +363,23 @@ def note_insertion_point(block: str) -> int | None:
 # design question with a named answer, and the note says what that answer is so
 # the next session does not have to rediscover it.
 NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
+    "stop_cluster_clearance_fraction": (
+        "stop-cluster-clearance moves a stop clear of a LIQUIDATION cluster -- a "
+        "crowd of leveraged positions that will be force-closed at one price. NSE "
+        "has no such cluster for a bought option, because there is nothing to "
+        "force-close. The Indian analogue of 'a price where a crowd is waiting' is "
+        "open interest concentrated at a strike, which broker-open-interest already "
+        "carries per contract; that is a different measurement on a different axis, "
+        "not this fraction rescaled"
+    ),
+    "signal_bridge_deviation_threshold": (
+        "its own note says it gates 'how far from its own normal a FUNDING RATE or "
+        "transfer must sit'. Neither exists on NSE. cross-segment-signal-bridge was "
+        "already pointed at open interest and order flow for the Indian build "
+        "(2026-09-01), so the threshold belongs to whichever of those it now reads "
+        "and has to be measured against that series rather than inherited from a "
+        "funding rate's distribution"
+    ),
     "bear_settlements_per_day": (
         "bear-setup-filter projects a carry cost over its horizon by multiplying a "
         "funding rate by settlements per day. A bought NSE option settles no funding "
@@ -292,6 +405,92 @@ NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
         "built segment uses leverage"
     ),
 }
+
+
+# Settings whose quantity genuinely does not depend on which market is traded.
+# A bus ceiling is a bus ceiling; a count of a model's features is a count; the
+# fraction of an account one trade may risk is the operator's policy and means
+# the same in rupees as in dollars.
+#
+# These name crypto only because they were written during the crypto build and
+# the note cites what was in front of the author at the time. Recorded rather
+# than re-derived, because there is nothing to re-derive -- and recorded rather
+# than ignored, because "nothing to do" has to be a stated answer or it is
+# indistinguishable from "nobody looked" (Rule 8).
+MARKET_INDEPENDENT: dict[str, str] = {
+    "closed_trades_trustworthy_after_ns": (
+        "a boundary in time, marking which recorded trades came from a run whose "
+        "prices the market never printed. When that moment was has nothing to do "
+        "with which market printed afterwards"
+    ),
+    "bull_opinion_maximum_missing_features": (
+        "a count of features, set from the model's own feature list rather than "
+        "from judgement -- its note says so. It changes when the model's features "
+        "change, not when the market does"
+    ),
+    "bear_opinion_maximum_missing_features": "the short side's mirror of the same count",
+    "risk_maximum_per_position_fraction": (
+        "the fraction of an allotment one position may risk. The operator's policy, "
+        "and one percent means the same thing in rupees as in dollars"
+    ),
+    "risk_maximum_total_fraction": (
+        "five times the single-position limit by construction, so it follows that "
+        "policy rather than any market"
+    ),
+    "miner_perfect_fit_threshold": (
+        "the fitted hit rate above which a readable formula is refused as too good "
+        "to be real. A statement about overfitting, which is a property of fitting "
+        "rather than of the instrument fitted"
+    ),
+    "reference_price_move_anchor_seconds": (
+        "two prints a millisecond apart differ by the tick rather than by "
+        "volatility, so a move needs an anchor at least this old. A fact about "
+        "measuring a series, true of any series"
+    ),
+    "reference_price_minimum_age_seconds": (
+        "the floor on a learned bound, set at the anchor spacing: below it the "
+        "estimate is extrapolating inside its own resolution. Again a property of "
+        "the estimator, not the market"
+    ),
+    "price_frame_maximum_symbols": (
+        "how many symbols fit in one frame before the 131,072-byte bus ceiling is "
+        "reached, measured by serialising real frames at 50.1 bytes per symbol. A "
+        "capacity of this project's own bus"
+    ),
+    "broker_price_frame_maximum_symbols": "the same bus ceiling, for the broker feed's own frame",
+    "broker_stream_drain_interval": (
+        "the longest a part may block on one socket read before yielding to its "
+        "tick loop -- T-2 tick discipline, which is about this runtime rather than "
+        "about any venue"
+    ),
+    "anomaly_basis_window_observations": (
+        "how many of a symbol's own prints a normal basis is learned from. A "
+        "sample size for an estimator, chosen for statistical stability"
+    ),
+}
+
+
+def record_market_independent(text: str, name: str, why: str) -> tuple[str, str]:
+    """Record that a setting's quantity does not depend on the market."""
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if INDEPENDENT_MARKER in block:
+        return text, "already recorded"
+    at = note_insertion_point(block)
+    if at is None:
+        return text, "NO NOTE"
+    addition = (
+        f" {INDEPENDENT_MARKER}: this quantity does not depend on which market is "
+        f"traded -- {why}. It names crypto only because it was written during the "
+        f"crypto build and its note cites what was in front of the author then. "
+        f"Nothing to re-derive; recorded so that is a stated answer rather than a "
+        f"gap nobody looked at."
+    )
+    block = block[:at] + addition.replace('"', "'") + block[at:]
+    return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
 
 
 def record_needs_a_mechanism(text: str, name: str, why: str) -> tuple[str, str]:
@@ -367,7 +566,9 @@ def back_up(path: pathlib.Path) -> pathlib.Path:
     return destination
 
 
-def refit(text: str, name: str, new_value: str, note: str) -> tuple[str, str]:
+def refit(
+    text: str, name: str, new_value: str, note: str, new_unit: str | None = None,
+) -> tuple[str, str]:
     """Replace one setting's value and append its provenance. Returns (text, what happened)."""
     start = text.find(f"[{name}]")
     if start < 0:
@@ -375,14 +576,30 @@ def refit(text: str, name: str, new_value: str, note: str) -> tuple[str, str]:
     end = text.find("\n[", start + 1)
     block = text[start:end if end > 0 else len(text)]
 
+    if CONVERTED_MARKER in block:
+        return text, "already recorded"
     current = re.search(r"^value\s*=\s*(.+)$", block, re.M)
     if current is None:
         return text, "NO VALUE LINE"
-    if current.group(1).strip() == new_value.strip():
-        return text, "already Indian"
 
+    # **A value that already matches still has to be recorded.** Returning
+    # "already Indian" on an equal value was a real bug (2026-09-12):
+    # whale_minimum_quote_value's whole point is that the DIGITS are unchanged
+    # and the meaning is not -- 1,000,000 USDT is about eight and a half crore,
+    # 1,000,000 rupees is the top of the observed print distribution -- and it
+    # was the one setting that silently kept its crypto provenance because of
+    # it. The marker is what a probe reads, so skipping it leaves the setting
+    # counted as drift forever.
     was = current.group(1).strip()
-    updated = block[:current.start(1)] + new_value + block[current.end(1):]
+    updated = block if was == new_value.strip() else (
+        block[:current.start(1)] + new_value + block[current.end(1):]
+    )
+
+    if new_unit is not None:
+        unit_line = re.search(r'^unit\s*=\s*"(.*)"$', updated, re.M)
+        if unit_line is not None and unit_line.group(1) != new_unit:
+            was = f"{was} {unit_line.group(1)}"
+            updated = updated[:unit_line.start(1)] + new_unit + updated[unit_line.end(1):]
 
     at = note_insertion_point(updated)
     if at is not None:
@@ -406,6 +623,11 @@ def main() -> int:
         print("DRY RUN -- nothing will be written. Pass --apply to do it.")
 
     changed = 0
+    for name, why in MARKET_INDEPENDENT.items():
+        text, what = record_market_independent(text, name, why)
+        print(f"  {name:46} independent: {what}")
+        if what == "recorded":
+            changed += 1
     for name, why in NEEDS_AN_INDIAN_MECHANISM.items():
         text, what = record_needs_a_mechanism(text, name, why)
         print(f"  {name:46} mechanism: {what}")
@@ -421,8 +643,10 @@ def main() -> int:
         print(f"  {name:46} {what}")
         if what == "recorded":
             changed += 1
-    for name, (value, note) in REFITS.items():
-        text, what = refit(text, name, value, note)
+    for name, entry in REFITS.items():
+        value, note = entry[0], entry[1]
+        new_unit = entry[2] if len(entry) > 2 else None
+        text, what = refit(text, name, value, note, new_unit)
         print(f"  {name:46} {what}")
         if "->" in what:
             changed += 1

@@ -215,6 +215,12 @@ INERT_MARKER = "INERT 2026-09-12"
 # plausible figure for a cost that does not exist, which is worse than leaving
 # it: it would look derived. Each note names the mechanism that replaces it.
 MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
+# A quantity that does not depend on which market is traded -- a bus ceiling, a
+# count of a model's features, the fraction of an account one trade may risk.
+# These name crypto only because they were written during the crypto build.
+# Counted apart so "nothing to re-derive" is a stated answer rather than a gap
+# nobody looked at (Rule 8).
+INDEPENDENT_MARKER = "MARKET-INDEPENDENT 2026-09-12"
 
 
 def settings_converted_to_the_indian_market() -> int:
@@ -240,6 +246,19 @@ def settings_inert_with_the_crypto_path() -> int:
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
         if re.match(r"\[([a-z0-9_]+)\]", block) and INERT_MARKER in block
+    )
+
+
+def settings_that_do_not_depend_on_the_market() -> int:
+    """Crypto-era notes whose quantity is the same on any market."""
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(
+        1 for block in re.split(r"\n(?=\[)", text)
+        if re.match(r"\[([a-z0-9_]+)\]", block) and INDEPENDENT_MARKER in block
     )
 
 
@@ -284,6 +303,9 @@ def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
             continue
         if MECHANISM_MARKER in block:
             # A concept, not a number. Its note names what replaces it.
+            continue
+        if INDEPENDENT_MARKER in block:
+            # The same quantity on any market; nothing to re-derive.
             continue
         if CRYPTO_PROVENANCE.search(block):
             fitted.append(named.group(1))
@@ -501,6 +523,8 @@ def main() -> int:
         print(f"     {'needs a mechanism':<26} {settings_needing_an_indian_mechanism():>4}   "
               f"a concept, not a number --")
         print(f"     {'':<26}        theta, not funding")
+        print(f"     {'market-independent':<26} {settings_that_do_not_depend_on_the_market():>4}   "
+              f"a bus ceiling is a bus ceiling")
         print(
             "     This overcounts by design: a note that explains why a number is no\n"
             "     longer crypto-derived still names crypto, and telling that apart from\n"
