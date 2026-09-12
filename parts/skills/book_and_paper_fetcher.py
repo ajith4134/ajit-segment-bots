@@ -236,9 +236,10 @@ def run_book_and_paper_fetcher(
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    fetches_per_tick: int = 1,
 ) -> int:
     def tick() -> None:
-        publish_documents(tuple(fetcher.fetch(gap) for gap in read_gaps(fetcher)))
+        fetch_one_round(fetcher, read_gaps, publish_documents, fetches_per_tick)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -250,6 +251,39 @@ def run_book_and_paper_fetcher(
         tick_floor_seconds=tick_floor_seconds,
         read_standing=lambda: describe_fetching(fetcher),
     )
+
+
+def fetch_one_round(fetcher, read_gaps, publish_documents, fetches_per_tick: int) -> int:
+    """One tick's worth of fetching. Returns how many gaps it took.
+
+    **Bounded, and the bound is the point** (2026-09-12). This used to fetch
+    every gap that had arrived, in one tick, with a real HTTP call each.
+    Measured on the live spine that day: 307 gaps seen, 20 fetched, 287
+    rate-limited, and the part reported `silent` for 308 seconds with its state
+    still `on` -- one tick had been running the whole time.
+
+    A part that blocks its own loop for five minutes cannot be switched off
+    (T-2: the governor owns the switch and can only take a part that returns to
+    its loop), cannot emit health, and is reported silent by
+    `failing-part-detector` while nothing is actually wrong with it. Its
+    `skipped_tick_effect` is `corrupts`, which makes a tick it never finishes
+    worse than one it skips.
+
+    Nothing is lost. A gap not fetched this tick is read on the next, and the
+    per-host rate limiter refuses most of them anyway -- 287 of 307 that day.
+    The bound changes how long one pass takes, not what eventually arrives.
+
+    A named function rather than a closure so the bound can be tested without
+    standing up a control socket.
+    """
+    if fetches_per_tick < 1:
+        raise ValueError(
+            "a fetcher allowed no fetches per tick never fetches anything, which is a "
+            "part that is off wearing the appearance of one that is on"
+        )
+    gaps_this_tick = tuple(read_gaps(fetcher))[:fetches_per_tick]
+    publish_documents(tuple(fetcher.fetch(gap) for gap in gaps_this_tick))
+    return len(gaps_this_tick)
 
 
 def start_part(context) -> int:
@@ -332,4 +366,5 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
+        fetches_per_tick=int(context.number("book_and_paper_fetches_per_tick")),
     )

@@ -1000,3 +1000,64 @@ def test_a_fetched_paper_is_published_as_the_wires_own_type():
     assert document.document_id == "paper:https://doi.org/10.1/x"
     assert document.can_be_rechecked
     assert document.content == "real abstract text"
+
+
+# ---- book-and-paper-fetcher: one tick may not become five minutes ------------
+
+def test_one_tick_fetches_no_more_gaps_than_its_bound():
+    """Measured on the live spine 2026-09-12: 307 gaps seen in one tick.
+
+    The part reported `silent` for 308 seconds with its state still `on`,
+    because a single tick had been running the whole time -- one real HTTP call
+    per gap. A part that blocks its own loop cannot be switched off (T-2),
+    cannot emit health, and is reported silent by failing-part-detector while
+    nothing is wrong with it.
+    """
+    from parts.skills.book_and_paper_fetcher import fetch_one_round
+
+    published = []
+    gaps = [_a_gap(f"g{n}") for n in range(50)]
+    fetcher = BookAndPaperFetcher(fetches_per_host_per_window=100, window_seconds=60.0)
+    fetcher.install_fetcher(lambda query: ("t", "c", "ref", "paper", "a.host"))
+
+    taken = fetch_one_round(fetcher, lambda _f: gaps, published.append, fetches_per_tick=3)
+
+    assert taken == 3
+    assert len(published[0]) == 3, (
+        f"one tick fetched {len(published[0])} of {len(gaps)}; the bound is what keeps "
+        f"the tick returning to its loop"
+    )
+
+
+def test_a_gap_not_fetched_this_tick_is_read_on_the_next():
+    """The bound changes how long one pass takes, not what eventually arrives."""
+    from parts.skills.book_and_paper_fetcher import fetch_one_round
+
+    published = []
+    remaining = [_a_gap(f"g{n}") for n in range(5)]
+    fetcher = BookAndPaperFetcher(fetches_per_host_per_window=100, window_seconds=60.0)
+    fetcher.install_fetcher(lambda query: ("t", "c", "ref", "paper", "a.host"))
+
+    def read_gaps(_f):
+        return tuple(remaining)
+
+    while remaining:
+        taken = fetch_one_round(fetcher, read_gaps, published.append, fetches_per_tick=2)
+        del remaining[:taken]
+
+    assert fetcher.standing.gaps_seen == 5
+    assert sum(len(batch) for batch in published) == 5
+
+
+def test_a_bound_of_zero_is_refused_rather_than_silently_off():
+    from parts.skills.book_and_paper_fetcher import fetch_one_round
+
+    fetcher = BookAndPaperFetcher(fetches_per_host_per_window=1, window_seconds=60.0)
+    with pytest.raises(ValueError, match="never fetches anything"):
+        fetch_one_round(fetcher, lambda _f: (), lambda _r: None, fetches_per_tick=0)
+
+
+def _a_gap(gap_id):
+    import types
+
+    return types.SimpleNamespace(gap_id=gap_id, query=f"query for {gap_id}")
