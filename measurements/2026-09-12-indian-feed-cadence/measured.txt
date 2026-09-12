@@ -1,0 +1,6 @@
+tape 2026-09-08; 501 instruments read
+
+kind      instr     gaps  median s    p95 s    p99 s     max s  prints/min
+index         1     1244      1.00    28.00    42.00      90.0        11.5
+share        27     6907      6.99   109.98  1055.84    8601.5         0.7
+option      185    64421      8.27   147.84   858.23   71913.4         0.7

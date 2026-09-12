@@ -151,6 +151,57 @@ REFITS: dict[str, tuple] = {
         "they are the tiers that may not trade at all, and that is not a "
         "currency question.",
     ),
+    # Derived from Indian print cadence, measured on the same tape:
+    #   kind    median gap   p95      p99      prints/min
+    #   index      1.00s    28.0s    42.0s        11.5
+    #   share      6.99s   110.0s  1055.8s         0.7
+    #   option     8.27s   147.8s   858.2s         0.7
+    # BTCUSDT printed about four times a SECOND. An Indian option prints 0.7
+    # times a MINUTE -- 340 times slower -- and every number the crypto build
+    # derived from print rate is wrong by about that factor.
+    "feed_gap_threshold": (
+        "150.0",
+        "Claude, 2026-09-12: how long a stream may be silent before the silence "
+        "is a feed-gap. Was 60.0, written against a Binance connection. Measured "
+        f"on {TAPE} (measurements/2026-09-12-indian-feed-cadence/): ordinary silence between two prints of the same "
+        "NSE option reaches 147.8 seconds at the 95th percentile and 858 at the "
+        "99th, so a 60-second floor calls ordinary Indian silence a feed gap. "
+        "150 is that p95, which is the least silence that is not normal. This is "
+        "a FLOOR under `feed_gap_patience_multiple x the stream's own p99`, so a "
+        "stream that has learned its own habit is judged by that instead; the "
+        "floor only decides for a stream nothing has measured yet, which is "
+        "exactly when a false gap is most likely.",
+    ),
+    "price_series_maximum_gap_seconds": (
+        "150.0",
+        "Claude, 2026-09-12: how long a symbol may be silent before the series a "
+        "part is judging is treated as having a hole and the window is cleared. "
+        "Was 120.0. Same measurement and same floor role as feed_gap_threshold "
+        f"above (measurements/2026-09-12-indian-feed-cadence/): at 120 seconds an ordinary quiet NSE option clears a "
+        "window that had nothing wrong with it, and a window cleared for no "
+        "reason is a detector that never accumulates enough history to fire.",
+    ),
+    "bull_cold_start_price_window": (
+        "4000",
+        "Claude, 2026-09-12: how many recent prints per symbol the exit-plan "
+        "proposer keeps so a range can be measured. RE-DERIVED AND UNCHANGED, "
+        "which is a result rather than an omission. Its crypto note said four "
+        "thousand 'covers a 60s horizon on the busiest symbols' -- true at "
+        f"BTCUSDT's four prints a second. Measured on {TAPE} (measurements/2026-09-12-indian-feed-cadence/) the "
+        "busiest Indian instrument is the NIFTY index at 11.5 prints a minute, "
+        "so 60 seconds buys 12 prints and a window sized for a horizon would "
+        "hold almost nothing. The Indian basis is a full session instead: 11.5 "
+        "a minute across a 375-minute NSE day is 4,312 prints, so four thousand "
+        "covers very nearly one session of the busiest thing this project "
+        "watches. Same number, completely different reason, and the reason is "
+        "what the next session needs.",
+    ),
+    "bear_cold_start_price_window": (
+        "4000",
+        "Claude, 2026-09-12: mirrored for the short side from "
+        "bull_cold_start_price_window -- re-derived against Indian print rates "
+        "and unchanged, for the reason stated there.",
+    ),
     # Anchored to taker_fee_rate by their own notes, so correcting that fee
     # without these would leave three numbers pointing at a rate that no longer
     # exists -- the shape of drift where one fix makes a neighbour wrong.
