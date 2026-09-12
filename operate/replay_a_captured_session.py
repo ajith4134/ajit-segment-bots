@@ -493,7 +493,9 @@ def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) 
     return chosen, skipped
 
 
-def size_for(segment_settings, price: float, lot_size: float) -> tuple[float, str]:
+def size_for(
+    segment_settings, price: float, lot_size: float, freeze_quantity: float = 0.0,
+) -> tuple[float, str]:
     """How many units one trade takes, under this segment's own capital bounds.
 
     Whole lots, because a venue does not fill a third of one. The bounds are the
@@ -501,6 +503,19 @@ def size_for(segment_settings, price: float, lot_size: float) -> tuple[float, st
     the same two numbers `trade-capital-bounds-gate` refuses against live, read
     from the same files, so a replay cannot size a trade the live path would
     have refused.
+
+    **And no more units than the exchange takes in one order** (2026-09-12).
+    This is a second sizing path beside the live one, and it reproduced the live
+    path's own defect independently: it snapped to whole lots and read no
+    `freeze_quantity`, so the replay of 2026-09-08 sized 17,355 units of a NIFTY
+    contract NSE caps at 1,755 and 38,350 of an HDFCBANK one. Every rupee of
+    profit and loss a replay reports at such a size is priced at a fill no venue
+    would have given, which makes the whole result a fiction of exactly the kind
+    RL-063 exists to prevent -- and a replay that cannot be trusted is worse than
+    none, because it is convincing.
+
+    Zero means the master stated no freeze quantity, which is not the same as no
+    limit; it is left unbound in that case and said so, rather than guessed.
     """
     minimum = float(segment_settings.read_value("minimum_capital_per_trade"))
     maximum = float(segment_settings.read_value("maximum_capital_per_trade"))
@@ -511,11 +526,24 @@ def size_for(segment_settings, price: float, lot_size: float) -> tuple[float, st
             f"maximum_capital_per_trade of {maximum:,.2f}"
         )
     lots = int(maximum // cost_of_one_lot)
+    if freeze_quantity > 0:
+        lots_the_exchange_takes = int(freeze_quantity // lot_size)
+        if lots_the_exchange_takes <= 0:
+            return 0.0, (
+                f"one {lot_size:g}-unit lot is already above the {freeze_quantity:g} this "
+                f"exchange accepts in a single order"
+            )
+        lots = min(lots, lots_the_exchange_takes)
     committed = lots * cost_of_one_lot
     if committed < minimum:
         return 0.0, (
             f"{lots} whole lot(s) commit {committed:,.2f}, below this segment's "
             f"minimum_capital_per_trade of {minimum:,.2f}"
+            + (
+                f" -- capped at the {freeze_quantity:g} units this exchange takes in one order"
+                if freeze_quantity > 0 and lots * lot_size >= freeze_quantity - lot_size
+                else ""
+            )
         )
     return lots * lot_size, ""
 
@@ -1088,8 +1116,13 @@ def main() -> int:
         rows = []
         for name, row, prints in instruments:
             lot_size = float(row.get("lot_size") or 1)
+            # The exchange's single-order limit for this contract, from the same
+            # master row the lot came from. Zero where it stated none.
+            freeze_quantity = float(row.get("freeze_quantity") or 0)
             entry_price = prints[0][1]
-            quantity, refused = size_for(segment_settings, entry_price, lot_size)
+            quantity, refused = size_for(
+                segment_settings, entry_price, lot_size, freeze_quantity,
+            )
             if quantity <= 0:
                 rows.append({"symbol": name, "trading_symbol": row.get("trading_symbol"),
                              "opened": False, "why": refused})

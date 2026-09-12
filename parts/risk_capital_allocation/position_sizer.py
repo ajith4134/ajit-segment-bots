@@ -60,6 +60,10 @@ REFUSED_NO_FREE_CAPITAL = "refused-free-capital-funds-nothing-tradeable"
 SHRUNK_TO_FIT = "shrunk-to-fit"
 CLOSED = "closed"
 REFUSED_NO_POSITION_TO_CLOSE = "refused-no-position-to-close"
+# A close for this exact held quantity was sized recently and has not been
+# answered. Not a fault: it is the second, third and twelve-thousandth ask for
+# the same thing, and acting on all of them sells the position many times over.
+REFUSED_CLOSE_ALREADY_ASKED_FOR = "refused-close-already-asked-for"
 
 # How many times the size is re-solved against fees before giving up. Each pass
 # converges quickly because fees are a small fraction of risk; the bound exists
@@ -108,6 +112,13 @@ class SizedOrder:
     # sized to: two parts snapping one quantity to two different steps is how an
     # order leaves the gate in a size the sizer would never have produced.
     quantity_increment: float = 0.0
+    # The most units the exchange takes in one order for this instrument, where
+    # the instrument choice named one. Carried for the same reason as the step
+    # above and to the same reader: `trade-capital-bounds-gate` is the last part
+    # before execution, so it is where an order larger than any venue would
+    # accept has to stop. Zero means the choice named none, which is not the
+    # same as no limit -- see CapturableSymbol.freeze_quantity.
+    freeze_quantity: float = 0.0
     # What this order does to the position, not what it costs to hold -- OPEN,
     # ADD_TO, REDUCE or CLOSE, from the intent it was sized from. Added
     # 2026-09-08 so `trade-capital-bounds-gate` can tell a close from an open:
@@ -169,6 +180,11 @@ class SizerStanding:
     # stop-target-plan's entry price alone was enough to proceed -- which is how
     # orders were placed on instruments nothing had selected.
     opens_without_an_instrument_choice: int = 0
+    # Opens where a choice DID arrive and said no. Kept apart from the above
+    # because one points at instrument-selector's inputs and the other at
+    # whether it is running at all -- two faults with two different answers.
+    opens_the_selector_refused: int = 0
+    selector_refusals: dict = field(default_factory=dict)
     missing_account_balance: int = 0
     missing_risk_limit: int = 0
     # Which of the three sources actually priced the stop -- added 2026-09-07
@@ -190,17 +206,33 @@ class SizerStanding:
     # exited through this part.
     closed: int = 0
     refused_no_position_to_close: int = 0
+    closes_not_restated: int = 0
 
 
 class PositionSizer:
     """Solves the largest size whose loss at the stop stays inside the allowed risk."""
 
-    def __init__(self, taker_fee_rate: float, slippage_fraction: float, now_ns=time.time_ns) -> None:
+    def __init__(
+        self,
+        taker_fee_rate: float,
+        slippage_fraction: float,
+        close_restated_after_seconds: float,
+        now_ns=time.time_ns,
+    ) -> None:
         if taker_fee_rate < 0 or slippage_fraction < 0:
             raise ValueError("a fee or slippage allowance cannot be negative")
+        if close_restated_after_seconds <= 0:
+            raise ValueError(
+                "a close with no wait before it is restated is re-asked every tick, and a "
+                "close order asks to sell the whole position each time"
+            )
         self._fee_rate = taker_fee_rate
         self._slippage = slippage_fraction
+        self._close_restated_after_ns = int(close_restated_after_seconds * 1e9)
         self._now_ns = now_ns
+        # The close last sized per symbol, so one is not re-asked before it could
+        # have been answered. See close_order.
+        self._closes_asked_for: dict[tuple[str, str], tuple[float, int]] = {}
         self.standing = SizerStanding()
 
     def size(
@@ -216,6 +248,12 @@ class PositionSizer:
         price_increment: float | None,
         quantity_increment: float,
         minimum_quantity: float,
+        # Zero means the instrument named no single-order limit, which is not
+        # the same as no limit -- see CapturableSymbol.freeze_quantity. Defaulted
+        # rather than required because a spot symbol genuinely has none, and
+        # trade-capital-bounds-gate reads the zero as "unstated" rather than as
+        # a cap of nothing.
+        freeze_quantity: float = 0.0,
         maximum_quantity: float | None = None,
         size_multiple: float | None = None,
         free_capital: float | None = None,
@@ -357,6 +395,7 @@ class PositionSizer:
             intent_id=intent_id,
             segment=segment,
             quantity_increment=quantity_increment,
+            freeze_quantity=freeze_quantity,
             reason=(
                 f"{snapped:g} risks {risk_at_stop:,.2f} of {risk_allowed:,.2f} allowed, "
                 f"stopping {abs(entry - stop):g} away"
@@ -372,6 +411,7 @@ class PositionSizer:
         position_side: str,
         entry_price: float | None,
         quantity_increment: float,
+        freeze_quantity: float = 0.0,
         action: str = CLOSE,
         intent_id: str = "",
         segment: str = "",
@@ -401,6 +441,46 @@ class PositionSizer:
                 "the intent asks to close a position this part has no record of holding",
                 intent_id, segment, action,
             )
+        # **An ask is not repeated until it could have been answered.** A close
+        # order asks to sell the WHOLE held quantity, and the arbiter forms a
+        # fresh intent for a symbol it still wants closed on every tick, so
+        # without this the same position is sold over and over: measured on the
+        # live spine 2026-09-08, 12,168 closes sized in one session against 16
+        # open symbols, `position-close-detector` refusing 10,005 units as an
+        # unmatched exit and `paper-account-index-options` holding **-1,042.29**
+        # of a NIFTY call -- a short option written in a segment whose settings
+        # say buy-only. This is the same lesson `switching-planner` learned on
+        # 2026-08-26 about re-asking before a part could start.
+        #
+        # The held quantity changing is what makes the ask new: a partial fill
+        # leaves less to close and deserves a fresh, smaller order. The elapsed
+        # bound covers the order that was never answered at all.
+        asked = self._closes_asked_for.get((venue_id, symbol))
+        if (
+            asked is not None
+            and asked[0] == position_quantity
+            and self._now_ns() - asked[1] < self._close_restated_after_ns
+        ):
+            self.standing.closes_not_restated += 1
+            return self._refusal(
+                venue_id, symbol, SELL if position_side == LONG else BUY, 0.0, 0.0,
+                REFUSED_CLOSE_ALREADY_ASKED_FOR, 1.0,
+                f"a close for the whole {abs(position_quantity):g} held was already sized and "
+                f"has not been answered yet; re-asking would sell the position twice",
+                intent_id, segment, action,
+            )
+        at = self._now_ns()
+        # Pruned rather than kept: an entry past the wait can never refuse
+        # anything again, so holding one per symbol ever closed would be an
+        # unbounded dict with a good excuse -- the shape T-3 and this project's
+        # own LatestByKey lesson both name.
+        self._closes_asked_for = {
+            key: asked_for
+            for key, asked_for in self._closes_asked_for.items()
+            if at - asked_for[1] < self._close_restated_after_ns
+        }
+        self._closes_asked_for[(venue_id, symbol)] = (position_quantity, at)
+
         side = SELL if position_side == LONG else BUY
         quantity = self._snap_quantity(abs(position_quantity), quantity_increment)
         price = entry_price or 0.0
@@ -413,7 +493,8 @@ class PositionSizer:
             notional=quantity * price, leverage=1.0,
             reason=f"closing the {abs(position_quantity):g} held, at the venue's own last price",
             sized_at_ns=self._now_ns(), intent_id=intent_id, segment=segment,
-            quantity_increment=quantity_increment, action=action,
+            quantity_increment=quantity_increment, freeze_quantity=freeze_quantity,
+            action=action,
         )
 
     def _quantity_free_capital_funds(self, free_capital: float, leverage: float, entry: float) -> float:
@@ -504,6 +585,24 @@ def opening_order_target(intent, choice) -> tuple[str, str] | None:
     if chosen is None or side is None or contract is None:
         return None
     return contract, side
+
+
+def freeze_quantity_for(instrument) -> float:
+    """The most units the exchange takes in one order for this instrument.
+
+    Zero where the choice named none -- a spot share genuinely has no freeze
+    quantity -- and `trade-capital-bounds-gate` reads that as unstated rather
+    than as a cap of nothing. Read by shape rather than by import, the same way
+    `quantity_increment_for` beside it reads the lot (T-4).
+
+    NSE publishes this per contract and it is not advisory: an order above it is
+    rejected outright. Nothing in this project read it until 2026-09-12, which
+    is why the orders of 2026-09-08 could ask for 6,823,286 units of a NIFTY
+    weekly capped at 1,755 and be filled by a paper book that did not know
+    either.
+    """
+    freeze = getattr(instrument, "freeze_quantity", None)
+    return float(freeze) if freeze and freeze > 0 else 0.0
 
 
 def quantity_increment_for(instrument, global_increment: float) -> float:
@@ -660,6 +759,11 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "actionable_intents_seen": sizer.standing.intents_seen,
         "missing_entry_price": sizer.standing.missing_entry_price,
         "missing_stop_price": sizer.standing.missing_stop_price,
+        "opens_the_selector_refused": sizer.standing.opens_the_selector_refused,
+        **{
+            f"opens_refused_as_{reason}": count
+            for reason, count in sorted(sizer.standing.selector_refusals.items())
+        },
         "opens_without_an_instrument_choice": (
             sizer.standing.opens_without_an_instrument_choice
         ),
@@ -670,6 +774,10 @@ def describe_sizing(sizer: PositionSizer) -> dict:
         "stop_from_absolute_fallback": sizer.standing.stop_from_absolute_fallback,
         "closed": sizer.standing.closed,
         "refused_no_position_to_close": sizer.standing.refused_no_position_to_close,
+        # Rule 8: a close that was refused because it was already asked for is a
+        # different fact from one refused because nothing is held, and a board
+        # that merged them would report a broken closing path as a busy one.
+        "closes_not_restated_because_one_is_outstanding": sizer.standing.closes_not_restated,
     }
 
 
@@ -863,6 +971,7 @@ def start_part(context) -> int:
     sizer = PositionSizer(
         taker_fee_rate=context.number("taker_fee_rate"),
         slippage_fraction=context.number("entry_slippage_fraction"),
+        close_restated_after_seconds=context.number("close_order_restated_after_seconds"),
     )
 
     def read_intents():
@@ -941,6 +1050,7 @@ def start_part(context) -> int:
                         "quantity_increment": quantity_increment_for(
                             instrument, quantity_increment
                         ),
+                        "freeze_quantity": freeze_quantity_for(instrument),
                         "action": intent.action,
                         "intent_id": intent.decision_id,
                         "segment": getattr(position, "segment", "") or "",
@@ -991,7 +1101,27 @@ def start_part(context) -> int:
             # the contract actually held, so they keep the intent's own symbol.
             target = opening_order_target(intent, instrument)
             if target is None:
-                sizer.standing.opens_without_an_instrument_choice += 1
+                # Two different facts, and merging them is what made this counter
+                # useless. `instrument-selector` publishes EVERY verdict, refusals
+                # included -- `publish_choices(tuple(select(intent) for ...))` --
+                # so a choice carrying `chosen=None` is the selector saying no,
+                # with a named reason, while no choice at all is the selector
+                # never having spoken about this symbol. Measured on the live
+                # spine 2026-09-08: 5,268 opens counted as "no instrument choice"
+                # against 13,729 intents the selector had refused by name, the
+                # largest of them `this-symbol-has-no-recent-trade-and-no-recent-
+                # quote` (10,612) -- a diagnosis this counter actively hid.
+                # The selector's own docstring names the rule this broke: a
+                # refusal that cannot be seen from outside is indistinguishable
+                # from an input that never arrived.
+                if instrument is None:
+                    sizer.standing.opens_without_an_instrument_choice += 1
+                else:
+                    sizer.standing.opens_the_selector_refused += 1
+                    refusal = str(getattr(instrument, "state", "") or "refused")
+                    sizer.standing.selector_refusals[refusal] = (
+                        sizer.standing.selector_refusals.get(refusal, 0) + 1
+                    )
                 continue
             order_symbol, order_side = target
             if entry_price is None:
@@ -1052,6 +1182,11 @@ def start_part(context) -> int:
                     "minimum_quantity": quantity_increment_for(
                         instrument, quantity_increment
                     ),
+                    # The exchange's single-order limit for the chosen contract,
+                    # carried to `trade-capital-bounds-gate`, which is the last
+                    # part before execution and therefore where an order no
+                    # venue would accept has to stop (2026-09-12).
+                    "freeze_quantity": freeze_quantity_for(instrument),
                     # Read off the field SizeHint carries, not through a getattr
                     # default: a default is what let this read return None on every
                     # intent for three days without anything reporting it.

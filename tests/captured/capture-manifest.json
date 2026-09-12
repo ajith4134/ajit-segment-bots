@@ -460,6 +460,18 @@
    "captured_on": "2026-09-04",
    "how": "one public fetch of Upstox's own NSE instrument master (76,596 rows, no token required), cut to the rows broker-symbol-universe-bridge selects from: the NIFTY and BANKNIFTY index instruments, the whole of NIFTY's nearest expiry (174 contracts, expiry 2026-09-08) so ranking by distance from the money runs against a real strike ladder, and 20 contracts of the following expiry so 'nearest expiry only' is a claim these rows can falsify. Kept verbatim -- field names, the millisecond expiry and the NSE_INDEX|Nifty 50 underlying_key are Upstox's own.",
    "records": 196
+  },
+  {
+   "path": "upstox/2026-09-08-closed-trades-and-excursions.jsonl",
+   "venue": "upstox",
+   "source": "this project's own position-recorder journal (~/.local/share/ajit-segment-bots/journal.position-recorder{,.8626142}.sqlite), which is a hash-chained JSONL despite the extension",
+   "captured_on": "2026-09-12",
+   "how": "every closed-trade record from the 2026-09-07 and 2026-09-08 Indian-options sessions, each preceded by the peak-excursion record that was current for its symbol when it closed -- the same two inputs label-builder's start_part pairs on the bus. Records kept verbatim, including the digest chain. Cut because label-builder joined the live spine at 09:56 on 2026-09-08, after the last trade of that session closed, so its live standing has read trades_seen 0 ever since and the part had never been exercised on a real trade",
+   "records": 184,
+   "closed_trades": 95,
+   "peak_excursions": 89,
+   "net_of_the_closed_trades_inr": -1269386,
+   "why_it_matters": "holds all seven NIFTY weekly trades of 2026-09-08 that are 91.4% of every rupee this project has lost"
   }
  ]
 }

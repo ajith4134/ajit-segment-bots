@@ -79,6 +79,20 @@ class ClosedTradeRecord:
     closed_at_ns: int
     horizon_seconds: float
     features: dict
+    # How far the protective stop sat from the entry, as a fraction of it. Zero
+    # means nobody told this part where the stop was, which is NOT the same as a
+    # stop at the entry price: `THE_SIZE_WAS_RIGHT` is then unjudgeable and is
+    # left out of the label rather than asserted (see `build`).
+    #
+    # Declared as a real field because it was not one until 2026-09-12, and
+    # `_stop_distance` read it with `getattr(trade, "stop_distance_fraction",
+    # 0.0)` off a record that has never carried it. The getattr always returned
+    # 0.0, 0.0 is falsy, and the conditional beneath it therefore always took its
+    # `else True` branch: **every label this part could ever build asserted that
+    # the size was right**, including the seven NIFTY trades of 2026-09-08 that
+    # were 91.4% of every rupee this project has lost. A default that can never
+    # be overridden is a hardcoded answer wearing a parameter's clothes.
+    stop_distance_fraction: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -101,6 +115,11 @@ class BuilderStanding:
     unresolved_within_horizon: int = 0
     by_component: dict = field(default_factory=dict)
     largest_exit_shortfall: float | None = None
+    # Labels built with no stop distance, so `THE_SIZE_WAS_RIGHT` could not be
+    # judged and was left out. Its own number because it is the difference
+    # between "the size was right" and "nobody measured the size", and until
+    # 2026-09-12 this part reported the first while meaning the second.
+    size_not_judgeable: int = 0
 
 
 class LabelBuilder:
@@ -175,16 +194,27 @@ class LabelBuilder:
                 favourable_after_costs <= 0
                 or realised >= favourable_after_costs * self._exit_capture
             ),
-            # The size: did the position survive its own adverse excursion? A
-            # trade stopped out by size is a sizing failure wearing a setup
-            # failure's clothes.
-            THE_SIZE_WAS_RIGHT: (
-                excursion.peak_adverse_fraction * self._size_multiple
-                <= abs(self._stop_distance(trade))
-                if self._stop_distance(trade)
-                else True
-            ),
         }
+
+        # The size: did the position survive its own adverse excursion? A trade
+        # stopped out by size is a sizing failure wearing a setup failure's
+        # clothes.
+        #
+        # **Omitted, never defaulted, when the stop distance is unknown.** This
+        # component used to read `... if stop_distance else True`, against a
+        # record that never carried a stop distance, so it asserted "the size was
+        # right" for every trade ever labelled. A model trained on that learns
+        # that size is never the problem. Absence of evidence renders as its own
+        # state here exactly as it does on a board (Rule 8): the key is left out,
+        # and `size_not_judgeable` counts how often, so the gap is visible rather
+        # than silently green.
+        stop_distance = abs(self._stop_distance(trade))
+        if stop_distance > 0:
+            labels[THE_SIZE_WAS_RIGHT] = (
+                excursion.peak_adverse_fraction * self._size_multiple <= stop_distance
+            )
+        else:
+            self.standing.size_not_judgeable += 1
 
         for component, value in labels.items():
             key = f"{component}:{'true' if value else 'false'}"
@@ -231,8 +261,17 @@ class LabelBuilder:
         return move if trade.side == LONG else -move
 
     def _stop_distance(self, trade: ClosedTradeRecord) -> float:
-        """How far the stop sat, from what the trade actually carried."""
-        return getattr(trade, "stop_distance_fraction", 0.0)
+        """How far the stop sat, from what the trade actually carried.
+
+        Reads the record's own field rather than `getattr`-with-a-default. The
+        default was the whole defect: `ClosedTradeRecord` never declared this,
+        so the lookup could not fail and could not succeed either -- it returned
+        0.0 for every trade, forever, and the caller read that as "no stop" and
+        asserted the size was right. A record that must carry a number carries
+        it as a field, where a missing one is a construction error rather than a
+        silent zero.
+        """
+        return trade.stop_distance_fraction
 
 
 def describe_labelling(builder: LabelBuilder) -> dict:
@@ -243,6 +282,7 @@ def describe_labelling(builder: LabelBuilder) -> dict:
         "refused_no_excursion_record": builder.standing.refused_no_excursion,
         "refused_no_cost_estimate": builder.standing.refused_no_costs,
         "unresolved_within_their_horizon": builder.standing.unresolved_within_horizon,
+        "labels_whose_size_could_not_be_judged": builder.standing.size_not_judgeable,
         "by_component": dict(sorted(builder.standing.by_component.items())),
         "largest_exit_shortfall": builder.standing.largest_exit_shortfall,
         "components": [

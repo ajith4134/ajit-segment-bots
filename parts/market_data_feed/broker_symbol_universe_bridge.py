@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.symbol_universe import CapturableSymbol
-from runtime.trading_types import OPTION
+from runtime.trading_types import OPTION, SPOT
 
 PART_ID = "broker-symbol-universe-bridge"
 
@@ -372,18 +372,41 @@ class BrokerSymbolUniverseBridge:
         live = [c.expiry_ms for c in contracts.values() if c.expiry_ms > now]
         return min(live) if live else None
 
-    def _entry_for_underlying(self, listing) -> CapturableSymbol:
-        # instrument_kind is None rather than any known kind: trading_types has
-        # no INDEX, and None already means "unknown kind, treat as no kind"
-        # rather than being read as a particular one.
+    def _entry_for_underlying(self, listing, instrument_kind=None) -> CapturableSymbol:
+        """One symbol that is not a contract: an option's underlying, or a share.
+
+        `instrument_kind` is None for an option underlying, because trading_types
+        has no INDEX and None already means "unknown kind, treat as no kind"
+        rather than being read as a particular one. NIFTY is a number, not
+        something anyone can buy, and `instrument-selector` correctly registers a
+        kindless listing only as the thing options hang off.
+
+        A **share** is SPOT, and passing None for one is what stopped
+        cash-equity-intraday trading at all. Measured on the live spine
+        2026-09-08: this bridge published 47 shares and
+        `instrument-selector.chosen_by_kind` held nothing but `option` -- 17,089
+        of them -- because every share arrived kindless, matched the "an
+        underlying: what every contract on it resolves through" branch, and went
+        into the ATM tracker instead of into the listed-instrument book. The
+        selector's own SPOT branch, written 2026-09-07 precisely so an equity
+        intent could be expressed, was unreachable. `paper-account-cash-equity-
+        intraday` read `fills_applied 0` while the other two segments held real
+        positions.
+
+        The two groups are disjoint by construction, so no symbol needs both
+        kinds: `entries()` skips any share that is a derivative's underlying
+        (`equities_covered_by_a_derivative`), which is the double-exposure rule
+        that already governs this universe.
+        """
         return CapturableSymbol(
             venue_id=UPSTOX_VENUE_ID,
             symbol=listing.trading_symbol,
             contract_type=listing.instrument_type,
             quote_volume_24h=None,
             price_increment=listing.tick_size,
-            instrument_kind=None,
+            instrument_kind=instrument_kind,
             lot_size=listing.lot_size,
+            freeze_quantity=listing.freeze_quantity,
             venue_instrument_id=listing.instrument_key,
         )
 
@@ -404,6 +427,11 @@ class BrokerSymbolUniverseBridge:
             strike_price=listing.strike_price,
             expiry_ms=listing.expiry_ms,
             lot_size=listing.lot_size,
+            # The exchange's single-order limit for this contract, carried so
+            # trade-capital-bounds-gate can refuse a size no venue would take
+            # (2026-09-12). NIFTY's is 1,755; the orders of 2026-09-08 were up
+            # to 6,823,286.
+            freeze_quantity=listing.freeze_quantity,
             venue_instrument_id=listing.instrument_key,
             underlying_symbol=underlying_symbol,
             underlying_venue_instrument_id=underlying_key,
@@ -501,7 +529,9 @@ class BrokerSymbolUniverseBridge:
                 if listing.trading_symbol not in self._shortlist_symbols:
                     outside_shortlist += 1
                     continue
-                entries.append(self._entry_for_underlying(listing))
+                # SPOT, not None: this is a share and the cash-equity segment
+                # buys it directly. See _entry_for_underlying.
+                entries.append(self._entry_for_underlying(listing, instrument_kind=SPOT))
                 equities += 1
         self.standing.equities_covered_by_a_derivative = covered
         self.standing.equities_outside_the_shortlist = outside_shortlist
@@ -549,7 +579,16 @@ class BrokerSymbolUniverseBridge:
                 )
                 out.append(self._entry_for_contract(listing, underlying_symbol, listing.underlying_key))
             else:
-                out.append(self._entry_for_underlying(listing))
+                # A held non-contract is a share this segment bought, unless it
+                # is one of the tracked option underlyings -- which are not
+                # buyable and are never held. Same kinds as `entries()`, so a
+                # position forced back in is registered the way it was opened.
+                out.append(self._entry_for_underlying(
+                    listing,
+                    instrument_kind=(
+                        None if listing.instrument_key in self._underlying_by_key else SPOT
+                    ),
+                ))
             already_covered.add(symbol)
             forced_in += 1
         return out, forced_in, without_a_listing

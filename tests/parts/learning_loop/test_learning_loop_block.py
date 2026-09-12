@@ -137,12 +137,14 @@ def a_label_builder(favourable=0.005, adverse_entry=0.01, capture=0.5, size_mult
     )
 
 
-def a_trade(entry=100.0, exit_=102.0, side="long", horizon=600.0, held=300.0, opened=0):
+def a_trade(entry=100.0, exit_=102.0, side="long", horizon=600.0, held=300.0, opened=0,
+            stop_distance=0.0):
     return ClosedTradeRecord(
         venue_id=VENUE, symbol=SYMBOL, detector="a-detector", regime="trending", side=side,
         entry_price=entry, exit_price=exit_, quantity=1.0, opened_at_ns=opened,
         closed_at_ns=opened + int(held * 1e9), horizon_seconds=horizon,
         features={"price_z_score": 1.0},
+        stop_distance_fraction=stop_distance,
     )
 
 
@@ -264,12 +266,33 @@ def test_direction_and_excursion_survive_into_the_training_label():
     assert label.worst_adverse_fraction == 0.02
 
 
-def test_every_component_is_labelled():
-    label, _ = a_prepared_builder().build(a_trade())
+def test_every_component_is_labelled_when_the_stop_distance_is_known():
+    label, _ = a_prepared_builder().build(a_trade(stop_distance=0.02))
     assert label.is_complete
     assert set(label.labels) == {
         THE_SETUP_WAS_RIGHT, THE_ENTRY_WAS_TIMED, THE_EXIT_WAS_TIMED, THE_SIZE_WAS_RIGHT
     }
+
+
+def test_size_is_omitted_rather_than_assumed_right_with_no_stop_distance():
+    """This test used to assert all four components always (2026-09-12).
+
+    That was only ever true because `_stop_distance` read a field
+    `ClosedTradeRecord` did not declare: the `getattr` default returned 0.0 for
+    every trade, and the branch beneath it asserted the size was right. The
+    suite passed, and the assertion it was making was that the defect was
+    present. The size of a position with no known stop is not judgeable, and an
+    unjudgeable component is left out.
+    """
+    builder = a_prepared_builder()
+    label, _ = builder.build(a_trade(stop_distance=0.0))
+
+    assert label.is_complete, "setup, entry and exit are still all judged"
+    assert set(label.labels) == {
+        THE_SETUP_WAS_RIGHT, THE_ENTRY_WAS_TIMED, THE_EXIT_WAS_TIMED
+    }
+    assert label.label_for(THE_SIZE_WAS_RIGHT) is None
+    assert builder.standing.size_not_judgeable == 1
 
 
 # ---- sample-weight-assigner -------------------------------------------------

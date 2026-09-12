@@ -65,6 +65,20 @@ REFUSED_NOT_TRADEABLE = "refused-order-not-tradeable"
 # the router and the book each reported nothing wrong and no order existed.
 REFUSED_POSITION_AT_THE_CEILING = "the-position-is-already-at-the-capital-ceiling"
 REFUSED_MAXIMUM_BUYS_NOTHING = "refused-the-maximum-cannot-buy-one-increment"
+# The order is inside the capital bounds but smaller than one tradeable lot of
+# this instrument. Its own outcome for the same reason as the one above: cutting
+# it to zero would be a refusal reported as a success.
+REFUSED_SMALLER_THAN_ONE_LOT = "refused-smaller-than-one-lot-of-this-instrument"
+# The order asks for more units than the exchange accepts in a single order.
+# NSE publishes this per contract as `freeze_quantity` -- 1,755 for NIFTY -- and
+# an order above it is rejected outright rather than filled small. Until
+# 2026-09-12 nothing in this project read that field: `grep -rn freeze_quantity`
+# hit the broker adapter that parses it, and tests, and nothing else. On
+# 2026-09-08 this gate emitted an order for 2,000,000 units of a NIFTY weekly,
+# 1,140 times the largest single order the exchange would have taken, and the
+# paper book filled it by walking the price from 0.10 to 0.169539375 -- which is
+# how a trade bound to a 200,000 rupee ceiling committed 339,079.
+REFUSED_ABOVE_THE_EXCHANGE_FREEZE_QUANTITY = "refused-above-the-exchanges-freeze-quantity"
 
 
 @dataclass(frozen=True)
@@ -137,19 +151,81 @@ class GateStanding:
     # sized exactly at the ceiling refused the one order that would have
     # brought it under.
     closed: int = 0
+    # All four new on 2026-09-12, and each counts something that was previously
+    # unmeasurable rather than merely unmeasured.
+    #
+    # An order whose quantity had to be cut to a whole number of the
+    # instrument's own lots. Until now only the bump and cap paths snapped; an
+    # order that was already inside the bounds went through untouched, which is
+    # how 712,985 and 559,703.18 units of a contract NSE trades in blocks of 65
+    # reached the book on 2026-09-08.
+    snapped_to_whole_lots: int = 0
+    refused_smaller_than_one_lot: int = 0
+    # An order cut to the exchange's single-order limit for that contract.
+    capped_at_the_freeze_quantity: int = 0
+    refused_above_the_freeze_quantity: int = 0
+    # Orders sized against the global `order_quantity_increment` because the
+    # instrument named no lot of its own. Not an error -- a share really does
+    # trade in single units -- but it is the state in which a wrong quantity is
+    # possible, so it is counted rather than assumed rare. A number that climbs
+    # here alongside option orders means the lot never reached this part.
+    sized_without_the_instruments_own_lot: int = 0
+    # The largest quantity this gate has emitted, and the largest it refused for
+    # being above the freeze. Both so an operator can see the shape of what is
+    # being asked for without reading the journal.
+    largest_quantity_emitted: float = 0.0
+    # Capital this gate reserved for an order it let through, which no position
+    # ever reported back and which therefore expired. A number that climbs here
+    # means orders are being bound and not filled -- worth seeing, because the
+    # reserve is bounding the ceiling in the meantime.
+    reservations_that_expired: int = 0
+    # Orders refused because the position ceiling was already spoken for by
+    # another order of this gate's own that had not yet reached a position.
+    # These are the four-in-one-millisecond stacks of 2026-09-08.
+    refused_for_capital_already_in_flight: int = 0
 
 
 class TradeCapitalBoundsGate:
     """Bumps, caps or refuses a sized order against the operator's per-trade bounds."""
 
-    def __init__(self, quantity_increment: float, now_ns=time.time_ns) -> None:
+    def __init__(
+        self, quantity_increment: float, now_ns=time.time_ns,
+        bound_capital_stands_for_seconds: float = 30.0,
+    ) -> None:
         if quantity_increment <= 0:
             raise ValueError("a quantity increment of zero cannot snap anything")
+        if bound_capital_stands_for_seconds <= 0:
+            raise ValueError(
+                "capital bound but not yet visible in a position has to expire, or an order "
+                "that never filled would reserve the ceiling for ever"
+            )
         self._increment = quantity_increment
         self._now_ns = now_ns
         # What each symbol already has committed to it, so the ceiling bounds
         # the position rather than the slice.
         self._held_capital: dict[tuple[str, str], float] = {}
+        # **Capital this gate has itself bound and let through, which no
+        # `position` message has reported back yet** (2026-09-12).
+        #
+        # `_held_capital` answers "what is held" from the position bus, and a
+        # position cannot be published until an order fills. Between the two
+        # there is a window, and on 2026-09-08 four separate orders for
+        # `NIFTY 24550 CE 08 SEP 26` were bound and filled inside the same
+        # millisecond -- 09:42:00.309, order ids 55d0de91, a0be0a0c, 594fd4b9
+        # and 679e2e0d, eight fills between them -- each one passing the
+        # position ceiling against a position record none of them had yet
+        # updated. The ceiling bounded every order and the position walked to
+        # 6,110,301 units regardless.
+        #
+        # Keyed by (venue, symbol) with the time it was bound, because it must
+        # expire: an order that is refused downstream, cancelled, or simply
+        # never filled would otherwise reserve the ceiling permanently. That is
+        # the unbounded-`LatestByKey` trap this project has paid for three times
+        # -- most recently the 214 switched-off parts that still counted as
+        # running on 2026-08-26 -- and the question to ask of any such map is
+        # what makes its keys go away.
+        self._bound_awaiting_a_position: dict[tuple[str, str], tuple[float, int]] = {}
+        self._bound_stands_for_ns = int(bound_capital_stands_for_seconds * 1e9)
         self.standing = GateStanding()
 
     def _increment_for(self, sized_order) -> float:
@@ -160,9 +236,76 @@ class TradeCapitalBoundsGate:
         choice names one. Capping with a different step than the sizer used would
         hand the book a quantity neither part chose -- 187.2 lots of a contract
         the exchange trades in blocks of 65.
+
+        The fallback is counted (2026-09-12). It is legitimate -- a share trades
+        in single units and names no lot -- but it is also the state in which an
+        option order can carry a quantity no exchange would accept, and an
+        uncounted fallback is indistinguishable from a lot that arrived.
         """
         step = getattr(sized_order, "quantity_increment", 0.0)
-        return float(step) if step and step > 0 else self._increment
+        if step and step > 0:
+            return float(step)
+        self.standing.sized_without_the_instruments_own_lot += 1
+        return self._increment
+
+    def _freeze_quantity_for(self, sized_order) -> float | None:
+        """The most units the exchange accepts in one order for this instrument.
+
+        None where the instrument named none, which is honestly different from
+        "no limit": a venue that publishes no freeze quantity has not told us
+        there is none. Read by shape rather than by import, because this part
+        knows the data it consumes and not the part that produced it (T-4).
+        """
+        freeze = getattr(sized_order, "freeze_quantity", None)
+        return float(freeze) if freeze and freeze > 0 else None
+
+    def _tradeable_quantity(self, sized_order, quantity: float):
+        """Cut a quantity to what the exchange would actually take, or say why not.
+
+        Two limits, applied in this order and both of them the venue's rather
+        than the operator's:
+
+        1. **A whole number of lots.** Every path through this gate ends here
+           now. Before 2026-09-12 only the bump and cap paths snapped, so an
+           order already inside the capital bounds was emitted at whatever
+           fractional size the sizer computed.
+        2. **At or below the freeze quantity.** Cutting rather than refusing,
+           because a smaller order is still the trade the operator asked for --
+           the same asymmetry the capital ceiling already uses. It is refused
+           only when one whole lot is already above the freeze, which is a
+           contract that cannot be traded at all at this size.
+
+        Returns `(quantity, outcome_or_None, reason)`. A non-None outcome is a
+        refusal the caller must return rather than an adjustment it may ignore.
+        """
+        increment = self._increment_for(sized_order)
+        snapped = self._snap_down(quantity, increment)
+        if snapped != quantity:
+            self.standing.snapped_to_whole_lots += 1
+        if snapped <= 0:
+            self.standing.refused_smaller_than_one_lot += 1
+            return 0.0, REFUSED_SMALLER_THAN_ONE_LOT, (
+                f"{quantity:g} is less than one {increment:g} lot of {sized_order.symbol}; "
+                f"an exchange rejects a part-lot outright, and rounding it up would spend "
+                f"more than the bounds allow"
+            )
+
+        freeze = self._freeze_quantity_for(sized_order)
+        if freeze is not None and snapped > freeze:
+            within_freeze = self._snap_down(freeze, increment)
+            if within_freeze <= 0:
+                self.standing.refused_above_the_freeze_quantity += 1
+                return 0.0, REFUSED_ABOVE_THE_EXCHANGE_FREEZE_QUANTITY, (
+                    f"one {increment:g} lot of {sized_order.symbol} is already above the "
+                    f"{freeze:g} this exchange accepts in a single order; there is no "
+                    f"tradeable size here at all"
+                )
+            self.standing.capped_at_the_freeze_quantity += 1
+            return within_freeze, None, (
+                f"cut from {snapped:g} to {within_freeze:g}, the most {sized_order.symbol} "
+                f"this exchange accepts in one order"
+            )
+        return snapped, None, ""
 
     def observe_position(self, venue_id: str, symbol: str, capital: float) -> None:
         """What is already committed to this symbol, from `position`.
@@ -175,9 +318,47 @@ class TradeCapitalBoundsGate:
             self._held_capital.pop(key, None)
         else:
             self._held_capital[key] = capital
+        # The position bus has now spoken for this symbol, so whatever this gate
+        # was holding in reserve for it is accounted for in the figure above.
+        # Dropped rather than decremented: the position is the state, and this
+        # reserve only ever existed because no position had reported yet.
+        self._bound_awaiting_a_position.pop(key, None)
+
+    def _reserved_for(self, sized_order) -> float:
+        """Capital let through for this symbol that no position has reported yet.
+
+        Expires, for the reason `_bound_awaiting_a_position` states: an order
+        that never fills must not hold the ceiling for ever.
+        """
+        key = (sized_order.venue_id, sized_order.symbol)
+        reserved = self._bound_awaiting_a_position.get(key)
+        if reserved is None:
+            return 0.0
+        capital, bound_at_ns = reserved
+        if self._now_ns() - bound_at_ns > self._bound_stands_for_ns:
+            self._bound_awaiting_a_position.pop(key, None)
+            self.standing.reservations_that_expired += 1
+            return 0.0
+        return capital
+
+    def _reserve(self, sized_order, capital: float) -> None:
+        """Remember capital just let through, until a position reports it."""
+        if capital <= 0:
+            return
+        key = (sized_order.venue_id, sized_order.symbol)
+        standing, _at = self._bound_awaiting_a_position.get(key, (0.0, 0))
+        self._bound_awaiting_a_position[key] = (standing + capital, self._now_ns())
 
     def held_capital(self, sized_order) -> float:
-        return self._held_capital.get((sized_order.venue_id, sized_order.symbol), 0.0)
+        """What is committed to this symbol: reported by a position, or in flight.
+
+        The sum of the two, because both are the operator's capital and the
+        ceiling is on the trade rather than on the message that happened to
+        report it. Reading only the first is what let one contract take four
+        simultaneous orders on 2026-09-08.
+        """
+        held = self._held_capital.get((sized_order.venue_id, sized_order.symbol), 0.0)
+        return held + self._reserved_for(sized_order)
 
     def bound(self, sized_order, bounds, settings_are_valid: bool) -> BoundedOrder:
         if not settings_are_valid:
@@ -203,22 +384,39 @@ class TradeCapitalBoundsGate:
         # computed from the position itself.
         if getattr(sized_order, "action", OPEN) in (CLOSE, REDUCE):
             self.standing.closed += 1
+            # **A close is capped, never refused** (2026-09-12). The exchange's
+            # freeze quantity applies to an exit as much as to an entry, so a
+            # position larger than one order's worth has to leave in pieces; but
+            # every refusal path above would strand it instead, and a position
+            # that cannot be closed is the worst state this system has. So the
+            # lot and part-lot rules are deliberately not applied here either: a
+            # position holding a fractional quantity -- which is exactly what the
+            # unsnapped orders of 2026-09-08 created -- must still be able to
+            # exit the residue it was left holding.
+            quantity = sized_order.quantity
+            freeze = self._freeze_quantity_for(sized_order)
+            leaving_in_pieces = ""
+            if freeze is not None and quantity > freeze:
+                self.standing.capped_at_the_freeze_quantity += 1
+                leaving_in_pieces = (
+                    f"; cut to the {freeze:g} this exchange takes in one order, so what is "
+                    f"held leaves in pieces rather than in an order it would reject"
+                )
+                quantity = freeze
+            capital = capital_committed_by(
+                quantity, sized_order.entry_price, leverage_behind(sized_order),
+            )
             self.standing.largest_capital_used = max(
-                self.standing.largest_capital_used,
-                capital_committed_by(
-                    sized_order.quantity, sized_order.entry_price,
-                    leverage_behind(sized_order),
-                ),
+                self.standing.largest_capital_used, capital,
+            )
+            self.standing.largest_quantity_emitted = max(
+                self.standing.largest_quantity_emitted, quantity
             )
             return self._bounded(
-                sized_order, bounds, sized_order.quantity,
-                capital_committed_by(
-                    sized_order.quantity, sized_order.entry_price,
-                    leverage_behind(sized_order),
-                ),
-                WITHIN_BOUNDS, sized_order.risk_at_stop,
-                f"closing {sized_order.quantity:g} of what is held; the capital ceiling "
-                f"bounds new commitment, not an order that reduces it",
+                sized_order, bounds, quantity, capital,
+                WITHIN_BOUNDS, self._risk_at(sized_order, quantity),
+                f"closing {quantity:g} of what is held; the capital ceiling "
+                f"bounds new commitment, not an order that reduces it{leaving_in_pieces}",
             )
 
         leverage = leverage_behind(sized_order)
@@ -256,12 +454,34 @@ class TradeCapitalBoundsGate:
         if capital > bounds.maximum_capital:
             return self._cap(sized_order, bounds, capital)
 
+        # Inside the capital bounds still has to be a size the exchange accepts
+        # (2026-09-12). This path emitted `sized_order.quantity` untouched until
+        # then -- no lot, no freeze -- because the snapping lived only in the
+        # bump and cap branches, where a quantity was being recomputed anyway.
+        # An order that needed no capital adjustment therefore needed no
+        # adjustment at all, which is exactly backwards: the venue's limits do
+        # not depend on whether the desk's limits bound.
+        quantity, refusal, adjustment = self._tradeable_quantity(
+            sized_order, sized_order.quantity
+        )
+        if refusal is not None:
+            return self._refusal(sized_order, bounds, refusal, adjustment)
+        capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
+
         self.standing.passed += 1
+        self._reserve(sized_order, capital)
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, capital)
+        self.standing.largest_quantity_emitted = max(
+            self.standing.largest_quantity_emitted, quantity
+        )
+        inside = (
+            f"{capital:,.2f} is inside "
+            f"[{bounds.minimum_capital:,.2f}, {bounds.maximum_capital:,.2f}]"
+        )
         return self._bounded(
-            sized_order, bounds, sized_order.quantity, capital, WITHIN_BOUNDS,
-            sized_order.risk_at_stop,
-            f"{capital:,.2f} is inside [{bounds.minimum_capital:,.2f}, {bounds.maximum_capital:,.2f}]",
+            sized_order, bounds, quantity, capital, WITHIN_BOUNDS,
+            self._risk_at(sized_order, quantity),
+            f"{inside}; {adjustment}" if adjustment else inside,
         )
 
     def _bump(self, sized_order, bounds, capital: float) -> BoundedOrder:
@@ -282,12 +502,37 @@ class TradeCapitalBoundsGate:
                 f"bounds cannot both be satisfied for this trade",
             )
 
+        # A bump snaps *up* to reach the minimum, so it can land above the
+        # exchange's single-order limit even though the capital is small -- which
+        # is precisely what a cheap contract does: the 100,000 rupee minimum buys
+        # a million units of a 0.10 option. Cut it to what the venue takes, and
+        # refuse when that no longer reaches the minimum, rather than emitting an
+        # order the exchange would reject.
+        quantity, refusal, adjustment = self._tradeable_quantity(sized_order, quantity)
+        if refusal is not None:
+            return self._refusal(sized_order, bounds, refusal, adjustment)
         bumped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
+        if bumped_capital < bounds.minimum_capital:
+            self.standing.refused_above_the_freeze_quantity += 1
+            return self._refusal(
+                sized_order, bounds, REFUSED_ABOVE_THE_EXCHANGE_FREEZE_QUANTITY,
+                f"reaching the {bounds.minimum_capital:,.2f} minimum needs more units of "
+                f"{sized_order.symbol} than the {self._freeze_quantity_for(sized_order):g} "
+                f"this exchange accepts in one order; at {sized_order.entry_price:g} the two "
+                f"bounds cannot both be satisfied",
+            )
+        scaled_risk = self._risk_at(sized_order, quantity)
+
         self.standing.bumped += 1
+        self._reserve(sized_order, bumped_capital)
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, bumped_capital)
+        self.standing.largest_quantity_emitted = max(
+            self.standing.largest_quantity_emitted, quantity
+        )
+        raised = f"raised from {capital:,.2f} to the {bounds.minimum_capital:,.2f} minimum"
         return self._bounded(
             sized_order, bounds, quantity, bumped_capital, BUMPED_TO_MINIMUM, scaled_risk,
-            f"raised from {capital:,.2f} to the {bounds.minimum_capital:,.2f} minimum",
+            f"{raised}; {adjustment}" if adjustment else raised,
         )
 
     def _cap(self, sized_order, bounds, capital: float, room: float | None = None) -> BoundedOrder:
@@ -315,13 +560,21 @@ class TradeCapitalBoundsGate:
                 f"{self._increment_for(sized_order):g} increment at "
                 f"{sized_order.entry_price:,.2f}",
             )
+        quantity, refusal, adjustment = self._tradeable_quantity(sized_order, quantity)
+        if refusal is not None:
+            return self._refusal(sized_order, bounds, refusal, adjustment)
         capped_capital = capital_committed_by(quantity, sized_order.entry_price, leverage)
         self.standing.capped += 1
+        self._reserve(sized_order, capped_capital)
         self.standing.largest_capital_used = max(self.standing.largest_capital_used, capped_capital)
+        self.standing.largest_quantity_emitted = max(
+            self.standing.largest_quantity_emitted, quantity
+        )
+        cut = f"cut from {capital:,.2f} to the {ceiling:,.2f} that may still be committed"
         return self._bounded(
             sized_order, bounds, quantity, capped_capital, CAPPED_AT_MAXIMUM,
             self._risk_at(sized_order, quantity),
-            f"cut from {capital:,.2f} to the {ceiling:,.2f} that may still be committed",
+            f"{cut}; {adjustment}" if adjustment else cut,
         )
 
     def _risk_at(self, sized_order, quantity: float) -> float:
@@ -394,6 +647,18 @@ def describe_bounding(gate: TradeCapitalBoundsGate) -> dict:
         "refused_maximum_buys_nothing": gate.standing.refused_maximum_buys_nothing,
         "largest_capital_used": gate.standing.largest_capital_used,
         "closed": gate.standing.closed,
+        "snapped_to_whole_lots": gate.standing.snapped_to_whole_lots,
+        "refused_smaller_than_one_lot": gate.standing.refused_smaller_than_one_lot,
+        "capped_at_the_freeze_quantity": gate.standing.capped_at_the_freeze_quantity,
+        "refused_above_the_freeze_quantity": gate.standing.refused_above_the_freeze_quantity,
+        "sized_without_the_instruments_own_lot": (
+            gate.standing.sized_without_the_instruments_own_lot
+        ),
+        "largest_quantity_emitted": gate.standing.largest_quantity_emitted,
+        "reservations_that_expired": gate.standing.reservations_that_expired,
+        "capital_in_flight_awaiting_a_position": sum(
+            capital for capital, _at in gate._bound_awaiting_a_position.values()
+        ),
     }
 
 
@@ -481,7 +746,10 @@ def start_part(context) -> int:
     )
     publish_bounded_orders = context.bus.publisher_for("bounded-order")
     gate = TradeCapitalBoundsGate(
-        quantity_increment=context.number("order_quantity_increment")
+        quantity_increment=context.number("order_quantity_increment"),
+        bound_capital_stands_for_seconds=context.number(
+            "bound_capital_awaits_a_position_for_seconds"
+        ),
     )
 
     def read_sized_orders():

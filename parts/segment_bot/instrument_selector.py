@@ -270,6 +270,12 @@ class ListedInstrument:
     # lot must fall back to the global step and say so, not silently trade in
     # single units of a contract sold in blocks of 65.
     quantity_increment: float | None = None
+    # The most units the exchange accepts in one order for this instrument --
+    # NSE's own freeze quantity, 1,755 for a NIFTY option. Carried for the same
+    # reason as the lot above: nothing downstream could ask, and on 2026-09-08
+    # nothing did. None where the source named none, which is not the same as
+    # unlimited.
+    freeze_quantity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +352,12 @@ class InstrumentChoice:
     # has asked for since 2026-08-22 ("the honest fix is a per-symbol venue fact
     # carried on instrument-choice").
     quantity_increment: float | None = None
+    # The most units the exchange accepts in one order for the chosen contract --
+    # NSE's own freeze quantity, 1,755 for a NIFTY option. Carried for exactly
+    # the same reason as the lot size beside it: nothing downstream could ask.
+    # Nothing in this project read the field at all until 2026-09-12, and the
+    # orders of 2026-09-08 ran to 6,823,286 units of a contract capped at 1,755.
+    freeze_quantity: float | None = None
     # The side the chosen contract is traded on to OPEN the intended view, in the
     # venue's vocabulary. None when nothing was chosen.
     #
@@ -502,10 +514,33 @@ class InstrumentSelector:
         # ATM fact -- the tracker's job is which strike is at the money, and
         # teaching it about quantities would be a second job welded on (T-6).
         self._lot_sizes: dict[str, float] = {}
+        # The exchange's single-order limit per instrument key, from the same two
+        # sources and for the same reason as `_lot_sizes` above.
+        self._freeze_quantities: dict[str, float] = {}
 
     def observe_option_listing(self, listing) -> None:
-        """One broker-instrument-listing row -- an underlying or an option contract."""
+        """One broker-instrument-listing row -- an underlying or an option contract.
+
+        The venue's own lot size is recorded here as well as on the
+        `symbol-universe` path, because a contract that arrives only on the
+        listing conveyor arrives with no quantity step otherwise, and
+        `position-sizer.quantity_increment_for` then falls back to
+        `order_quantity_increment` -- one global 0.001 whose own note has called
+        itself "the coarsest number in the system and it is temporary" since
+        2026-08-22. Measured 2026-09-08: `paper-account-stock-options` held
+        **12,207.81406719471** units of `AXISBANK 1260 CE 29 SEP 26`, a contract
+        the exchange trades in whole lots. Every fee, margin and fill figure
+        computed from a quantity like that is a fiction, and the same defect was
+        already found and fixed once on the other path (2026-09-07, an order for
+        12,165.44 units of NIFTY 23750 PE).
+        """
         self._atm_tracker.observe_listing(listing)
+        lot = getattr(listing, "lot_size", None)
+        if lot:
+            self._lot_sizes[listing.instrument_key] = float(lot)
+        freeze = getattr(listing, "freeze_quantity", None)
+        if freeze:
+            self._freeze_quantities[listing.instrument_key] = float(freeze)
         underlying_symbol = (
             listing.trading_symbol if listing.underlying_key is None
             else self._atm_tracker.underlying_of(listing.instrument_key)
@@ -585,6 +620,7 @@ class InstrumentSelector:
                     contract_symbol=atm.trading_symbol,
                     venue_instrument_id=atm.instrument_key,
                     quantity_increment=self._lot_sizes.get(atm.instrument_key),
+                    freeze_quantity=self._freeze_quantities.get(atm.instrument_key),
                     funding_rate_per_settlement=None, settlements_per_day=None,
                     basis_fraction=None,
                     premium_fraction=premium_fraction,
@@ -631,6 +667,7 @@ class InstrumentSelector:
                 contract_symbol=contract.trading_symbol,
                 venue_instrument_id=contract.instrument_key,
                 quantity_increment=self._lot_sizes.get(contract.instrument_key),
+                freeze_quantity=self._freeze_quantities.get(contract.instrument_key),
                 funding_rate_per_settlement=None, settlements_per_day=None,
                 basis_fraction=None,
                 premium_fraction=premium_fraction,
@@ -854,6 +891,9 @@ class InstrumentSelector:
             lot = getattr(listed, "lot_size", None)
             if lot:
                 self._lot_sizes[chain_fact.instrument_key] = float(lot)
+            freeze = getattr(listed, "freeze_quantity", None)
+            if freeze:
+                self._freeze_quantities[chain_fact.instrument_key] = float(freeze)
             # An option, or the underlying an option is a claim on. Handed to
             # the same ATM tracker `observe_option_listing` feeds, so options
             # arriving this way are priced by the one path that prices them --
@@ -1366,6 +1406,9 @@ class InstrumentSelector:
             ),
             quantity_increment=(
                 None if chosen is None else getattr(chosen, "quantity_increment", None)
+            ),
+            freeze_quantity=(
+                None if chosen is None else getattr(chosen, "freeze_quantity", None)
             ),
         )
 

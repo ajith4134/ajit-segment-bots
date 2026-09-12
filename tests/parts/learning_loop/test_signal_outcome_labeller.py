@@ -455,44 +455,82 @@ def test_a_classified_regime_reaches_the_label(real_prices):
 # ---- a staleness bound answering the wrong question --------------------------
 
 def test_the_labellers_price_bound_is_its_own_barrier_not_a_round_trip_fee():
-    """Measured live: 1,053 of 1,397 claims refused for a stale price.
+    """The labeller judges against its own barrier, not against a round-trip fee.
 
-    The bound was not wrong, it was answering a different question -- how old may
-    a price be before ACTING on it costs more than the round trip. This part never
-    acts; its price is contaminated when it has drifted far enough to distort the
-    barrier the claim will be judged against, and that barrier is wider than a
-    fee. The bound goes as the SQUARE of the materiality, so the difference is
-    more than threefold rather than marginal.
+    Measured live when this was written: 1,053 of 1,397 claims refused for a
+    stale price. The bound was not wrong, it was answering a different question
+    -- how old may a price be before ACTING on it costs more than the round trip.
+    This part never acts; its price is contaminated when it has drifted far
+    enough to distort the barrier the claim will be judged against. The bound
+    goes as the SQUARE of the materiality, which is what this pins.
+
+    **This test could not run at all between 2026-09-07 and 2026-09-08**: the
+    stub below was missing `reference_price_materiality_fraction` from the day
+    `price_staleness_from` began reading it, so it raised KeyError instead of
+    asserting anything. Completing it exposed a finding bigger than the test.
+
+    With the crypto numbers it was written against (prior 0.000898, materiality
+    0.0011) the trading bound is 1.50 s and the labelling bound 4.96 s -- the
+    labeller's barrier is the wider one, which is the property this test exists
+    to protect. With the numbers actually deployed for NSE (prior 0.002324,
+    materiality 0.008532, both re-derived 2026-09-07) the trading bound is
+    13.48 s and the labelling bound is **1.00 s -- its floor.**
+
+    `signal_label_move_fraction` is 0.002, still the crypto-era barrier: on an
+    NSE option a round trip costs 0.8532%, so a claim is marked right or wrong on
+    a move four times smaller than the cost of taking it, and the bound derived
+    from it has bottomed out on `reference_price_minimum_age_seconds`. That is
+    exactly the collapse `instrument-selector` warns about in its own standing --
+    "a bound that quietly collapsed to its floor would stop every trade while
+    looking exactly like a market nobody wanted to trade". Recorded in
+    docs/feature-audit.md; re-deriving that barrier for NSE is its own change
+    with its own evidence, and asserting a number here would be picking one.
     """
     from runtime.price_staleness import price_staleness_from
 
-    class Settings:
-        health_interval_seconds = 1.0
+    def settings_for(prior, materiality):
+        class Settings:
+            health_interval_seconds = 1.0
 
-        def number(self, name):
-            return {
-                "taker_fee_rate": 0.00055,
-                "signal_label_move_fraction": 0.002,
-                "reference_price_move_anchor_seconds": 1.0,
-                "reference_price_move_quantile": 0.95,
-                "reference_price_move_window": 3600,
-                "reference_price_move_observations_needed": 300,
-                "reference_price_prior_one_second_move": 0.000898,
-                "reference_price_minimum_age_seconds": 1.0,
-                "reference_price_maximum_age_seconds": 60.0,
-            }[name]
+            def number(self, name):
+                return {
+                    "taker_fee_rate": 0.00055,
+                    "signal_label_move_fraction": 0.002,
+                    "reference_price_move_anchor_seconds": 1.0,
+                    "reference_price_move_quantile": 0.95,
+                    "reference_price_move_window": 3600,
+                    "reference_price_move_observations_needed": 300,
+                    "reference_price_prior_one_second_move": prior,
+                    "reference_price_materiality_fraction": materiality,
+                    "reference_price_minimum_age_seconds": 1.0,
+                    "reference_price_maximum_age_seconds": 60.0,
+                }[name]
 
-    context = Settings()
-    trading = price_staleness_from(context)
-    labelling = price_staleness_from(
-        context, materiality_fraction=context.number("signal_label_move_fraction")
-    )
+        return Settings()
 
-    tighter = trading.believable_age_seconds(VENUE, SYMBOL).value
-    wider = labelling.believable_age_seconds(VENUE, SYMBOL).value
+    def bounds_under(prior, materiality):
+        context = settings_for(prior, materiality)
+        trading = price_staleness_from(context).believable_age_seconds(VENUE, SYMBOL)
+        labelling = price_staleness_from(
+            context, materiality_fraction=context.number("signal_label_move_fraction")
+        ).believable_age_seconds(VENUE, SYMBOL)
+        return trading, labelling
 
-    assert tighter == pytest.approx(1.50, abs=0.01)
-    assert wider == pytest.approx(4.96, abs=0.01)
-    assert wider > tighter
+    # The property, on the numbers this test was written against: the labeller's
+    # own barrier is wider than a round-trip fee, and the bound goes as the
+    # square of the materiality so the gap is threefold rather than marginal.
+    trading, labelling = bounds_under(prior=0.000898, materiality=0.0011)
+    assert trading.value == pytest.approx(1.50, abs=0.01)
+    assert labelling.value == pytest.approx(4.96, abs=0.01)
+    assert labelling.value > trading.value
     # Still derived and still bounded -- not a number chosen to admit more claims.
-    assert labelling.believable_age_seconds(VENUE, SYMBOL).bound_high == 60.0
+    assert labelling.bound_high == 60.0
+
+    # On the numbers actually deployed for NSE the property has inverted, and
+    # the labelling bound has collapsed onto its floor. See the docstring: the
+    # barrier is a crypto-era number, not this bound.
+    trading, labelling = bounds_under(prior=0.002324, materiality=0.008532)
+    assert trading.value == pytest.approx(13.48, abs=0.01)
+    assert labelling.value == pytest.approx(1.00, abs=0.01), (
+        "signal_label_move_fraction has stopped producing a bound of its own"
+    )

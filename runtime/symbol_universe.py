@@ -150,3 +150,18 @@ class CapturableSymbol:
     # the lot size, which for NIFTY is 75. None where the master did not state
     # one.
     lot_size: int | None = None
+    # The most units the exchange accepts in a single order for this instrument
+    # -- NSE's own `freeze_quantity`, 1,755 for a NIFTY option. An order above
+    # it is rejected outright; it is not a hint and it is not a fill-what-you-can.
+    #
+    # Carried from 2026-09-12, because until then nothing in this project read
+    # the field at all even though the broker adapter had parsed it since the
+    # Upstox cutover. On 2026-09-08 the bots placed orders for 2,000,000,
+    # 4,000,000 and 6,823,286 units of NIFTY weeklies -- up to 3,887 times this
+    # limit -- and the paper book, which knows nothing of it either, filled them
+    # by walking the price 69.5% up its own depth curve. Those seven fills are
+    # 91.4% of every rupee this project has lost.
+    #
+    # None where the master stated none, which is not the same as unlimited: a
+    # venue that has not published a limit has not told us there is none.
+    freeze_quantity: float | None = None
