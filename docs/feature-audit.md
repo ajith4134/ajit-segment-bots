@@ -81,7 +81,7 @@ come before the ones that learn from a trade that has not happened yet.
 | 26 | `llm-services` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
 | 27 | `online-research` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
 | 28 | `autonomous` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
-| 29 | `stock-market-news-data` | **walked 2026-09-06, re-walked 2026-09-12** — 10 of 29 built and running; the source and the four parts directly below it landed on 2026-09-12, see the end of this file |
+| 29 | `stock-market-news-data` | **walked 2026-09-06** — re-walked 2026-09-12: 10 of 29 built and running; the source and the four parts directly below it landed that day, see the end of this file |
 
 ---
 
