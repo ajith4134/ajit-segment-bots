@@ -621,7 +621,12 @@ LIVE_SPINE = (
     # clock and the broker's is measured continuously rather than never. Two
     # timestamp traps were found by hand on the day this was rewired and nothing
     # running would have caught either.
-    "clock-skew-monitor",
+    #
+    # Moved below broker-order-router on 2026-09-12: it also reads
+    # `raw-venue-order-status`, and until that day nothing on the spine produced
+    # one -- ccxt-order-router is off -- so its ordering against a producer was
+    # vacuously satisfied. Adding a real producer made the requirement real, and
+    # the spine's own dependency test is what noticed.
     "fund-conservation-auditor",
     "self-model-reporter",
     "decision-cost-accountant",
@@ -704,6 +709,26 @@ LIVE_SPINE = (
     # it: a cancel and a reprice are things the router reads.
     "resting-order-cancel-policy",
     "limit-price-walker",
+    # The live half of the order fork, started 2026-09-12 at the operator's
+    # instruction. `order-destination-router` addresses every order by its
+    # segment's money mode: paper orders go to paper-fill-simulator, live ones to
+    # this. Both segments state money_mode "paper" today, so this refuses every
+    # order it sees, and `refused_not_live_destination` climbing beside a
+    # `placed` of zero is the measurement of that -- the honest picture of a live
+    # path that is wired and deliberately shut, rather than one nobody built.
+    #
+    # **Placed here, after the two parts above, because it READS what they
+    # decide** -- the comment above already says so -- and after
+    # money-mode-reader, broker-token-refresh-scheduler and
+    # broker-symbol-universe-bridge, which produce the three levels its gates
+    # read. A router started before its gates have input refuses everything for
+    # the wrong reason, and the counters look identical to refusing correctly.
+    # The spine's own dependency test caught exactly that when this was first
+    # put beside paper-fill-simulator.
+    "broker-order-router",
+    # Reads `raw-venue-order-status` from the router above, as well as
+    # `broker-market-data`. See its own note higher up for why it came back on.
+    "clock-skew-monitor",
     # The last risk part: it turns a bounded order into an execution schedule, a
     # plan rather than orders, so it adds nothing to the order path it reads.
     "participation-capped-order-splitter",

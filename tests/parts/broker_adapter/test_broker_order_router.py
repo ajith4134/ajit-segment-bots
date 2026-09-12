@@ -434,11 +434,55 @@ def test_a_failed_cancel_does_not_claim_the_order_is_gone():
 
 # ---- it must not be startable by accident ------------------------------------
 
-def test_the_part_is_not_started_by_the_live_spine():
-    """A part that can spend money is started deliberately, never inherited.
+def test_the_part_starts_after_every_producer_its_gates_read():
+    """On the spine since 2026-09-12, and the ORDER is the safety property.
 
-    Both segments are on paper, so a router that can reach Upstox's place-order
-    endpoint has nothing legitimate to do today.
+    Its gates read three levels -- `money-mode`, `broker-token-standing` and
+    `symbol-universe`. A router started before those produce anything refuses
+    every order for the wrong reason, and refusing for the wrong reason looks
+    exactly like refusing correctly: the same counters climb. So the invariant
+    that replaced "it is not on the spine" is that it starts last of the four.
     """
     spine = pathlib.Path("operate/run_live_spine.py").read_text(encoding="utf-8")
-    assert '"broker-order-router"' not in spine
+    order = [
+        line.strip().strip(',').strip('"')
+        for line in spine.splitlines()
+        if line.strip().startswith('"') and line.strip().endswith('",')
+    ]
+    assert "broker-order-router" in order, "the part must be on the spine"
+
+    router_at = order.index("broker-order-router")
+    for producer in (
+        "money-mode-reader",
+        "broker-token-refresh-scheduler",
+        "broker-symbol-universe-bridge",
+        "order-destination-router",
+    ):
+        assert producer in order, producer
+        assert order.index(producer) < router_at, (
+            f"{producer} produces a level this router's gates read and must start "
+            f"before it; started after, the router refuses everything for the wrong "
+            f"reason and the counters look identical to refusing correctly"
+        )
+
+
+def test_it_places_nothing_while_every_segment_is_on_paper():
+    """The property that makes putting it on the spine safe today.
+
+    This is what the live spine is actually running into: both segments state
+    money_mode "paper", so order-destination-router addresses every order to the
+    paper book and gate 1 refuses it. Asserted rather than trusted, because "it
+    is safe because of a setting" is the kind of claim that stops being true
+    without anything failing.
+    """
+    router = a_router(mode="paper")
+    router._place = lambda url, payload, token: pytest.fail("nothing may reach the broker")
+
+    statuses = [
+        router.route(an_order(destination="paper-book", intent_id="a")),
+        router.route(an_order(destination="paper-book", intent_id="b")),
+    ]
+
+    assert [s.outcome for s in statuses] == [REFUSED_NOT_LIVE_DESTINATION] * 2
+    assert router.standing.placed == 0
+    assert router.standing.refused_not_live_destination == 2
