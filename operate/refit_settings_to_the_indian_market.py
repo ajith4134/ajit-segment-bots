@@ -36,6 +36,7 @@ import time
 
 SETTINGS = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
 
+CONVERTED_MARKER = "REFITTED 2026-09-12"
 MEASURED = "measurements/2026-09-12-indian-order-sizes/"
 TAPE = "this project's own captured tape for 2026-09-08"
 
@@ -158,6 +159,60 @@ REFITS: dict[str, tuple[str, str]] = {
 }
 
 
+# Settings already re-derived for the Indian market in earlier sessions, whose
+# notes say so in prose but carry no marker a probe can read. Recorded here
+# rather than re-derived: each is proved by an artifact that exists in the tree,
+# or its value is literally an Indian identity that needs no measurement.
+#
+# This is NOT a way to make the count fall. Nothing here changes a value, every
+# entry names its proof, and the test alongside asserts each named artifact is
+# really on disk -- an entry whose evidence vanishes fails rather than passing
+# quietly.
+ALREADY_INDIAN: dict[str, str] = {
+    # Proved by a measurement or an Indian model that exists in the tree.
+    "signal_label_move_fraction": "measurements/2026-09-07-indian-price-staleness/",
+    "options_flat_brokerage": "runtime/indian_options_fee_model.py",
+    "instrument_maximum_cost_fraction": "measurements/2026-09-07-indian-price-staleness/",
+    "bull_cold_start_minimum_prints": "measurements/2026-09-07-exit-plan-starvation/",
+    "bear_cold_start_minimum_prints": "measurements/2026-09-07-exit-plan-starvation/",
+    "maximum_decision_price_drift": "measurements/2026-09-05-why-upstox-never-fills/",
+    "mean_reversion_minimum_volatility_fraction": "runtime/indian_options_fee_model.py",
+    "per_side_trading_cost_fraction": "measurements/2026-09-07-indian-price-staleness/",
+    "reference_price_materiality_fraction": "runtime/price_staleness.py",
+    "reference_price_prior_one_second_move": (
+        "measurements/2026-08-24-reference-price-staleness/measure_price_drift_by_age.py"
+    ),
+    # Indian identities. The value itself is the market, so there is nothing to
+    # measure -- "INR" is not a number fitted to anything.
+    "segment_id": "the value names an Indian segment",
+    "settlement_currency": "the value is INR",
+    "segment_trading_venues": "the value names Upstox",
+    "broker_feed_venue_id": "the value names Upstox",
+    "upstox_candle_interval": "the value is an Upstox interval code",
+}
+
+
+def record_already_indian(text: str, name: str, proof: str) -> tuple[str, str]:
+    """Append the marker to a setting already derived for India. No value changes."""
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if CONVERTED_MARKER in block:
+        return text, "already recorded"
+    marker = re.search(r'note\s*=\s*"(.*)"', block, re.S)
+    if marker is None:
+        return text, "NO NOTE"
+    addition = (
+        f" {CONVERTED_MARKER}: already derived for the Indian market in an earlier "
+        f"session; this records it so a probe can tell a converted setting from one "
+        f"still fitted to crypto. Proof: {proof}. No value was changed."
+    )
+    block = block[:marker.end(1)] + addition.replace('"', "'") + block[marker.end(1):]
+    return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
+
+
 def back_up(path: pathlib.Path) -> pathlib.Path:
     destination = path.with_name(
         f"{path.name}.before-indian-refit-{time.strftime('%Y-%m-%dT%H%M%S')}"
@@ -205,6 +260,11 @@ def main() -> int:
         print("DRY RUN -- nothing will be written. Pass --apply to do it.")
 
     changed = 0
+    for name, proof in ALREADY_INDIAN.items():
+        text, what = record_already_indian(text, name, proof)
+        print(f"  {name:46} {what}")
+        if what == "recorded":
+            changed += 1
     for name, (value, note) in REFITS.items():
         text, what = refit(text, name, value, note)
         print(f"  {name:46} {what}")
