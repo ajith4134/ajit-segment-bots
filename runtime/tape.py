@@ -105,6 +105,15 @@ class StreamKind(enum.IntEnum):
     # Delta, theta, gamma, vega, rho and implied volatility for one options
     # contract. Added 2026-09-01, same reasoning as OPEN_INTEREST above.
     OPTION_GREEKS = 7
+    # One news item as its source delivered it, or the published news fact
+    # once the block has understood it. Added 2026-09-12 with
+    # `news-tape-writer`: the news block's own design says history accrues
+    # only in real time, same as the market tape, and a story is not
+    # re-fetchable -- Upstox's news endpoint carries a rolling backlog
+    # (measured 2026-09-12: 153.3 hours of it) and nothing older.
+    # Appended, never inserted, so every tape written before this reads back
+    # unchanged.
+    NEWS = 8
 
 
 class TradeFidelity(enum.StrEnum):

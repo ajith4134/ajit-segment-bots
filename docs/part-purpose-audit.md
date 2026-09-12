@@ -73,7 +73,9 @@ master.
 
 ## Progress
 
-**43 of 373 hand-judged; all 373 now carry measured evidence** as of 2026-09-07.
+**48 of 378 hand-judged; 373 carry measured evidence** as of 2026-09-12 — the
+five added on 2026-09-12 are the news chain, judged on real Upstox articles and
+on the live spine (see the news section below).
 
 **Silence is often the correct output, and the probe cannot know that.** Ten
 parts were reported as receiving every input they declare and publishing
@@ -131,6 +133,42 @@ finding rather than a refresh.
 
 The user said 370; the blueprint holds **373** parts across 29 categories, and every part is what the instruction means.
 
+
+## The news chain, 2026-09-12 — and the two defects live measurement found
+
+`stock-market-news-data` declared 29 parts, 5 ran, and **nothing produced
+`raw-news-item` at all**; then `broker-news-reader` landed and published 7,580
+items **to nobody**, because all four consumers of that type were unbuilt. Both
+halves are now closed: the source and the four parts below it run on the live
+spine and every one of the five rows above is judged on real data.
+
+Two defects only the live spine could show, and both were in parts whose tests
+were already green:
+
+**A part's tests pass on the code on disk; the spine runs the code it imported.**
+`broker-news-reader`'s standing read 104,646 instruments known and 11,555
+failures against 9,141 requests at 3.37 requests a second. Nothing was broken —
+the running process predated the filter and the pace by three minutes. After a
+restart: 0 failures, paced, 4,370 listings refused as things no story can be
+about. This project's own note already says to restart after changing anything a
+live part imports, and reading a standing is how the omission was caught.
+
+**A delivery is an occasion, not a row.** `news-source-health-monitor` measured
+its silence bound from each source's own gaps, which is right, and counted every
+row as an arrival, which is not: one poll of NSE's F&O ban list is 244
+restriction reports, so the source appeared to deliver twice a second and thirty
+seconds of entirely ordinary quiet then beat every gap it had ever shown. Two
+sources read `NOT_DELIVERING` inside three minutes of a healthy spine. It now
+records at most one delivery per source per tick — 284 rows, 10 deliveries — and
+reports every source as `NOT_MEASURED` until it has 20 gaps, which is the honest
+answer and no longer a false alarm.
+
+A third came out of the test suite rather than the spine, and is the same shape
+as Rule 8's "failing states must be reachable": the nearest-rank 95th percentile
+of *n* observations **is** the maximum until n ≥ 20, so with the narrower
+13-gap capture the monitor's middle state `QUIETER_THAN_USUAL` could never be
+rendered at all. That is why `news_source_minimum_gaps_to_state_a_habit` is 20,
+and why a second, wider capture of 30 real underlyings was taken.
 
 ## What the walk found on 2026-09-07, beyond the per-part rows
 
@@ -248,7 +286,11 @@ independent failures.
 
 | part | verdict | fed in | came out |
 |---|---|---|---|
-| `broker-news-reader` | NOT MEASURED | nothing has reached it | nothing published |
+| `broker-news-reader` | SERVING ITS PURPOSE | broker-instrument-listing 4,523; broker-token-standing 79 (live spine, 2026-09-12) | raw-news-item 132 — 33 real Upstox articles, 8 paced requests, 0 failures, 4,370 listings correctly refused as things no story can be about |
+| `news-item-deduplicator` | SERVING ITS PURPOSE | the real 42-row/31-story capture, and 33 live items | 31 stories off the capture, matching the broker's own `total_records` exactly; live 33 items → 18 stories, 15 collapsed by url, 0 by headline |
+| `news-tape-writer` | SERVING ITS PURPOSE | 33 live raw-news-item | 51 records on `tape/news/upstox-news-api/2026-09-12.news`, read back off disk verbatim with `published_at_ns == venue_time_ns` |
+| `news-latency-meter` | SERVING ITS PURPOSE | 33 live raw-news-item | 33 readings, all correctly flagged backlog (the part had just started), so no typical latency asserted from a restart. The real finding it states: this source's freshest story was 21.5 hours old |
+| `news-source-health-monitor` | SERVING ITS PURPOSE | 284 rows across all three declared wires, live | 5 sources known, 10 deliveries, all `NOT_MEASURED` — honest, and the correction that made it so is below |
 | `corporate-action-adjuster` | PRODUCES REAL OUTPUT | broker-instrument-listing 109,714; corporate-action-report 20 | corporate-action 19 — work: actions_understood 19 |
 | `corporate-action-reader` | NOT MEASURED | nothing has reached it | corporate-action-report 20 — work: is_warm 1; requests_made 1 |
 | `exchange-filing-reader` | NOT MEASURED | nothing has reached it | nothing published |

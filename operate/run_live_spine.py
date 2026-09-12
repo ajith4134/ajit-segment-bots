@@ -248,6 +248,18 @@ LIVE_SPINE = (
     # Upstox's News API is authenticated. Read-only: it fetches and publishes
     # what the broker said, and reads nothing it fetches.
     "broker-news-reader",
+    # The chain below that source, started 2026-09-12. Until this day
+    # `raw-news-item` had a producer and **no consumer at all** -- measured on
+    # the live spine, 7,580 items published to nobody. Order matters: the
+    # deduplicator is what stops a rolling backlog (167.1 hours of it, measured)
+    # being restated as breaking news every sixteen minutes, so it comes first;
+    # the tape writer is next because a story is not re-fetchable and an hour of
+    # news not captured is gone; the meter and the monitor are measurement and
+    # can follow.
+    "news-item-deduplicator",
+    "news-tape-writer",
+    "news-latency-meter",
+    "news-source-health-monitor",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and

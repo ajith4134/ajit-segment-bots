@@ -4764,3 +4764,45 @@ note  = "Claude, 2026-09-12: how long broker-news-reader waits for the broker's 
 value = 10.0
 unit  = "seconds between news requests"
 note  = "Claude, 2026-09-12: how long broker-news-reader waits between calls to the broker's news endpoint. Measured on the live spine the moment this part first ran WITHOUT a pace: 371 requests in 110 seconds -- 3.37 a second, about 291,000 calls a day at an endpoint that is rate limited. Nothing had failed yet, which is exactly the shape of problem that arrives as a ban rather than as an error, and is the reasoning api-key-pool-rotator's own note already gives for resting a key. Ten seconds, derived from the sweep: news can only be ABOUT a company or an index, which is 2,871 of the master's 118,388 instruments, so a full sweep at 30 keys a request is 96 requests and one every ten seconds comes back round to any given share about every sixteen minutes. That is faster than Indian market news moves and 337 times gentler than what it was doing. Shorten it only on evidence that a story was acted on late -- news-latency-meter is the part that would show it."
+
+[news_story_headline_overlap_to_collapse]
+value = 0.8
+unit  = "shared headline words over all headline words"
+note  = "Claude, 2026-09-12: how far two headlines must overlap before news-item-deduplicator calls them one story. DERIVED, not chosen, and the derivation is a measurement on this project's own capture of the real Upstox news endpoint (tests/captured/upstox/2026-09-12-news-for-two-underlyings.json, 17 rows and the broker's own metadata.total_records of 14). Jaccard over the part's own story_tokens: the 3 pairs that are provably one story -- identical headings returned under two instrument keys -- score 1.000, and the 133 pairs that are provably different score max 0.600, p95 0.250, median 0.044. 0.8 is the midpoint of that gap. The 0.600 pair is why it cannot sit lower: 'SENSEX, NIFTY50 resume decline after a day's pause dragged by Reliance Industries, Larsen & Toubro' against '...dragged by IT stocks' is one outlet's market wrap on two different days, and collapsing those two would delete a day of news. Only one source runs today, so cross-outlet collapse is evidenced from a single outlet's own repeats; re-derive when a second source lands, and news-item-deduplicator's collapsed_by_headline counter is what makes a threshold that starts destroying stories visible rather than silent."
+
+[news_story_remembered_for_seconds]
+value = 691200
+unit  = "seconds"
+note  = "Claude, 2026-09-12: how far back news-item-deduplicator can recognise a story it has already seen. Derived from the source's own backlog, measured twice on real captures the same day: 14 stories for 2 underlyings spanned 153.27 hours, and 31 stories for the 30 underlyings the option segments actually track spanned 167.08 hours (2026-09-05 05:11 to 2026-09-12 04:16 UTC). Upstox's news endpoint is a rolling backlog, so broker-news-reader re-delivers those same stories on every sweep -- about every sixteen minutes at 2,871 instruments and 30 keys a request -- and a memory shorter than the backlog republishes a week-old story as breaking news, forever. EIGHT days (691,200s) is the next whole day above the measured 167.08 hours; whole days because a backlog refilled daily is bounded in days. The first derivation of this number said seven days off the narrower capture, which left 0.92 hours of margin -- the wider capture is why it is eight, and it is also the warning that this margin is measured, not generous. Cost is memory: stories_held in the standing says how many are held, each with its headline tokens."
+
+
+[news_latency_window_observations]
+value = 500
+unit  = "observations"
+note  = "Claude, 2026-09-12: how many arrivals news-latency-meter keeps per source when estimating what latency is ordinary for it. A bounded window rather than every arrival ever, so a source that improves is measured as it is now and not as an average of its whole history. 500: the measured Upstox news endpoint carries about two stories a day per underlying and the reader sweeps 2,871 instruments, so a few hundred arrivals is hours of a source's behaviour rather than minutes of it -- long enough that one slow afternoon does not become the habit, short enough that yesterday's outage stops counting today. Memory is 500 floats per source and this block has 6 declared sources."
+
+[news_latency_minimum_observations_to_state_a_typical]
+value = 20
+unit  = "observations"
+note  = "Claude, 2026-09-12: how many arrivals a source must show before news-latency-meter will state a typical latency for it. Below this the reading carries typical_latency_ns of None rather than a number, because news-impact-forecaster discounts a late item against that typical and discounting against a figure measured from three arrivals is discounting against noise (Rule 8: not measured is its own state, never a default). Twenty at the median: the median of twenty observations moves by less than one observation's worth when the next one arrives, and the measured source delivers enough per sweep to reach twenty inside an hour."
+
+[news_latency_prior_seconds]
+value = 0.0
+unit  = "seconds"
+note  = "Claude, 2026-09-12: the prior news-latency-meter holds for a source's typical latency before it has measured one. ZERO, and it is never published as a value -- typical_latency_ns is None until the estimate is fitted, so this prior exists only to satisfy QuantileEstimator's constructor and is deliberately the one number that cannot be mistaken for a measurement. A non-zero prior here would be an invented claim about how fast a source this system has never watched delivers; the measured truth for the one source that exists is nothing like a guess anyway -- the newest of 14 real stories was first seen 21.5 hours after it was published, because this source is a digest and not a wire."
+
+[news_source_gap_window_observations]
+value = 500
+unit  = "observations"
+note  = "Claude, 2026-09-12: how many gaps between arrivals news-source-health-monitor keeps per source. Same size and same reasoning as news_latency_window_observations -- a bounded window measures a source as it behaves now -- and deliberately the same number rather than a second one to tune, since both windows watch the same arrivals of the same sources. The monitor's own longest-gap record is NOT windowed: 'quiet for longer than this source has ever been quiet' is the bound that decides NOT_DELIVERING, and windowing it would let the overnight gap fall out of memory and make every morning look like a dead feed."
+
+[news_source_minimum_gaps_to_state_a_habit]
+value = 20
+unit  = "gaps"
+note  = "Claude, 2026-09-12: how many gaps a source must show before news-source-health-monitor will judge its silence. Below this the standing is NOT_MEASURED, which is its own state and not a healthy one -- a dead feed reads exactly like a quiet news day, and so does a feed nobody has watched long enough to know its rhythm. TWENTY, and the number is arithmetic rather than taste: QuantileEstimator takes the nearest rank, so the 95th percentile of n observations IS the maximum until ceil(0.95n) - 1 < n - 1, which first holds at n = 20. Below twenty gaps the monitor's middle state, QUIETER_THAN_USUAL, is unreachable -- silence would jump straight from DELIVERING to NOT_DELIVERING -- and Rule 8 refuses a display whose failing states cannot be rendered. Measured on the real 30-underlying capture, which carries exactly 30 gaps: nearest-rank median 6,242.3s (1.73h), 95th percentile 64,524.9s (17.92h), longest 102,145s (28.37h), so all three states separate. The narrower 2-underlying capture has 13 gaps and its 95th percentile equals its maximum -- that is the defect this value exists to close, and it was found by a test failing rather than by reading the code."
+
+
+[news_source_standing_refresh_interval_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-12: how long news-source-health-monitor may leave an unchanged source standing unsaid before saying it again. A level, not an event (runtime/level_publishing.py): silence is a level that no arriving message announces, so the monitor re-judges every source every tick but only publishes when that source's own standing differs or this interval is due. Sixty seconds because alert-raiser is the consumer and the thing it would fire on -- a source that has gone dark -- is measured in minutes for a news feed delivering twice a day per name, not in ticks. Published per source with LevelPublisherByKey so one source going quiet does not restate the other five, which is the 89,747 msg/s storm of 2026-08-26 in miniature."
