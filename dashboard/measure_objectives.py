@@ -209,6 +209,12 @@ CONVERTED_MARKER = "REFITTED 2026-09-12"
 # outstanding work either, because re-deriving a number for a decision nobody
 # makes would be inventing one. If the part comes back, so does the drift.
 INERT_MARKER = "INERT 2026-09-12"
+# A crypto concept whose Indian answer is a different MECHANISM, not a different
+# number -- a bought option pays theta rather than funding, and cannot be
+# liquidated at all. Counted apart because re-scaling one would produce a
+# plausible figure for a cost that does not exist, which is worse than leaving
+# it: it would look derived. Each note names the mechanism that replaces it.
+MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
 
 
 def settings_converted_to_the_indian_market() -> int:
@@ -237,6 +243,19 @@ def settings_inert_with_the_crypto_path() -> int:
     )
 
 
+def settings_needing_an_indian_mechanism() -> int:
+    """Crypto concepts with no Indian number, only an Indian mechanism."""
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(
+        1 for block in re.split(r"\n(?=\[)", text)
+        if re.match(r"\[([a-z0-9_]+)\]", block) and MECHANISM_MARKER in block
+    )
+
+
 def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
     """(fitted to crypto, of those read by running code, settings in total).
 
@@ -262,6 +281,9 @@ def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
             continue
         if INERT_MARKER in block:
             # Still the crypto number, and nothing on this spine asks for it.
+            continue
+        if MECHANISM_MARKER in block:
+            # A concept, not a number. Its note names what replaces it.
             continue
         if CRYPTO_PROVENANCE.search(block):
             fitted.append(named.group(1))
@@ -476,6 +498,9 @@ def main() -> int:
         print(f"     {'inert, nothing reads it':<26} {settings_inert_with_the_crypto_path():>4}   "
               f"still crypto, but its reader")
         print(f"     {'':<26}        is off this spine")
+        print(f"     {'needs a mechanism':<26} {settings_needing_an_indian_mechanism():>4}   "
+              f"a concept, not a number --")
+        print(f"     {'':<26}        theta, not funding")
         print(
             "     This overcounts by design: a note that explains why a number is no\n"
             "     longer crypto-derived still names crypto, and telling that apart from\n"

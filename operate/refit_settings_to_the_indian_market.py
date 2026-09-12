@@ -38,6 +38,7 @@ SETTINGS = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.tom
 
 CONVERTED_MARKER = "REFITTED 2026-09-12"
 INERT_MARKER = "INERT 2026-09-12"
+MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
 MEASURED = "measurements/2026-09-12-indian-order-sizes/"
 TAPE = "this project's own captured tape for 2026-09-08"
 
@@ -148,6 +149,25 @@ REFITS: dict[str, tuple[str, str]] = {
         "they are the tiers that may not trade at all, and that is not a "
         "currency question.",
     ),
+    "taker_fee_rate": (
+        "0.004266",
+        "Claude, 2026-09-12: what crossing the spread costs per side. Was "
+        "0.00055 -- bybit-linear's published taker fee, the higher of the two "
+        "crypto venues. NSE charges nothing resembling it: the real per-side "
+        "cost of an Upstox options round trip is 0.4266%, already derived and "
+        "already in this file as per_side_trading_cost_fraction, from Upstox's "
+        "own six-line charge stack plus half the measured spread "
+        "(measurements/2026-09-07-indian-price-staleness/). The crypto figure "
+        "understated it 7.8-fold, and three parts that run every tick used it "
+        "unconditionally: position-sizer charges it as the fee on every size, "
+        "execution-cost-model makes it the fee component of every estimate "
+        "(628,233 of them so far), and tail-mover-qualifier doubles it into the "
+        "round trip a mover has to clear -- so the tailgater was qualifying "
+        "movers that cannot pay for themselves. paper-fill-simulator is "
+        "unaffected either way: it charges Upstox's real stack for an Upstox "
+        "fill and only falls back to this rate for a venue this project no "
+        "longer has.",
+    ),
     "policy_earned_size_per_competence": (
         "100000.0",
         "Claude, 2026-09-12: how much notional one unit of demonstrated "
@@ -236,6 +256,64 @@ def note_insertion_point(block: str) -> int | None:
         return closing if closing >= 0 else None
     single = re.search(r'note\s*=\s*"(.*)"', block, re.S)
     return single.end(1) if single is not None else None
+
+
+# Crypto concepts whose part is on this spine but whose Indian answer is a
+# different MECHANISM rather than a different number. Re-scaling these would be
+# the worst outcome available: a plausible figure for a cost that does not exist,
+# which looks derived and is fiction.
+#
+# Recorded, not changed, and deliberately NOT counted as converted -- each is a
+# design question with a named answer, and the note says what that answer is so
+# the next session does not have to rediscover it.
+NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
+    "bear_settlements_per_day": (
+        "bear-setup-filter projects a carry cost over its horizon by multiplying a "
+        "funding rate by settlements per day. A bought NSE option settles no funding "
+        "at all; what it pays for being held is THETA, the decay of its own premium, "
+        "which is a function of time to expiry and volatility rather than a rate per "
+        "day. The Indian answer is to project theta from the option's own greeks -- "
+        "broker-option-greeks already carries it -- not to pick a number of "
+        "settlements. Left at 3.0 because the constructor refuses zero and a smaller "
+        "positive number would be a quieter version of the same fiction"
+    ),
+    "maintenance_margin_rate": (
+        "leverage-selector sizes against a liquidation distance. A bought option "
+        "cannot be liquidated -- its worst case is the premium, already paid -- and "
+        "both built segments state leverage_ceiling 1.0, so nothing on this spine "
+        "asks for leverage at all since cash-equity-intraday was retired on "
+        "2026-09-12. The Indian answer for a leveraged segment is the broker's own "
+        "per-order margin (broker-margin-quoter, already built and carrying real "
+        "Upstox quotes), never a flat rate"
+    ),
+    "leverage_target_liquidation_distance": (
+        "the other half of the same question as maintenance_margin_rate, and the "
+        "same answer: there is no liquidation price for a bought option, and no "
+        "built segment uses leverage"
+    ),
+}
+
+
+def record_needs_a_mechanism(text: str, name: str, why: str) -> tuple[str, str]:
+    """Record that a crypto concept needs an Indian mechanism, not a new number."""
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if MECHANISM_MARKER in block:
+        return text, "already recorded"
+    at = note_insertion_point(block)
+    if at is None:
+        return text, "NO NOTE"
+    addition = (
+        f" {MECHANISM_MARKER}: this is a crypto concept and its Indian answer is a "
+        f"different mechanism, not a different number -- {why}. The value is left "
+        f"alone on purpose: re-scaling it would produce a plausible figure for a "
+        f"cost that does not exist here, which looks derived and is fiction."
+    )
+    block = block[:at] + addition.replace('"', "'") + block[at:]
+    return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
 
 
 def record_inert(text: str, name: str, reader: str) -> tuple[str, str]:
@@ -328,6 +406,11 @@ def main() -> int:
         print("DRY RUN -- nothing will be written. Pass --apply to do it.")
 
     changed = 0
+    for name, why in NEEDS_AN_INDIAN_MECHANISM.items():
+        text, what = record_needs_a_mechanism(text, name, why)
+        print(f"  {name:46} mechanism: {what}")
+        if what == "recorded":
+            changed += 1
     for name, reader in INERT_WITH_THE_CRYPTO_PATH.items():
         text, what = record_inert(text, name, reader)
         print(f"  {name:46} inert: {what}")
