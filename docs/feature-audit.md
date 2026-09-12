@@ -81,7 +81,7 @@ come before the ones that learn from a trade that has not happened yet.
 | 26 | `llm-services` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
 | 27 | `online-research` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
 | 28 | `autonomous` | **walked 2026-09-06** — all parts running, no gaps; idle downstream of a trade or an LLM call |
-| 29 | `stock-market-news-data` | **walked 2026-09-06** — 5 of 29 built; the 24 missing are one coherent subsystem, mapped below |
+| 29 | `stock-market-news-data` | **walked 2026-09-06, re-walked 2026-09-12** — 10 of 29 built and running; the source and the four parts directly below it landed on 2026-09-12, see the end of this file |
 
 ---
 
@@ -2062,3 +2062,53 @@ This walk is the measurement that says the gates are actually fed.
 - The idle wires concentrate where they should: `ai-brain` 176, `learning-loop`
   167, `closed-trade-decoding` 157. All of it is downstream of a closed trade,
   and no trade has closed on a live run since the segments were re-scoped.
+
+## 29 — `stock-market-news-data` again, 2026-09-12: the chain has a head and a first layer
+
+The 2026-09-06 walk found 5 of 29 built and, more usefully, that **nothing
+produced `raw-news-item` at all** — so the fourteen parts below a source were
+starved at the top of the chain and building any of them first would have
+measured nothing. Both ends of that have moved:
+
+| | 2026-09-06 | 2026-09-12 |
+|---|---|---|
+| parts built and running | 5 of 29 | **10 of 29** |
+| producers of `raw-news-item` | 0 | 1 (`broker-news-reader`, Upstox's own News API) |
+| consumers of `raw-news-item` | **0** | 4 — deduplicator, tape writer, latency meter, source health monitor |
+
+Every number those five act on is derived from real Upstox articles, captured
+twice: `tests/captured/upstox/2026-09-12-news-for-two-underlyings.json` (17 rows,
+14 stories) and `-for-thirty-underlyings.json` (42 rows, 31 stories across 167.08
+hours). The broker states its own `total_records`, which is what lets the
+deduplicator be checked against the source's count rather than against one a test
+invented.
+
+**Three defects, and the two that matter were invisible to the test suite:**
+
+- The reader's live standing read 104,646 instruments known and 11,555 failures
+  against 9,141 requests at 3.37 a second, with every test green — the running
+  process predated its own filter and pace by three minutes. **A part's tests
+  pass on the code on disk; the spine runs the code it imported.** After a
+  restart: 0 failures, paced, 4,370 listings refused as things no story can be
+  about.
+- `news-source-health-monitor` counted rows as arrivals, so one poll of NSE's
+  F&O ban list (244 reports) made the source look like it delivered twice a
+  second, and thirty seconds of ordinary quiet beat every gap on record: two
+  sources read `NOT_DELIVERING` inside three minutes of a healthy spine. **A
+  delivery is an occasion, not a row** — at most one per source per tick.
+  Measured after: 284 rows, 10 deliveries, zero false verdicts.
+- The nearest-rank 95th percentile of *n* observations **is** the maximum until
+  n ≥ 20, so on the narrower capture the monitor's middle state was unreachable
+  — a Rule 8 defect found by a test failing rather than by reading code, and the
+  reason a second wider capture was taken.
+
+**What is still dark, measured rather than assumed:** the three types those parts
+produce — `distinct-news-item`, `news-latency-reading`, `news-source-standing` —
+now have producers and no consumers. `news-text-structurer` (the block's single
+LLM read), `news-symbol-resolver`, the classifiers, the scorers and
+`news-impact-forecaster` are the next layer, and 19 of the 29 are still unbuilt.
+
+One fact from the tape worth carrying forward: **this source is a digest, not a
+wire.** The freshest of 31 real stories was 21.5 hours old when first seen, and
+`news-latency-meter` says so rather than a part downstream assuming news arrives
+in seconds.
