@@ -201,6 +201,14 @@ CRYPTO_PROVENANCE = re.compile(
 # and "converted, provenance kept" are now separate numbers and only the first
 # is work outstanding.
 CONVERTED_MARKER = "REFITTED 2026-09-12"
+# A setting whose only readers are parts that are off this spine, or that no code
+# reads at all. Its value is still the crypto one and nothing acts on it.
+#
+# Counted as its own number rather than folded into either of the others. It is
+# not converted -- the figure is still wrong for this market -- and it is not
+# outstanding work either, because re-deriving a number for a decision nobody
+# makes would be inventing one. If the part comes back, so does the drift.
+INERT_MARKER = "INERT 2026-09-12"
 
 
 def settings_converted_to_the_indian_market() -> int:
@@ -213,6 +221,19 @@ def settings_converted_to_the_indian_market() -> int:
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
         if re.match(r"\[([a-z0-9_]+)\]", block) and CONVERTED_MARKER in block
+    )
+
+
+def settings_inert_with_the_crypto_path() -> int:
+    """Crypto settings nothing on this spine reads, counted apart from live drift."""
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(
+        1 for block in re.split(r"\n(?=\[)", text)
+        if re.match(r"\[([a-z0-9_]+)\]", block) and INERT_MARKER in block
     )
 
 
@@ -238,6 +259,9 @@ def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
         total += 1
         if CONVERTED_MARKER in block:
             # Already converted; its note names crypto only to say what it was.
+            continue
+        if INERT_MARKER in block:
+            # Still the crypto number, and nothing on this spine asks for it.
             continue
         if CRYPTO_PROVENANCE.search(block):
             fitted.append(named.group(1))
@@ -449,6 +473,9 @@ def main() -> int:
         print(f"     {'of those, read by code':<26} {read_by_code:>4}   these act every tick")
         print(f"     {'converted, note kept':<26} {converted:>4}   re-derived from Indian data,")
         print(f"     {'':<26}        provenance says what it was")
+        print(f"     {'inert, nothing reads it':<26} {settings_inert_with_the_crypto_path():>4}   "
+              f"still crypto, but its reader")
+        print(f"     {'':<26}        is off this spine")
         print(
             "     This overcounts by design: a note that explains why a number is no\n"
             "     longer crypto-derived still names crypto, and telling that apart from\n"

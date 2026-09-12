@@ -77,7 +77,22 @@ def test_recording_is_idempotent(refit):
     assert twice == once
 
 
-def test_no_setting_is_both_recorded_and_refitted(refit):
-    """A setting cannot be already-Indian and also need a new value."""
-    overlap = set(refit.ALREADY_INDIAN) & set(refit.REFITS)
-    assert overlap == set(), f"{overlap} appear in both lists"
+def test_no_setting_appears_in_two_states(refit):
+    """The three states are exclusive, and a setting in two of them is a bug.
+
+    Real case (2026-09-12): `whale_minimum_quote_value` was given an Indian
+    derivation and then also listed as inert, because nothing reads it. Both
+    statements were true and the pair is still wrong -- converted beats inert,
+    since a setting right for this market stays right if its reader comes back.
+    """
+    states = {
+        "already-Indian": set(refit.ALREADY_INDIAN),
+        "refitted": set(refit.REFITS),
+        "inert": set(refit.INERT_WITH_THE_CRYPTO_PATH),
+    }
+    for left in states:
+        for right in states:
+            if left >= right:
+                continue
+            overlap = states[left] & states[right]
+            assert overlap == set(), f"{overlap} is both {left} and {right}"

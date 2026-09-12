@@ -37,6 +37,7 @@ import time
 SETTINGS = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
 
 CONVERTED_MARKER = "REFITTED 2026-09-12"
+INERT_MARKER = "INERT 2026-09-12"
 MEASURED = "measurements/2026-09-12-indian-order-sizes/"
 TAPE = "this project's own captured tape for 2026-09-08"
 
@@ -192,6 +193,73 @@ ALREADY_INDIAN: dict[str, str] = {
 }
 
 
+# Settings whose only readers are parts that are off this spine, or that no code
+# reads at all. Their values are INERT: nothing acts on them, so re-deriving a
+# number for them would be inventing a figure for a decision nobody makes.
+#
+# A third state, deliberately not folded into "converted". A converted setting is
+# right for this market; an inert one is simply not being asked. Calling the
+# second the first would be the drift guard lying in the other direction -- and
+# if one of these parts ever comes back on the spine, its setting is crypto again
+# that day, which is what the note has to say.
+INERT_WITH_THE_CRYPTO_PATH: dict[str, str] = {
+    "captured_symbol_count": "symbol-catalogue-reader, off the spine since the 2026-09-02 cutover",
+    "symbol_selection_metric": "symbol-catalogue-reader, off the spine",
+    "symbol_catalogue_refresh_interval": "symbol-catalogue-reader, off the spine",
+    "stream_drain_interval": "ccxt-venue-reader and order-book-reader, both off the spine",
+    "consolidated_price_maximum_quote_age": "cross-venue-price-consolidator, off the spine",
+    "liquidation_fee_rate": "paper-liquidation-simulator, off the spine -- a bought option cannot be liquidated",
+    "book_symbols_when_thinnable": "stream-budget-planner, off the spine",
+    "liquidation_cascade_minimum_cluster_notional": "no code reads it",
+    "funding_premium_clamp": "no code reads it",
+    # whale_minimum_quote_value is read by nothing either, but it was already
+    # given an Indian derivation earlier today (REFITS), and converted beats
+    # inert: a setting that is right for this market stays right if its reader
+    # comes back. Listing it in both is the conflict the overlap test catches.
+}
+
+
+def note_insertion_point(block: str) -> int | None:
+    """Where a sentence may be appended inside this setting's note, or None.
+
+    Handles both TOML string forms. A note written with a TRIPLE-quoted string
+    is the trap: a regex for a single-quoted note matches the FIRST quote of the
+    triple
+    and reports the insertion point inside the delimiter, which produces a file
+    tomllib refuses. `book_symbols_when_thinnable` is written that way, and it
+    is what the parse-before-write guard caught on 2026-09-12 -- the guard
+    working, and the reason it exists.
+    """
+    triple = re.search(r'note\s*=\s*"""', block)
+    if triple is not None:
+        closing = block.find('"""', triple.end())
+        return closing if closing >= 0 else None
+    single = re.search(r'note\s*=\s*"(.*)"', block, re.S)
+    return single.end(1) if single is not None else None
+
+
+def record_inert(text: str, name: str, reader: str) -> tuple[str, str]:
+    """Record that nothing on this spine reads a setting. No value changes."""
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if INERT_MARKER in block:
+        return text, "already recorded"
+    at = note_insertion_point(block)
+    if at is None:
+        return text, "NO NOTE"
+    addition = (
+        f" {INERT_MARKER}: nothing on this spine reads this -- {reader}. The value is "
+        f"still the crypto one and is left alone deliberately: re-deriving a number for "
+        f"a decision nobody makes would be inventing a figure. If that part is ever put "
+        f"back on the spine this is crypto again that day, and has to be derived then."
+    )
+    block = block[:at] + addition.replace('"', "'") + block[at:]
+    return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
+
+
 def record_already_indian(text: str, name: str, proof: str) -> tuple[str, str]:
     """Append the marker to a setting already derived for India. No value changes."""
     start = text.find(f"[{name}]")
@@ -201,15 +269,15 @@ def record_already_indian(text: str, name: str, proof: str) -> tuple[str, str]:
     block = text[start:end if end > 0 else len(text)]
     if CONVERTED_MARKER in block:
         return text, "already recorded"
-    marker = re.search(r'note\s*=\s*"(.*)"', block, re.S)
-    if marker is None:
+    at = note_insertion_point(block)
+    if at is None:
         return text, "NO NOTE"
     addition = (
         f" {CONVERTED_MARKER}: already derived for the Indian market in an earlier "
         f"session; this records it so a probe can tell a converted setting from one "
         f"still fitted to crypto. Proof: {proof}. No value was changed."
     )
-    block = block[:marker.end(1)] + addition.replace('"', "'") + block[marker.end(1):]
+    block = block[:at] + addition.replace('"', "'") + block[at:]
     return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
 
 
@@ -238,10 +306,10 @@ def refit(text: str, name: str, new_value: str, note: str) -> tuple[str, str]:
     was = current.group(1).strip()
     updated = block[:current.start(1)] + new_value + block[current.end(1):]
 
-    marker = re.search(r'note\s*=\s*"(.*)"', updated, re.S)
-    if marker is not None:
-        addition = f" REFITTED 2026-09-12, was {was}. {note}"
-        updated = updated[:marker.end(1)] + addition.replace('"', "'") + updated[marker.end(1):]
+    at = note_insertion_point(updated)
+    if at is not None:
+        addition = f" {CONVERTED_MARKER}, was {was}. {note}"
+        updated = updated[:at] + addition.replace('"', "'") + updated[at:]
     return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{was} -> {new_value}"
 
 
@@ -260,6 +328,11 @@ def main() -> int:
         print("DRY RUN -- nothing will be written. Pass --apply to do it.")
 
     changed = 0
+    for name, reader in INERT_WITH_THE_CRYPTO_PATH.items():
+        text, what = record_inert(text, name, reader)
+        print(f"  {name:46} inert: {what}")
+        if what == "recorded":
+            changed += 1
     for name, proof in ALREADY_INDIAN.items():
         text, what = record_already_indian(text, name, proof)
         print(f"  {name:46} {what}")
