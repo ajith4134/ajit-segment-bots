@@ -220,6 +220,81 @@ PART_SKELETON = "SKELETON"
 PART_UNJUDGED = "NOT MEASURED"
 
 
+# What a crypto venue, symbol or feature looks like inside a learned checkpoint.
+# Wider than CRYPTO_MARKERS on purpose: a model does not name its venue, it names
+# the features it was fitted on, and `funding_rate` is a perpetual's cost of
+# carry that no NSE option has.
+CRYPTO_IN_LEARNED_STATE = re.compile(
+    r"binance|bybit|USDT|USDC|funding_rate|funding_forecast", re.IGNORECASE
+)
+
+
+def learned_state_still_fitted_to_crypto() -> tuple[int, int, list[tuple[str, int, int]]]:
+    """(checkpoints carrying crypto, checkpoints found, per-file crypto/total keys).
+
+    **The category this probe was blind to until 2026-09-12.** Sections 3 and 4
+    count source files and settings; neither can see a model's own saved state,
+    and that state is what the bot actually acts on. `bull-conviction-model`
+    restores 98,862 labels every start, of which `funding_rate` has 44,812
+    observations and is its third-largest weight, while the Indian features that
+    replaced it -- `open_interest_change`, `order_flow_imbalance` -- have 65 and
+    80. `signal-excursion-profiler` restores 1,049 symbol keys of which 746 are
+    Binance and Bybit.
+
+    A converted feature builder stops *feeding* a crypto feature. It does not
+    unlearn one: the surviving weights were co-fitted with it and the
+    normalisation moments are on crypto scales, so a model carrying that state
+    is not merely holding dead weight, it is deciding with a function fitted to
+    a market this project does not trade.
+
+    Counted per checkpoint as (crypto-named keys, total keys) where the state is
+    keyed by symbol, so a file that is being converted shows the ratio falling
+    rather than staying binary.
+    """
+    root = pathlib.Path.home() / ".local/share/ajit-segment-bots/learned"
+    if not root.is_dir():
+        return (0, 0, [])
+    rows: list[tuple[str, int, int]] = []
+    carrying = 0
+    found = 0
+    for checkpoint in sorted(root.glob("*.json")):
+        found += 1
+        try:
+            state = json.loads(checkpoint.read_text(encoding="utf-8")).get("state", {})
+        except (OSError, ValueError):
+            continue
+        keys = _symbol_keys_of(state)
+        crypto_keys = [key for key in keys if CRYPTO_IN_LEARNED_STATE.search(key)]
+        names_crypto = bool(CRYPTO_IN_LEARNED_STATE.search(json.dumps(state)))
+        if names_crypto:
+            carrying += 1
+            rows.append((checkpoint.name, len(crypto_keys), len(keys)))
+    return (carrying, found, rows)
+
+
+def _symbol_keys_of(state) -> list[str]:
+    """Every dictionary key in a learned state that looks like a per-symbol one.
+
+    Read structurally rather than by a fixed path: each part checkpoints its own
+    shape, and a probe that knew one part's layout would silently measure
+    nothing for the rest.
+    """
+    keys: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, str) and "|" in key:
+                    keys.append(key)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(state)
+    return keys
+
+
 def parts_judged_for_purpose() -> tuple[int, int, int]:
     """(serving their purpose, found to be skeletons, parts in the ledger).
 
@@ -336,7 +411,29 @@ def main() -> int:
         )
     print()
 
-    print("5. IS EACH PART ACTUALLY SERVING ITS PURPOSE?  (goal 3, 2026-09-06)")
+    print("5. WHAT THE BOT HAS ALREADY LEARNED, AND ON WHICH MARKET  (goal 2)")
+    carrying, found, rows = learned_state_still_fitted_to_crypto()
+    if found == 0:
+        print("     NOT MEASURED  no learned checkpoints on this machine yet")
+    else:
+        print(f"     {'checkpoints carrying crypto':<32} {carrying:>4} of {found}")
+        for name, crypto_keys, total_keys in rows:
+            share = f"{crypto_keys}/{total_keys} symbol keys" if total_keys else "feature names only"
+            print(f"       {name:<46} {share}")
+        print(
+            "\n     Sections 3 and 4 cannot see this. They count source files and\n"
+            "     settings; a model's own saved state is neither, and it is what the\n"
+            "     bot actually decides with. Converting a feature builder stops it\n"
+            "     FEEDING a crypto feature -- it does not unlearn one. The surviving\n"
+            "     weights were co-fitted with it and the normalisation moments are on\n"
+            "     crypto scales, so the decision function is still the crypto one.\n"
+            "     Added 2026-09-12, after a session reported the conversion as done\n"
+            "     while bull-conviction-model was restoring 44,812 funding_rate\n"
+            "     observations every start against 65 for the feature that replaced it."
+        )
+    print()
+
+    print("6. IS EACH PART ACTUALLY SERVING ITS PURPOSE?  (goal 3, 2026-09-06)")
     serving, skeleton, in_ledger = parts_judged_for_purpose()
     if in_ledger == 0:
         print("     NOT MEASURED  no ledger at docs/part-purpose-audit.md")
