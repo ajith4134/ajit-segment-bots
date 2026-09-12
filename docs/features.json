@@ -12199,6 +12199,31 @@
    "skipped_tick_effect": "corrupts"
   },
   {
+   "id": "seed-prompt-promoter",
+   "name": "Seed prompt promoter",
+   "role": "promote a purpose's first prompt version, which no score can reach",
+   "category": "llm-foundation",
+   "consumes": [
+    "prompt-version"
+   ],
+   "produces": [
+    "prompt-promotion",
+    "part-health"
+   ],
+   "switchable": true,
+   "off_releases_resources": true,
+   "states": [
+    "off",
+    "on"
+   ],
+   "origin": "claude",
+   "proposed": "2026-09-12",
+   "evidence": "docs/proposals/the-first-prompt-for-a-purpose-cannot-be-scored.md",
+   "resource_class": "compute-bound",
+   "rate_risk": "changes-the-answer",
+   "skipped_tick_effect": "delays"
+  },
+  {
    "id": "prompt-drift-monitor",
    "name": "Prompt drift monitor",
    "role": "alert when the serving version's score falls over time, before the parts reading it go quietly wrong",

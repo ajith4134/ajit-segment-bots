@@ -869,6 +869,18 @@ LIVE_SPINE = (
     "golden-case-keeper",
     "prompt-drift-monitor",
     "prompt-promotion-gate",
+    # The entrance to the promotion ring, added 2026-09-12. Until this part
+    # existed, NO LLM call had ever been made by any of the sixteen parts that
+    # publish `llm-request`: prompt-renderer had refused 906 of 906 requests for
+    # `no-active-prompt-version-for-this-purpose`, because an active version
+    # needs a promotion, a promotion needs a score, a score needs golden cases
+    # and validated output, and validated output needs an active version.
+    #
+    # After prompt-promotion-gate and never in place of it: this part promotes a
+    # purpose's FIRST version, once, on no evidence and saying so, and every
+    # version after that goes through the gate on measurement.
+    # docs/proposals/the-first-prompt-for-a-purpose-cannot-be-scored.md
+    "seed-prompt-promoter",
     "part-token-budgeter",
     # The LLM services. metered-api-caller and subscription-session-caller
     # are the two parts in this system that could spend money on a provider, and
