@@ -23,6 +23,8 @@ BLOCK_PARTS = {
         "parts.broker_adapter.broker_history_reader",
     "broker-margin-quoter":
         "parts.broker_adapter.broker_margin_quoter",
+    "broker-order-router":
+        "parts.broker_adapter.broker_order_router",
     "broker-instrument-catalogue-reader":
         "parts.broker_adapter.broker_instrument_catalogue_reader",
     "broker-market-feed-reader":

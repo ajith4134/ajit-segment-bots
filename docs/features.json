@@ -13910,6 +13910,34 @@
    "resource_class": "bandwidth-bound",
    "rate_risk": "changes-the-answer",
    "skipped_tick_effect": "delays"
+  },
+  {
+   "id": "broker-order-router",
+   "name": "Broker order router",
+   "role": "place each live order with the broker",
+   "category": "broker-adapter",
+   "consumes": [
+    "order-request",
+    "broker-token-standing",
+    "money-mode",
+    "symbol-universe"
+   ],
+   "produces": [
+    "raw-venue-order-status",
+    "part-health"
+   ],
+   "switchable": true,
+   "off_releases_resources": true,
+   "states": [
+    "off",
+    "on"
+   ],
+   "origin": "proposed",
+   "proposed": "2026-09-12",
+   "evidence": "docs/proposals/the-broker-order-router.md",
+   "resource_class": "io-bound",
+   "rate_risk": "changes-the-answer",
+   "skipped_tick_effect": "delays"
   }
  ],
  "control_plane": {

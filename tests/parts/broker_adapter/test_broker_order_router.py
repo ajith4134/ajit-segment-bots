@@ -1,0 +1,308 @@
+"""broker-order-router: the part that can spend real money on NSE.
+
+**No test here can reach a broker.** The transport is injected everywhere, and
+one test asserts that the part's own default transport is never constructed by
+accident. A test that could place an order is a test that might.
+
+The five refusals are asserted one at a time, each with every OTHER gate open,
+so none of them can be passing because a different one happened to fire first.
+That matters most for the two live-money gates: they read different producers on
+purpose -- `destination` from order-destination-router, `money-mode` from
+money-mode-reader -- and the whole point is that either alone stops an order.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import pathlib
+import types
+
+import pytest
+
+from parts.broker_adapter.broker_order_router import (
+    BROKER_REFUSED, CLIENT_ORDER_ID_LENGTH, FAILED, PART_DECLARATION, PLACED,
+    REFUSED_DUPLICATE, REFUSED_NOT_LIVE_DESTINATION, REFUSED_NO_INSTRUMENT_KEY,
+    REFUSED_NO_TOKEN, REFUSED_SEGMENT_IS_ON_PAPER, BrokerOrderRouter, describe_router,
+)
+from runtime.brokers.upstox import UpstoxAdapter
+from runtime.part_declaration import load_declaration_from_blueprint
+from runtime.trading_types import BUY, LIVE_VENUE, SELL
+
+SEGMENT = "index-options"
+MASTER = pathlib.Path.home() / ".local/share/ajit-segment-bots/instrument-master/complete.json.gz"
+
+
+@pytest.fixture(scope="module")
+def a_real_contract():
+    """A real NIFTY option out of the broker's own instrument master (RL-063).
+
+    The instrument key's shape is the whole reason gate 4 exists, so it is taken
+    from the master rather than written here.
+    """
+    assert MASTER.exists(), f"{MASTER} is missing; this runs on the real master"
+    for row in json.load(gzip.open(MASTER)):
+        if row.get("instrument_type") == "CE" and row.get("underlying_symbol") == "NIFTY":
+            return row
+    raise AssertionError("no NIFTY call in the master")
+
+
+def a_token(valid=True):
+    return types.SimpleNamespace(
+        broker_id="upstox", access_token="a-token", is_still_valid=lambda: valid
+    )
+
+
+def an_order(
+    symbol="NIFTY 24550 CE 08 SEP 26", side=BUY, quantity=75, destination=LIVE_VENUE,
+    segment=SEGMENT, order_type="market", limit_price=0.0, intent_id="an-intent",
+):
+    return types.SimpleNamespace(
+        venue_id="upstox", symbol=symbol, side=side, quantity=quantity,
+        destination=destination, segment=segment, order_type=order_type,
+        limit_price=limit_price, intent_id=intent_id,
+    )
+
+
+def a_router(
+    place=None, mode="live", instrument_key="NSE_FO|51420", token=a_token,
+    product="D", validity="DAY",
+):
+    sent = []
+
+    def record(url, payload, access_token):
+        sent.append({"url": url, "payload": payload, "token": access_token})
+        return {"status": "success", "data": {"order_id": "241212000000001"}}
+
+    router = BrokerOrderRouter(
+        adapter=UpstoxAdapter(),
+        place=place if place is not None else record,
+        read_money_mode=lambda segment: (
+            None if mode is None else types.SimpleNamespace(segment=segment, mode=mode)
+        ),
+        read_instrument_key=lambda symbol: instrument_key,
+        read_token=token,
+        product=product,
+        validity=validity,
+    )
+    router.sent = sent
+    return router
+
+
+# ---- the declaration ---------------------------------------------------------
+
+def test_the_built_declaration_equals_the_blueprint():
+    assert PART_DECLARATION == load_declaration_from_blueprint("broker-order-router")
+
+
+def test_the_part_does_not_import_another_part():
+    """T-4: a part names data, never another part."""
+    source = pathlib.Path(
+        "parts/broker_adapter/broker_order_router.py"
+    ).read_text(encoding="utf-8")
+    for line in source.splitlines():
+        assert not line.startswith(("from parts.", "import parts.")), line
+
+
+# ---- gate 1: the paper book owns anything not addressed to the live venue -----
+
+def test_an_order_not_addressed_to_the_live_venue_is_refused():
+    router = a_router()
+    status = router.route(an_order(destination="paper-book"))
+
+    assert status.outcome == REFUSED_NOT_LIVE_DESTINATION
+    assert router.sent == [], "nothing may reach the broker"
+    assert router.standing.refused_not_live_destination == 1
+
+
+# ---- gate 2: the segment's money mode, from a different producer -------------
+
+def test_a_live_destination_is_still_refused_when_the_segment_is_on_paper():
+    """The gate that exists because one flag is one bug away from real money.
+
+    Every other gate is open here: the destination IS the live venue, the token
+    is valid, the instrument key resolves. Only the mode says paper.
+    """
+    router = a_router(mode="paper")
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_SEGMENT_IS_ON_PAPER
+    assert router.sent == []
+    assert "not 'live'" in status.reason
+
+
+def test_a_segment_with_no_money_mode_at_all_is_refused():
+    """An age-bounded level that stopped arriving must stop authorising orders."""
+    router = a_router(mode=None)
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_SEGMENT_IS_ON_PAPER
+    assert router.sent == []
+
+
+def test_a_mode_that_is_neither_paper_nor_live_is_not_treated_as_live():
+    router = a_router(mode="LIVE")  # wrong case is not the live mode
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_SEGMENT_IS_ON_PAPER
+    assert router.sent == []
+
+
+# ---- gate 3: the token -------------------------------------------------------
+
+def test_an_expired_token_refuses_the_order():
+    router = a_router(token=lambda: a_token(valid=False))
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_NO_TOKEN
+    assert router.sent == []
+
+
+def test_no_token_at_all_refuses_the_order():
+    router = a_router(token=lambda: None)
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_NO_TOKEN
+    assert router.sent == []
+
+
+# ---- gate 4: the instrument key ----------------------------------------------
+
+def test_a_symbol_with_no_instrument_key_is_refused():
+    """Sending a trading symbol where a token is expected is not one bad order."""
+    router = a_router(instrument_key=None)
+    status = router.route(an_order())
+
+    assert status.outcome == REFUSED_NO_INSTRUMENT_KEY
+    assert router.sent == []
+
+
+# ---- gate 5: idempotency -----------------------------------------------------
+
+def test_the_same_order_twice_reaches_the_broker_once():
+    router = a_router()
+    first = router.route(an_order())
+    second = router.route(an_order())
+
+    assert first.outcome == PLACED
+    assert second.outcome == REFUSED_DUPLICATE
+    assert len(router.sent) == 1, "a retry is the same decision, not a second position"
+    assert first.client_order_id == second.client_order_id
+
+
+def test_two_different_decisions_asking_for_the_same_order_are_not_one():
+    router = a_router()
+    first = router.route(an_order(intent_id="decision-one"))
+    second = router.route(an_order(intent_id="decision-two"))
+
+    assert first.outcome == PLACED and second.outcome == PLACED
+    assert first.client_order_id != second.client_order_id
+    assert len(router.sent) == 2
+
+
+def test_a_timeout_still_marks_the_id_as_sent():
+    """The dangerous case: the order may or may not have arrived.
+
+    Remembering the id BEFORE the call is what makes a retry refuse rather than
+    open a second position.
+    """
+    def times_out(url, payload, token):
+        raise TimeoutError("no response")
+
+    router = a_router(place=times_out)
+    first = router.route(an_order())
+    assert first.outcome == FAILED
+
+    router._place = lambda url, payload, token: {
+        "status": "success", "data": {"order_id": "x"}
+    }
+    second = router.route(an_order())
+    assert second.outcome == REFUSED_DUPLICATE
+
+
+# ---- what the broker actually receives ---------------------------------------
+
+def test_the_payload_is_what_upstox_place_order_takes(a_real_contract):
+    router = a_router(instrument_key=a_real_contract["instrument_key"])
+    status = router.route(an_order(quantity=a_real_contract["lot_size"]))
+
+    assert status.outcome == PLACED
+    payload = router.sent[0]["payload"]
+    # Upstox's own body names this instrument_token, not instrument_key.
+    assert payload["instrument_token"] == a_real_contract["instrument_key"]
+    assert payload["quantity"] == a_real_contract["lot_size"]
+    assert payload["transaction_type"] == "BUY"
+    assert payload["order_type"] == "MARKET"
+    assert payload["product"] == "D"
+    assert payload["validity"] == "DAY"
+    assert payload["tag"] == status.client_order_id
+    assert len(status.client_order_id) == CLIENT_ORDER_ID_LENGTH
+    assert router.sent[0]["url"] == UpstoxAdapter().order_endpoint_url()
+    assert router.sent[0]["token"] == "a-token"
+
+
+def test_a_sell_becomes_upstox_s_own_word_for_one():
+    router = a_router()
+    router.route(an_order(side=SELL))
+    assert router.sent[0]["payload"]["transaction_type"] == "SELL"
+
+
+def test_a_limit_order_carries_its_price_and_a_market_order_does_not():
+    router = a_router()
+    router.route(an_order(order_type="limit", limit_price=12.5, intent_id="a"))
+    router.route(an_order(order_type="market", limit_price=12.5, intent_id="b"))
+
+    limit, market = router.sent[0]["payload"], router.sent[1]["payload"]
+    assert limit["order_type"] == "LIMIT" and limit["price"] == 12.5
+    assert market["order_type"] == "MARKET" and market["price"] == 0.0
+
+
+def test_the_product_and_validity_come_from_settings_not_from_the_part():
+    """RL-061: a future intraday segment says 'I' in settings, not here."""
+    router = a_router(product="I", validity="IOC")
+    router.route(an_order())
+
+    assert router.sent[0]["payload"]["product"] == "I"
+    assert router.sent[0]["payload"]["validity"] == "IOC"
+
+
+# ---- what the broker says back -----------------------------------------------
+
+def test_a_refusal_from_the_broker_is_reported_not_raised():
+    router = a_router(place=lambda url, payload, token: {"status": "error", "errors": ["no"]})
+    status = router.route(an_order())
+
+    assert status.outcome == BROKER_REFUSED
+    assert status.venue_response == {"status": "error", "errors": ["no"]}
+    assert router.standing.broker_refused == 1
+
+
+def test_every_refusal_is_published_rather_than_dropped():
+    """An order that vanishes silently is the shape this project keeps hitting."""
+    router = a_router(mode="paper")
+    statuses = [
+        router.route(an_order(destination="paper-book")),
+        router.route(an_order()),
+    ]
+    assert all(s is not None for s in statuses)
+    assert all(s.client_order_id and s.reason for s in statuses)
+
+
+def test_the_standing_names_what_this_part_does_not_do():
+    """Cancel, reprice and poll are absent by design, and say so."""
+    standing = describe_router(a_router())
+    assert standing["cancels_orders"] is False
+    assert standing["reprices_orders"] is False
+    assert standing["polls_for_status"] is False
+
+
+# ---- it must not be startable by accident ------------------------------------
+
+def test_the_part_is_not_started_by_the_live_spine():
+    """A part that can spend money is started deliberately, never inherited.
+
+    Both segments are on paper, so a router that can reach Upstox's place-order
+    endpoint has nothing legitimate to do today.
+    """
+    spine = pathlib.Path("operate/run_live_spine.py").read_text(encoding="utf-8")
+    assert '"broker-order-router"' not in spine
