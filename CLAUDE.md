@@ -1,5 +1,56 @@
 # ajit-segment-bots
 
+## THE CRYPTO SETTINGS ARE DONE — 2026-09-12
+
+`python3 dashboard/measure_objectives.py` is the drift guard and **CLAUDE.md has
+always said to run it before deciding what to work on.** It went unrun for
+sessions while the number sat at 106/107; running it is the first thing now.
+
+    settings fitted to crypto      81 -> 7   (3 measured, inconclusive)
+    converted, provenance kept      9 -> 45
+    inert, reader is off            0 -> 10
+    needs an Indian mechanism       0 -> 8
+    market-independent              0 -> 20
+    learned checkpoints          5 of 7 -> 0 of 3
+    parts/ files naming crypto        13 -> 4
+
+**`operate/refit_settings_to_the_indian_market.py` holds every decision**, one
+entry per setting with its derivation, and is idempotent. It parses its own
+output with tomllib before writing and refuses otherwise -- added because a
+provenance note took every part down once and nearly did twice.
+
+Six states, and only the first is work outstanding. The others exist because
+"nothing to do" has to be a stated answer or it reads as "nobody looked"
+(Rule 8): **converted** (re-derived, note says what it was), **inert** (reader is
+off the spine -- re-deriving for a decision nobody makes is inventing a figure),
+**needs a mechanism** (a bought option pays theta not funding and cannot be
+liquidated -- rescaling would be fiction that looks derived),
+**market-independent** (a bus ceiling is a bus ceiling), and **measured but
+inconclusive**, which stays counted as outstanding because recording an attempt
+is not settling one.
+
+The three numbers that were actively wrong, each measured on this project's own
+tape for 2026-09-08:
+
+| | was | now | why |
+|---|---|---|---|
+| `taker_fee_rate` | 0.00055 | 0.004266 | Bybit's taker fee charged on every Indian trade, **7.8x** understated, feeding position-sizer, 628,233 cost estimates and the tailgater's break-even |
+| `risk_maximum_stop_fraction` | 0.05 | 0.33 | an NSE option's median session range is **12.89%**, so every stop sat inside ordinary noise |
+| `feed_gap_threshold` | 60s | 150s | an Indian option prints **0.7 times a minute** against BTCUSDT's four a second; ordinary silence reaches 147.8s at p95 |
+
+Correcting the fee made three neighbours wrong -- their notes said "anchored to
+the taker fee" -- including `liquidity_deep_cost_fraction`, where the "deep"
+grade became unreachable and every Indian symbol read thinner than it is. Expect
+that shape: fixing one number here often breaks its neighbour.
+
+The measurements are in `measurements/2026-09-12-indian-order-sizes/`,
+`-indian-feed-cadence/`, `-indian-return-distribution/` and
+`-indian-pair-behaviour/`.
+
+**The 7 left are named in the guard's output**, and four need measurements this
+session could not make: candle-boundary jumps, an implied-vs-realised volatility
+gap, a price-drift-by-age curve, and a spread half-life on time-spaced bars.
+
 ## SCOPE CHANGE — 2026-09-12, read before any segment work
 
 **Two segments, not three.** The operator: *"Lets focus only on option index and
