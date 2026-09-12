@@ -119,3 +119,67 @@ def test_the_learning_replay_says_which_part_it_refuses_to_run(replay):
     inventing them would call a fabrication a graduation."""
     assert "edge-graduation-gate" in replay.LearningReplay.__doc__
     assert "deliberately not run" in replay.LearningReplay.__doc__
+
+
+# ---- derived segment membership (2026-09-12) ---------------------------------
+#
+# Both option segments stopped stating their underlyings that day and started
+# deriving them from the broker's master. `segment_that_trades` answers None for
+# a derived segment it is given no membership for -- honestly, since it holds no
+# master -- so the replay has to supply one per derived segment or it finds that
+# nobody owns anything. It did exactly that for one run: "Segments that opened
+# AND closed a trade: 0 of 2", with every instrument counted as unowned and no
+# error anywhere. That is the silent-wrong-answer shape this project keeps
+# finding, and it is what these guard.
+
+def test_every_derived_segment_gets_a_membership_set(replay):
+    """A derived segment absent from this map owns nothing, silently."""
+    master = replay.instruments_by_key()
+    membership = replay.derived_membership_for(master)
+
+    assert {"index-options", "stock-options", "cash-equity-intraday"} <= set(membership)
+    for segment, symbols in membership.items():
+        assert symbols, f"{segment} derived an empty universe, which owns nothing"
+
+
+def test_the_derived_option_universes_match_the_bridges_own_rules(replay):
+    """Reused from broker-symbol-universe-bridge, never restated (T-6).
+
+    A replay that disagreed with the live spine about who owns an instrument is
+    a replay that cannot verify the live spine.
+    """
+    master = replay.instruments_by_key()
+    membership = replay.derived_membership_for(master)
+
+    indices = membership["index-options"]
+    stocks = membership["stock-options"]
+
+    # Measured on the real master 2026-09-12.
+    assert indices == {
+        "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+        "NIFTYFPI", "FOCIT", "SENSEX", "BANKEX", "SENSEX50",
+    }
+    assert len(stocks) > 150, "the F&O stock list is 210 names, not a handful"
+    assert {"RELIANCE", "HDFCBANK", "MARUTI", "TATASTEEL"} <= stocks
+    assert not indices & stocks, "no underlying may be owned by both segments"
+
+
+def test_an_underlying_with_no_option_written_on_it_is_owned_by_neither(replay):
+    """The half of each rule that needs the whole master.
+
+    2,655 ordinary shares are listed and 210 carry options; admitting on "is an
+    ordinary share" alone would hand 2,445 chainless names to an options segment.
+    """
+    master = replay.instruments_by_key()
+    membership = replay.derived_membership_for(master)
+
+    owned_by_options = membership["index-options"] | membership["stock-options"]
+    cash = membership["cash-equity-intraday"]
+
+    assert not owned_by_options & cash, (
+        "the option rules and the cash rule are complements; an overlap is "
+        "double exposure nothing bounds"
+    )
+    assert len(cash) > len(owned_by_options), (
+        "far more shares carry no derivative than carry one"
+    )

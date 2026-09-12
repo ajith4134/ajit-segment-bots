@@ -78,6 +78,9 @@ from parts.paper_live_trading.stop_order_manager import (
 )
 from parts.portfolio_state.cost_basis_tracker import CostBasisTracker
 from parts.portfolio_state.fill_reconciler import FillReconciler
+from parts.learning_loop.label_builder import (
+    ClosedTradeRecord, ExcursionRecord, LabelBuilder,
+)
 from parts.portfolio_state.peak_excursion_tracker import PeakExcursionTracker
 from parts.portfolio_state.position_close_detector import PositionCloseDetector
 from parts.risk_capital_allocation.exit_order_chainer import ExitOrderChainer
@@ -249,6 +252,52 @@ def cash_equity_eligible_symbols(master: dict) -> frozenset[str]:
         for key, row in master.items()
         if key not in derivative_underlying_keys and admits(types.SimpleNamespace(**row))
     )
+
+
+def option_underlying_symbols(master: dict, rule) -> frozenset[str]:
+    """Every underlying in the real master that `rule` admits AND an option names.
+
+    The second half is what makes it a universe rather than a catalogue: 2,655
+    ordinary shares are listed and 210 carry options; 216 index listings exist
+    and 10 do. `IndexWithAnOption` and `StockWithAnOption` are reused from
+    `broker-symbol-universe-bridge` rather than restated (T-6), so a replay
+    cannot disagree with the live spine about who owns an instrument.
+
+    Needed from 2026-09-12, when both option segments stopped stating their
+    underlyings and started deriving them. `segment_that_trades` answers None
+    for a derived segment it is given no membership for -- honestly, since it
+    has no master -- so without this the replay found that no segment owned
+    anything and reported "0 of 2 segments traded", which is the silent-wrong-
+    answer shape this project keeps finding.
+    """
+    import types
+
+    derivative_underlying_keys = {
+        row["underlying_key"] for row in master.values() if row.get("underlying_key")
+    }
+    return frozenset(
+        row["trading_symbol"]
+        for key, row in master.items()
+        if key in derivative_underlying_keys and rule.admits(types.SimpleNamespace(**row))
+    )
+
+
+def derived_membership_for(master: dict) -> dict:
+    """Which underlyings each derived-universe segment owns, this day's master.
+
+    One entry per segment whose `segment_universe_selection` is a rule rather
+    than a list. A segment stating its own symbols is absent and needs no entry:
+    `segment_that_trades` reads those straight from its settings file.
+    """
+    from parts.market_data_feed.broker_symbol_universe_bridge import (
+        EquityWithoutADerivative, IndexWithAnOption, StockWithAnOption,
+    )
+
+    return {
+        "cash-equity-intraday": cash_equity_eligible_symbols(master),
+        "index-options": option_underlying_symbols(master, IndexWithAnOption()),
+        "stock-options": option_underlying_symbols(master, StockWithAnOption()),
+    }
 
 
 def the_market_is_open_now() -> bool | None:
@@ -452,7 +501,7 @@ def contracts_for_each_segment(day: str, per_segment: int, minimum_prints: int) 
 
     context = SettingsContext()
     master = instruments_by_key()
-    derived_membership = {"cash-equity-intraday": cash_equity_eligible_symbols(master)}
+    derived_membership = derived_membership_for(master)
     wanted = {segment: [] for segment in built_segments(context)}
     skipped = collections.Counter()
 
@@ -829,6 +878,96 @@ class LearningReplay:
         )
         self.episodes = 0
         self.refused = collections.Counter()
+        # label-builder, added 2026-09-12. It is the part that turns a closed
+        # trade into what a model learns from, and it had never seen one: it
+        # joined the live spine at 09:56 on 2026-09-08, after the last trade of
+        # that session closed, so its standing has read `trades_seen 0` ever
+        # since. `training-label` is consumed by both conviction models, both
+        # setup-weight learners, three detectors and the retrain scheduler -- so
+        # the wire from a realised trade back to every model exists and has
+        # simply never carried anything.
+        #
+        # A replay can drive it honestly, and is the only thing that can while
+        # the market is shut. All three of its inputs are real here: the
+        # excursion is the best and worst print while the position was actually
+        # open, the cost is this trade's own Upstox charge stack over its own
+        # notional, and the stop distance is the one the replay really rested --
+        # `stop_multiple` times the contract's own typical move. That last one
+        # matters most: without a stop distance `THE_SIZE_WAS_RIGHT` is not
+        # judgeable at all.
+        self.labeller = LabelBuilder(
+            favourable_threshold=number(settings, "label_favourable_threshold"),
+            adverse_entry_threshold=number(settings, "label_adverse_entry_threshold"),
+            exit_capture_threshold=number(settings, "label_exit_capture_threshold"),
+            size_survival_multiple=number(settings, "label_size_survival_multiple"),
+        )
+        self.label_horizon_seconds = (
+            number(settings, "spread_reversion_horizon")
+            * number(settings, "bull_exit_conviction_horizon_multiple")
+        )
+        self.labels_built = 0
+        self.labels_refused = collections.Counter()
+        self.label_components = collections.Counter()
+
+    def label(self, trade_id: str, closed_trade, held_prints, stop_price) -> dict | None:
+        """`label-builder` on one finished round trip, from this replay's own facts.
+
+        Returns what the label said per component, or None with the reason it
+        could not be built -- which is itself a real answer and is counted.
+        """
+        entry = closed_trade.entry_price
+        if not entry or not held_prints:
+            self.labels_refused["no entry price or no print while it was held"] += 1
+            return None
+
+        prices = [price for _at_ns, price in held_prints]
+        excursion = ExcursionRecord(
+            peak_favourable_fraction=max(0.0, (max(prices) - entry) / entry),
+            peak_adverse_fraction=max(0.0, (entry - min(prices)) / entry),
+            # The replay walks prints in order and stops at the first exit, so
+            # it knows the sequence but not which print was the peak in time.
+            # Left at zero rather than guessed: nothing in the label reads them.
+            seconds_to_peak_favourable=0.0,
+            seconds_to_peak_adverse=0.0,
+            observations=len(prices),
+        )
+        self.labeller.observe_excursion(
+            VENUE, closed_trade.symbol, closed_trade.opened_at_ns, excursion,
+        )
+        # This trade's own round trip, from the charge stack that really priced
+        # its fills -- not a rate from settings. A setup that is right only
+        # before fees is not right.
+        notional = abs(closed_trade.quantity) * entry
+        if notional <= 0:
+            self.labels_refused["the trade had no notional to charge costs against"] += 1
+            return None
+        self.labeller.observe_cost_estimate(
+            VENUE, closed_trade.symbol, closed_trade.fees_paid / notional,
+        )
+
+        record = ClosedTradeRecord(
+            venue_id=VENUE, symbol=closed_trade.symbol,
+            detector=THE_REPLAY_HAS_NO_DETECTOR, regime=THE_REPLAY_HAS_NO_REGIME,
+            side=closed_trade.direction,
+            entry_price=entry, exit_price=closed_trade.exit_price,
+            quantity=closed_trade.quantity,
+            opened_at_ns=closed_trade.opened_at_ns,
+            closed_at_ns=closed_trade.closed_at_ns,
+            horizon_seconds=self.label_horizon_seconds,
+            features={},
+            # The stop this replay really rested, as a fraction of the entry.
+            stop_distance_fraction=(
+                abs(entry - stop_price) / entry if stop_price and entry else 0.0
+            ),
+        )
+        built, reason = self.labeller.build(record)
+        if built is None:
+            self.labels_refused[reason] += 1
+            return None
+        self.labels_built += 1
+        for component, value in built.labels.items():
+            self.label_components[f"{component}:{'true' if value else 'false'}"] += 1
+        return dict(built.labels)
 
     def decode(self, trade_id: str, closed_trade, fills, prints, entry_at_ns) -> dict:
         """One closed trade, all the way to an episode and a scorecard entry."""
@@ -1003,6 +1142,13 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         decoded = learning.decode(
             trade_id=f"{day}:{name}", closed_trade=closed, fills=chain.fills,
             prints=prints, entry_at_ns=entry_at_ns,
+        )
+        # Only the prints the position was actually open across. The whole
+        # captured series would include prices after the exit, and an excursion
+        # measured over those is not one this trade ever lived through.
+        decoded["label"] = learning.label(
+            trade_id=f"{day}:{name}", closed_trade=closed,
+            held_prints=prints[1:walked + 1], stop_price=stop_price,
         )
     # Which of Upstox's two charge stacks actually priced these fills, carried
     # out with the result rather than trusted. A cash-equity trade priced by the
@@ -1190,12 +1336,30 @@ def main() -> int:
         print("    an episode was refused for a missing piece:")
         for missing, count in learning.refused.most_common():
             print(f"       {count:>4}  {missing} had not landed")
+    # label-builder: the chain from a realised trade back to every model that
+    # trains on `training-label` -- both conviction models, both setup-weight
+    # learners, three detectors and the retrain scheduler. The wire has existed
+    # all along and had never carried a single label (2026-09-12).
+    print(f"    training-label {learning.labels_built} built of {len(decoded)} closed trade(s)")
+    for component, count in sorted(learning.label_components.items()):
+        print(f"       {count:>4}  {component}")
+    if learning.labels_refused:
+        for reason, count in learning.labels_refused.most_common():
+            print(f"       {count:>4}  NOT labelled: {reason}")
+    if learning.labeller.standing.size_not_judgeable:
+        print(f"       {learning.labeller.standing.size_not_judgeable:>4}  "
+              f"the-size-was-right could not be judged (no stop distance)")
+
     card = learning.scorekeeper.scorecard_for("bull").describe()
     for regime, record in card["by_regime"].items():
         print(f"    bot-scorecard  bull/{regime}: "
               f"{record['trades']} trade(s), {record['wins']} win(s)")
     print("    REAL here: the fills, the attribution across them, the entry-quality")
-    print("      window of captured prints, and the contract's own measured volatility.")
+    print("      window of captured prints, the contract's own measured volatility,")
+    print("      and all three of the label's inputs -- the excursion is the best and")
+    print("      worst print while the position was open, the cost is this trade's own")
+    print("      charge stack over its own notional, and the stop distance is the one")
+    print("      the replay really rested.")
     print("    STATED: the detector, the regime and the opinion's probability -- the")
     print(f"      replay opens at the first print, so no detector fired ({THE_REPLAY_HAS_NO_DETECTOR}).")
     print("    NOT RUN: edge-graduation-gate. It needs a decision quality, a refutation")
