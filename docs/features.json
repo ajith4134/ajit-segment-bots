@@ -13052,7 +13052,8 @@
    "role": "read whatever news a broker's own API carries",
    "category": "stock-market-news-data",
    "consumes": [
-    "broker-instrument-listing"
+    "broker-instrument-listing",
+    "broker-token-standing"
    ],
    "produces": [
     "raw-news-item",

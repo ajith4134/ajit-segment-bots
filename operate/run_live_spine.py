@@ -236,6 +236,18 @@ LIVE_SPINE = (
     "instrument-restriction-state",
     "corporate-action-reader",
     "corporate-action-adjuster",
+    # The head of the news feature, started 2026-09-12. Until that day
+    # `stock-market-news-data` had 29 parts declared, 5 running, and **nothing
+    # produced `raw-news-item` at all** -- so the fourteen parts below a source
+    # (the deduplicator, the structurer, the symbol resolver, the sentiment
+    # model, the impact forecaster) were starved at the top of the chain and
+    # building any of them first would have measured nothing.
+    #
+    # After broker-instrument-catalogue-reader, whose listings say what there is
+    # to ask news about, and after broker-token-refresh-scheduler, because
+    # Upstox's News API is authenticated. Read-only: it fetches and publishes
+    # what the broker said, and reads nothing it fetches.
+    "broker-news-reader",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and

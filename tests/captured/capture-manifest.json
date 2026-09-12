@@ -472,6 +472,15 @@
    "peak_excursions": 89,
    "net_of_the_closed_trades_inr": -1269386,
    "why_it_matters": "holds all seven NIFTY weekly trades of 2026-09-08 that are 91.4% of every rupee this project has lost"
+  },
+  {
+   "path": "upstox/2026-09-12-news-for-two-underlyings.json",
+   "venue": "upstox",
+   "source": "https://api.upstox.com/v2/news?category=instrument_keys&instrument_keys=NSE_EQ|INE002A01018,NSE_EQ|INE040A01034",
+   "captured_on": "2026-09-12",
+   "how": "one authenticated REST call with this project's own broker token, kept verbatim. RELIANCE and HDFCBANK by their real instrument keys from the instrument master. The response carries no credential -- the request does, the body does not, and that is asserted before this file is written",
+   "records": 17,
+   "why_it_matters": "broker-news-reader is the head of the whole 29-part news feature, and nothing produced raw-news-item at all. Its fields are Upstox's own: heading, summary, thumbnail, article_link, published_time (epoch MILLISECONDS)"
   }
  ]
 }
