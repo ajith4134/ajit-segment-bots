@@ -268,7 +268,18 @@ def start_part(context) -> int:
     converter = PaperCurrencyConverter(
         journal=journal, maximum_rate_age_seconds=context.number("paper_currency_rate_maximum_age")
     )
-    quote = "USDT"
+    # The currency this desk settles in, from the operator's own setting rather
+    # than a literal (2026-09-12). It was "USDT" -- a dollar stablecoin that
+    # settles crypto perpetuals -- while `settlement_currency` has read "INR"
+    # since the pivot, so this part was scanning the NSE tape for symbols ending
+    # in a currency no Indian instrument is quoted in.
+    #
+    # On a single-currency market this part correctly finds nothing to do: the
+    # main account is in INR, the market is in INR, and `main.currency != quote`
+    # is false, so no conversion is requested. Idle here is the right answer,
+    # not a fault -- and it is a different idle from scanning for the wrong
+    # suffix forever, which is what it was doing.
+    quote = str(context.setting("settlement_currency").value)
 
     def read_rates_and_requests():
         rates = []

@@ -49,6 +49,7 @@ from runtime.price_frames import levels_in
 from runtime.online_learner import RunningMoments
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.underlying_of_a_trading_symbol import underlying_of_a_trading_symbol
 
 PART_ID = "cross-segment-signal-bridge"
 
@@ -370,7 +371,11 @@ def start_part(context) -> int:
     oi_aggregator = UnderlyingOpenInterestAggregator()
 
     def underlying_of(symbol: str) -> str:
-        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+        # Settlement-suffix only until 2026-09-12, which never resolved an NSE
+        # option: "HINDUNILVR 1980 PE 29 SEP 26" ends in no settlement currency,
+        # so the whole contract name came back and the option was never joined
+        # to the share it is written on.
+        return underlying_of_a_trading_symbol(symbol, settlement)
 
     def read_observations(_bridge):
         for listing in listings.payloads():

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.underlying_of_a_trading_symbol import underlying_of_a_trading_symbol
 
 PART_ID = "cross-segment-exposure-watch"
 
@@ -382,19 +383,9 @@ def start_part(context) -> int:
     )
 
     def underlying_of(symbol: str) -> str:
-        # An option's trading symbol leads with the share or index it is a claim
-        # on ("HINDUNILVR 1980 PE 29 SEP 26"), so the first token is the
-        # underlying and is the identity for a share, an index or a perpetual
-        # that has no space in its name.
-        head = symbol.split(" ", 1)[0]
-        if head != symbol:
-            return head
-        # A settlement-suffixed perpetual (BTCUSDT), the crypto rule this part was
-        # written against. Kept because it is still right for that shape and
-        # costs nothing where the symbol has no suffix.
-        if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement):
-            return symbol[: -len(settlement)]
-        return symbol
+        # This part had the only correct copy of the rule; it now lives in
+        # runtime/ so the other three cannot drift from it again (2026-09-12).
+        return underlying_of_a_trading_symbol(symbol, settlement)
 
     def read_positions(_watch) -> None:
         for position in positions.payloads():

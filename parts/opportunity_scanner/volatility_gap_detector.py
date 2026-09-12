@@ -31,6 +31,7 @@ from runtime.market_signal import (
 )
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.underlying_of_a_trading_symbol import underlying_of_a_trading_symbol
 
 PART_ID = "volatility-gap-detector"
 
@@ -258,7 +259,20 @@ def start_part(context) -> int:
                 continue
             detector.observe_forecast(forecast.venue_id, forecast.symbol, forecast.expected_volatility)
             touched.add((forecast.venue_id, forecast.symbol))
-            symbols_of.setdefault((forecast.venue_id, forecast.symbol.rstrip("USDT")), set()).add(forecast.symbol)
+            # The underlying this forecast's symbol is a claim on, so the
+            # implied-vol surface below -- which is keyed by the underlying --
+            # finds the symbols it should be recorded against.
+            #
+            # This was `forecast.symbol.rstrip("USDT")` until 2026-09-12.
+            # `rstrip` is not "remove this suffix": it strips every trailing
+            # character in the set, so it removed any run of U, S, D and T. It
+            # gave "BTC" for "BTCUSDT" and mangled 39 of the 210 NSE F&O stock
+            # underlyings -- LT to L, HAVELLS to HAVELL, ADANIENT to ADANIEN.
+            # A mangled key does not raise, it just never matches, so those
+            # names silently had no implied volatility recorded at all.
+            symbols_of.setdefault(
+                (forecast.venue_id, underlying_of_a_trading_symbol(forecast.symbol)), set()
+            ).add(forecast.symbol)
         for surface in surfaces.payloads():
             at_the_money = surface.at_the_money if isinstance(surface.at_the_money, dict) else {}
             nearest = min(at_the_money.items(), default=(None, None))[1] if at_the_money else None

@@ -38,6 +38,47 @@ ORDERS_PATH = TRADING_STATE_DIRECTORY / "orders.jsonl"
 FILLS_PATH = TRADING_STATE_DIRECTORY / "fills.jsonl"
 POSITIONS_PATH = TRADING_STATE_DIRECTORY / "positions.json"
 
+# Where a realised result really lives (2026-09-12). `position-recorder` writes a
+# hash-chained JSONL -- the `.sqlite` extension is historical and wrong -- and a
+# `closed-trade` record in it is one finished round trip with its own fees.
+#
+# **The three paths above are a crypto-era location nothing has written since the
+# pivot**, and `TRADING_STATE_DIRECTORY` does not exist on this machine at all.
+# `probe_realised_result` therefore reported NOT BUILT with the detail "no fills
+# -- nothing has been bought or sold", on a project with 910 closed trades and a
+# realised result of about -1,249,500 rupees. Asserting a fact about trading from
+# the absence of a file that stopped being written is the exact inversion of
+# Rule 8: absence of evidence rendered as evidence of absence.
+CLOSED_TRADE_JOURNAL = (
+    pathlib.Path.home() / ".local" / "share" / "ajit-segment-bots"
+    / "journal.position-recorder.sqlite"
+)
+# How much of the journal's tail to read. It only grows, and a probe that streams
+# a 4 GB rotated journal is a probe nobody runs -- `build_trade_board.py` does
+# exactly that and takes ten minutes. The tile says what it counted, so a partial
+# read is honest rather than silently partial.
+CLOSED_TRADE_TAIL_BYTES = 8 * 1024 * 1024
+
+# The currency a realised result is stated in. Read from the operator's own
+# settings where they are readable, because a probe that hardcodes one states a
+# result in a currency nobody chose -- this said "USDT" until 2026-09-12, on a
+# desk whose `settlement_currency` has read "INR" since the pivot.
+def _settlement_currency() -> str:
+    try:
+        from runtime.settings_reader import load_settings_document, settings_directory
+
+        document = load_settings_document(
+            settings_directory() / "runtime.toml", scope="machine"
+        )
+        return str(document.entries["settlement_currency"].value)
+    except Exception:  # noqa: BLE001 -- a probe never fails on its own settings read
+        # Named rather than blank: a result with no unit is not a result, and the
+        # market this project trades settles in rupees.
+        return "INR"
+
+
+SETTLEMENT_CURRENCY = _settlement_currency()
+
 # The blocks that must be built before an order can be placed at all. Naming
 # blocks rather than a count keeps this honest as parts land: the tile says which
 # blocks are still empty, so "not trading" carries its own explanation.
@@ -197,51 +238,72 @@ def probe_open_positions() -> TradingProbeResult:
 
 
 def probe_realised_result() -> TradingProbeResult:
-    """What trading has actually produced, in USDT, from recorded fills."""
-    if not FILLS_PATH.exists():
+    """What trading has actually produced, net of fees, from closed trades.
+
+    Reads `position-recorder`'s journal rather than the crypto-era
+    `trading/fills.jsonl`, which nothing has written since the pivot and which
+    does not exist on this machine. Net, never gross: a board showing gross calls
+    a fee-eaten loser a winner, which is the same reasoning `/api/trades`
+    already carries.
+    """
+    if not CLOSED_TRADE_JOURNAL.exists():
         return TradingProbeResult(
             "Realised result",
-            NOT_BUILT,
-            "no fills -- nothing has been bought or sold",
-            f"{FILLS_PATH} does not exist",
-        )
-    fills = _count_lines(FILLS_PATH)
-    if fills is None:
-        return TradingProbeResult(
-            "Realised result", NOT_MEASURED, "the fill record could not be read", str(FILLS_PATH)
-        )
-    if fills == 0:
-        return TradingProbeResult(
-            "Realised result", NOT_BUILT, "the fill record is empty", str(FILLS_PATH)
+            NOT_MEASURED,
+            "no position journal yet -- nothing has recorded a closed trade",
+            f"{CLOSED_TRADE_JOURNAL} does not exist",
         )
 
     realised = 0.0
     counted = 0
+    unreadable = 0
     try:
-        with open(FILLS_PATH, encoding="utf-8") as handle:
+        size = CLOSED_TRADE_JOURNAL.stat().st_size
+        with open(CLOSED_TRADE_JOURNAL, encoding="utf-8", errors="replace") as handle:
+            if size > CLOSED_TRADE_TAIL_BYTES:
+                handle.seek(size - CLOSED_TRADE_TAIL_BYTES)
+                handle.readline()  # the partial line the seek landed inside
             for line in handle:
-                if not line.strip():
+                if '"closed-trade"' not in line:
                     continue
-                record = json.loads(line)
-                if isinstance(record.get("realised_pnl_usdt"), (int, float)):
-                    realised += float(record["realised_pnl_usdt"])
-                    counted += 1
-    except (OSError, json.JSONDecodeError) as failure:
+                try:
+                    payload = json.loads(line).get("payload") or {}
+                except json.JSONDecodeError:
+                    unreadable += 1
+                    continue
+                try:
+                    quantity = float(payload["quantity"])
+                    entry = float(payload["entry_price"])
+                    exit_price = float(payload["exit_price"])
+                    fees = float(payload["fees_paid"])
+                except (KeyError, TypeError, ValueError):
+                    unreadable += 1
+                    continue
+                direction = 1.0 if payload.get("direction") == "long" else -1.0
+                realised += (exit_price - entry) * quantity * direction - fees
+                counted += 1
+    except OSError as failure:
         return TradingProbeResult(
-            "Realised result", NOT_MEASURED, f"{type(failure).__name__}: {failure}", str(FILLS_PATH)
+            "Realised result",
+            NOT_MEASURED,
+            f"{type(failure).__name__}: {failure}",
+            str(CLOSED_TRADE_JOURNAL),
         )
+
     if counted == 0:
         return TradingProbeResult(
             "Realised result",
             NOT_MEASURED,
-            f"{fills} fills recorded, none carrying a realised result",
-            str(FILLS_PATH),
+            "no closed trade in the journal's tail",
+            f"last {CLOSED_TRADE_TAIL_BYTES // (1024 * 1024)} MB of {CLOSED_TRADE_JOURNAL}",
         )
+    caveat = f", {unreadable} record(s) unreadable" if unreadable else ""
     return TradingProbeResult(
         "Realised result",
         OK,
-        f"{realised:+,.2f} USDT over {counted} of {fills} fills",
-        f"summed realised_pnl_usdt in {FILLS_PATH}",
+        f"{realised:+,.2f} {SETTLEMENT_CURRENCY} net of fees over {counted} closed trade(s){caveat}",
+        f"closed-trade records in the last "
+        f"{CLOSED_TRADE_TAIL_BYTES // (1024 * 1024)} MB of {CLOSED_TRADE_JOURNAL}",
     )
 
 

@@ -59,7 +59,7 @@ MIXED_CURRENCIES = "the-fills-are-not-all-in-one-quote-currency"
 # The default when a caller states no currency at all. The operator's own
 # `settlement_currency` is what the running part uses, and this exists so a test
 # constructing the class directly still has a unit rather than an empty string.
-QUOTE_CURRENCY = "USDT"
+QUOTE_CURRENCY = "INR"
 
 
 @dataclass(frozen=True)

@@ -106,7 +106,7 @@ class KeeperStanding:
 class PaperAccountKeeper:
     """Applies paper fills to a paper balance that starts at the segment's allotment."""
 
-    def __init__(self, segment: str, currency: str = "USDT", now_ns=time.time_ns) -> None:
+    def __init__(self, segment: str, currency: str = "INR", now_ns=time.time_ns) -> None:
         self._segment = segment
         self._currency = currency
         self._now_ns = now_ns

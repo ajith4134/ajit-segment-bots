@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from runtime.external_research_types import OptionsFlow
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
+from runtime.underlying_of_a_trading_symbol import underlying_of_a_trading_symbol
 
 PART_ID = "options-flow-reader"
 
@@ -301,7 +302,9 @@ def start_part(context) -> int:
     )
 
     def underlying_of(symbol: str) -> str:
-        return symbol[: -len(settlement)] if settlement and symbol.endswith(settlement) and len(symbol) > len(settlement) else symbol
+        # Same fix as cross-segment-signal-bridge (2026-09-12): the suffix rule
+        # alone never resolved an NSE option to its underlying.
+        return underlying_of_a_trading_symbol(symbol, settlement)
 
     def read_rows():
         for selection in universe.payloads():
