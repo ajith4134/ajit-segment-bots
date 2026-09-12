@@ -1,4 +1,4 @@
-"""usdt-pnl-accountant: each trade's profit or loss in USDT against the capital it used (RL-028)."""
+"""inr-pnl-accountant: each trade's profit or loss in INR against the capital it used (RL-028)."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ from dataclasses import dataclass, field
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
-PART_ID = "usdt-pnl-accountant"
+PART_ID = "inr-pnl-accountant"
 
 PART_DECLARATION = PartDeclaration(
-    part_id="usdt-pnl-accountant",
+    part_id="inr-pnl-accountant",
     consumes=(
         "closed-trade", "fill", "market-data", "capital-allotment",
         "cost-basis", "funding-settlement", "paper-currency-rate",
     ),
-    produces=("usdt-pnl-statement", "part-health"),
+    produces=("inr-pnl-statement", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
     skipped_tick_effect="delays",
@@ -24,8 +24,8 @@ PART_DECLARATION = PartDeclaration(
 
 
 @dataclass(frozen=True)
-class UsdtPnlStatement:
-    """One trade's result in USDT, with every component kept separate.
+class InrPnlStatement:
+    """One trade's result in INR, with every component kept separate.
 
     Gross, fees and funding are not summed away: a strategy that is profitable
     gross and loses to funding is a different problem from one that never had an
@@ -35,11 +35,11 @@ class UsdtPnlStatement:
     venue_id: str
     symbol: str
     direction: str
-    gross_pnl_usdt: float
-    fees_usdt: float
-    funding_usdt: float
-    net_pnl_usdt: float
-    capital_used_usdt: float | None
+    gross_pnl_inr: float
+    fees_inr: float
+    funding_inr: float
+    net_pnl_inr: float
+    capital_used_inr: float | None
     return_on_capital: float | None
     quote_currency: str
     conversion_rate: float
@@ -52,13 +52,13 @@ class UsdtPnlStatement:
 class AccountantStanding:
     statements: int = 0
     without_capital: int = 0
-    non_usdt_converted: int = 0
+    non_inr_converted: int = 0
     funding_applied: int = 0
-    net_total_usdt: float = 0.0
+    net_total_inr: float = 0.0
 
 
-class UsdtPnlAccountant:
-    """States every result in USDT, converting where a symbol is quoted otherwise.
+class InrPnlAccountant:
+    """States every result in INR, converting where a symbol is quoted otherwise.
 
     RL-028: one currency, so results are comparable across symbols and venues. A
     USDC-quoted perpetual settles in a different unit, and adding the two numbers
@@ -71,31 +71,31 @@ class UsdtPnlAccountant:
 
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
-        self._rates: dict[str, float] = {"USDT": 1.0}
+        self._rates: dict[str, float] = {"INR": 1.0}
         self._capital: dict[tuple[str, str], float] = {}
         self._funding: dict[tuple[str, str], float] = {}
         self.standing = AccountantStanding()
 
-    def set_conversion_rate(self, quote_currency: str, rate_to_usdt: float) -> None:
-        self._rates[quote_currency] = rate_to_usdt
+    def set_conversion_rate(self, quote_currency: str, rate_to_inr: float) -> None:
+        self._rates[quote_currency] = rate_to_inr
 
-    def set_capital_allotment(self, venue_id: str, symbol: str, capital_usdt: float) -> None:
-        self._capital[(venue_id, symbol)] = capital_usdt
+    def set_capital_allotment(self, venue_id: str, symbol: str, capital_inr: float) -> None:
+        self._capital[(venue_id, symbol)] = capital_inr
 
     def record_funding(self, venue_id: str, symbol: str, amount_quote: float) -> None:
         key = (venue_id, symbol)
         self._funding[key] = self._funding.get(key, 0.0) + amount_quote
         self.standing.funding_applied += 1
 
-    def state(self, trade, quote_currency: str = "USDT") -> UsdtPnlStatement:
+    def state(self, trade, quote_currency: str = "INR") -> InrPnlStatement:
         rate = self._rates.get(quote_currency)
         if rate is None:
             rate = 1.0
             reason = f"no rate for {quote_currency}; stated at parity and flagged"
         else:
-            reason = "converted at the recorded rate" if quote_currency != "USDT" else "quoted in USDT"
-        if quote_currency != "USDT":
-            self.standing.non_usdt_converted += 1
+            reason = "converted at the recorded rate" if quote_currency != "INR" else "quoted in INR"
+        if quote_currency != "INR":
+            self.standing.non_inr_converted += 1
 
         key = (trade.venue_id, trade.symbol)
         gross = trade.realised_pnl * rate
@@ -109,16 +109,16 @@ class UsdtPnlAccountant:
         return_on_capital = (net / capital) if capital else None
 
         self.standing.statements += 1
-        self.standing.net_total_usdt += net
-        return UsdtPnlStatement(
+        self.standing.net_total_inr += net
+        return InrPnlStatement(
             venue_id=trade.venue_id,
             symbol=trade.symbol,
             direction=trade.direction,
-            gross_pnl_usdt=gross,
-            fees_usdt=fees,
-            funding_usdt=funding,
-            net_pnl_usdt=net,
-            capital_used_usdt=capital,
+            gross_pnl_inr=gross,
+            fees_inr=fees,
+            funding_inr=funding,
+            net_pnl_inr=net,
+            capital_used_inr=capital,
             return_on_capital=return_on_capital,
             quote_currency=quote_currency,
             conversion_rate=rate,
@@ -128,19 +128,19 @@ class UsdtPnlAccountant:
         )
 
 
-def describe_pnl(accountant: UsdtPnlAccountant) -> dict:
+def describe_pnl(accountant: InrPnlAccountant) -> dict:
     return {
         "part_id": PART_ID,
         "statements": accountant.standing.statements,
-        "net_total_usdt": accountant.standing.net_total_usdt,
+        "net_total_inr": accountant.standing.net_total_inr,
         "statements_without_capital": accountant.standing.without_capital,
-        "non_usdt_converted": accountant.standing.non_usdt_converted,
+        "non_inr_converted": accountant.standing.non_inr_converted,
         "funding_events_applied": accountant.standing.funding_applied,
     }
 
 
-def run_usdt_pnl_accountant(
-    accountant: UsdtPnlAccountant, control_socket, read_closed_trades, publish_statements,
+def run_inr_pnl_accountant(
+    accountant: InrPnlAccountant, control_socket, read_closed_trades, publish_statements,
     health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
@@ -174,7 +174,7 @@ def start_part(context) -> int:
     quote currencies is a portfolio nobody can add up.
 
     The conversion rate comes from `paper-currency-rate`, which nothing produces
-    yet. Until it does, only trades quoted in USDT can be stated, and the rest are
+    yet. Until it does, only trades quoted in INR can be stated, and the rest are
     reported as unconvertible rather than assumed to be one-for-one -- an assumed
     rate is a profit figure with an invented number in it.
     """
@@ -193,7 +193,7 @@ def start_part(context) -> int:
     bases = Batch(read=context.bus.reader("cost-basis"))
     settlements = Batch(read=context.bus.reader("funding-settlement"))
     rates = Batch(read=context.bus.reader("paper-currency-rate"))
-    publish_statements = context.bus.publisher_for("usdt-pnl-statement")
+    publish_statements = context.bus.publisher_for("inr-pnl-statement")
 
     segment = str(context.setting("segment_id").value)
     quote_currency = str(context.setting("quote_currency", scope=segment).value)
@@ -204,7 +204,7 @@ def start_part(context) -> int:
             # usable one names a rate at all -- a refused conversion reports why
             # it could not convert, and adopting the None in it would state every
             # trade at parity while claiming a rate was applied.
-            if conversion.is_usable and conversion.rate and conversion.to_currency == "USDT":
+            if conversion.is_usable and conversion.rate and conversion.to_currency == "INR":
                 accountant.set_conversion_rate(conversion.from_currency, conversion.rate)
         for settlement in settlements.payloads():
             accountant.record_funding(
@@ -214,7 +214,7 @@ def start_part(context) -> int:
         # per symbol -- what one trade actually committed. Filing the segment's
         # whole allotment against each symbol would state a return on capital
         # computed from money the trade never used, so it is drained and left
-        # unset: `capital_used_usdt` reads None and the statement says so, which
+        # unset: `capital_used_inr` reads None and the statement says so, which
         # is the honest answer until something sizes capital per position.
         allotments.payloads()
         fills.payloads()
@@ -222,8 +222,8 @@ def start_part(context) -> int:
         bases.payloads()
         return tuple((trade, quote_currency) for trade in closed_trades.payloads())
 
-    accountant = UsdtPnlAccountant()
-    return run_usdt_pnl_accountant(
+    accountant = InrPnlAccountant()
+    return run_inr_pnl_accountant(
         accountant=accountant,
         control_socket=context.control_socket,
         read_closed_trades=read_closed_trades,

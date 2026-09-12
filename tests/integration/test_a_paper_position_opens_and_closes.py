@@ -45,7 +45,7 @@ from parts.portfolio_state.cost_basis_tracker import CostBasisTracker
 from parts.portfolio_state.fill_reconciler import FillReconciler
 from parts.portfolio_state.peak_excursion_tracker import PeakExcursionTracker
 from parts.portfolio_state.position_close_detector import PositionCloseDetector
-from parts.portfolio_state.usdt_pnl_accountant import UsdtPnlAccountant
+from parts.portfolio_state.inr_pnl_accountant import InrPnlAccountant
 from parts.risk_capital_allocation.exit_order_chainer import CHAINED, ExitOrderChainer
 from runtime.market_conditions import MarketSessionState, SessionKind
 from runtime.trading_types import (
@@ -152,7 +152,7 @@ class TheClosingChain:
         self.chainer = ExitOrderChainer()
         self.stops = StopOrderManager()
         self.closes = PositionCloseDetector(QUANTITY_INCREMENT)
-        self.accountant = UsdtPnlAccountant()
+        self.accountant = InrPnlAccountant()
         self.closed_trades = []
         self.statements = []
         self.exit_orders_sent = []
@@ -330,10 +330,10 @@ def test_a_paper_position_opens_rests_its_exits_and_closes_on_a_real_price(real_
     # -- and what it made, in the currency everything is compared in ------------
     assert chain.statements, "a closed trade with no statement is a trade nobody can add up"
     statement = chain.statements[0]
-    assert statement.net_pnl_usdt == pytest.approx(
-        statement.gross_pnl_usdt - statement.fees_usdt + statement.funding_usdt
+    assert statement.net_pnl_inr == pytest.approx(
+        statement.gross_pnl_inr - statement.fees_inr + statement.funding_inr
     )
-    assert statement.capital_used_usdt is None, (
+    assert statement.capital_used_inr is None, (
         "nothing sizes capital per position yet, and the statement must say so rather than "
         "state a return computed from money the trade never used"
     )
@@ -369,7 +369,7 @@ def test_the_stop_closes_the_trade_when_the_market_goes_the_other_way(real_trade
     closed = chain.closed_trades[0]
     assert closed.exit_price <= stop_price, "a stop fills at or through its trigger"
     assert closed.realised_pnl < 0, "closing below entry is a loss, and it must read as one"
-    assert chain.statements[0].net_pnl_usdt < 0
+    assert chain.statements[0].net_pnl_inr < 0
 
 
 def test_a_position_never_rests_without_a_stop(real_trades):
@@ -437,7 +437,10 @@ def test_the_sizer_skips_a_stand_aside_intent_and_counts_it():
     standing = sizer_part.SizerStanding()
     assert standing.stood_aside == 0
     assert "intents_that_stood_aside" in sizer_part.describe_sizing(
-        sizer_part.PositionSizer(taker_fee_rate=0.0004, slippage_fraction=0.0005)
+        sizer_part.PositionSizer(
+            taker_fee_rate=0.0004, slippage_fraction=0.0005,
+            close_restated_after_seconds=30.0,
+        )
     )
 
 

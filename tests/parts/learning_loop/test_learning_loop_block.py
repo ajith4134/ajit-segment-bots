@@ -63,7 +63,7 @@ from parts.learning_loop.retrain_scheduler import (
     NOT_ENOUGH_NEW_LABELS, NO_DUTY_CYCLE, NO_REASON, SCHEDULED, RetrainScheduler,
 )
 from parts.learning_loop.reward_shaper import (
-    FOR_RISK_TAKEN, FOR_TIME_HELD, NO_EXCURSION, NO_USDT_STATEMENT, SHAPED, RewardShaper,
+    FOR_RISK_TAKEN, FOR_TIME_HELD, NO_EXCURSION, NO_INR_STATEMENT, SHAPED, RewardShaper,
 )
 from parts.learning_loop.sample_weight_assigner import (
     FOR_AGE, FOR_A_BROKEN_REGIME, FOR_FILL_QUALITY, FOR_RARITY, SampleWeightAssigner,
@@ -518,9 +518,9 @@ def a_shaper(maximum=10.0, risk_reference=0.02, horizon_half_life=86400.0, minim
     )
 
 
-def a_prepared_shaper(usdt=100.0, rate=1.0, adverse=0.01, **kwargs):
+def a_prepared_shaper(inr=100.0, rate=1.0, adverse=0.01, **kwargs):
     subject = a_shaper(**kwargs)
-    subject.observe_usdt_result(VENUE, SYMBOL, 0, usdt, rate)
+    subject.observe_inr_result(VENUE, SYMBOL, 0, inr, rate)
     subject.observe_peak_adverse_excursion(VENUE, SYMBOL, 0, adverse)
     return subject
 
@@ -534,7 +534,7 @@ def test_a_losing_trade_does_not_take_the_scorekeeper_down():
     is refused now and counted; falling over on ordinary traffic is not a
     response a part is allowed to have.
     """
-    reward = a_prepared_shaper(usdt=-100.0).shape(VENUE, SYMBOL, "momentum-burst", 0, 60.0)
+    reward = a_prepared_shaper(inr=-100.0).shape(VENUE, SYMBOL, "momentum-burst", 0, 60.0)
     assert reward.reward < 0
 
     subject = a_scorekeeper()
@@ -562,8 +562,8 @@ def test_a_refused_reward_leaves_every_bot_weighted_as_it_was():
 
 def test_the_same_profit_earned_with_more_risk_is_worth_less():
     """Profit alone teaches the system to take enormous risk."""
-    safe = a_prepared_shaper(usdt=100.0, adverse=0.005, risk_reference=0.01)
-    risky = a_prepared_shaper(usdt=100.0, adverse=0.40, risk_reference=0.01)
+    safe = a_prepared_shaper(inr=100.0, adverse=0.005, risk_reference=0.01)
+    risky = a_prepared_shaper(inr=100.0, adverse=0.40, risk_reference=0.01)
     assert (
         risky.shape(VENUE, SYMBOL, "d", 0, 60.0).reward
         < safe.shape(VENUE, SYMBOL, "d", 0, 60.0).reward
@@ -580,7 +580,7 @@ def test_holding_a_position_longer_is_not_free():
 
 
 def test_a_result_indistinguishable_from_noise_teaches_less():
-    subject = a_prepared_shaper(usdt=1.0, minimum_significance=2.0, horizon_half_life=1e9)
+    subject = a_prepared_shaper(inr=1.0, minimum_significance=2.0, horizon_half_life=1e9)
     subject.observe_significance(VENUE, SYMBOL, 0, 0.5)
     discounted = subject.shape(VENUE, SYMBOL, "d", 0, 60.0).reward
     subject.observe_significance(VENUE, SYMBOL, 0, 3.0)
@@ -589,7 +589,7 @@ def test_a_result_indistinguishable_from_noise_teaches_less():
 
 
 def test_a_result_that_came_from_the_market_teaches_the_setup_less():
-    subject = a_prepared_shaper(usdt=1.0, horizon_half_life=1e9)
+    subject = a_prepared_shaper(inr=1.0, horizon_half_life=1e9)
     subject.observe_attribution(VENUE, SYMBOL, 0, 0.1)
     mostly_market = subject.shape(VENUE, SYMBOL, "d", 0, 60.0).reward
     subject.observe_attribution(VENUE, SYMBOL, 0, 1.0)
@@ -597,29 +597,29 @@ def test_a_result_that_came_from_the_market_teaches_the_setup_less():
     assert mostly_market < mostly_setup
 
 
-def test_the_reward_is_in_usdt_and_carries_its_rate():
+def test_the_reward_is_in_inr_and_carries_its_rate():
     """RL-028 and RL-029."""
-    subject = a_prepared_shaper(usdt=100.0, rate=1.0004)
+    subject = a_prepared_shaper(inr=100.0, rate=1.0004)
     reward = subject.shape(VENUE, SYMBOL, "d", 0, 60.0)
     assert reward.conversion_rate == 1.0004
-    assert reward.raw_usdt == 100.0
+    assert reward.raw_inr == 100.0
 
 
-def test_no_usdt_result_means_no_reward():
+def test_no_inr_result_means_no_reward():
     subject = a_shaper()
     subject.observe_peak_adverse_excursion(VENUE, SYMBOL, 0, 0.01)
-    assert subject.shape(VENUE, SYMBOL, "d", 0, 60.0).state == NO_USDT_STATEMENT
+    assert subject.shape(VENUE, SYMBOL, "d", 0, 60.0).state == NO_INR_STATEMENT
 
 
 def test_no_excursion_record_means_no_reward():
     subject = a_shaper()
-    subject.observe_usdt_result(VENUE, SYMBOL, 0, 100.0, 1.0)
+    subject.observe_inr_result(VENUE, SYMBOL, 0, 100.0, 1.0)
     assert subject.shape(VENUE, SYMBOL, "d", 0, 60.0).state == NO_EXCURSION
 
 
 def test_the_reward_is_bounded():
     """The extraordinary trade is the one most likely mismeasured."""
-    subject = a_prepared_shaper(usdt=1_000_000.0, maximum=10.0, horizon_half_life=1e12)
+    subject = a_prepared_shaper(inr=1_000_000.0, maximum=10.0, horizon_half_life=1e12)
     reward = subject.shape(VENUE, SYMBOL, "d", 0, 1.0)
     assert reward.reward == 10.0
     assert reward.was_bounded

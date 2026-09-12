@@ -89,7 +89,7 @@ CLOSING_CHAIN = (
     "exit-order-chainer",
     "stop-order-manager",
     "position-close-detector",
-    "usdt-pnl-accountant",
+    "inr-pnl-accountant",
 )
 
 # How much of the symbol's own movement the exits are placed inside. Not a round
@@ -376,7 +376,7 @@ def test_a_position_opens_and_closes_across_nine_processes(
     watched = {
         "position": watch_at(wiring, "exposure-limiter", "position"),
         "closed-trade": watch_at(wiring, "position-recorder", "closed-trade"),
-        "usdt-pnl-statement": watch_at(wiring, "board-snapshot-builder", "usdt-pnl-statement"),
+        "inr-pnl-statement": watch_at(wiring, "board-snapshot-builder", "inr-pnl-statement"),
         # `stop-adjustment` has exactly one consumer in the blueprint and it is
         # running, so watching it would take the manager's input away. What the
         # chainer did is visible in what the manager published, which is the next
@@ -546,10 +546,10 @@ def test_a_position_opens_and_closes_across_nine_processes(
     )
     assert closed.fees_paid > 0, "a round trip pays the venue twice, and paper must too"
 
-    assert counted["usdt-pnl-statement"] > 0, (
+    assert counted["inr-pnl-statement"] > 0, (
         f"a closed trade with no statement is a trade nobody can add up: {counted}"
     )
-    statement = seen["usdt-pnl-statement"][0].payload
-    assert statement.net_pnl_usdt == pytest.approx(
-        statement.gross_pnl_usdt - statement.fees_usdt + statement.funding_usdt
+    statement = seen["inr-pnl-statement"][0].payload
+    assert statement.net_pnl_inr == pytest.approx(
+        statement.gross_pnl_inr - statement.fees_inr + statement.funding_inr
     )

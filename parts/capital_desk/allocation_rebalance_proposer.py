@@ -7,7 +7,7 @@ allowance, and this project keeps the operator on the right side of it.
 
 What it proposes from, and why each is needed:
 
-- **Realised USDT result**, not unrealised. An open position's paper gain is a
+- **Realised INR result**, not unrealised. An open position's paper gain is a
   claim, and allocating against claims is how a system doubles down on a trade
   that has not finished going wrong.
 - **Return on the capital actually used**, not absolute profit. A segment earning
@@ -33,7 +33,7 @@ PART_ID = "allocation-rebalance-proposer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="allocation-rebalance-proposer",
-    consumes=("usdt-pnl-statement", "capital-utilisation", "bot-scorecard"),
+    consumes=("inr-pnl-statement", "capital-utilisation", "bot-scorecard"),
     produces=("allocation-proposal", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -50,14 +50,14 @@ class SegmentPerformance:
     """What one segment has actually earned, and on what."""
 
     segment: str
-    realised_usdt: float
+    realised_inr: float
     capital_used: float
     closed_trades: int
     utilisation: float
 
     @property
     def return_on_capital(self) -> float | None:
-        return self.realised_usdt / self.capital_used if self.capital_used > 0 else None
+        return self.realised_inr / self.capital_used if self.capital_used > 0 else None
 
 
 @dataclass(frozen=True)
@@ -259,7 +259,7 @@ def run_allocation_rebalance_proposer(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    A segment's performance is the sum of its USDT statements, its closed
+    A segment's performance is the sum of its INR statements, its closed
     trade count from its bots' scorecards, and its utilisation from the
     meter. Proposals go out once per health interval.
     """
@@ -267,7 +267,7 @@ def start_part(context) -> int:
 
     from runtime.input_assembly import Batch, LatestByKey
 
-    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    statements = Batch(read=context.bus.reader("inr-pnl-statement"))
     utilisations = LatestByKey(read=context.bus.reader("capital-utilisation"), key_of=lambda u: u.segment)
     scorecards = Batch(read=context.bus.reader("bot-scorecard"))
     publish_proposals = context.bus.publisher_for("allocation-proposal")
@@ -284,8 +284,8 @@ def start_part(context) -> int:
 
     def read_performance(_proposer) -> None:
         for statement in statements.payloads():
-            realised[0] += statement.net_pnl_usdt
-            capital[0] = max(capital[0], statement.capital_used_usdt or 0.0)
+            realised[0] += statement.net_pnl_inr
+            capital[0] = max(capital[0], statement.capital_used_inr or 0.0)
         for scorecard in scorecards.payloads():
             trades[0] = max(trades[0], scorecard.describe().get("trades", 0))
         utilisation = utilisations.mapping().get(segment)
@@ -293,7 +293,7 @@ def start_part(context) -> int:
             proposer.set_allocation(segment, utilisation.allotted)
             proposer.observe_performance(
                 SegmentPerformance(
-                    segment=segment, realised_usdt=realised[0], capital_used=capital[0],
+                    segment=segment, realised_inr=realised[0], capital_used=capital[0],
                     closed_trades=trades[0], utilisation=utilisation.utilisation,
                 )
             )

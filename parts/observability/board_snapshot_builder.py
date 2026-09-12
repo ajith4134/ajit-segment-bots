@@ -30,7 +30,7 @@ PART_ID = "board-snapshot-builder"
 PART_DECLARATION = PartDeclaration(
     part_id="board-snapshot-builder",
     consumes=(
-        "heartbeat-table", "probe-result", "usdt-pnl-statement", "alert", "switch-record",
+        "heartbeat-table", "probe-result", "inr-pnl-statement", "alert", "switch-record",
         "account-balance", "feed-coverage", "competence-map", "main-account-setting",
         "capital-allotment", "trade-capital-bounds", "leverage-ceiling", "allocation-headroom",
         "capital-settings-verdict", "capital-utilisation", "allocation-proposal",

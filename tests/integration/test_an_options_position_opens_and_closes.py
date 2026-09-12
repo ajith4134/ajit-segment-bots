@@ -42,7 +42,7 @@ from parts.portfolio_state.cost_basis_tracker import CostBasisTracker
 from parts.portfolio_state.fill_reconciler import FillReconciler
 from parts.portfolio_state.peak_excursion_tracker import PeakExcursionTracker
 from parts.portfolio_state.position_close_detector import PositionCloseDetector
-from parts.portfolio_state.usdt_pnl_accountant import UsdtPnlAccountant
+from parts.portfolio_state.inr_pnl_accountant import InrPnlAccountant
 from parts.risk_capital_allocation.exit_order_chainer import CHAINED, ExitOrderChainer
 from parts.segment_bot.instrument_selector import CHOSEN, InstrumentSelector, OPTION
 from runtime.market_conditions import MarketSessionState, SessionKind
@@ -195,7 +195,7 @@ class TheClosingChain:
         self.chainer = ExitOrderChainer()
         self.stops = StopOrderManager()
         self.closes = PositionCloseDetector(QUANTITY_INCREMENT)
-        self.accountant = UsdtPnlAccountant()
+        self.accountant = InrPnlAccountant()
         self.closed_trades = []
         self.statements = []
         self.exit_orders_sent = []
@@ -366,12 +366,12 @@ def test_an_options_position_opens_rests_its_exits_and_closes_on_its_target(chos
 
     assert chain.statements, "a closed trade with no statement is a trade nobody can add up"
     statement = chain.statements[0]
-    # UsdtPnlAccountant's own field names stay "_usdt" regardless of
+    # InrPnlAccountant reports every component in rupees (2026-09-12).
     # quote_currency (a pre-existing crypto-era naming wart, not this test's
     # to fix) -- they hold INR here, at parity, since an option premium is
     # already quoted in the account's own currency and needs no conversion.
-    assert statement.net_pnl_usdt == pytest.approx(
-        statement.gross_pnl_usdt - statement.fees_usdt + statement.funding_usdt
+    assert statement.net_pnl_inr == pytest.approx(
+        statement.gross_pnl_inr - statement.fees_inr + statement.funding_inr
     )
     assert statement.quote_currency == "INR"
 
@@ -398,7 +398,7 @@ def test_an_options_position_closes_at_a_loss_when_the_premium_falls(chosen_cont
     closed = chain.closed_trades[0]
     assert closed.exit_price <= STOP_PRICE_REACHED
     assert closed.realised_pnl < 0, "a bought option that drops in premium loses, and must read as one"
-    assert chain.statements[0].net_pnl_usdt < 0
+    assert chain.statements[0].net_pnl_inr < 0
 
 
 def test_an_options_position_never_rests_without_a_stop(chosen_contract):

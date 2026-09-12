@@ -401,7 +401,7 @@ LIVE_SPINE = (
     # makes this journal the only source for the board's "when did this last
     # change", so it must be up before anything reads one.
     "capital-settings-change-recorder",
-    # Before usdt-pnl-accountant, which states every result in USDT (RL-028)
+    # Before inr-pnl-accountant, which states every result in USDT (RL-028)
     # and needs the rate to convert a non-USDT quote at all.
     "paper-currency-converter",
     "money-mode-reader",
@@ -450,9 +450,9 @@ LIVE_SPINE = (
     "stop-order-manager",
     "position-close-detector",
     # funding-settlement-recorder is off: funding rate is a crypto perpetual
-    # concept and an option has none to book. usdt-pnl-accountant's own
-    # funding_usdt term simply stays at its default without one.
-    "usdt-pnl-accountant",
+    # concept and an option has none to book. inr-pnl-accountant's own
+    # funding_inr term simply stays at its default without one.
+    "inr-pnl-accountant",
     # The record. Without it a fill happened and nothing can say what decided it,
     # and a position closed with nothing to say what it was worth.
     "trade-lifecycle-recorder",

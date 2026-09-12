@@ -55,6 +55,7 @@ from runtime.bot_opinion import (
 from runtime.edge_arithmetic import ConvictionFloor
 from runtime.learned_estimator import Estimate
 from runtime.market_signal import CONTINUATION, make_candidate
+from runtime.symbol_round_trip_cost import SymbolRoundTripCost
 from runtime.part_declaration import load_declaration_from_blueprint
 
 BLOCK_PARTS = {
@@ -91,6 +92,26 @@ class Clock:
 
     def advance_seconds(self, seconds):
         self.now_ns += int(seconds * 1e9)
+
+
+# The deployed values, so a test that does exercise the measured path is
+# exercising the same arithmetic the spine runs.
+CHARGE_STACK_ROUND_TRIP_FRACTION = 0.002341
+LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS = 60.0
+
+
+def an_ungraded_cost():
+    """A round-trip cost holder that has been handed no grade.
+
+    The floor then falls back to the ConvictionFloor's own fee_rate, which is
+    what every one of these tests was written against. A test that wants the
+    measured path hands it a real `liquidity-grade` -- see
+    tests/runtime/test_symbol_round_trip_cost.py for what that changes.
+    """
+    return SymbolRoundTripCost(
+        charge_stack_round_trip_fraction=CHARGE_STACK_ROUND_TRIP_FRACTION,
+        maximum_age_seconds=LIQUIDITY_GRADE_MAXIMUM_AGE_SECONDS,
+    )
 
 
 def an_estimate(value, observations, is_fitted, reason="measured"):
@@ -623,7 +644,7 @@ def test_a_losing_trade_does_not_take_the_follow_model_down():
         maximum_reward=10.0, risk_reference_fraction=0.02,
         horizon_half_life_seconds=86400.0, minimum_significance=1.0,
     )
-    shaper.observe_usdt_result(VENUE, SYMBOL, 0, -100.0, 1.0)
+    shaper.observe_inr_result(VENUE, SYMBOL, 0, -100.0, 1.0)
     shaper.observe_peak_adverse_excursion(VENUE, SYMBOL, 0, 0.01)
     reward = shaper.shape(VENUE, SYMBOL, "scanner-continuation", 0, 60.0)
     assert reward.reward < 0
@@ -1029,6 +1050,7 @@ def a_tail_composer(margin=0.0, require_measured=False):
     # The plan's own break-even plus a margin, as for the bull and bear bots.
     return TailOpinionComposer(
         conviction_floor=ConvictionFloor(fee_rate=0.00055, margin=margin, fallback_reward_to_risk=1.5),
+        round_trip_cost=an_ungraded_cost(),
         require_trained_model=require_measured,
     )
 

@@ -30,7 +30,7 @@ from parts.portfolio_state.fund_lock_ledger import LOCKED, REFUSED, RELEASED, Fu
 from parts.portfolio_state.liquidation_price_tracker import LiquidationPriceTracker
 from parts.portfolio_state.peak_excursion_tracker import PeakExcursionTracker
 from parts.portfolio_state.position_close_detector import PositionCloseDetector
-from parts.portfolio_state.usdt_pnl_accountant import UsdtPnlAccountant
+from parts.portfolio_state.inr_pnl_accountant import InrPnlAccountant
 from runtime.journal import GENESIS_DIGEST, Journal, JournalEntry
 from runtime.part_declaration import load_declaration_from_blueprint
 from runtime.trading_types import BUY, FLAT, LONG, SELL, SHORT, Fill, Position
@@ -39,7 +39,7 @@ BLOCK_PARTS = {
     "fill-reconciler": "parts.portfolio_state.fill_reconciler",
     "position-close-detector": "parts.portfolio_state.position_close_detector",
     "peak-excursion-tracker": "parts.portfolio_state.peak_excursion_tracker",
-    "usdt-pnl-accountant": "parts.portfolio_state.usdt_pnl_accountant",
+    "inr-pnl-accountant": "parts.portfolio_state.inr_pnl_accountant",
     "liquidation-price-tracker": "parts.portfolio_state.liquidation_price_tracker",
     "fund-lock-ledger": "parts.portfolio_state.fund_lock_ledger",
     "cost-basis-tracker": "parts.portfolio_state.cost_basis_tracker",
@@ -743,7 +743,7 @@ def test_an_untranslatable_release_is_counted_not_silent():
     assert ledger.standing.releases_with_no_lock_to_match == 1
 
 
-# ---- usdt-pnl-accountant -----------------------------------------------------
+# ---- inr-pnl-accountant -----------------------------------------------------
 
 def closed_trade(realised=100.0, fees=1.0, quote="USDT"):
     from runtime.trading_types import ClosedTrade
@@ -757,17 +757,17 @@ def closed_trade(realised=100.0, fees=1.0, quote="USDT"):
 
 def test_gross_fees_and_funding_stay_separate():
     """A strategy that loses to funding is a different problem from one with no edge."""
-    accountant = UsdtPnlAccountant()
+    accountant = InrPnlAccountant()
     accountant.record_funding(VENUE, SYMBOL, -5.0)
     statement = accountant.state(closed_trade(realised=100.0, fees=1.0))
-    assert statement.gross_pnl_usdt == pytest.approx(100.0)
-    assert statement.fees_usdt == pytest.approx(1.0)
-    assert statement.funding_usdt == pytest.approx(-5.0)
-    assert statement.net_pnl_usdt == pytest.approx(94.0)
+    assert statement.gross_pnl_inr == pytest.approx(100.0)
+    assert statement.fees_inr == pytest.approx(1.0)
+    assert statement.funding_inr == pytest.approx(-5.0)
+    assert statement.net_pnl_inr == pytest.approx(94.0)
 
 
 def test_return_on_capital_needs_the_capital_that_was_used():
-    accountant = UsdtPnlAccountant()
+    accountant = InrPnlAccountant()
     statement = accountant.state(closed_trade(realised=100.0, fees=0.0))
     assert statement.return_on_capital is None
     assert accountant.standing.without_capital == 1
@@ -778,21 +778,21 @@ def test_return_on_capital_needs_the_capital_that_was_used():
 
 
 def test_a_non_usdt_quote_is_converted_and_flagged():
-    accountant = UsdtPnlAccountant()
+    accountant = InrPnlAccountant()
     accountant.set_conversion_rate("USDC", 0.999)
     statement = accountant.state(closed_trade(realised=100.0, fees=0.0), quote_currency="USDC")
-    assert statement.net_pnl_usdt == pytest.approx(99.9)
+    assert statement.net_pnl_inr == pytest.approx(99.9)
     assert statement.quote_currency == "USDC"
-    assert accountant.standing.non_usdt_converted == 1
+    assert accountant.standing.non_inr_converted == 1
 
 
 def test_funding_is_applied_once():
-    accountant = UsdtPnlAccountant()
+    accountant = InrPnlAccountant()
     accountant.record_funding(VENUE, SYMBOL, -5.0)
     first = accountant.state(closed_trade())
     second = accountant.state(closed_trade())
-    assert first.funding_usdt == pytest.approx(-5.0)
-    assert second.funding_usdt == pytest.approx(0.0)
+    assert first.funding_inr == pytest.approx(-5.0)
+    assert second.funding_inr == pytest.approx(0.0)
 
 
 # ---- the journal itself ------------------------------------------------------

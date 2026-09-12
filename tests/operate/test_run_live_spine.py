@@ -390,7 +390,7 @@ def test_the_ordering_rule_still_catches_a_single_producer_inversion():
 
     "At least one producer" is weaker than "every producer", and the weakening is
     only safe because a type with one producer is unaffected. That is the case
-    every real defect has fallen into -- usdt-pnl-accountant started before
+    every real defect has fallen into -- inr-pnl-accountant started before
     funding-settlement-recorder on 2026-08-25, and funding-settlement has exactly
     one producer -- so this pins that such an inversion is still a failure.
     """
@@ -408,13 +408,13 @@ def test_the_ordering_rule_still_catches_a_single_producer_inversion():
     )
 
     # An inverted spine of exactly that shape must be rejected by the same rule.
-    inverted = ("usdt-pnl-accountant", "funding-settlement-recorder")
+    inverted = ("inr-pnl-accountant", "funding-settlement-recorder")
     position = {part_id: index for index, part_id in enumerate(inverted)}
-    consumer = next(f for f in blueprint["features"] if f["id"] == "usdt-pnl-accountant")
+    consumer = next(f for f in blueprint["features"] if f["id"] == "inr-pnl-accountant")
     assert "funding-settlement" in consumer["consumes"]
 
     on_the_spine = [p for p in produces["funding-settlement"] if p in position]
     assert on_the_spine == ["funding-settlement-recorder"]
     assert not any(
-        position[p] < position["usdt-pnl-accountant"] for p in on_the_spine
+        position[p] < position["inr-pnl-accountant"] for p in on_the_spine
     ), "the rule would no longer catch a single-producer inversion"

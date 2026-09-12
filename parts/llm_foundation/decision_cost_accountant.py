@@ -38,7 +38,7 @@ PART_ID = "decision-cost-accountant"
 
 PART_DECLARATION = PartDeclaration(
     part_id="decision-cost-accountant",
-    consumes=("llm-call-record", "trade-intent", "usdt-pnl-statement"),
+    consumes=("llm-call-record", "trade-intent", "inr-pnl-statement"),
     produces=("decision-cost", "part-health"),
     resource_class="io-bound",
     rate_risk="latency-only",
@@ -260,7 +260,7 @@ def start_part(context) -> int:
 
     records = Batch(read=context.bus.reader("llm-call-record"))
     intents = Batch(read=context.bus.reader("trade-intent"))
-    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    statements = Batch(read=context.bus.reader("inr-pnl-statement"))
     publish_costs = context.bus.publisher_for("decision-cost")
     accountant = DecisionCostAccountant()
     open_decision: dict[tuple[str, str], str] = {}
@@ -281,7 +281,7 @@ def start_part(context) -> int:
             decision_id = open_decision.pop((statement.venue_id, statement.symbol), None)
             if decision_id is None:
                 continue
-            accountant.observe_realised(decision_id, float(statement.net_pnl_usdt))
+            accountant.observe_realised(decision_id, float(statement.net_pnl_inr))
             settled.append(decision_id)
         return tuple(settled)
 

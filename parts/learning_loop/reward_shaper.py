@@ -18,7 +18,7 @@ habits:
   outcome significance, which is what says whether the result was distinguishable
   from noise.
 
-**Rewards are in USDT** (RL-028), and every conversion carries the rate it used
+**Rewards are in INR** (RL-028), and every conversion carries the rate it used
 (RL-029). A reward denominated in whatever the position happened to settle in
 teaches the system to prefer the currency that appreciated.
 
@@ -41,7 +41,7 @@ PART_ID = "reward-shaper"
 PART_DECLARATION = PartDeclaration(
     part_id="reward-shaper",
     consumes=(
-        "closed-trade", "usdt-pnl-statement", "peak-excursion", "pnl-attribution",
+        "closed-trade", "inr-pnl-statement", "peak-excursion", "pnl-attribution",
         "outcome-significance",
     ),
     produces=("learning-reward", "part-health"),
@@ -51,7 +51,7 @@ PART_DECLARATION = PartDeclaration(
 )
 
 SHAPED = "shaped"
-NO_USDT_STATEMENT = "no-usdt-denominated-result-for-this-trade"
+NO_INR_STATEMENT = "no-inr-denominated-result-for-this-trade"
 NO_EXCURSION = "no-excursion-record-to-scale-risk-by"
 
 FOR_RISK_TAKEN = "risk-taken-to-earn-it"
@@ -69,7 +69,7 @@ class LearningReward:
     detector: str
     state: str
     reward: float | None
-    raw_usdt: float | None
+    raw_inr: float | None
     conversion_rate: float | None
     components: dict
     was_bounded: bool
@@ -85,7 +85,7 @@ class LearningReward:
 class ShaperStanding:
     trades_seen: int = 0
     rewards_shaped: int = 0
-    refused_no_usdt: int = 0
+    refused_no_inr: int = 0
     refused_no_excursion: int = 0
     bounded_at_the_cap: int = 0
     largest_reward: float | None = None
@@ -123,21 +123,21 @@ class RewardShaper:
         self._horizon_half_life = horizon_half_life_seconds
         self._minimum_significance = minimum_significance
         self._now_ns = now_ns
-        self._usdt_results: dict[tuple[str, str, int], tuple] = {}
+        self._inr_results: dict[tuple[str, str, int], tuple] = {}
         self._excursions: dict[tuple[str, str, int], float] = {}
         self._attributions: dict[tuple[str, str, int], float] = {}
         self._significance: dict[tuple[str, str, int], float] = {}
         self.standing = ShaperStanding()
 
-    def observe_usdt_result(
-        self, venue_id: str, symbol: str, opened_at_ns: int, usdt: float, conversion_rate: float
+    def observe_inr_result(
+        self, venue_id: str, symbol: str, opened_at_ns: int, inr: float, conversion_rate: float
     ) -> None:
-        """The result in USDT with the rate it was converted at (RL-028, RL-029).
+        """The result in INR with the rate it was converted at (RL-028, RL-029).
 
         Rewarding whatever the position settled in teaches the system to prefer
         the currency that appreciated.
         """
-        self._usdt_results[(venue_id, symbol, opened_at_ns)] = (usdt, conversion_rate)
+        self._inr_results[(venue_id, symbol, opened_at_ns)] = (inr, conversion_rate)
 
     def observe_peak_adverse_excursion(
         self, venue_id: str, symbol: str, opened_at_ns: int, fraction: float
@@ -161,21 +161,21 @@ class RewardShaper:
         self.standing.trades_seen += 1
         key = (venue_id, symbol, opened_at_ns)
 
-        result = self._usdt_results.get(key)
+        result = self._inr_results.get(key)
         if result is None:
-            self.standing.refused_no_usdt += 1
+            self.standing.refused_no_inr += 1
             return self._reward(
-                venue_id, symbol, detector, NO_USDT_STATEMENT, None, None, None, {}, False,
-                "no USDT-denominated result for this trade; rewarding whatever it settled in "
+                venue_id, symbol, detector, NO_INR_STATEMENT, None, None, None, {}, False,
+                "no INR-denominated result for this trade; rewarding whatever it settled in "
                 "would teach the system to prefer the currency that appreciated (RL-028)",
             )
 
-        usdt, conversion_rate = result
+        inr, conversion_rate = result
         excursion = self._excursions.get(key)
         if excursion is None:
             self.standing.refused_no_excursion += 1
             return self._reward(
-                venue_id, symbol, detector, NO_EXCURSION, None, usdt, conversion_rate, {}, False,
+                venue_id, symbol, detector, NO_EXCURSION, None, inr, conversion_rate, {}, False,
                 "no excursion record, so how much risk was taken to earn this cannot be "
                 "measured -- and profit alone teaches the system to take enormous risk",
             )
@@ -209,7 +209,7 @@ class RewardShaper:
             # reasons should not teach the setup.
             components[FOR_ATTRIBUTION] = max(0.0, min(1.0, attribution))
 
-        reward = usdt
+        reward = inr
         for multiple in components.values():
             reward *= multiple
 
@@ -225,8 +225,8 @@ class RewardShaper:
             self.standing.by_component[name] = self.standing.by_component.get(name, 0) + 1
 
         return self._reward(
-            venue_id, symbol, detector, SHAPED, reward, usdt, conversion_rate, components, bounded,
-            f"{usdt:+,.2f} USDT shaped to {reward:+,.4f}: "
+            venue_id, symbol, detector, SHAPED, reward, inr, conversion_rate, components, bounded,
+            f"{inr:+,.2f} INR shaped to {reward:+,.4f}: "
             + ", ".join(f"{name} x{value:.3f}" for name, value in sorted(components.items()))
             + f". Converted at {conversion_rate:.6g} (RL-029)"
             + (
@@ -238,7 +238,7 @@ class RewardShaper:
         )
 
     def _reward(
-        self, venue_id, symbol, detector, state, reward, usdt, rate, components, bounded, reason
+        self, venue_id, symbol, detector, state, reward, inr, rate, components, bounded, reason
     ) -> LearningReward:
         return LearningReward(
             venue_id=venue_id,
@@ -246,7 +246,7 @@ class RewardShaper:
             detector=detector,
             state=state,
             reward=reward,
-            raw_usdt=usdt,
+            raw_inr=inr,
             conversion_rate=rate,
             components=dict(components),
             was_bounded=bounded,
@@ -260,13 +260,13 @@ def describe_reward_shaping(shaper: RewardShaper) -> dict:
         "part_id": PART_ID,
         "trades_seen": shaper.standing.trades_seen,
         "rewards_shaped": shaper.standing.rewards_shaped,
-        "refused_no_usdt_statement": shaper.standing.refused_no_usdt,
+        "refused_no_inr_statement": shaper.standing.refused_no_inr,
         "refused_no_excursion_record": shaper.standing.refused_no_excursion,
         "bounded_at_the_cap": shaper.standing.bounded_at_the_cap,
         "largest_reward": shaper.standing.largest_reward,
         "largest_risk_discount": shaper.standing.largest_risk_discount,
         "by_component": dict(sorted(shaper.standing.by_component.items())),
-        "denominated_in": "USDT",
+        "denominated_in": "INR",
     }
 
 
@@ -299,7 +299,7 @@ def run_reward_shaper(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    A closed trade is shaped once its USDT statement has arrived, keyed by
+    A closed trade is shaped once its INR statement has arrived, keyed by
     venue, symbol and opening time; the excursion, attribution and
     significance that arrive for the same trade refine it. The detector
     that raised the trade is not on the closed trade, so it is "unknown"
@@ -308,7 +308,7 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch
 
     closed = Batch(read=context.bus.reader("closed-trade"))
-    statements = Batch(read=context.bus.reader("usdt-pnl-statement"))
+    statements = Batch(read=context.bus.reader("inr-pnl-statement"))
     excursions = Batch(read=context.bus.reader("peak-excursion"))
     attributions = Batch(read=context.bus.reader("pnl-attribution"))
     significances = Batch(read=context.bus.reader("outcome-significance"))
@@ -341,8 +341,8 @@ def start_part(context) -> int:
             at = opened_at.get((statement.venue_id, statement.symbol))
             if at is None:
                 continue
-            shaper.observe_usdt_result(
-                statement.venue_id, statement.symbol, at, statement.net_pnl_usdt, statement.conversion_rate
+            shaper.observe_inr_result(
+                statement.venue_id, statement.symbol, at, statement.net_pnl_inr, statement.conversion_rate
             )
             ready.append((statement.venue_id, statement.symbol, "unknown", at, held_for.get((statement.venue_id, statement.symbol, at), statement.holding_seconds)))
         for attribution in attributions.payloads():
