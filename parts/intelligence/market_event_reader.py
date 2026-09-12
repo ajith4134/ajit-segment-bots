@@ -63,9 +63,20 @@ CLASSIFIERS = (
     (MAINTENANCE, (r"\bmaintenance", r"\bupgrade", r"\bsuspend", r"\bhalt")),
 )
 
+# A last resort for a venue that publishes free text and resolves nothing.
 # Symbols look like BTCUSDT, 1000PEPEUSDT, ETH-PERP. Deliberately narrow: a
 # looser pattern pulls ordinary words out of prose and attaches an event to a
-# symbol nobody mentioned.
+# symbol nobody mentioned -- and that is exactly why it is not extended to NSE
+# names. "RELIANCE", "TRENT" and "LT" are also ordinary words, and a pattern
+# loose enough to catch them would attach a delisting notice to any capitalised
+# word in a sentence.
+#
+# The real answer is that a symbol should not be re-derived here at all:
+# `exchange-announcement-reader` already resolves the symbols an announcement
+# names **against the declared universe**, which is the only reliable way to do
+# it, and publishes them on the announcement. This part ignored that and ran the
+# pattern below over a text blob instead -- so on the Indian market it matched
+# nothing and every market event was published touching NO symbols (2026-09-12).
 SYMBOL_PATTERN = re.compile(r"\b[0-9]{0,4}[A-Z]{2,10}(?:USDT|USDC|BUSD|PERP|-PERP)\b")
 
 
@@ -79,6 +90,11 @@ class VenueAnnouncement:
     published_at_ns: int
     url: str | None = None
     effective_at_ns: int | None = None
+    # The symbols the announcement reader already resolved against the declared
+    # universe. Empty when the source resolved none, which is a different fact
+    # from "this announcement names none" -- `symbols_in` falls back to the
+    # pattern there and says which route it took.
+    symbols: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -118,6 +134,14 @@ class ReaderStanding:
     unclassified: int = 0
     unscheduled: int = 0
     symbols_extracted: int = 0
+    # Which route the symbols came by (2026-09-12). Kept apart because they are
+    # different levels of trust: the source matched against the declared
+    # universe, the pattern guessed from text. A board reading only the total
+    # cannot tell an announcement whose symbols were resolved from one whose
+    # symbols were scraped -- and on this market the pattern resolves nothing at
+    # all, which is how every event came to be published touching no symbols.
+    symbols_from_the_source: int = 0
+    symbols_from_the_pattern: int = 0
     by_type: dict = field(default_factory=dict)
     by_venue: dict = field(default_factory=dict)
 
@@ -143,8 +167,22 @@ class MarketEventReader:
         return UNCLASSIFIED
 
     def symbols_in(self, announcement: VenueAnnouncement) -> tuple:
+        """The symbols this announcement names.
+
+        Resolved upstream wherever possible. `exchange-announcement-reader`
+        matches an announcement's text against the declared universe, which
+        handles "NIFTY 24500 CE" and "NIFTY24500CE" being the same instrument
+        and a substring match being wrong -- work this part cannot repeat,
+        because it holds no universe.
+        """
+        if announcement.symbols:
+            self.standing.symbols_from_the_source += 1
+            return tuple(sorted(set(announcement.symbols)))
         text = f"{announcement.title}\n{announcement.body}"
-        return tuple(sorted(set(SYMBOL_PATTERN.findall(text))))
+        found = tuple(sorted(set(SYMBOL_PATTERN.findall(text))))
+        if found:
+            self.standing.symbols_from_the_pattern += 1
+        return found
 
     def read(self, announcement: VenueAnnouncement) -> MarketEvent | None:
         """One announcement. A repeat of one already read produces nothing."""
@@ -215,6 +253,8 @@ def describe_market_events(reader: MarketEventReader) -> dict:
         "unclassified_needing_a_person": reader.standing.unclassified,
         "events_with_no_effective_time": reader.standing.unscheduled,
         "symbols_extracted": reader.standing.symbols_extracted,
+        "symbols_from_the_source": reader.standing.symbols_from_the_source,
+        "symbols_from_the_pattern": reader.standing.symbols_from_the_pattern,
         "by_type": dict(sorted(reader.standing.by_type.items())),
         "by_venue": dict(sorted(reader.standing.by_venue.items())),
         "event_types": [event_type for event_type, _ in CLASSIFIERS] + [UNCLASSIFIED],
@@ -264,7 +304,12 @@ def start_part(context) -> int:
                 VenueAnnouncement(
                     venue_id=str(announcement.venue_id),
                     title=str(getattr(announcement, "headline", getattr(announcement, "title", ""))),
-                    body=str(getattr(announcement, "kind", getattr(announcement, "body", ""))) + " " + " ".join(getattr(announcement, "symbols", ())),
+                    # The kind alone. The symbols used to be appended here so a
+                    # regex could find them again, which was a round trip through
+                    # text that lost every NSE name (2026-09-12); they are carried
+                    # as themselves below.
+                    body=str(getattr(announcement, "kind", getattr(announcement, "body", ""))),
+                    symbols=tuple(str(s) for s in getattr(announcement, "symbols", ()) or ()),
                     published_at_ns=int(announcement.published_at_ns),
                     url=getattr(announcement, "source_reference", getattr(announcement, "url", None)),
                     effective_at_ns=announcement.effective_at_ns,

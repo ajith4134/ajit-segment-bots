@@ -1778,3 +1778,80 @@ def test_the_patience_multiple_is_optional_and_off_means_the_floor_alone():
     clock.set(last + 90.0)
 
     assert subject.check("upstox", "NIFTY24500CE").anomaly == "this-venue-has-stopped-updating"
+
+
+# ---- market-event-reader: the symbols an announcement names (2026-09-12) -----
+#
+# `exchange-announcement-reader` resolves an announcement's symbols against the
+# declared universe -- the only reliable way, since "NIFTY 24500 CE" and
+# "NIFTY24500CE" are one instrument and a substring match is wrong. This part
+# ignored that and re-derived them with a regex shaped for BTCUSDT, run over a
+# text blob the adapter built by joining the resolved symbols back into a string.
+#
+# On the Indian market that pattern matches nothing, so every market event was
+# published touching NO symbols -- with `symbols_extracted` reading 0, which is
+# indistinguishable from announcements that genuinely name none.
+
+def _an_announcement(symbols=(), title="Contract note", body="settlement"):
+    from parts.intelligence.market_event_reader import VenueAnnouncement
+
+    return VenueAnnouncement(
+        venue_id="upstox", title=title, body=body,
+        published_at_ns=1_700_000_000_000_000_000, symbols=tuple(symbols),
+    )
+
+
+def test_the_symbols_the_source_resolved_are_used_rather_than_re_derived():
+    from parts.intelligence.market_event_reader import MarketEventReader
+
+    reader = MarketEventReader()
+    resolved = ("NIFTY 24550 CE 08 SEP 26", "RELIANCE")
+    found = reader.symbols_in(_an_announcement(symbols=resolved))
+
+    assert found == tuple(sorted(resolved))
+    assert reader.standing.symbols_from_the_source == 1
+    assert reader.standing.symbols_from_the_pattern == 0
+
+
+def test_an_nse_announcement_no_longer_resolves_to_nothing():
+    """The defect, stated as its consequence.
+
+    Every one of these is a real NSE trading symbol. The crypto pattern finds
+    none of them, so before this the event named no symbols at all.
+    """
+    from parts.intelligence.market_event_reader import SYMBOL_PATTERN, MarketEventReader
+
+    nse = ("RELIANCE", "HDFCBANK", "LT", "NIFTY 24550 CE 08 SEP 26")
+    text = "Settlement notice for " + ", ".join(nse)
+    assert SYMBOL_PATTERN.findall(text) == [], (
+        "the pattern is deliberately crypto-shaped; if it starts matching NSE "
+        "names it will also match ordinary capitalised words in prose"
+    )
+
+    reader = MarketEventReader()
+    assert reader.symbols_in(_an_announcement(symbols=nse)) == tuple(sorted(nse))
+
+
+def test_the_pattern_still_serves_a_source_that_resolves_nothing():
+    """Convert or replace, never merely delete: a free-text venue still works."""
+    from parts.intelligence.market_event_reader import MarketEventReader
+
+    reader = MarketEventReader()
+    found = reader.symbols_in(
+        _an_announcement(symbols=(), body="BTCUSDT and ETHUSDT will be delisted")
+    )
+    assert found == ("BTCUSDT", "ETHUSDT")
+    assert reader.standing.symbols_from_the_pattern == 1
+    assert reader.standing.symbols_from_the_source == 0
+
+
+def test_the_two_routes_are_counted_apart():
+    """A total alone cannot tell a resolved symbol from a scraped one."""
+    from parts.intelligence.market_event_reader import MarketEventReader
+
+    reader = MarketEventReader()
+    reader.symbols_in(_an_announcement(symbols=("RELIANCE",)))
+    reader.symbols_in(_an_announcement(symbols=(), body="BTCUSDT delisting"))
+
+    assert reader.standing.symbols_from_the_source == 1
+    assert reader.standing.symbols_from_the_pattern == 1

@@ -45,12 +45,36 @@ CRYPTO_MARKERS = ("binance", "bybit", "ccxt", "USDT")
 # Files that are legitimately about crypto and are not drift: the venue adapters
 # themselves, the tape they wrote, and this measurement. Retiring them is a
 # separate decision from converting the parts that still reason in their terms.
+# Files that must name a crypto venue to do their job, and whose naming is
+# therefore not drift. Kept deliberately short: every addition here makes the
+# number fall without anything being fixed, which is the one way this guard can
+# lie. A file belongs here only when naming crypto IS its purpose.
 LEGITIMATELY_CRYPTO = (
     "runtime/venues/binance_usdm.py",
     "runtime/venues/bybit_linear.py",
     "runtime/venues/adapter_registry.py",
     "dashboard/measure_objectives.py",
+    # The tool that finds and retires crypto-fitted learned state. Same argument
+    # as this file: a detector that may not name what it detects cannot work.
+    "operate/retire_crypto_learned_state.py",
 )
+
+# Files that still name crypto and are NOT excused, listed so the remainder is
+# legible rather than a bare count. Every one is the crypto venue path, kept
+# rather than deleted because the operator's instruction is convert or replace
+# -- and none has an Indian equivalent built yet:
+#
+#   parts/execution_venue_adapter/ccxt_order_router.py
+#   parts/execution_venue_adapter/venue_order_status_translator.py
+#   parts/market_data_feed/ccxt_venue_reader.py
+#       the real-money crypto execution and feed path, correctly off for paper
+#       trading. Replacing them means building the Upstox order router.
+#   parts/intelligence/market_event_reader.py
+#       its crypto symbol pattern is now only a fallback for a venue that
+#       publishes free text and resolves nothing; the Indian path reads the
+#       symbols exchange-announcement-reader resolved against the universe.
+#
+# They stay counted on purpose. The number should read as work outstanding.
 
 SEGMENTS = ("index-options", "stock-options", "cash-equity-intraday")
 
