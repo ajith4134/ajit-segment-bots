@@ -188,6 +188,34 @@ CRYPTO_PROVENANCE = re.compile(
 )
 
 
+# A note that records a conversion rather than justifying a crypto number. The
+# refit script writes this marker and nothing else does, so it is unambiguous.
+#
+# Added 2026-09-12 because the headline count could not fall by doing the work:
+# converting a setting means writing "was 1000.0 USDT" into its note, which makes
+# the crypto pattern match harder than before. A guard whose number rises when
+# the goal is met is not measuring the goal.
+#
+# Counted APART rather than excluded. The total still shows every setting whose
+# note names crypto, so nothing is hidden -- what changes is that "still fitted"
+# and "converted, provenance kept" are now separate numbers and only the first
+# is work outstanding.
+CONVERTED_MARKER = "REFITTED 2026-09-12"
+
+
+def settings_converted_to_the_indian_market() -> int:
+    """Settings carrying a conversion record, counted apart from live drift."""
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(
+        1 for block in re.split(r"\n(?=\[)", text)
+        if re.match(r"\[([a-z0-9_]+)\]", block) and CONVERTED_MARKER in block
+    )
+
+
 def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
     """(fitted to crypto, of those read by running code, settings in total).
 
@@ -208,6 +236,9 @@ def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
         if named is None:
             continue
         total += 1
+        if CONVERTED_MARKER in block:
+            # Already converted; its note names crypto only to say what it was.
+            continue
         if CRYPTO_PROVENANCE.search(block):
             fitted.append(named.group(1))
     # Named directories rather than a glob pattern: `[pr][ao][rn]*` looks like it
@@ -413,8 +444,11 @@ def main() -> int:
         print("     NOT MEASURED  no runtime.toml at the settings path")
     else:
         print("     settings whose provenance names a crypto venue, instrument or fee")
+        converted = settings_converted_to_the_indian_market()
         print(f"     {'fitted to crypto':<26} {fitted:>4} of {total}")
         print(f"     {'of those, read by code':<26} {read_by_code:>4}   these act every tick")
+        print(f"     {'converted, note kept':<26} {converted:>4}   re-derived from Indian data,")
+        print(f"     {'':<26}        provenance says what it was")
         print(
             "     This overcounts by design: a note that explains why a number is no\n"
             "     longer crypto-derived still names crypto, and telling that apart from\n"

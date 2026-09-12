@@ -1,0 +1,5 @@
+tape day 2026-09-08; 601 instruments read
+
+kind      instruments    prints       median          p75          p95           p99            max
+share              40      7822        2,224        8,572       52,866       183,990      1,093,495
+option            560     68791       13,722       44,026      201,000       464,100        969,000
