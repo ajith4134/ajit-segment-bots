@@ -1978,3 +1978,87 @@ larger risk fraction, which makes the round trip cheaper in units of risk and so
 - cash-equity-intraday's fix is proven by unit test and by the real segment
   resolver, **not yet live** — NSE was closed when it landed. Monday's open is
   its first real test.
+
+---
+
+# Re-walk — 2026-09-12, market shut (Saturday)
+
+The operator asked for the 29 to be walked again. Warranted rather than
+ceremonial: since the 2026-09-06 walk the project has **retired a segment**,
+**derived both option universes** instead of listing them, **converted 45
+settings** off crypto, **retired five learned checkpoints**, and **built a new
+part that can spend real money**. Every one of those moves the dataflow picture.
+
+## Where the walk stands now
+
+| | 2026-09-06 | 2026-09-12 |
+|---|---|---|
+| features walked | 29 of 29 | **29 of 29, re-walked** |
+| parts declared | 373 | **374** (`broker-order-router` added) |
+| parts launchable | 348 | **349** |
+| parts running | 322 | **324** |
+| wires carrying | 3,806 of 5,843 (65.1%) | **4,073 of 5,904 (69.0%)** |
+| blocks fully on | — | **20 of 29**, 0 dark |
+| parts silent | 1 | **0** |
+
+**Counters are ~4 minutes old** (spine restarted 2026-09-12 11:55 UTC for the
+fetcher fix below) and NSE is shut, asked of `market-session-calendar` rather
+than assumed. Every "idle" reading downstream of a trade is therefore idle for
+the honest reason, not a defect.
+
+The instrument's own cross-check is clean:
+
+    Consumers receiving nothing from a producer that is publishing:
+      none — every live producer's messages are reaching their consumers
+
+That is the sentence that matters. Idle-because-nothing-is-trading is a
+different fact from a producer publishing into a void, and only the second is a
+defect. There are none.
+
+## What this walk found
+
+**One defect, and it was invisible to every other check.** The coverage probe
+reported one silent part. `book-and-paper-fetcher` fetched EVERY gap that had
+arrived in a single tick, one real HTTP call each — 307 gaps seen, 20 fetched,
+287 rate-limited, and the part reporting `silent` for 308 seconds with its own
+state still `on`, because one tick had been running the whole time.
+
+A part that blocks its own loop for five minutes **cannot be switched off**: the
+governor owns the switch and can only take a part that returns to its loop
+(T-2). It cannot emit health, so `failing-part-detector` reports it silent while
+nothing is wrong with it. And its `skipped_tick_effect` is `corrupts`, which
+makes a tick it never finishes worse than one it skips. Bounded to one fetch per
+tick, as a setting with provenance. **325 of 325 reporting afterwards, 0
+silent.**
+
+No other check could have caught it. All four contract checkers pass on that
+part and always did; its wires all carry; the part monitor shows it RUNNING.
+Only "how long since this part last spoke" exposes it — which is what this walk
+measures and nothing else does.
+
+## The features this session's work changed, verified
+
+| feature | reading | what it confirms |
+|---|---|---|
+| `market-data-feed` | 14/24 running, **301 carrying, 0 idle between running parts** | the derived universe carries: `broker-symbol-universe-bridge` 4/4 in, 2/2 out. The 10 off are the crypto feed cluster |
+| `broker-adapter` | 10/10 running, 194 carrying | **`broker-order-router` running with its three GATE inputs carrying** — `broker-token-standing`, `money-mode`, `symbol-universe` — and idle only on `order-request`, `cancel-decision`, `order-reprice` |
+| `portfolio-state` | 6/7 running | `inr-pnl-accountant` running under its new name, 3/7 in; the four idle are `closed-trade`, `fill`, `paper-currency-rate` and crypto `funding-settlement` |
+| `execution-venue-adapter` | 2/11 running | unchanged and correct: the crypto real-money path, with `ccxt-order-router` off and its Indian replacement now live in `broker-adapter` |
+
+**The router's gate inputs carrying is the specific thing worth having
+measured.** The spine comment written when it was added claims it must start
+after those three producers, because "a router whose gates have no input refuses
+everything for the wrong reason — which looks identical to refusing correctly".
+This walk is the measurement that says the gates are actually fed.
+
+## Still true, still outstanding
+
+- `stock-market-news-data` is **5 of 29 parts running**, 338 wires unmeasured —
+  24 parts carry no `start_part` at all. Unchanged since 2026-09-06 and the
+  largest single hole in the diagram.
+- `ledger`, `opportunity-scanner`, `paper-live-trading`, `prediction`,
+  `risk-capital-allocation`, `skills` each have one part off; every one is
+  either crypto-only or downstream of a trade.
+- The idle wires concentrate where they should: `ai-brain` 176, `learning-loop`
+  167, `closed-trade-decoding` 157. All of it is downstream of a closed trade,
+  and no trade has closed on a live run since the segments were re-scoped.
