@@ -2112,3 +2112,54 @@ One fact from the tape worth carrying forward: **this source is a digest, not a
 wire.** The freshest of 31 real stories was 21.5 hours old when first seen, and
 `news-latency-meter` says so rather than a part downstream assuming news arrives
 in seconds.
+
+## Two findings from 2026-09-12 that are not about news, recorded so they are not re-found
+
+### The LLM foundation had never made a call, and four defects were why
+
+Sixteen parts publish `llm-request`; none had ever produced one. Not broken —
+deadlocked. The whole ring, each part's own counters, and the fixes are in
+`measurements/2026-09-12-the-first-llm-call-this-project-has-made/` and
+`docs/proposals/the-first-prompt-for-a-purpose-cannot-be-scored.md`. In short:
+nothing could promote a purpose's *first* prompt version; no part could get its
+*first* budget; `llm-request-router` looked a per-part budget up by
+`str(rendered.context_id)`, which is never a part id; and the budget window
+rolled on every tick, so no part could ever be found out of budget. Live after:
+`purposes_with_an_active_version` 0 → 2, `refused_no_active_version` 906 of 906 →
+2 of 41, `budgets_issued` 0 ever → 1,774, `windows_rolled` 855 → 0. The transport
+itself was proved with one real call: 20,341 input tokens, 128 out, 4.99s.
+
+**Still one step short of a call through the parts**, and the reason is correct:
+`context-assembler` needs a verified snapshot and
+`ground-truth-snapshot-builder` refuses to build one while the market is shut.
+Monday's open or a purpose-built integration test over captured prints is what
+closes it.
+
+### 100% of today's tape records are written under an instrument key — MEASURED, cause not yet confirmed
+
+`broker-market-tape-writer` on the live spine, 2026-09-12:
+
+    records_written    3,935
+    unresolved_writes  3,935   -- every single one
+    symbols_resolved      39   -- against 3,464 open tapes
+
+and on disk, `3,817` of today's tape directories are named `NSE_FO|105892`-style
+instrument keys and **zero** are named trading symbols.
+
+This is the 2026-09-08 incident's exact shape: that day ten open stock-options
+positions with real capital had a live tick every second under
+`tape/upstox/NSE_FO|56316/...` and read `NOT MEASURED` on the board, because the
+board asks for `tape/upstox/AXISBANK 1260 CE 29 SEP 26/...`. The writer was
+changed to resolve `instrument_key` to `trading_symbol` through
+`broker-subscribed-instrument-listing`, and to fall back to the key rather than
+drop a tick — `unresolved_writes` exists to make a resolution gap that never
+closes visible. It is not closing.
+
+**What is not yet established:** today is a Saturday, so the records were not
+written from a live subscription, and the resolving listing may simply not travel
+on whatever path feeds the tape while the market is shut. That would make this a
+gap in the shut-market path rather than a regression in the live one. It needs
+one reading at Monday's open to tell those apart, and that reading is the next
+thing to take: if `unresolved_writes` is still 100% with the market open, every
+price lookup by symbol is broken again.
+
