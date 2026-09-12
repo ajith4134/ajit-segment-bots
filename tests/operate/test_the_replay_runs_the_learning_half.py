@@ -183,3 +183,77 @@ def test_an_underlying_with_no_option_written_on_it_is_owned_by_neither(replay):
     assert len(cash) > len(owned_by_options), (
         "far more shares carry no derivative than carry one"
     )
+
+
+# ---- the live order path inside a replay (2026-09-12) ------------------------
+#
+# The replay offers every order it makes to broker-order-router before the paper
+# book fills it, so the fork is exercised rather than assumed. A replay that
+# showed the paper half filling while the live half stayed silent would prove
+# only that the paper half works.
+
+def test_the_replay_reads_each_segments_real_money_mode(replay):
+    """Not hardcoded to paper: a segment moved live must show the NEXT refusal.
+
+    Hardcoding "paper" here would make this replay keep reporting the first gate
+    forever, including on the day an operator moves a segment to live -- which
+    is exactly when the report would matter most and would be wrong.
+    """
+    mode = replay.money_mode_of("index-options")
+    assert mode.mode in ("paper", "live")
+    assert mode.segment == "index-options"
+
+
+def test_a_segment_with_no_settings_file_reads_as_paper(replay):
+    """money-mode-reader defaults to paper in every ambiguous case; so does this."""
+    assert replay.money_mode_of("a-segment-that-does-not-exist").mode == "paper"
+    assert replay.money_mode_of("").mode == "paper"
+
+
+def test_the_replays_router_cannot_reach_a_broker(replay):
+    """Its three transports raise. A replay runs unattended on real data.
+
+    This is the claim the replay's own output makes, so it is asserted rather
+    than trusted: a gate failing open must stop the replay with a traceback
+    naming the endpoint, never quietly place an order.
+    """
+    import types
+
+    from runtime.settings_reader import load_settings_document, settings_directory
+
+    settings = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    chain = replay.ReplayChain(
+        settings, quantity_increment=65.0, replayed_day="2026-09-08",
+        segment="index-options", clock=replay.TapeClock(1_700_000_000_000_000_000),
+    )
+
+    for transport, arguments in (
+        (chain.router._place, ("url", {}, "token")),
+        (chain.router._cancel, ("url", "token")),
+        (chain.router._modify, ("url", {}, "token")),
+    ):
+        with pytest.raises(AssertionError, match="REPLAY"):
+            transport(*arguments)
+
+
+def test_a_replayed_order_is_refused_at_the_first_gate(replay):
+    """The whole point: a paper order never reaches the live router's broker."""
+    import types
+
+    from runtime.settings_reader import load_settings_document, settings_directory
+    from runtime.trading_types import BUY, PAPER_BOOK
+
+    settings = load_settings_document(settings_directory() / "runtime.toml", "runtime")
+    chain = replay.ReplayChain(
+        settings, quantity_increment=65.0, replayed_day="2026-09-08",
+        segment="index-options", clock=replay.TapeClock(1_700_000_000_000_000_000),
+    )
+
+    status = chain.router.route(types.SimpleNamespace(
+        venue_id="upstox", symbol="NIFTY 24550 CE 08 SEP 26", side=BUY, quantity=65,
+        destination=PAPER_BOOK, segment="index-options", order_type="market",
+        limit_price=0.0, intent_id="a-replay",
+    ))
+
+    assert status.outcome == "refused-this-order-is-not-addressed-to-the-live-venue"
+    assert chain.router.standing.placed == 0

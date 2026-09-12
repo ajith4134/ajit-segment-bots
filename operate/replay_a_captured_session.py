@@ -61,6 +61,7 @@ import datetime
 import json
 import math
 import pathlib
+import types
 import statistics
 import sys
 import time
@@ -72,6 +73,7 @@ from parts.closed_trade_decoding.luck_skill_separator import LuckSkillSeparator
 from parts.closed_trade_decoding.pnl_attributor import PnlAttributor
 from parts.closed_trade_decoding.trade_episode_encoder import TradeEpisodeEncoder
 from parts.learning_loop.bot_scorekeeper import BotScorekeeper
+from parts.broker_adapter.broker_order_router import BrokerOrderRouter
 from parts.paper_live_trading.paper_fill_simulator import FILLED, PaperFillSimulator
 from parts.paper_live_trading.stop_order_manager import (
     PLACE_NEW, PLACE_TARGET, StopOrderManager, as_order_request,
@@ -87,7 +89,8 @@ from parts.risk_capital_allocation.exit_order_chainer import ExitOrderChainer
 from runtime.market_conditions import MarketSessionState, SessionKind
 from runtime.settings_reader import load_settings_document, settings_directory
 from runtime.tape import read_tape_index
-from runtime.trading_types import BUY, LONG, MARKET, OPTION, SELL, SPOT
+from runtime.brokers.upstox import UpstoxAdapter
+from runtime.trading_types import BUY, LONG, MARKET, OPTION, PAPER_BOOK, SELL, SPOT
 
 # Where a replay's own results live. Deliberately not under the live spine's
 # state root: nothing here may be read by a part, and nothing a part wrote may
@@ -111,6 +114,30 @@ SECONDS_IN_AN_NSE_SESSION = 6.25 * 60 * 60
 # `LearningReplay`'s docstring.
 THE_REPLAY_HAS_NO_DETECTOR = "replay-opened-at-the-first-print"
 THE_REPLAY_HAS_NO_REGIME = "unclassified-in-replay"
+
+
+def money_mode_of(segment: str):
+    """One segment's real money mode, from its own settings file.
+
+    The same source `money-mode-reader` reads live, rather than a hardcoded
+    "paper": if an operator moves a segment to live, this replay should show the
+    router refusing for the NEXT reason instead of going on claiming the first
+    one. A segment with no file at all reads as paper, which is what
+    `money-mode-reader` itself does in every ambiguous case.
+    """
+    import types
+
+    if not segment:
+        return types.SimpleNamespace(segment=segment, mode="paper")
+    try:
+        document = load_settings_document(
+            settings_directory() / "segments" / f"{segment}.toml", f"segment:{segment}"
+        )
+        return types.SimpleNamespace(
+            segment=segment, mode=str(document.read_value("money_mode"))
+        )
+    except (OSError, KeyError, ValueError):
+        return types.SimpleNamespace(segment=segment, mode="paper")
 
 
 def number(document, name: str) -> float:
@@ -689,6 +716,48 @@ class ReplayChain:
             kinds_by_segment={segment: kind} if segment else None,
             now_ns=self.clock,
         )
+        # The live half of the order fork, added 2026-09-12. Every order this
+        # replay makes is a PAPER order, so the router refuses each one at its
+        # first gate and nothing reaches a broker -- which is the point of
+        # running it here. A replay that showed the paper book filling while the
+        # live router stayed silent would not prove the fork works; it would
+        # only prove the paper half does.
+        #
+        # **Its three transports raise if they are ever called.** A replay runs
+        # unattended against real captured data and must not be one bad
+        # conditional away from placing an order at Upstox. If a gate ever fails
+        # open, this replay stops with a traceback naming the endpoint rather
+        # than quietly reaching it (RL-071: a replay is never what a real
+        # decision is made from).
+        def a_replay_must_never_reach_the_broker(*arguments):
+            raise AssertionError(
+                "broker-order-router tried to call Upstox from a REPLAY. Every "
+                "replayed order is a paper order and must be refused at the "
+                "router's first gate; reaching this line means a gate failed open."
+            )
+
+        self.router = BrokerOrderRouter(
+            adapter=UpstoxAdapter(),
+            place=a_replay_must_never_reach_the_broker,
+            cancel=a_replay_must_never_reach_the_broker,
+            modify=a_replay_must_never_reach_the_broker,
+            # The segment's real money mode, read from its own settings file --
+            # the same source money-mode-reader uses live. Not hardcoded to
+            # paper: if an operator sets a segment live, this replay should show
+            # the router refusing for the NEXT reason instead, not keep claiming
+            # the first one.
+            read_money_mode=lambda name: money_mode_of(name),
+            read_instrument_key=lambda symbol: None,
+            read_token=lambda: None,
+            product=str(settings.read_value("broker_order_product")),
+            validity=str(settings.read_value("broker_order_validity")),
+            now_ns=self.clock,
+        )
+        # Every status the router returned this replay. Collected rather than
+        # counted, so the summary can say WHICH refusal fired rather than only
+        # how many -- a router refusing for the wrong reason produces the same
+        # count as one refusing correctly.
+        self.refusals: list = []
         self.book.observe_session(
             MarketSessionState(
                 segment="NSE_EQ" if kind == SPOT else "NSE_FO",
@@ -1108,6 +1177,19 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         prints, entry_price, stop_multiple, target_multiple)
 
     chain.chainer.register_plan(VENUE, name, BUY, stop_price, target_price)
+
+    # The same order offered to the LIVE router first, exactly as
+    # order-destination-router offers it live. It is addressed to the paper book
+    # because this segment's money mode says paper, so the router refuses it at
+    # its first gate and the book below fills it -- which is the fork working.
+    # The refusal is collected rather than discarded: a live path that is wired
+    # and shut has to be visible as that, not as silence.
+    chain.refusals.append(chain.router.route(types.SimpleNamespace(
+        venue_id=VENUE, symbol=name, side=BUY, quantity=traded_quantity,
+        destination=PAPER_BOOK, segment=segment, order_type="market",
+        limit_price=0.0, intent_id=f"replay-{name}",
+    )))
+
     opened = chain.book.simulate(
         client_order_id=f"replay-{name}", venue_id=VENUE, symbol=name, side=BUY,
         quantity=traded_quantity, order_type=MARKET, limit_price=None, money_mode="paper",
@@ -1115,7 +1197,10 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         stop_price=None, segment=segment,
     )
     if opened.outcome != FILLED:
-        return {"symbol": name, "opened": False, "why": opened.reason}
+        return {
+            "symbol": name, "opened": False, "why": opened.reason,
+            "router_statuses": chain.refusals,
+        }
     chain.apply_fill(opened.fill)
 
     walked = 0
@@ -1131,6 +1216,7 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
             "entry_price": entry_price, "stop_price": stop_price,
             "target_price": target_price,
             "why": "neither the stop nor the target was reached in the captured session",
+            "router_statuses": chain.refusals,
         }
 
     closed = chain.closed_trades[0]
@@ -1175,6 +1261,7 @@ def replay_one_contract(name: str, prints: list, settings, lot_size: float,
         "direction": closed.direction,
         "opened_at_ns": entry_at_ns,
         "decoded": decoded,
+        "router_statuses": chain.refusals,
     }
 
 
@@ -1320,8 +1407,28 @@ def main() -> int:
                 print(f"    {shown:<30} did not close: {trade.get('why')}")
         print()
 
+    router_refusals = [
+        status
+        for rows in results.values()
+        for row in rows
+        for status in (row.get("router_statuses") or ())
+    ]
     closed_everywhere = [r for rows in results.values() for r in rows if r.get("closed")]
     decoded = [r["decoded"] for r in closed_everywhere if r.get("decoded")]
+    if router_refusals:
+        print("=== the live order path, offered the same orders")
+        outcomes = collections.Counter(status.outcome for status in router_refusals)
+        for outcome, count in outcomes.most_common():
+            print(f"    {count:>4}  {outcome}")
+        placed = sum(1 for status in router_refusals if status.outcome == "placed")
+        print(f"    {placed} of {len(router_refusals)} reached a broker.")
+        print("    Every replayed order is addressed to the paper book, because every")
+        print("    built segment's money_mode says paper -- so broker-order-router")
+        print("    refuses each one at its first gate and paper-fill-simulator fills")
+        print("    it. That is the fork working. The router's transports raise if")
+        print("    they are ever called, so a replay that somehow got past a gate")
+        print("    would stop with a traceback rather than reach Upstox.\n")
+
     print("=== the learning half, on the same trades")
     print(f"    {len(decoded)} closed trade(s) decoded, "
           f"{learning.episodes} became a trade-episode")
