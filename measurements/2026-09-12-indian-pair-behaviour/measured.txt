@@ -1,0 +1,5 @@
+tape 2026-09-08; 30 share series with 300+ prints
+
+window  128    406 pairs   |corr| median 0.301 q75 0.469 q90 0.661   reversion/step median 0.0000 q75 -0.0000
+window  256    435 pairs   |corr| median 0.367 q75 0.575 q90 0.701   reversion/step median 0.0000 q75 0.0000
+window  512    136 pairs   |corr| median 0.322 q75 0.614 q90 0.762   reversion/step median 0.0000 q75 0.0000

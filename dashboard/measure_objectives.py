@@ -221,6 +221,12 @@ MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
 # Counted apart so "nothing to re-derive" is a stated answer rather than a gap
 # nobody looked at (Rule 8).
 INDEPENDENT_MARKER = "MARKET-INDEPENDENT 2026-09-12"
+# A setting an Indian measurement was ATTEMPTED for, where the evidence came back
+# too thin to move the number. Deliberately NOT skipped below: these stay counted
+# as outstanding, because recording an attempt is not the same as settling one.
+# The note says what was measured and what would settle it, so the next attempt
+# starts from there instead of repeating it.
+INCONCLUSIVE_MARKER = "MEASURED BUT INCONCLUSIVE 2026-09-12"
 
 
 def settings_converted_to_the_indian_market() -> int:
@@ -246,6 +252,22 @@ def settings_inert_with_the_crypto_path() -> int:
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
         if re.match(r"\[([a-z0-9_]+)\]", block) and INERT_MARKER in block
+    )
+
+
+def settings_measured_without_a_conclusion() -> int:
+    """Outstanding settings a measurement was tried for and did not settle.
+
+    A subset of the outstanding count, not a deduction from it.
+    """
+    path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(
+        1 for block in re.split(r"\n(?=\[)", text)
+        if re.match(r"\[([a-z0-9_]+)\]", block) and INCONCLUSIVE_MARKER in block
     )
 
 
@@ -525,6 +547,9 @@ def main() -> int:
         print(f"     {'':<26}        theta, not funding")
         print(f"     {'market-independent':<26} {settings_that_do_not_depend_on_the_market():>4}   "
               f"a bus ceiling is a bus ceiling")
+        tried = settings_measured_without_a_conclusion()
+        print(f"     {'  of the outstanding,':<26} {tried:>4}   were measured and the")
+        print(f"     {'  measured inconclusively':<26}        evidence did not settle them")
         print(
             "     This overcounts by design: a note that explains why a number is no\n"
             "     longer crypto-derived still names crypto, and telling that apart from\n"

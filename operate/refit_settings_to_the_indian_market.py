@@ -40,6 +40,7 @@ CONVERTED_MARKER = "REFITTED 2026-09-12"
 INERT_MARKER = "INERT 2026-09-12"
 MECHANISM_MARKER = "NEEDS AN INDIAN MECHANISM 2026-09-12"
 INDEPENDENT_MARKER = "MARKET-INDEPENDENT 2026-09-12"
+INCONCLUSIVE_MARKER = "MEASURED BUT INCONCLUSIVE 2026-09-12"
 MEASURED = "measurements/2026-09-12-indian-order-sizes/"
 TAPE = "this project's own captured tape for 2026-09-08"
 
@@ -150,6 +151,43 @@ REFITS: dict[str, tuple] = {
         "operator already allows a single trade. The two zero tiers stay zero -- "
         "they are the tiers that may not trade at all, and that is not a "
         "currency question.",
+    ),
+    "risk_maximum_stop_fraction": (
+        "0.33",
+        "Claude, 2026-09-12: the furthest a stop may sit from entry, whatever "
+        "produced the distance. Was 0.05, and its own note gives the crypto "
+        "basis: 'against a measured BTCUSDT range of 77415.1-77518.1 over the 28 "
+        "seconds captured' -- a range of 0.13%. An NSE OPTION is a different "
+        f"instrument entirely. Measured on {TAPE} (measurements/2026-09-12-indian-return-distribution/), 298 contracts: the "
+        "median session high-low range is 12.89% of the opening price and the "
+        "95th percentile is 33.12%. A stop capped at 5% of entry sits INSIDE "
+        "ordinary intraday movement on essentially every option, so it is hit by "
+        "noise rather than by the thesis being wrong -- and a stop that cannot "
+        "be placed outside the noise makes every exit a coin flip. 0.33 is the "
+        "measured p95 session range: a stop may now be placed beyond what an "
+        "ordinary session does. It is a SANITY CAP and not the risk control: "
+        "what actually bounds loss is risk_maximum_per_position_fraction, one "
+        "percent of the allotment, which sizes the position so that even a stop "
+        "this wide risks only that one percent.",
+    ),
+    "bull_outlier_deviation_threshold": (
+        "4.0",
+        "Claude, 2026-09-12: how far from its own history a feature must sit "
+        "before the vector is flagged out of distribution. RE-DERIVED AND "
+        "UNCHANGED. Its note chose four over the conventional three because "
+        "'crypto features are fat-tailed', and the question is whether Indian "
+        f"ones are too. Measured on {TAPE} (measurements/2026-09-12-indian-return-distribution/): the ratio of the 99.9th "
+        "percentile print-to-print move to the median is 33x for NSE options, "
+        "53x for shares and 16x for the index -- fat by any reading, and fat in "
+        "the same direction the note reasoned in. Three standard deviations "
+        "would flag ordinary Indian movement as anomalous. The number stands "
+        "and now stands on Indian evidence.",
+    ),
+    "bear_outlier_deviation_threshold": (
+        "4.0",
+        "Claude, 2026-09-12: mirrored for the short side from "
+        "bull_outlier_deviation_threshold -- re-derived against Indian tails and "
+        "unchanged, for the reason stated there.",
     ),
     # Derived from Indian print cadence, measured on the same tape:
     #   kind    median gap   p95      p99      prints/min
@@ -348,6 +386,7 @@ ALREADY_INDIAN: dict[str, str] = {
         "measurements/2026-08-24-reference-price-staleness/measure_price_drift_by_age.py"
     ),
     # Proved by pointing at another setting that is itself proved.
+    "limit_walk_maximum_total_fraction": "measurements/2026-09-05-why-upstox-never-fills/",
     "intent_timing_maximum_price_drift": "measurements/2026-09-05-why-upstox-never-fills/",
     "tail_crowding_order_flow_deviation_threshold": "runtime/underlying_open_interest.py",
     # Indian identities. The value itself is the market, so there is nothing to
@@ -370,6 +409,11 @@ ALREADY_INDIAN: dict[str, str] = {
 # if one of these parts ever comes back on the spine, its setting is crypto again
 # that day, which is what the note has to say.
 INERT_WITH_THE_CRYPTO_PATH: dict[str, str] = {
+    "cash_equity_shortlist_liquidity_pool_size": (
+        "cash-equity-shortlist-ranker, whose segment cash-equity-intraday was "
+        "retired on 2026-09-12. The part is still built and still on the spine, "
+        "and with no cash-equity segment in built_segments it ranks nothing"
+    ),
     "captured_symbol_count": "symbol-catalogue-reader, off the spine since the 2026-09-02 cutover",
     "symbol_selection_metric": "symbol-catalogue-reader, off the spine",
     "symbol_catalogue_refresh_interval": "symbol-catalogue-reader, off the spine",
@@ -414,6 +458,36 @@ def note_insertion_point(block: str) -> int | None:
 # design question with a named answer, and the note says what that answer is so
 # the next session does not have to rediscover it.
 NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
+    "anomaly_disagreement_threshold": (
+        "market-anomaly-detector calls the VENUES in disagreement when one venue's "
+        "print sits this far from the consolidated price. It needs two venues "
+        "pricing one instrument, and this project now has one: captured_venues is "
+        "empty and every price comes from Upstox. There is no second opinion to "
+        "disagree with, so the threshold has nothing to gate. The Indian analogue "
+        "of 'two prices for one thing' is the option's own premium against the "
+        "premium implied by its underlying and the surface -- implied-vol-reader "
+        "and broker-option-greeks both already carry the pieces -- which is a "
+        "different comparison needing its own measurement, not this fraction"
+    ),
+    "leverage_carry_tolerance_per_day": (
+        "the most leverage-selector will pay per day to borrow before reducing "
+        "leverage. Both built segments state leverage_ceiling 1.0 and "
+        "cash-equity-intraday, the only segment that ever used leverage, was "
+        "retired on 2026-09-12 -- so nothing borrows and nothing pays carry. Its "
+        "own note already says it was 'carried over unchanged' from the crypto "
+        "funding tolerance. A leveraged Indian segment's answer is Upstox's real "
+        "MTF interest rate, which is a published schedule rather than a tolerance "
+        "this project picks"
+    ),
+    "intraday_borrowing_daily_interest_rate": (
+        "what the broker charges per day on the borrowed part of an intraday "
+        "position. Zero is CORRECT for Upstox MIS -- interest is what the margin "
+        "trading facility charges to carry overnight, a product this project "
+        "deliberately does not use -- and its own note says it is NOT VERIFIED "
+        "against Upstox's schedule. It is moot either way now: the segment that "
+        "borrowed is retired. Verify against the schedule before any leveraged "
+        "segment trades, rather than treating a zero nobody checked as measured"
+    ),
     "stop_cluster_clearance_fraction": (
         "stop-cluster-clearance moves a stop clear of a LIQUIDATION cluster -- a "
         "crowd of leveraged positions that will be force-closed at one price. NSE "
@@ -469,6 +543,54 @@ NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
 # than ignored, because "nothing to do" has to be a stated answer or it is
 # indistinguishable from "nobody looked" (Rule 8).
 MARKET_INDEPENDENT: dict[str, str] = {
+    "broker_reconnect_backoff_floor": (
+        "the first wait after a dropped feed connection before doubling. A "
+        "reconnection policy is about being a well-behaved client of whatever "
+        "server dropped you, not about what that server prices. Its note already "
+        "says it matches the crypto reader's starting point because no Upstox "
+        "measurement exists -- and none is needed: one second before a first "
+        "retry is polite on any socket, and the doubling is what adapts"
+    ),
+    "broker_account_funds_freshness": (
+        "how old a funds reading may be before it is read again. A staleness "
+        "budget for a REST poll, chosen against how fast an account's available "
+        "margin can move and how hard the endpoint may be hit -- both properties "
+        "of this project's own polling rather than of the instruments"
+    ),
+    "broker_price_frame_cadence_seconds": (
+        "how often the price-level sampler republishes every instrument's latest "
+        "price. A publish rate on this project's own bus. Note the direction it "
+        "errs in is now generous rather than tight: four frames a second against "
+        "an Indian option that prints 0.7 times a MINUTE "
+        f"(measurements/2026-09-12-indian-feed-cadence/) means most frames restate an unchanged price, which is the "
+        "cheap failure, and level publishing already skips an unchanged level"
+    ),
+    "price_gap_patience_multiple": (
+        "how far past its own habit a symbol must be silent before the gap is "
+        "real, as a multiple of that symbol's OWN measured p99. The multiple is "
+        "the judgement; the p99 it multiplies is measured live and per symbol, "
+        "so the market enters through the measurement rather than through this "
+        "number. That is the whole design of an adaptive bound, and it is why "
+        "this one did not need re-deriving when the floor beneath it did"
+    ),
+    "anomaly_feed_silence_patience_multiple": "the same adaptive-bound argument, for silence that reads as an anomaly",
+    "feed_gap_patience_multiple": "the same adaptive-bound argument, for silence that reads as a feed gap",
+    "spread_reversion_z_threshold": (
+        "its own note says it is 'judgement anchored to a measurement rather than "
+        "measured directly: under a normal distribution two standard deviations is "
+        "the outer 5%'. That is a property of the normal distribution, which does "
+        "not change market. The note's second half -- that fat tails make it fire "
+        "more often than 5% -- is if anything MORE true of Indian options than of "
+        "crypto perpetuals, and in the same direction, so the choice stands"
+    ),
+    "risk_maximum_drawdown_fraction": (
+        "how far realised equity may fall from its high-water mark before the "
+        "drawdown breaker zeroes the risk limit. Ten percent of an allotment is "
+        "ten percent whatever the allotment is denominated in; its note names USDT "
+        "only because it worked the fraction through against the old 10,000 USDT "
+        "paper balance. The segments now hold 75 lakh each and a tenth of that is "
+        "7.5 lakh, computed from the same fraction"
+    ),
     "closed_trades_trustworthy_after_ns": (
         "a boundary in time, marking which recorded trades came from a run whose "
         "prices the market never printed. When that moment was has nothing to do "
@@ -519,6 +641,71 @@ MARKET_INDEPENDENT: dict[str, str] = {
         "sample size for an estimator, chosen for statistical stability"
     ),
 }
+
+
+# Settings a measurement was attempted for, where the evidence came back too
+# thin to re-derive from. **These stay counted as outstanding**: the note records
+# what was measured and what would settle it, and no marker is written that the
+# guard skips. Recording the attempt is worth doing -- the next session should
+# not repeat a measurement that did not work -- but it is not progress and must
+# not read as any.
+MEASURED_BUT_INCONCLUSIVE: dict[str, str] = {
+    "cointegration_minimum_correlation": (
+        "measured on 30 NSE share series from 2026-09-08, 435 pairs at the 256 "
+        "window: median |correlation| 0.367, q75 0.575, q90 0.701. The crypto "
+        "figure of 0.5 was chosen as 'about the median pair on bybit-linear (q50 "
+        "0.56)', and on this Indian sample 0.5 sits nearer the 70th percentile "
+        "than the median -- so keeping it is a TIGHTER filter here than it was "
+        "there, not a looser one. Not changed on this evidence: one session and "
+        "thirty symbols is too thin to move a threshold that decides what the "
+        "pair finder spends its budget on, and loosening it toward the Indian "
+        "median would widen a sweep that already grows with the SQUARE of a "
+        "1,980-symbol universe. What would settle it: the same measurement "
+        "across several sessions and the full F&O underlying list"
+    ),
+    "cointegration_minimum_reversion_strength": (
+        "measured alongside the correlation above and the result was NOT USABLE: "
+        "median reversion per step came out 0.0000 at every window tried. Print-"
+        "to-print is the wrong granularity for it on this market -- an NSE share "
+        "barely moves between consecutive prints (median step 0.037%), so the "
+        "deviation ratio the estimator forms is dominated by rounding rather than "
+        "by any pull back toward the mean. What would settle it: a spread half-"
+        "life fitted on time-spaced bars rather than on prints, across several "
+        "sessions"
+    ),
+    "cointegration_window_length": (
+        "the window the two thresholds above are measured AT, so it cannot be "
+        "re-derived before they are. The crypto figure of 256 was chosen because "
+        "reversion was three to five times stronger there than at 1024; the "
+        "Indian reversion measurement did not work (see "
+        "cointegration_minimum_reversion_strength), so the comparison that chose "
+        "256 cannot yet be repeated here. Correlation alone rose slightly with "
+        "window on this sample -- median 0.301 at 128, 0.367 at 256, 0.322 at "
+        "512 -- which is not a strong enough signal to move it on"
+    ),
+}
+
+
+def record_measured_but_inconclusive(text: str, name: str, what: str) -> tuple[str, str]:
+    """Record a measurement that did not settle the value. Stays outstanding."""
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if INCONCLUSIVE_MARKER in block:
+        return text, "already recorded"
+    at = note_insertion_point(block)
+    if at is None:
+        return text, "NO NOTE"
+    addition = (
+        f" {INCONCLUSIVE_MARKER}: an Indian measurement was attempted and did not "
+        f"settle this -- {what}. The value is unchanged and this setting REMAINS "
+        f"outstanding; the record exists so the next attempt starts from what was "
+        f"already tried rather than repeating it."
+    )
+    block = block[:at] + addition.replace('"', "'") + block[at:]
+    return text[:start] + block + text[(end if end > 0 else len(text)):], "recorded"
 
 
 def record_market_independent(text: str, name: str, why: str) -> tuple[str, str]:
@@ -674,6 +861,11 @@ def main() -> int:
         print("DRY RUN -- nothing will be written. Pass --apply to do it.")
 
     changed = 0
+    for name, what in MEASURED_BUT_INCONCLUSIVE.items():
+        text, done = record_measured_but_inconclusive(text, name, what)
+        print(f"  {name:46} inconclusive: {done}")
+        if done == "recorded":
+            changed += 1
     for name, why in MARKET_INDEPENDENT.items():
         text, what = record_market_independent(text, name, why)
         print(f"  {name:46} independent: {what}")
