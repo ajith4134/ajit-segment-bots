@@ -1,5 +1,57 @@
 # ajit-segment-bots
 
+## SCOPE CHANGE — 2026-09-12, read before any segment work
+
+**Two segments, not three.** The operator: *"Lets focus only on option index and
+option stocks full universe and retire the intraday cash"*, then *"make sure
+notin isard coded and detects auto maticly every tme"*.
+
+| | |
+|---|---|
+| built segments | `index-options`, `stock-options` |
+| retired | `cash-equity-intraday` — **settings-off, not removed**; its file and all its parts stay, bringing it back is one line in `built_segments` plus a restart |
+| capital | ₹7,500,000 each (its ₹5,000,000 split between them); total unchanged at ₹1.5 crore |
+| universe | **220 underlyings — 10 indices, 210 shares — 8 contracts each = 1,980 of the connection's 2,000 keys** |
+
+**"Full universe" is of underlyings.** 36,178 option contracts exist against a
+connection that accepts 2,000 keys and evicts nothing, so the contract universe
+was never subscribable.
+
+**Nothing is named by hand.** Both universes are rules read off the broker's own
+master every restatement — `every-nse-index-with-an-option` and
+`every-nse-stock-with-an-option`, the complement of the cash segment's existing
+`every-nse-share-without-a-derivative`. An exchange listing options on a new
+index, or NSE revising the F&O list, is picked up with no edit. The symbol lists
+still in each segment file are **fallbacks**, not the universe. MCX is not
+blacklisted — it excludes itself, because the index rule admits NSE_INDEX and
+BSE_INDEX and MCXBULLDEX is MCX_INDEX.
+
+`docs/proposals/two-option-segments-on-a-derived-universe.md` carries the
+measurements. **One open question, and it is the operator's:**
+`minimum_capital_per_trade` (₹100,000) over NSE's freeze quantity (1,755 for
+NIFTY) imposes a **~₹57 floor on any index option premium** this segment can
+trade — on the real 2026-09-08 tape it makes 4 of 8 contracts untradeable. The
+two settings were each chosen without the other in view.
+
+**Sizing is bounded by the venue now, not only by the desk**
+(`docs/proposals/no-order-larger-than-the-exchange-accepts.md`). Seven NIFTY
+trades on 2026-09-08 were 91.4% of every rupee this project has lost, and the
+cause was mechanical: the capital ceiling was computed at the touch price and
+converted into 2,000,000 units of a contract NSE caps at 1,755 per order, which
+the paper book filled by walking the price 69.5%. `trade-capital-bounds-gate`
+now snaps to whole lots on **every** path (not just bump and cap), caps at
+`freeze_quantity` — which nothing in this project read until that day — never
+refuses a close, and counts capital it has itself let through until a `position`
+reports it, so orders cannot stack inside one millisecond.
+
+**`label-builder`'s `THE_SIZE_WAS_RIGHT` could never be false**: `_stop_distance`
+read a field `ClosedTradeRecord` never declared, so the `getattr` default made
+every label assert the size was right. It is a declared field now and an unknown
+stop omits the component rather than asserting it. Still open: nothing consumes
+that component, no closed trade carries its stop, and the conviction models train
+only on `signal-outcome-labeller` — so `label-builder` has built **zero** labels
+ever.
+
 ## TEMPORARY GOAL (third, active) — 2026-09-06, read before anything else
 
 **Take every one of the 373 parts individually and prove, with a real-data

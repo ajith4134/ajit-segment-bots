@@ -8,6 +8,48 @@ made only when the user gives them.
 trading bot) is in git history — `git log -p docs/goal.md` — not deleted, not
 carried forward as a parallel track.
 
+## SCOPE CHANGE — given 2026-09-12, read this before any segment work
+
+**In the user's own words, verbatim:**
+
+> Lets focus only on option index and option stocks full universe and retire the
+> intraday cash
+
+and, while it was being built:
+
+> make sure notin isard coded and detects auto maticly every tme
+
+**Two segments, not three.** `cash-equity-intraday` is retired. The user chose
+**settings-off over removal** when asked: it is gone from `built_segments` and
+its settings file carries a banner saying so, and every part that serves it stays
+built and unchanged — `cash-equity-shortlist-ranker`, `equity-opportunity-profiler`,
+`intraday-square-off-placer`, `leverage-selector`. Bringing it back is one line
+and a restart. Its ₹5,000,000 allotment was split between the two options
+segments, which hold **₹7,500,000 each** now, so total capital at risk is
+unchanged at ₹1.5 crore.
+
+**"Full universe" is of underlyings, because the universe of contracts is not
+subscribable.** Measured on the real master: 36,178 option contracts exist and one
+connection accepts 2,000 instrument keys. What the two segments now take is
+**220 underlyings — 10 indices and 210 shares — with 8 contracts on each**,
+1,980 of 2,000 keys.
+
+**Nothing is typed by hand.** Both segments' universes are rules evaluated against
+the broker's own master every restatement — `every-nse-index-with-an-option` and
+`every-nse-stock-with-an-option` — so an exchange listing options on a new index,
+or NSE revising the F&O list, is picked up without an edit. The stated symbol
+lists that remain in each file are fallbacks, not the universe.
+
+The design, the measurements and what it leaves open are in
+`docs/proposals/two-option-segments-on-a-derived-universe.md`. **The open question
+is the operator's:** `minimum_capital_per_trade` (₹100,000) and NSE's freeze
+quantity together impose a ~₹57 floor on any index option premium this segment can
+trade, and the two settings were each chosen without the other in view.
+
+This narrows the first temporary goal below (which named three segments) and does
+not touch the second or third — the feature audit and the part-purpose audit still
+cover every part, including the retired segment's.
+
 ## TEMPORARY GOAL — given 2026-09-06 (third), read this first
 
 **In the user's own words, verbatim:**

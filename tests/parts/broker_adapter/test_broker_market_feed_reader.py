@@ -78,17 +78,22 @@ def test_only_the_tracked_underlyings_and_their_nearest_expiry_chain_are_subscri
     unrelated = _listing("NSE_EQ|RANDOM")
 
     listings = (unrelated, far_call, near_put, other_index, nifty, near_call)
-    wanted = only_what_the_segments_trade(
+    wanted, left_to_the_universe = only_what_the_segments_trade(
         listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
     )
 
-    assert {listing.instrument_key for listing in wanted} == {
-        nifty.instrument_key, near_call.instrument_key, near_put.instrument_key,
-    }
+    # Underlyings only since 2026-09-12. The nearest-expiry contracts are real
+    # and wanted, but this function holds no prices and so cannot rank them by
+    # distance from the money; `broker-symbol-universe-bridge` does, and
+    # `subscribe_the_universe_first` puts its ranked chains ahead of everything.
+    # At the operator's 220-underlying universe the unranked remainder is 13,738
+    # contracts against a 2,000-key connection that never evicts.
+    assert {listing.instrument_key for listing in wanted} == {nifty.instrument_key}
+    assert left_to_the_universe == 2, "both nearest-expiry contracts, counted not dropped silently"
     # The far expiry, the untracked index and the unrelated equity are not
     # deprioritized -- they are not subscribed at all, so their slots stay free
     # for the chain the bots are actually waiting on.
-    assert len(wanted) == 3
+    assert len(wanted) == 1
 
 
 def test_a_tracked_ordinary_share_gets_its_chain_too_not_only_an_index():
@@ -108,12 +113,13 @@ def test_a_tracked_ordinary_share_gets_its_chain_too_not_only_an_index():
     )
     call = _option_listing("NSE_FO|RELIANCE|near|CE", "NSE_EQ|INE002A01018", expiry_ms=2000)
 
-    wanted = only_what_the_segments_trade(
+    wanted, left_to_the_universe = only_what_the_segments_trade(
         (reliance, call), tracked_trading_symbols=("NIFTY", "RELIANCE"), now_ms=1000,
     )
-    assert {listing.instrument_key for listing in wanted} == {
-        reliance.instrument_key, call.instrument_key,
-    }
+    # The share itself, whatever its instrument type -- which is what this test
+    # has always been about. Its chain now comes from the universe, ranked.
+    assert {listing.instrument_key for listing in wanted} == {reliance.instrument_key}
+    assert left_to_the_universe == 1
 
 
 def test_the_same_name_listed_on_two_exchanges_keeps_both_chains():
@@ -134,10 +140,15 @@ def test_the_same_name_listed_on_two_exchanges_keeps_both_chains():
     nse_call = _option_listing("NSE_FO|R|CE", "NSE_EQ|RELIANCE", expiry_ms=2000)
     bse_call = _option_listing("BSE_FO|R|CE", "BSE_EQ|RELIANCE", expiry_ms=2000)
 
-    wanted = only_what_the_segments_trade(
+    wanted, left_to_the_universe = only_what_the_segments_trade(
         (nse, bse, nse_call, bse_call), tracked_trading_symbols=("RELIANCE",), now_ms=1000,
     )
-    assert len(wanted) == 4
+    # Both exchanges' listings of the name, which is what a symbol-keyed dict
+    # used to lose. Their chains come from the universe.
+    assert {listing.instrument_key for listing in wanted} == {
+        nse.instrument_key, bse.instrument_key,
+    }
+    assert left_to_the_universe == 2
 
 
 def test_an_expired_contract_is_excluded_not_merely_deprioritized():
@@ -147,13 +158,14 @@ def test_an_expired_contract_is_excluded_not_merely_deprioritized():
     expired_call = _option_listing("NSE_FO|NIFTY|expired|CE", "NSE_INDEX|Nifty 50", expiry_ms=500)
     live_call = _option_listing("NSE_FO|NIFTY|live|CE", "NSE_INDEX|Nifty 50", expiry_ms=5000)
 
-    wanted = only_what_the_segments_trade(
+    wanted, left_to_the_universe = only_what_the_segments_trade(
         (expired_call, nifty, live_call),
         tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
     )
-    assert {listing.instrument_key for listing in wanted} == {
-        nifty.instrument_key, live_call.instrument_key,
-    }
+    assert {listing.instrument_key for listing in wanted} == {nifty.instrument_key}
+    # The live one is left to the universe; the expired one is not counted at
+    # all, because it is excluded rather than deprioritized.
+    assert left_to_the_universe == 1
 
 
 def test_nothing_is_subscribed_before_a_tracked_listing_has_arrived():
@@ -166,7 +178,7 @@ def test_nothing_is_subscribed_before_a_tracked_listing_has_arrived():
     listings = tuple(_listing(f"NSE_EQ|{i}") for i in range(5))
     assert only_what_the_segments_trade(
         listings, tracked_trading_symbols=("NIFTY", "BANKNIFTY", "SENSEX"), now_ms=1000,
-    ) == ()
+    ) == ((), 0)
 
 
 def test_plan_additional_subscriptions_skips_what_is_already_subscribed():

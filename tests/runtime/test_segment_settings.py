@@ -151,8 +151,14 @@ def test_the_chain_width_falls_back_the_same_way(monkeypatch):
 
 
 def test_the_operator_s_own_two_segments_each_state_a_universe():
-    """The real files on this machine, not a fixture: index-options must keep
-    trading the three indices and stock-options must not inherit them."""
+    """The real files on this machine, not a fixture.
+
+    index-options states every index NSE or BSE writes options on, which the
+    operator asked for on 2026-09-12 as the full index universe; stock-options
+    must still not inherit any of them. Its own symbols are now a fallback --
+    its `segment_universe_selection` is derived -- so what matters here is that
+    the two do not contend, not how long either list is.
+    """
     from runtime.settings_reader import settings_directory
 
     root = settings_directory()
@@ -162,7 +168,13 @@ def test_the_operator_s_own_two_segments_each_state_a_universe():
     index = read_segment_symbols("index-options", "segment_underlying_trading_symbols", root)
     stock = read_segment_symbols("stock-options", "segment_underlying_trading_symbols", root)
 
-    assert index == ("NIFTY", "BANKNIFTY", "SENSEX")
+    # The ten that carry CE/PE contracts in NSE_FO or BSE_FO on the real master,
+    # measured 2026-09-12. MCXBULLDEX also carries options and is deliberately
+    # absent: it is MCX, which docs/goal.md #6 defers.
+    assert set(index) == {
+        "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+        "NIFTYFPI", "FOCIT", "SENSEX", "BANKEX", "SENSEX50",
+    }
     assert "NIFTY" not in stock and "SENSEX" not in stock
     assert "RELIANCE" in stock
     assert not set(index) & set(stock), "the two segments must not share an underlying"
@@ -367,15 +379,29 @@ def test_a_derived_selection_segment_does_not_disturb_a_stated_one(derived_cash_
     ) == "stock-options"
 
 
-def test_the_operator_s_three_segments_claim_disjoint_instruments():
-    """The real files on this machine: the three bots of the 2026-09-05
-    temporary goal must not contend for one instrument."""
+def test_the_operator_s_built_segments_claim_disjoint_instruments():
+    """The real files on this machine: no two built segments may contend.
+
+    Reads `built_segments` rather than naming three, because which segments are
+    built is the operator's and changed on 2026-09-12 -- cash-equity-intraday
+    was retired and the file that describes it deliberately kept. A test that
+    named the three by hand would have failed for the retirement rather than for
+    a contention, which is the wrong reason to go red.
+
+    The count is not asserted. Both remaining segments' stated symbols are a
+    fallback beneath a derived rule now, so a number here would be measuring the
+    fallback rather than the universe.
+    """
     from runtime.settings_reader import settings_directory
 
     root = settings_directory()
-    segments = ("index-options", "stock-options", "cash-equity-intraday")
+    context = _MultiSegmentContext("index-options", [])
+    try:
+        segments = built_segments(context)
+    except Exception:  # noqa: BLE001 - no live settings on this machine
+        pytest.skip("this machine states no built segments")
     if not all(segment_settings_path(s, root).exists() for s in segments):
-        pytest.skip("this machine does not have all three segment files")
+        pytest.skip("this machine does not have every built segment's file")
 
     claimed = {}
     for segment in segments:
@@ -389,4 +415,4 @@ def test_the_operator_s_three_segments_claim_disjoint_instruments():
                 )
                 claimed[key] = segment
 
-    assert len(claimed) == 3 + 14 + 14
+    assert claimed, "at least one built segment must claim something"

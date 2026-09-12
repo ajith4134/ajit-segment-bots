@@ -158,6 +158,30 @@ def only_what_the_segments_trade(
     same-day-expired contract is real, current data and would otherwise still
     win a nearest-expiry comparison against tomorrow's real chain.
 
+    **Underlyings only since 2026-09-12, and the contracts come from the
+    universe instead.** This returned every nearest-expiry contract of every
+    tracked underlying, unranked, and `plan_subscriptions` took whatever fit in
+    listing order. At 3 indices and 14 shares that was 1,528 contracts against a
+    2,000-key connection and the slack absorbed it. The operator's universe of
+    that day -- every index NSE or BSE writes options on, and every one of the
+    210 shares an option is written on -- makes it **13,738 nearest-expiry
+    contracts**, and listing order has no relationship to what is worth
+    subscribing.
+
+    This function cannot rank them, because ranking is distance from the money
+    and it holds no prices. `broker-symbol-universe-bridge` does hold them, and
+    already publishes each underlying's chain capped and sorted nearest the
+    money first. So the honest division of labour is: this selects the
+    underlyings, whose prices are what make a ranking possible at all, and
+    `subscribe_the_universe_first` supplies the ranked contracts ahead of
+    everything else.
+
+    The cost is that no option is subscribed until the bridge has priced its
+    underlying, which is the bootstrap the caller already documents. The
+    alternative is worse and has already happened: **a slot spent on the wrong
+    instrument is spent for good**, because the connection caps at 2,000 and
+    nothing evicts. An empty slot costs nothing and can still be filled.
+
     Earlier evidence this exists at all, 2026-09-02: with the raw catalogue
     order, `instrument-selector` refused 14 of 14 trade-intents
     no-instrument-is-listed-for-this-symbol and `symbols_with_listed_instruments`
@@ -187,14 +211,17 @@ def only_what_the_segments_trade(
                 nearest_expiry_by_underlying[listing.underlying_key] = listing.expiry_ms
 
     wanted: list[InstrumentListing] = []
+    contracts_dropped = 0
     for listing in listings:
         is_tracked_underlying = listing.instrument_key in tracked_underlying_keys
         is_nearest_expiry_option = listing.expiry_ms is not None and listing.expiry_ms == (
             nearest_expiry_by_underlying.get(listing.underlying_key)
         )
-        if is_tracked_underlying or is_nearest_expiry_option:
+        if is_tracked_underlying:
             wanted.append(listing)
-    return tuple(wanted)
+        elif is_nearest_expiry_option:
+            contracts_dropped += 1
+    return tuple(wanted), contracts_dropped
 
 
 def state_of_the_subscription(
@@ -460,9 +487,10 @@ def start_part(context) -> int:
             # they can be subscribed before the catalogue race resolves, and
             # their chains follow once those prices arrive.
             return False
-        listings = only_what_the_segments_trade(
+        listings, contracts_left_to_the_universe = only_what_the_segments_trade(
             listings, tracked_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
+        state["contracts_left_to_the_universe"] = contracts_left_to_the_universe
         plan = plan_subscriptions(
             adapter,
             subscribe_the_universe_first(universe, listings),
@@ -506,9 +534,10 @@ def start_part(context) -> int:
             "broker_subscription_growth_check_interval"
         )
         listings = instrument_listings.values()
-        listings = only_what_the_segments_trade(
+        listings, contracts_left_to_the_universe = only_what_the_segments_trade(
             listings, tracked_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
+        state["contracts_left_to_the_universe"] = contracts_left_to_the_universe
         additional = plan_additional_subscriptions(
             adapter,
             state["subscribed"],
@@ -582,6 +611,15 @@ def start_part(context) -> int:
             "connected": state["connection"] is not None,
             "subscribed_instruments": len(state["subscribed"]),
             "universe_instruments_known": len(selected_universe.mapping()),
+            # Nearest-expiry contracts this part deliberately did not subscribe
+            # from the raw catalogue, leaving them to the universe's own ranked
+            # chains (2026-09-12). A large number here is the normal state, not
+            # a fault: it is 13,738 on the operator's own 220-underlying
+            # universe, and every one of them would have been an unranked
+            # strike competing for a slot nothing can ever evict.
+            "contracts_left_to_the_universe": state.get(
+                "contracts_left_to_the_universe", 0
+            ),
             "decoded_messages": counts["decoded_messages"],
             "last_failure": counts["last_failure"],
         }

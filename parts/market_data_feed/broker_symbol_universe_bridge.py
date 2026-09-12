@@ -120,6 +120,72 @@ class EquityWithoutADerivative:
         )
 
 
+# The two segments an index option can be listed in. MCX is deliberately absent
+# and excludes itself: MCXBULLDEX carries options and sits in MCX_INDEX, which
+# docs/goal.md #6 defers, so no name has to be blacklisted by hand.
+INDEX_SEGMENTS = ("NSE_INDEX", "BSE_INDEX")
+INDEX_INSTRUMENT_TYPE = "INDEX"
+
+
+class IndexWithAnOption:
+    """Which indices the index-options segment trades, by derivation (2026-09-12).
+
+    The operator's instruction the same day: *"make sure notin isard coded and
+    detects auto maticly every tme"*. This segment stated ten trading symbols by
+    hand for a few hours; a list is a list however short, and it is wrong the
+    day an exchange lists options on an eleventh index.
+
+    Same shape as `StockWithAnOption` below and for the same reason: an index
+    is this segment's if it is an NSE or BSE index **and some contract is
+    written on it**, both read off the broker's own master. Measured there
+    2026-09-12: of 216 index listings, exactly 10 carry CE/PE contracts.
+
+    `admits` answers only the first half, because the second needs the whole
+    master -- an index is heard before or after its options depending on where
+    the catalogue conveyor is. `universe()` completes it.
+    """
+
+    def admits(self, listing) -> bool:
+        return (
+            getattr(listing, "segment", None) in INDEX_SEGMENTS
+            and getattr(listing, "instrument_type", None) == INDEX_INSTRUMENT_TYPE
+        )
+
+
+class StockWithAnOption:
+    """Which shares the stock-options segment trades, by derivation (2026-09-12).
+
+    The operator's instruction: "Lets focus only on option index and option
+    stocks full universe". Full universe of *underlyings*, because the full
+    universe of contracts is not subscribable -- the real master carries 27,012
+    stock option contracts and 9,166 index ones against a connection that
+    accepts 2,000 instrument keys. So every share an option is written on, with
+    a bounded chain on each.
+
+    The exact complement of `EquityWithoutADerivative`, and deliberately built
+    from the same two facts that class already reads: an ordinary NSE share, and
+    whether some contract names it as an underlying. Measured on the real master
+    2026-09-12: 210 of 2,655 ordinary shares carry options, against the 14 the
+    segment had stated by hand.
+
+    Stated as a rule and never as a list, for the reason the cash-equity rule
+    already gives: 210 names typed into a settings file is fiction the day NSE
+    revises the F&O list, and it cannot be audited.
+
+    `admits` answers only the first half -- is this an ordinary share -- because
+    the second half needs the whole master: a share is this segment's only if
+    some contract is written on it, and that contract may not have been spoken
+    yet. `universe()` completes it once a catalogue cycle has been heard.
+    """
+
+    def admits(self, listing) -> bool:
+        return (
+            getattr(listing, "segment", None) == NSE_EQUITY_SEGMENT
+            and getattr(listing, "instrument_type", None) == ORDINARY_SHARE
+            and getattr(listing, "security_type", None) == ORDINARY_SECURITY
+        )
+
+
 @dataclass
 class BridgeStanding:
     listings_seen: int = 0
@@ -174,6 +240,14 @@ class BridgeStanding:
     # "never tried" (Rule 8 -- see warm_start_failure for which one it was).
     warm_start_listings_loaded: int = 0
     warm_start_failure: str | None = None
+    # Underlyings this bridge derived rather than was handed -- every ordinary
+    # NSE share an option is written on (2026-09-12). Its own number because a
+    # derived universe that silently resolves to nothing looks exactly like a
+    # stated one that was never given symbols, and that reading cost a day on
+    # 2026-09-04 when universal-symbol-sweeper had run 3,114 sweeps over an
+    # empty universe with every skip counter at zero.
+    derived_option_underlyings: int = 0
+    shares_held_pending_an_option: int = 0
 
 
 class BrokerSymbolUniverseBridge:
@@ -185,6 +259,8 @@ class BrokerSymbolUniverseBridge:
         option_contracts_per_underlying: int | dict[str, int],
         now_ms=lambda: int(time.time() * 1000),
         equity_selection=None,
+        option_underlying_selections=(),
+        derived_chain_width: int = 0,
     ) -> None:
         if not tracked_trading_symbols:
             raise ValueError(
@@ -246,6 +322,28 @@ class BrokerSymbolUniverseBridge:
         # None means this bridge publishes only what it was handed, which is what
         # a spine trading only derivatives states.
         self._equity_selection = equity_selection
+        # The derived option universes (2026-09-12): every index an option is
+        # written on, every ordinary NSE share an option is written on, or
+        # both -- one rule per segment that asks for one. Empty when no segment
+        # does, and then this bridge tracks only what it was handed.
+        #
+        # A tuple rather than one rule because the two segments derive
+        # different halves of the same master and both run on this spine, and
+        # because the operator's standing instruction is that nothing is typed
+        # by hand: a rule that could only express one half would have sent the
+        # other half back to a list.
+        self._option_underlying_selections = tuple(option_underlying_selections)
+        # The chain width for an underlying no settings file names by hand.
+        # Zero with no derived selection, which is the one case where a width
+        # of zero is right rather than missing.
+        self._derived_chain_width = int(derived_chain_width)
+        # Every ordinary NSE share the master has listed, held while we wait to
+        # learn whether an option is written on it. A share is heard before its
+        # contracts as often as after -- the conveyor restates the table in its
+        # own order -- so admission cannot be decided at the moment the share
+        # arrives. Promoted in `universe()` once the answer is knowable.
+        self._share_by_key: dict[str, object] = {}
+        self._derived_underlyings_promoted = 0
         # The most recent cash-equity-shortlist, or None while none has arrived
         # yet. None while the equity_selection wants shares at all is what
         # holds the equity branch back (see universe()) -- publishing every
@@ -317,6 +415,17 @@ class BrokerSymbolUniverseBridge:
         elif self._equity_selection is not None and self._equity_selection.admits(listing):
             self._equity_by_key[listing.instrument_key] = listing
             self.standing.equities_listed = len(self._equity_by_key)
+
+        # Held separately from the cash-equity branch above, and not in an elif
+        # with it: the two rules are complements over the same shares, so a
+        # spine running both segments has to keep every share for both to judge.
+        if (
+            listing.underlying_key is None
+            and any(
+                rule.admits(listing) for rule in self._option_underlying_selections
+            )
+        ):
+            self._share_by_key[listing.instrument_key] = listing
 
         if listing.trading_symbol in self._tracked and listing.underlying_key is None:
             if listing.instrument_key not in self._underlying_by_key:
@@ -473,11 +582,39 @@ class BrokerSymbolUniverseBridge:
             getattr(underlying, "trading_symbol", None)
         )
         if width is None:
-            # An underlying that is not tracked has no width and no chain. It
-            # cannot be reached from universe(), which iterates the tracked ones;
-            # returning nothing here says so rather than inventing a width.
-            return ()
+            # An underlying nobody named by hand takes the derived width, which
+            # is the widest any segment taking a derived universe states for
+            # itself. Zero means no segment takes one, and then an untracked
+            # underlying has no width and no chain -- it cannot be reached from
+            # universe(), which iterates the tracked ones, so returning nothing
+            # here says so rather than inventing a width.
+            if self._derived_chain_width <= 0:
+                return ()
+            width = self._derived_chain_width
         return tuple(on_the_chain[:width])
+
+    def promote_shares_an_option_is_written_on(self) -> None:
+        """Track every held share that some contract names as its underlying.
+
+        The second half of `StockWithAnOption.admits`, which can only be
+        answered against the whole master: a share and its options arrive in
+        whatever order the catalogue conveyor restates them, so a share heard
+        first would be refused on a question nothing could yet answer.
+
+        Runs every tick and is cheap after the first: a share already tracked is
+        skipped, so this converges to the set difference and then does nothing.
+        Idempotent on purpose -- `universe()` is called once per tick.
+        """
+        if not self._option_underlying_selections:
+            return
+        for key, listing in self._share_by_key.items():
+            if key in self._underlying_by_key or key not in self._derivative_underlying_keys:
+                continue
+            self._underlying_by_key[key] = listing
+            self.standing.underlyings_resolved += 1
+            self._derived_underlyings_promoted += 1
+        self.standing.derived_option_underlyings = self._derived_underlyings_promoted
+        self.standing.shares_held_pending_an_option = len(self._share_by_key)
 
     def universe(self) -> tuple[CapturableSymbol, ...]:
         """Every entry this segment's universe currently holds.
@@ -488,6 +625,7 @@ class BrokerSymbolUniverseBridge:
         the 256-observation floor, p99 gap between prints 0.6s). Their nearest
         expiry's contracts with them, because those are what the segment buys.
         """
+        self.promote_shares_an_option_is_written_on()
         entries: list[CapturableSymbol] = []
         priced = without_price = no_expiry = contracts = 0
 
@@ -621,6 +759,8 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
         "held_positions_without_a_listing": bridge.standing.held_positions_without_a_listing,
         "warm_start_listings_loaded": bridge.standing.warm_start_listings_loaded,
         "warm_start_failure": bridge.standing.warm_start_failure,
+        "derived_option_underlyings": bridge.standing.derived_option_underlyings,
+        "shares_held_pending_an_option": bridge.standing.shares_held_pending_an_option,
     }
 
 
@@ -688,9 +828,21 @@ def start_part(context) -> int:
     # want it, with the chain width of whichever segment trades its options.
     from runtime.segment_settings import (
         any_segment_takes_shares_without_a_derivative,
+        chain_width_for_derived_underlyings,
         option_chain_width_by_underlying,
+        segments_taking_every_index_with_an_option,
+        segments_taking_every_stock_with_an_option,
         underlyings_every_built_segment_trades,
     )
+
+    def derived_option_underlying_rules(context) -> tuple:
+        """One rule per built segment that derives its own option universe."""
+        rules = []
+        if segments_taking_every_index_with_an_option(context):
+            rules.append(IndexWithAnOption())
+        if segments_taking_every_stock_with_an_option(context):
+            rules.append(StockWithAnOption())
+        return tuple(rules)
 
     bridge = BrokerSymbolUniverseBridge(
         tracked_trading_symbols=underlyings_every_built_segment_trades(context),
@@ -704,6 +856,14 @@ def start_part(context) -> int:
             if any_segment_takes_shares_without_a_derivative(context)
             else None
         ),
+        # The derived option universes (2026-09-12): whichever of "every index
+        # an option is written on" and "every NSE share an option is written
+        # on" the built segments ask for. Nothing is named by hand on either
+        # side -- both are read off the broker's own master every restatement,
+        # so an exchange listing options on a new index or adding a name to the
+        # F&O list is picked up without an edit.
+        option_underlying_selections=derived_option_underlying_rules(context),
+        derived_chain_width=chain_width_for_derived_underlyings(context),
     )
     # Held positions cannot wait for the paced conveyor -- see
     # warm_start_from_the_masters_own_file's own docstring for why this is a
@@ -753,6 +913,10 @@ __all__ = [
     "BrokerSymbolUniverseBridge",
     "CALL",
     "EquityWithoutADerivative",
+    "IndexWithAnOption",
+    "INDEX_INSTRUMENT_TYPE",
+    "INDEX_SEGMENTS",
+    "StockWithAnOption",
     "NSE_EQUITY_SEGMENT",
     "ORDINARY_SECURITY",
     "ORDINARY_SHARE",

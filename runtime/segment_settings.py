@@ -379,6 +379,100 @@ def _underlyings_or_nothing(segment: str, root: pathlib.Path | None) -> tuple[st
 UNIVERSE_SELECTION_SETTING = "segment_universe_selection"
 UNIVERSE_IS_STATED = "stated"
 UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE = "every-nse-share-without-a-derivative"
+# Every ordinary NSE share that some derivative IS written on -- the exact
+# complement of the rule above, and the stock-options segment's universe from
+# 2026-09-12, when the operator asked for "option index and option stocks full
+# universe". Stated as a rule for the same reason that one is: 210 trading
+# symbols typed into a settings file is fiction the day NSE revises the F&O
+# list, and nobody can audit it. Measured on the real master that day: exactly
+# 210 shares carry option contracts, against the 14 the segment had stated.
+UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION = "every-nse-stock-with-an-option"
+# Every NSE or BSE index that some option is written on -- the index-options
+# segment's universe from 2026-09-12, on the operator's standing instruction
+# that nothing is typed by hand and everything is detected every time. Measured
+# on the real master that day: of 216 index listings, exactly 10 carry CE/PE
+# contracts. MCX excludes itself rather than being blacklisted: MCXBULLDEX
+# carries options and sits in MCX_INDEX, which docs/goal.md #6 defers.
+UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION = "every-nse-index-with-an-option"
+
+# Every selection value that means "derive this segment's underlyings from the
+# broker's own master". Named as a set so a new rule is added in one place, and
+# so `chain_width_for_derived_underlyings` cannot fall behind the list it is
+# supposed to cover -- which is exactly how a width would silently become zero
+# for a segment whose rule nobody remembered to add.
+DERIVED_OPTION_UNIVERSE_SELECTIONS = (
+    UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION,
+    UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION,
+)
+
+
+def _segments_whose_selection_is_in(
+    wanted, context, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Built segments whose universe rule is one of `wanted`, operator's order."""
+    root = _root_of(context, root)
+    taking = []
+    for segment in built_segments(context):
+        try:
+            selection = str(
+                read_segment_setting(segment, UNIVERSE_SELECTION_SETTING, root).value
+            )
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+        if selection in wanted:
+            taking.append(segment)
+    return tuple(taking)
+
+
+def segments_taking_every_index_with_an_option(
+    context, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Which built segments want every index an option is written on."""
+    return _segments_whose_selection_is_in(
+        (UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION,), context, root
+    )
+
+
+def segments_taking_every_stock_with_an_option(
+    context, root: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Which built segments want every F&O stock underlying, in the operator's order.
+
+    Asked of the spine rather than of one segment for the same reason
+    `any_segment_takes_shares_without_a_derivative` is: the universe bridge
+    publishes one universe for all of them, the feed subscribes each instrument
+    once however many segments want it, and which segment may trade a contract
+    is decided later, by (instrument kind, underlying), where it belongs.
+    """
+    return _segments_whose_selection_is_in(
+        (UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION,), context, root
+    )
+
+
+def chain_width_for_derived_underlyings(
+    context, root: pathlib.Path | None = None,
+) -> int:
+    """The chain width to give an underlying no settings file names by hand.
+
+    A derived universe has no per-symbol width map, because nobody typed the
+    symbols. The width is the widest any segment taking a derived universe
+    states for itself -- its own `segment_option_contracts_per_underlying`,
+    which is a number the operator set with the feed's instrument budget in
+    view. Zero when no segment takes one, which is what a spine trading only
+    stated universes looks like.
+    """
+    root = _root_of(context, root)
+    widest = 0
+    for segment in _segments_whose_selection_is_in(
+        DERIVED_OPTION_UNIVERSE_SELECTIONS, context, root
+    ):
+        try:
+            widest = max(widest, int(read_segment_setting(
+                segment, "segment_option_contracts_per_underlying", root
+            ).value))
+        except (SegmentSettingMissing, OSError, ValueError):
+            continue
+    return widest
 
 
 def any_segment_takes_shares_without_a_derivative(
@@ -409,6 +503,12 @@ __all__ = [
     "SegmentSettingMissing",
     "SegmentsOverlap",
     "UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE",
+    "UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION",
+    "UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION",
+    "DERIVED_OPTION_UNIVERSE_SELECTIONS",
+    "segments_taking_every_index_with_an_option",
+    "chain_width_for_derived_underlyings",
+    "segments_taking_every_stock_with_an_option",
     "UNIVERSE_IS_STATED",
     "UNIVERSE_SELECTION_SETTING",
     "any_segment_takes_shares_without_a_derivative",
