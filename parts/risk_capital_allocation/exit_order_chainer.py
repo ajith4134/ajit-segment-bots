@@ -60,6 +60,13 @@ class ExitOrders:
     filled_quantity_so_far: float
     reason: str
     chained_at_ns: int
+    # When the entry fill these exits protect was filled, on the fill's own clock.
+    # Carried since 2026-09-13 so `stop-order-manager` can tell exits for a position
+    # that is still open from exits that arrive after the position already closed:
+    # an entry and its target can fill in the same second, the "flat" position can
+    # reach the manager before these exits do, and a stop placed then rests on
+    # nothing until it fires. Zero when nothing said.
+    entry_filled_at_ns: int = 0
 
     @property
     def should_be_sent(self) -> bool:
@@ -162,6 +169,7 @@ class ExitOrderChainer:
         entry_side: str,
         filled_quantity: float,
         fill_price: float | None = None,
+        filled_at_ns: int = 0,
     ) -> ExitOrders | None:
         """One entry fill; returns the exits that must now exist for it.
 
@@ -185,6 +193,7 @@ class ExitOrderChainer:
                 venue_id=venue_id, symbol=symbol, entry_order_id=entry_order_id,
                 exit_side="", quantity=0.0, stop_price=0.0, target_price=None,
                 outcome=NO_PLAN, filled_quantity_so_far=filled_quantity,
+                entry_filled_at_ns=filled_at_ns,
                 reason=(
                     f"a fill arrived for {entry_order_id} on {symbol} with no stop-target plan "
                     f"held for a {entry_side}; the position is naked and nothing here can size "
@@ -220,6 +229,7 @@ class ExitOrderChainer:
                 + f"; exits sized to what actually filled, not to the order"
             ),
             chained_at_ns=self._now_ns(),
+            entry_filled_at_ns=filled_at_ns,
         )
 
     def forget_position(self, venue_id: str, symbol: str, entry_side: str) -> None:
@@ -314,6 +324,7 @@ def start_part(context) -> int:
                 "entry_side": fill.side,
                 "filled_quantity": fill.quantity,
                 "fill_price": fill.price,
+                "filled_at_ns": fill.filled_at_ns,
             }
             for fill in fills.payloads()
         )

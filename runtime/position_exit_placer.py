@@ -331,7 +331,11 @@ class PositionExitPlacer:
     ) -> OrderRequest:
         self._sequence += 1
         return OrderRequest(
-            client_order_id=f"{self._prefix}-{held.venue_id}-{held.symbol}-{self._sequence}",
+            # `at_ns` is in the id since 2026-09-13: `_sequence` restarts at zero
+            # with the part, so an exit asked for after a restart could reuse an id
+            # already spent, and the idempotency stamper and the fill ids built from
+            # it would both treat a new order as an old one.
+            client_order_id=f"{self._prefix}-{held.venue_id}-{held.symbol}-{at_ns}-{self._sequence}",
             destination=(
                 PAPER_BOOK
                 if self.money_mode_for(held.segment) == PAPER

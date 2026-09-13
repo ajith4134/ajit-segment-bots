@@ -892,15 +892,21 @@ class PaperFillSimulator:
         self.standing.orders_on_the_book = len(self._resting)
 
         self._fill_sequence += 1
+        filled_at_ns = self._now_ns()
         fill = Fill(
-            fill_id=f"paper-{client_order_id}-{self._fill_sequence}",
+            # The moment is part of the id since 2026-09-13. `_fill_sequence`
+            # starts again at zero every time this part starts, so a resting order
+            # filled again after a restart reproduced an id already spent: three
+            # real fills on 2026-09-07 carried an earlier fill's id, and every
+            # book -- each refusing an id it has seen -- dropped them as duplicates.
+            fill_id=f"paper-{client_order_id}-{filled_at_ns}-{self._fill_sequence}",
             venue_id=order.venue_id,
             symbol=order.symbol,
             side=order.side,
             price=price,
             quantity=fillable,
             fee=fee,
-            filled_at_ns=self._now_ns(),
+            filled_at_ns=filled_at_ns,
             order_id=client_order_id,
             is_paper=True,
             # A fill states a price and a quantity, and those are the same number

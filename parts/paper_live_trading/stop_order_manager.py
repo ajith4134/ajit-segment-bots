@@ -113,7 +113,17 @@ class StopOrderAction:
 
     @property
     def is_actionable(self) -> bool:
-        return self.action in (PLACE_NEW, REPLACE, PLACE_TARGET, RESIZE_TARGET, CANCEL_EXIT)
+        # RESIZE was missing until 2026-09-13 -- added as an action on 2026-08-28,
+        # never added here, while RESIZE_TARGET was (2026-09-01). The manager
+        # recorded the re-cut stop's new id as resting and the action was filtered
+        # out before publishing: the new stop was never placed and the old one
+        # never withdrawn. When the position closed, the manager cancelled the id
+        # that did not exist and the real old stop kept resting until it fired --
+        # NIFTY 23700 CE 15 SEP 26 on 2026-09-08: cancel sent for stop -1340, stop
+        # -1338 sold 1,430.081 two minutes after the position was flat.
+        return self.action in (
+            PLACE_NEW, REPLACE, RESIZE, PLACE_TARGET, RESIZE_TARGET, CANCEL_EXIT,
+        )
 
     @property
     def is_cancel_only(self) -> bool:
@@ -175,6 +185,8 @@ class ManagerStanding:
     # quantity when it filled -- see RESIZE_TARGET.
     resized_target_to_the_position: int = 0
     refused_no_position: int = 0
+    # Exits that arrived after the position they were for had already closed.
+    refused_exits_for_a_closed_position: int = 0
     refused_no_mode: int = 0
     unprotected_windows: int = 0
     stops_resting: int = 0
@@ -607,6 +619,9 @@ def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
         "resized_to_the_position": manager.standing.resized_to_the_position,
         "resized_target_to_the_position": manager.standing.resized_target_to_the_position,
         "refused_no_position": manager.standing.refused_no_position,
+        "refused_exits_for_a_closed_position": (
+            manager.standing.refused_exits_for_a_closed_position
+        ),
         "refused_no_mode": manager.standing.refused_no_mode,
         "stops_resting": manager.standing.stops_resting,
         "targets_placed": manager.standing.targets_placed,
@@ -716,9 +731,13 @@ def run_stop_order_manager(
 
 # Returned when an adjustment is readable and deliberately not to be sent.
 SKIP = object()
+# Returned for exits whose position had already closed before they arrived.
+ALREADY_CLOSED = object()
 
 
-def read_adjustment(adjustment, held_quantity: dict, is_already_resting=None) -> dict | None:
+def read_adjustment(
+    adjustment, held_quantity: dict, is_already_resting=None, closed_at_ns=None,
+) -> dict | None:
     """One `stop-adjustment`, whichever of its two shapes it is.
 
     `stop-adjustment` is one wire carrying two payloads, which is the shape that
@@ -760,6 +779,25 @@ def read_adjustment(adjustment, held_quantity: dict, is_already_resting=None) ->
     if exit_side is not None and stop_price is not None:
         if not getattr(adjustment, "should_be_sent", True):
             return SKIP
+        # **Exits for a position that has already closed are not placed**
+        # (2026-09-13). An entry and its target can fill in the same second;
+        # `fill-reconciler` then reports the position flat, and that can reach
+        # this part before `exit-order-chainer`'s exits for the entry do. Seeing
+        # flat with nothing resting, the part withdrew nothing -- then placed the
+        # stop for a position that no longer existed, and the stop fired on
+        # nothing. Measured on 2026-09-08: NIFTY 23700 CE 15 SEP 26 closed by its
+        # target at 09:31:36, and its stop sold 1,430.081 at 09:33:20, which is
+        # the phantom long `position-close-detector` then held. Both times are fill
+        # times, so the comparison does not depend on which part ran first.
+        entry_filled_at_ns = int(getattr(adjustment, "entry_filled_at_ns", 0) or 0)
+        key = (venue_id, symbol)
+        if (
+            entry_filled_at_ns
+            and closed_at_ns is not None
+            and key not in held_quantity
+            and closed_at_ns.get(key, -1) >= entry_filled_at_ns
+        ):
+            return ALREADY_CLOSED
         return {
             "venue_id": venue_id,
             "symbol": symbol,
@@ -879,6 +917,10 @@ def start_part(context) -> int:
             return default
 
     dropped = _Dropped()
+    # When each position was last reported flat, on the fill's own clock
+    # (`Position.updated_at_ns` is the closing fill's `filled_at_ns`). See
+    # ALREADY_CLOSED in `read_adjustment`.
+    closed_at_ns: dict[tuple[str, str], int] = {}
 
     def read_adjustments():
         mode_by_segment = modes.mapping()
@@ -886,6 +928,9 @@ def start_part(context) -> int:
             key = (position.venue_id, position.symbol)
             was_held = held_quantity.get(key, 0.0)
             if position.is_flat:
+                closed_at_ns[key] = max(
+                    closed_at_ns.get(key, 0), int(getattr(position, "updated_at_ns", 0) or 0)
+                )
                 if was_held:
                     gone_flat.append(key)
                 held_quantity.pop(key, None)
@@ -902,7 +947,12 @@ def start_part(context) -> int:
 
         readable = []
         for adjustment in adjustments.payloads():
-            read = read_adjustment(adjustment, held_quantity, manager.is_stop_resting)
+            read = read_adjustment(
+                adjustment, held_quantity, manager.is_stop_resting, closed_at_ns
+            )
+            if read is ALREADY_CLOSED:
+                manager.standing.refused_exits_for_a_closed_position += 1
+                continue
             if read is None:
                 unreadable["count"] += 1
                 unreadable["last"] = type(adjustment).__name__

@@ -9,6 +9,8 @@ strategy that works on paper and loses money live.
 
 import datetime
 import importlib
+import json
+import pathlib
 
 import pytest
 
@@ -31,7 +33,7 @@ from parts.paper_live_trading.order_latency_simulator import (
     HELD, LIVE_NOT_DELAYED, RELEASED, OrderLatencySimulator,
 )
 from parts.paper_live_trading.paper_account_keeper import (
-    APPLIED, REFUSED_DUPLICATE, REFUSED_INSUFFICIENT, REFUSED_LIVE_FILL, PaperAccountKeeper,
+    APPLIED, APPLIED_BEYOND_CASH, REFUSED_DUPLICATE, REFUSED_LIVE_FILL, PaperAccountKeeper,
 )
 from parts.paper_live_trading.paper_fill_simulator import (
     ALREADY_FILLED, CANCELLED, FILLED, HELD_IN_FLIGHT, LIMIT, MARKET, PARTIALLY_FILLED,
@@ -603,9 +605,9 @@ def test_half_a_levered_position_returns_half_its_margin():
 def test_a_levered_trade_the_account_could_not_afford_unlevered_is_admitted():
     """The operator's ceiling has to reach the account, or it reaches nothing."""
     subject = keeper(200.0)
-    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0)) == REFUSED_INSUFFICIENT
-    assert subject.apply_fill(paper_fill("f2", BUY, 100.0, 10.0, leverage=10.0)) == APPLIED
+    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0, leverage=10.0)) == APPLIED
     assert subject.read_balance().cash == pytest.approx(100.0)
+    assert subject.standing.fills_applied_beyond_cash == 0
 
 
 def test_a_short_posts_margin_rather_than_raising_the_account_s_cash():
@@ -756,10 +758,28 @@ def test_a_live_fill_never_touches_the_paper_account():
     assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 1.0, is_paper=False)) == REFUSED_LIVE_FILL
 
 
-def test_the_paper_account_cannot_spend_what_it_does_not_have():
-    """A venue would have refused it, and the paper record must show the same."""
+def test_an_executed_fill_the_cash_did_not_cover_is_applied_and_counted():
+    """A venue refuses the order, not the fill after it executed (2026-09-13).
+
+    Refusing here after execution made this account disagree with every other
+    book: on 2026-09-07 it refused 114 executed fills the lot books had applied.
+    """
     subject = keeper(100.0)
-    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0)) == REFUSED_INSUFFICIENT
+    assert subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0)) == APPLIED_BEYOND_CASH
+    balance = subject.read_balance()
+    assert balance.open_positions == 1
+    assert balance.cash == pytest.approx(-900.0)
+    assert subject.standing.fills_applied == 1
+    assert subject.standing.fills_applied_beyond_cash == 1
+    assert subject.standing.cash_shortfall_total == pytest.approx(900.0)
+
+
+def test_closing_a_position_the_cash_did_not_cover_returns_it_to_flat_not_short():
+    """The refused buy is what made the later sell a short in this account alone."""
+    subject = keeper(100.0)
+    subject.apply_fill(paper_fill("f1", BUY, 100.0, 10.0))
+    assert subject.apply_fill(paper_fill("f2", SELL, 100.0, 10.0)) == APPLIED
+    assert subject.read_balance().open_positions == 0
     assert subject.read_balance().cash == pytest.approx(100.0)
 
 
@@ -1697,3 +1717,101 @@ def test_a_short_position_has_its_stop_re_cut_too():
     assert action.action == RESIZE
     assert action.side == BUY
     assert action.quantity == pytest.approx(9.0)
+
+
+def test_a_fill_id_is_not_reused_after_the_simulator_restarts():
+    """`_fill_sequence` restarts at zero with the part (2026-09-13).
+
+    Three real fills on 2026-09-07 carried an earlier fill's id, because the same
+    client order id was filled again after a restart, and every book dropped them
+    as duplicates. Two simulators here are that restart.
+    """
+    before = fill_simulator().simulate(**an_order(client_order_id="stop-upstox-NIFTY-2"))
+    after_restart = fill_simulator().simulate(**an_order(client_order_id="stop-upstox-NIFTY-2"))
+    assert before.fill.fill_id != after_restart.fill.fill_id
+
+
+# ---- an exit never outlives its position (2026-09-13) ------------------------
+
+NIFTY_FILLS = json.loads((
+    pathlib.Path(__file__).resolve().parents[3]
+    / "tests/captured/upstox/2026-09-08-nifty-23700-ce-fills-and-a-stale-stop.json"
+).read_text())["fills"]
+
+
+def nifty_fill(side, quantity):
+    """The captured fill of that side and quantity, from this project's own journal."""
+    return next(
+        fill for fill in NIFTY_FILLS
+        if fill["side"] == side and abs(fill["quantity"] - quantity) < 1e-6
+    )
+
+
+def orders_left_on_the_book(actions):
+    """The ids a book holds after these actions, applied the way the book applies them."""
+    from parts.paper_live_trading.stop_order_manager import as_order_request
+
+    book = set()
+    for action in actions:
+        if not action.is_actionable:
+            continue
+        request = as_order_request(action)
+        if request.cancels_client_order_id:
+            book.discard(request.cancels_client_order_id)
+        if action.place_order_id:
+            book.add(action.place_order_id)
+    return book
+
+
+def test_a_re_cut_stop_replaces_the_old_one_on_the_book_and_leaves_nothing_after_the_close():
+    """NIFTY 23700 CE 15 SEP 26, 2026-09-08, quantities from the captured fills.
+
+    A stop for the 1,430.081 entry, re-cut when 240.304 more filled, then the
+    position closed. Until 2026-09-13 the re-cut was never published: the manager
+    held the new id, the book held the old one, the close cancelled the new id,
+    and the old stop sold 1,430.081 on a flat position.
+    """
+    venue, symbol = "upstox", "NIFTY 23700 CE 15 SEP 26"
+    first = nifty_fill(BUY, 1430.081)["quantity"]
+    whole = first + nifty_fill(BUY, 240.3040000000001)["quantity"]
+    manager = StopOrderManager()
+    actions = [manager.apply_adjustment(venue, symbol, LONG, first, 126.57, Mode("paper"))]
+    resize = manager.resize_stop_to_the_position(
+        venue_id=venue, symbol=symbol, direction=LONG, quantity=whole,
+        money_mode=Mode("paper"), quantity_increment=STOP_QUANTITY_INCREMENT,
+    )
+    assert resize.action == RESIZE
+    assert resize.is_actionable
+    actions.append(resize)
+    assert orders_left_on_the_book(actions) == {resize.place_order_id}
+
+    actions.extend(manager.observe_position_closed(venue, symbol))
+    assert orders_left_on_the_book(actions) == set()
+
+
+def test_exits_for_an_entry_the_position_had_already_closed_past_are_not_placed():
+    """The target closed the position at 09:31:36.909; the entry's exits arrived after."""
+    from parts.paper_live_trading.stop_order_manager import ALREADY_CLOSED, read_adjustment
+    from parts.risk_capital_allocation.exit_order_chainer import ExitOrders
+
+    venue, symbol = "upstox", "NIFTY 23700 CE 15 SEP 26"
+    entry = nifty_fill(BUY, 1430.081)
+    closing = nifty_fill(SELL, 1670.385)
+    later_entry = nifty_fill(BUY, 1560.0)
+    assert entry["filled_at_ns"] < closing["filled_at_ns"] < later_entry["filled_at_ns"]
+    closed_at = {(venue, symbol): closing["filled_at_ns"]}
+
+    def exits_for(fill):
+        return ExitOrders(
+            venue_id=venue, symbol=symbol, entry_order_id=fill["order_id"], exit_side=SELL,
+            quantity=fill["quantity"], stop_price=126.57, target_price=130.5,
+            outcome="chained", filled_quantity_so_far=fill["quantity"], reason="",
+            chained_at_ns=closing["filled_at_ns"] + 1, entry_filled_at_ns=fill["filled_at_ns"],
+        )
+
+    assert read_adjustment(exits_for(entry), {}, None, closed_at) is ALREADY_CLOSED
+    placed = read_adjustment(exits_for(later_entry), {}, None, closed_at)
+    assert isinstance(placed, dict) and placed["quantity"] == 1560.0
+    # Held again: the exits apply to a live position, whatever closed before.
+    held = {(venue, symbol): 1560.0}
+    assert isinstance(read_adjustment(exits_for(entry), held, None, closed_at), dict)

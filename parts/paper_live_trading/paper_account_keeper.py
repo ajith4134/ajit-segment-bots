@@ -48,7 +48,10 @@ APPLIED = "applied"
 CHECKPOINT_COMPONENT = "paper-account"
 REFUSED_LIVE_FILL = "refused-live-fill"
 REFUSED_DUPLICATE = "refused-duplicate-fill"
+# Kept as a name for readers of old standings. Since 2026-09-13 nothing returns it:
+# an executed fill is applied whatever the cash, and the shortfall is counted.
 REFUSED_INSUFFICIENT = "refused-insufficient-paper-balance"
+APPLIED_BEYOND_CASH = "applied-beyond-the-paper-cash"
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,12 @@ class KeeperStanding:
     live_fills_refused: int = 0
     duplicates_refused: int = 0
     insufficient_refused: int = 0
+    # Fills applied although the account's cash did not cover them, and by how
+    # much in total. Each is an order the pre-trade guards (`fund-lock-ledger`,
+    # `position-sizer`, `trade-capital-bounds-gate`) let through that they should
+    # have stopped: the defect is upstream, and this is where it becomes visible.
+    fills_applied_beyond_cash: int = 0
+    cash_shortfall_total: float = 0.0
     realised_total: float = 0.0
     fees_total: float = 0.0
     lowest_cash: float | None = None
@@ -207,12 +216,20 @@ class PaperAccountKeeper:
         margin = capital_committed_by(fill.quantity, fill.price, leverage_behind(fill))
         opening = held is None or held.quantity == 0 or (held.quantity > 0) == (fill.side == BUY)
 
-        if opening and margin + fill.fee > self._cash:
-            # A paper account that went negative would let a strategy spend money
-            # a venue would have refused it, and the paper record would show a
-            # trade that could not have happened.
-            self.standing.insufficient_refused += 1
-            return REFUSED_INSUFFICIENT
+        # **An executed fill is never refused here** (2026-09-13). This refused a
+        # fill when the cash did not cover it -- after `paper-fill-simulator` had
+        # already executed it and every other book had applied it. On 2026-09-07
+        # it refused 114 such fills while `fill-reconciler`, `cost-basis-tracker`
+        # and `position-close-detector` applied all of them, and refusing the buys
+        # turned the later sells into shorts in this account alone: two books of
+        # one portfolio that disagreed on sixteen positions. A venue refuses the
+        # *order*; that refusal is `fund-lock-ledger`'s, before execution. A fill
+        # the cash did not cover is applied and counted, so the upstream gap is a
+        # number rather than a divergence.
+        beyond_cash = opening and margin + fill.fee > self._cash
+        if beyond_cash:
+            self.standing.fills_applied_beyond_cash += 1
+            self.standing.cash_shortfall_total += margin + fill.fee - max(self._cash, 0.0)
 
         self._seen_fills.add(fill.fill_id)
         self._cash -= fill.fee
@@ -233,7 +250,7 @@ class PaperAccountKeeper:
         self.standing.fills_applied += 1
         if self.standing.lowest_cash is None or self._cash < self.standing.lowest_cash:
             self.standing.lowest_cash = self._cash
-        return APPLIED
+        return APPLIED_BEYOND_CASH if beyond_cash else APPLIED
 
     def _apply_to_position(self, key, held, fill, signed, margin) -> None:
         increasing = held.quantity == 0 or (held.quantity > 0) == (signed > 0)
@@ -323,6 +340,8 @@ def describe_paper_account(keeper: PaperAccountKeeper) -> dict:
         "live_fills_refused": keeper.standing.live_fills_refused,
         "duplicates_refused": keeper.standing.duplicates_refused,
         "insufficient_refused": keeper.standing.insufficient_refused,
+        "fills_applied_beyond_cash": keeper.standing.fills_applied_beyond_cash,
+        "cash_shortfall_total": keeper.standing.cash_shortfall_total,
         "lowest_cash": keeper.standing.lowest_cash,
     }
 
@@ -422,6 +441,17 @@ def describe_segment_paper_accounts(accounts: SegmentPaperAccounts) -> dict:
             segment: keeper.read_balance().starting_balance
             for segment, keeper in sorted(accounts.keepers.items())
         },
+        # Flat per-segment maps, because a standing reaches the heartbeat table
+        # one level deep and `by_segment` below is two: a fill the cash did not
+        # cover is the upstream guard failing, and must be on the board.
+        "fills_applied_beyond_cash_by_segment": {
+            segment: keeper.standing.fills_applied_beyond_cash
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
+        "cash_shortfall_total_by_segment": {
+            segment: keeper.standing.cash_shortfall_total
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
         "by_segment": {
             segment: describe_paper_account(keeper)
             for segment, keeper in sorted(accounts.keepers.items())
@@ -442,7 +472,7 @@ def run_paper_account_keeper(
             one = keeper.keeper_for(fill)
             if one is None:
                 continue
-            if one.apply_fill(fill) == APPLIED:
+            if one.apply_fill(fill) in (APPLIED, APPLIED_BEYOND_CASH):
                 applied[one._segment] = applied.get(one._segment, 0) + 1
         for segment in applied:
             if write_checkpoint is not None:
