@@ -691,6 +691,28 @@ def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
     }
 
 
+def manager_changes(manager: StopOrderManager) -> int:
+    """Every change to what this part believes is resting, as one count.
+
+    The checkpoint is written when this moves. **`replaced` and `targets_placed`
+    were missing until 2026-09-13**, so a trailed stop -- `profit-lock` tightening
+    one, which is a REPLACE -- and a newly placed target were never written down.
+    The next start restored the stop that had been replaced and re-sent it beside
+    its replacement: ICICIBANK 1440 PE 29 SEP 26 held stop -1437 and stop -1442 on
+    one position after the restart at 10:03, two orders that would close it twice.
+    The id sequence was not written either, so the replacement reused its old id.
+    """
+    standing = manager.standing
+    return (
+        standing.placed
+        + standing.replaced
+        + standing.targets_placed
+        + standing.exits_withdrawn
+        + standing.resized_to_the_position
+        + standing.resized_target_to_the_position
+    )
+
+
 def run_stop_order_manager(
     manager: StopOrderManager, control_socket, read_adjustments, publish_orders,
     health_interval_seconds: float, emit_health, read_flat_positions=None,
@@ -771,12 +793,7 @@ def run_stop_order_manager(
             # Resizes count too. They change which order id is resting and for how
             # much, and a checkpoint that ignored them would restore a stop the
             # venue no longer holds and a quantity the position no longer is.
-            write_checkpoint(
-                manager.standing.placed
-                + manager.standing.exits_withdrawn
-                + manager.standing.resized_to_the_position
-                + manager.standing.resized_target_to_the_position
-            )
+            write_checkpoint(manager_changes(manager))
 
     return run_part(
         declaration=PART_DECLARATION,

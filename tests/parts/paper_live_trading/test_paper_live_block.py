@@ -1913,3 +1913,24 @@ def test_after_a_restart_the_paper_book_holds_each_exit_exactly_once(book_was_ke
 
     resting = sorted(order.client_order_id for order in restarted_book.resting_orders)
     assert resting == sorted([held.order_id, held.target_order_id])
+
+
+def test_a_trailed_stop_or_a_new_target_is_a_change_the_checkpoint_records():
+    """A REPLACE was not counted: the restart restored the replaced stop beside its replacement."""
+    from parts.paper_live_trading.stop_order_manager import manager_changes
+
+    manager = StopOrderManager()
+    manager.apply_adjustment(NIFTY_VENUE, NIFTY_SYMBOL, LONG, 8329.855, 25.641, Mode("paper"))
+    after_place = manager_changes(manager)
+    manager.apply_adjustment(NIFTY_VENUE, NIFTY_SYMBOL, LONG, 8329.855, 30.0, Mode("paper"))
+    after_trail = manager_changes(manager)
+    assert after_trail > after_place
+    manager.place_target(
+        venue_id=NIFTY_VENUE, symbol=NIFTY_SYMBOL, direction=LONG, quantity=8329.855,
+        target_price=40.0, money_mode=Mode("paper"),
+    )
+    assert manager_changes(manager) > after_trail
+
+    restarted = StopOrderManager()
+    restarted.restore_from_checkpoint(manager.read_checkpoint_state())
+    assert restarted.resting_stop(NIFTY_VENUE, NIFTY_SYMBOL) == 30.0
