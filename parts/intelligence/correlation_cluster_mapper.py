@@ -140,6 +140,7 @@ class CorrelationClusterMapper:
         cluster_threshold: float,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
+        gap_warmup_gaps: int | None = None,
         now_ns=time.time_ns,
         maximum_pairs_per_pass: int | None = None,
         passes_per_sweep_ceiling: int | None = None,
@@ -162,6 +163,7 @@ class CorrelationClusterMapper:
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
+        self._gap_warmup_gaps = gap_warmup_gaps
         # How many pair correlations one pass may compute. None means every pair,
         # every pass, which is what a universe small enough for that states -- and
         # what this part did until 2026-09-05.
@@ -212,6 +214,7 @@ class CorrelationClusterMapper:
                 length=self._window,
                 maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                gap_warmup_gaps=self._gap_warmup_gaps,
             )
             self._prices[symbol] = window
         window.observe(price, at_ns)
@@ -596,6 +599,7 @@ def start_part(context) -> int:
         cluster_threshold=context.number("correlation_cluster_threshold"),
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
         gap_patience_multiple=context.number("price_gap_patience_multiple"),
+        gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
         # The pair budget (2026-09-05). The ceiling on passes is what ties it to
         # the statistic: a sweep of every pair finishes inside one correlation
         # window, so no correlation is ever older than the window it describes.

@@ -461,6 +461,7 @@ def start_part(context) -> int:
     minimum_symbols = int(context.number("sweep_minimum_symbols_for_cross_section"))
     maximum_gap_seconds = context.number("price_series_maximum_gap_seconds")
     gap_patience_multiple = context.number("price_gap_patience_multiple")
+    gap_warmup_gaps = int(context.number("price_gap_warmup_gaps"))
     windows: dict[tuple[str, str], RollingWindow] = {}
 
     def read_prices_and_candidates(labeller: SignalOutcomeLabeller) -> None:
@@ -479,6 +480,7 @@ def start_part(context) -> int:
                     length=window_length,
                     maximum_gap_seconds=maximum_gap_seconds,
                     gap_patience_multiple=gap_patience_multiple,
+                    gap_warmup_gaps=gap_warmup_gaps,
                 )
             window.observe(trade.price, trade.observed_at_ns)
 

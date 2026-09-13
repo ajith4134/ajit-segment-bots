@@ -115,6 +115,7 @@ class BearFeatureBuilder:
         minimum_observations: int,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
+        gap_warmup_gaps: int | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if short_window >= long_window:
@@ -131,6 +132,7 @@ class BearFeatureBuilder:
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
+        self._gap_warmup_gaps = gap_warmup_gaps
         self._symbols: dict[tuple[str, str], SymbolObservations] = {}
         self.standing = BuilderStanding()
 
@@ -277,16 +279,19 @@ class BearFeatureBuilder:
                     length=self._short,
                     maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                gap_warmup_gaps=self._gap_warmup_gaps,
                 ),
                 long_window=RollingWindow(
                     length=self._long,
                     maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                gap_warmup_gaps=self._gap_warmup_gaps,
                 ),
                 open_interest_window=RollingWindow(
                     length=self._long,
                     maximum_gap_seconds=self._maximum_gap_seconds,
                     gap_patience_multiple=self._gap_patience_multiple,
+                    gap_warmup_gaps=self._gap_warmup_gaps,
                 ),
             )
             self._symbols[key] = observations
@@ -491,6 +496,7 @@ def start_part(context) -> int:
             minimum_observations=int(context.number("bear_feature_minimum_observations")),
             maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
+            gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
         ),
         control_socket=context.control_socket,
         read_candidates_and_market=read_candidates_and_market,

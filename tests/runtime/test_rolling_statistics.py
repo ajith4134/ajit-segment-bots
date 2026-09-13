@@ -219,3 +219,58 @@ def test_a_window_with_no_gap_bound_is_never_reported_as_quiet():
 
     assert window.has_gone_silent_past_its_bound(time.time_ns()) is False
     assert subjects_gone_quiet({"X": window}, {}, time.time_ns()) == ()
+
+
+# ---- the gap warm-up (2026-09-13) ------------------------------------------------
+
+def a_quiet_option_session(gaps_seconds):
+    """Trade times with the given gaps, one price each, starting at an arbitrary moment."""
+    at, rows = 1_788_760_000 * 1_000_000_000, []
+    for index, gap in enumerate(gaps_seconds):
+        at += int(gap * 1e9)
+        rows.append((at, 20.0 + index * 0.05))
+    return rows
+
+
+def test_a_short_warm_up_learns_an_ordinarily_quiet_series_before_clearing_it():
+    """An option's ordinary rhythm, then its ordinary slow patches.
+
+    The shape of the Upstox history (p50 gap 60s, p90 120s, p95 180s, p99 660s). Twenty
+    gaps of a minute or two teach a 16-gap warm-up a bound of 2.8 x 120s = 336s, so the
+    180s gaps and the 300s pause after them are ordinary quiet. Judged at the 150s floor
+    until 128 gaps, every one of them cleared the window.
+    """
+    from runtime.rolling_statistics import RollingWindow
+
+    rhythm = [60.0, 60.0, 120.0, 60.0, 90.0] * 4
+    slow_patch = [180.0, 60.0, 180.0, 300.0, 60.0]
+    rows = a_quiet_option_session(rhythm + slow_patch)
+    as_before = RollingWindow(length=256, maximum_gap_seconds=150.0, gap_patience_multiple=2.8)
+    warmed = RollingWindow(length=256, maximum_gap_seconds=150.0, gap_patience_multiple=2.8,
+                           gap_warmup_gaps=16)
+    for at, price in rows:
+        as_before.observe(price, at)
+        warmed.observe(price, at)
+    assert as_before.series_breaks == 3
+    assert warmed.series_breaks == 0
+    assert len(warmed.values) == len(rows)
+
+
+def test_a_warmed_window_still_clears_on_a_real_hole():
+    from runtime.rolling_statistics import RollingWindow
+
+    rows = a_quiet_option_session([10.0] * 40 + [1031.0] + [10.0] * 3)
+    window = RollingWindow(length=256, maximum_gap_seconds=150.0, gap_patience_multiple=2.8,
+                           gap_warmup_gaps=16)
+    for at, price in rows:
+        window.observe(price, at)
+    assert window.series_breaks == 1
+
+
+def test_a_warm_up_of_fewer_than_two_gaps_is_refused():
+    import pytest
+    from runtime.rolling_statistics import RollingWindow
+
+    with pytest.raises(ValueError):
+        RollingWindow(length=256, maximum_gap_seconds=150.0, gap_patience_multiple=2.8,
+                      gap_warmup_gaps=1)

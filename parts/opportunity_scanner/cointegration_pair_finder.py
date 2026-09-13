@@ -103,6 +103,7 @@ class CointegrationPairFinder:
         minimum_reversion_strength: float,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
+        gap_warmup_gaps: int | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not 0.0 < minimum_reversion_strength < 1.0:
@@ -117,6 +118,7 @@ class CointegrationPairFinder:
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
+        self._gap_warmup_gaps = gap_warmup_gaps
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         self._cointegrated: set[tuple[str, str, str]] = set()
         self.standing = FinderStanding()
@@ -149,6 +151,7 @@ class CointegrationPairFinder:
                 length=self._window_length,
                 maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                gap_warmup_gaps=self._gap_warmup_gaps,
             )
             self._prices[key] = window
         return window
@@ -419,6 +422,7 @@ def start_part(context) -> int:
         minimum_reversion_strength=context.number("cointegration_minimum_reversion_strength"),
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
             gap_patience_multiple=context.number("price_gap_patience_multiple"),
+            gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
     )
     # The series and the verdicts survive the off switch. Pairs grow as the square
     # of symbols, so a cold scanner has to rotate through thousands of them before

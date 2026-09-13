@@ -112,6 +112,7 @@ class RegimeClassifier:
         reverting_below: float,
         maximum_gap_seconds: float | None = None,
         gap_patience_multiple: float | None = None,
+        gap_warmup_gaps: int | None = None,
         now_ns=time.time_ns,
     ) -> None:
         if not reverting_below < RANDOM_WALK_HURST < trending_above:
@@ -129,6 +130,7 @@ class RegimeClassifier:
         # and this part does not invent one (RL-061).
         self._maximum_gap_seconds = maximum_gap_seconds
         self._gap_patience_multiple = gap_patience_multiple
+        self._gap_warmup_gaps = gap_warmup_gaps
         self._prices: dict[tuple[str, str], RollingWindow] = {}
         # When this part last *received* anything for a symbol, on its own clock.
         # Not the venue's print time, which is what the window keeps: with the
@@ -249,6 +251,7 @@ class RegimeClassifier:
                 length=self._window_length,
                 maximum_gap_seconds=self._maximum_gap_seconds,
                 gap_patience_multiple=self._gap_patience_multiple,
+                gap_warmup_gaps=self._gap_warmup_gaps,
             )
             self._prices[key] = window
         return window
@@ -440,6 +443,7 @@ def start_part(context) -> int:
         reverting_below=context.number("regime_reverting_hurst_below"),
         maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
         gap_patience_multiple=context.number("price_gap_patience_multiple"),
+        gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
     )
     store = DurableStateStore(
         pathlib.Path(str(context.setting("position_state_root").value)).expanduser()

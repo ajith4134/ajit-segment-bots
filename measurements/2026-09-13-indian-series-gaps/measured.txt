@@ -1,0 +1,19 @@
+1452 option sessions, 346,326 gaps between trading minutes
+  gap p50 60s  p90 120s  p95 180s  p99 660s  p99.9 2940s
+  longest silence per session: p50 360s  p90 3960s  p99 11520s
+  sessions with any silence over 150s: 75.5%
+
+false window clearings inside a session (window 256), by rule:
+  as set: floor 150s, warm-up length//2 = 128 gaps false clearing in 62.4% of sessions, 12.22/session, window full at end 37.9%; a 5-min feed hole mid-session on the 718 liquid sessions caught 80.8%
+  floor 150s, warm-up 64 gaps                  false clearing in 53.6% of sessions,  7.60/session, window full at end 47.4%; a 5-min feed hole mid-session on the 718 liquid sessions caught 80.8%
+  floor 150s, warm-up 32 gaps                  false clearing in 46.1% of sessions,  4.35/session, window full at end 51.3%; a 5-min feed hole mid-session on the 718 liquid sessions caught 80.8%
+  floor 150s, warm-up 16 gaps                  false clearing in 41.8% of sessions,  2.32/session, window full at end 51.8%; a 5-min feed hole mid-session on the 718 liquid sessions caught 80.8%
+  floor 150s, warm-up 8 gaps                   false clearing in 38.8% of sessions,  1.28/session, window full at end 51.9%; a 5-min feed hole mid-session on the 718 liquid sessions caught 80.8%
+  floor 660s (option p99 gap), warm-up 128     false clearing in 35.0% of sessions,  2.07/session, window full at end 55.7%; a 5-min feed hole mid-session on the 718 liquid sessions caught  0.3%
+  floor 660s, warm-up 32 gaps                  false clearing in 26.7% of sessions,  1.30/session, window full at end 55.8%; a 5-min feed hole mid-session on the 718 liquid sessions caught  0.3%
+
+regime-classifier replay, window 256, sessions classified at session end: warm-up length//2 -> 16
+  tape option            0.4% ->   0.8% of 1562
+  tape share-or-index    9.4% ->   9.9% of 171
+  tape future            0.0% ->   0.0% of 17
+  Upstox history option sessions  37.9% ->  51.8% of 1452

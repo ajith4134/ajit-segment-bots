@@ -2494,3 +2494,22 @@ to study, on a day without restarts.
 Not verifiable live until 2026-09-15 (market shut; grader sees empty books, classifier
 restarted cold because its checkpoint was written under a different window).
 
+
+### 2026-09-13 — the series gap rule cleared ordinary option quiet
+
+`RollingWindow` clears a price window on a gap longer than
+max(`price_series_maximum_gap_seconds`, `price_gap_patience_multiple` x its own p99 gap),
+but judged gaps at the 150s floor alone until it had seen half its length in gaps — 128
+at a 256 window. Twelve parts use it (the detectors, both feature builders and entry
+timers, cointegration, correlation, regime break, the labeller).
+
+Measured on restart-free data — Upstox one-minute history, 1,452 sessions of the 40
+most-traded options (`measurements/2026-09-13-indian-series-gaps/`): ordinary gaps are 60s
+p50 and 660s p99, and 75.5% of sessions contain a silence over 150s. The rule falsely
+cleared 62.4% of sessions, 12.2 times each. Raising the floor to 660s cut that but caught
+a 5-minute feed hole on liquid contracts 0.3% of the time instead of 80.8%, so it was
+rejected. A warm-up of 16 gaps (new setting `price_gap_warmup_gaps`) cut false clearings to
+2.32 a session with hole detection unchanged at 80.8%; 8 improved nothing further on
+windows filled. Replayed through `RegimeClassifier`: history option sessions classified
+37.9% -> 51.8%. On the tape's two days only 0.4% -> 0.8% — those days' holes are real
+feed outages from the spine restarting, which the rule is right to clear on.

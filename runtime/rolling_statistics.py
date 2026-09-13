@@ -57,6 +57,14 @@ class RollingWindow:
     # gaps of 3.0s (median symbol) to 42.3s (worst) against a real outage of
     # ~1031s -- an outage clears any plausible bound either way.
     gap_patience_multiple: float | None = None
+    # How many gaps the window must have seen before its own p99 is trusted over the
+    # floor. None keeps the original rule, half the window length. Added 2026-09-13:
+    # at a 256 window that was 128 gaps judged at the floor alone, and on NSE options
+    # -- whose ordinary silence reaches 660s at p99 -- 62.4% of 1,452 sessions of
+    # Upstox history had their window cleared by quiet the rule exists to tolerate,
+    # 12.2 times a session. At 16 it was 2.3 times, with a mid-session feed hole on
+    # liquid contracts caught exactly as often (measurements/2026-09-13-indian-series-gaps/).
+    gap_warmup_gaps: int | None = None
     values: deque = field(default_factory=deque)
     _last_observed_at_ns: int | None = None
     _last_observed_value: float | None = None
@@ -83,6 +91,11 @@ class RollingWindow:
                     f"the gap patience is a positive multiple of this series' own p99 gap; "
                     f"got {self.gap_patience_multiple!r}"
                 )
+        if self.gap_warmup_gaps is not None and self.gap_warmup_gaps < 2:
+            raise ValueError(
+                "a p99 needs at least two gaps to be anything but the one gap it saw; "
+                f"got a warm-up of {self.gap_warmup_gaps!r}"
+            )
         self.values = deque(self.values, maxlen=self.length)
         # As many gaps as values: the p99 of the gaps should describe the same
         # stretch of series the window itself does.
@@ -177,7 +190,8 @@ class RollingWindow:
         if self.gap_patience_multiple is None:
             return self.maximum_gap_seconds
         gaps = self._recent_gaps_seconds
-        if len(gaps) < max(2, self.length // 2):
+        warmup = self.length // 2 if self.gap_warmup_gaps is None else self.gap_warmup_gaps
+        if len(gaps) < max(2, warmup):
             return self.maximum_gap_seconds
         ordered = sorted(gaps)
         p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
