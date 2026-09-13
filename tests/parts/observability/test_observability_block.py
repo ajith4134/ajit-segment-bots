@@ -177,6 +177,38 @@ def test_an_unregistered_probe_is_not_run():
     assert ProbeRunner(timeout_seconds=1.0).run("nothing").outcome == NOT_RUN
 
 
+def test_a_hanging_probe_is_interrupted_at_its_deadline_not_waited_for():
+    """Until 2026-09-13 the deadline was checked after the probe returned: 777s live."""
+    import time as real_time
+
+    runner = ProbeRunner(timeout_seconds=0.2)
+    runner.register("hangs", lambda: real_time.sleep(5.0), command="sleep 5")
+    started = real_time.monotonic()
+    result = runner.run("hangs")
+    assert real_time.monotonic() - started < 1.0
+    assert result.outcome == TIMED_OUT
+    assert "deadline" in result.failure
+
+
+def test_a_tick_runs_one_due_probe_and_reports_the_rest_as_not_run_yet():
+    clock = Clock()
+    runner = ProbeRunner(timeout_seconds=1.0, rest_multiple=20.0, monotonic=clock.monotonic,
+                         minimum_rest_seconds=1.0)
+    runner.register("a", lambda: 1, command="echo 1")
+    runner.register("b", lambda: 2, command="echo 2")
+
+    first = {result.name: result for result in runner.run_next_due()}
+    assert [first["a"].outcome, first["b"].outcome] == [MEASURED, NOT_RUN]
+    assert first["b"].command == "echo 2"
+
+    second = {result.name: result for result in runner.run_next_due()}
+    assert second["b"].outcome == MEASURED
+    assert runner.run_next_due() is None, "both rest at least the minimum"
+
+    clock.now += 1.0
+    assert runner.run_next_due() is not None
+
+
 # ---- alert-raiser ------------------------------------------------------------
 
 def raiser(clock, cooldown=60.0):

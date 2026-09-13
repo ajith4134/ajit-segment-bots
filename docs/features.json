@@ -4096,7 +4096,11 @@
    "note": "Built on CCXT.",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "ccxt-order-router",
@@ -4135,7 +4139,12 @@
    ],
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design.",
+    "replaced_by": "broker-order-router"
+   }
   },
   {
    "id": "ablation-harness",
@@ -6410,7 +6419,11 @@
    "proposed": "2026-08-20",
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "forecast-ensembler",
@@ -6751,7 +6764,12 @@
      "on": "2026-09-06",
      "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
     }
-   ]
+   ],
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design.",
+    "replaced_by": "broker-market-feed-reader"
+   }
   },
   {
    "id": "order-book-reader",
@@ -6776,7 +6794,11 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "symbol-catalogue-reader",
@@ -6800,7 +6822,12 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design.",
+    "replaced_by": "broker-instrument-catalogue-reader"
+   }
   },
   {
    "id": "feed-gap-detector",
@@ -7575,7 +7602,12 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design.",
+    "replaced_by": "broker-account-funds-reader"
+   }
   },
   {
    "id": "venue-position-reader",
@@ -7599,7 +7631,11 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "order-state-poller",
@@ -7623,7 +7659,11 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "order-reject-classifier",
@@ -7647,7 +7687,11 @@
    "proposed": "2026-08-20",
    "resource_class": "compute-bound",
    "rate_risk": "latency-only",
-   "skipped_tick_effect": "delays"
+   "skipped_tick_effect": "delays",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "order-resubmitter",
@@ -7673,7 +7717,11 @@
    "proposed": "2026-08-20",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "venue-rate-budgeter",
@@ -7702,7 +7750,11 @@
    },
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "exploration-pair-opener",
@@ -8125,7 +8177,11 @@
    "evidence": "docs/research/repo-harvest/jesse.md _check_for_liquidations; nautilus_trader.md process_liquidations",
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "order-idempotency-stamper",
@@ -8175,7 +8231,11 @@
    "evidence": "docs/research/repo-harvest/octobot.md LinearPosition.update_isolated_liquidation_price; jesse.md Position.liquidation_price",
    "resource_class": "bandwidth-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "fund-lock-ledger",
@@ -8264,7 +8324,11 @@
    "evidence": "docs/research/repo-harvest/nautilus_trader.md exchange.rs process_liquidations",
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "stop-frequency-breaker",
@@ -8364,7 +8428,11 @@
    "evidence": "docs/research/repo-harvest/lumibot.md order.py STATUS_ALIAS_MAP; hummingbot.md order-state machine",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "order-not-found-debouncer",
@@ -8388,7 +8456,11 @@
    "evidence": "docs/research/repo-harvest/hummingbot.md ClientOrderTracker.process_order_not_found",
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "resting-order-cancel-policy",
@@ -8514,7 +8586,11 @@
    "evidence": "docs/research/repo-harvest/nautilus_trader.md settle_funding_rate; backtrader.md CommInfoBase.get_credit_interest",
    "resource_class": "io-bound",
    "rate_risk": "latency-only",
-   "skipped_tick_effect": "delays"
+   "skipped_tick_effect": "delays",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "drawdown-episode-tracker",
@@ -11157,7 +11233,11 @@
    "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
    "resource_class": "compute-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "venue-pool-rotator",
@@ -11185,7 +11265,11 @@
    "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "api-key-pool-rotator",
@@ -11210,7 +11294,11 @@
    "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
    "resource_class": "io-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "cross-venue-price-consolidator",
@@ -11235,7 +11323,11 @@
    "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
    "resource_class": "bandwidth-bound",
    "rate_risk": "changes-the-answer",
-   "skipped_tick_effect": "corrupts"
+   "skipped_tick_effect": "corrupts",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "stream-budget-planner",
@@ -11261,7 +11353,11 @@
    "evidence": "RL-049; trading-system src/ops/rate_budget.py, src/capture/venues/, ~/research/binance-fstream-connection-limits.md, ~/research/binance-withheld-streams.md",
    "resource_class": "compute-bound",
    "rate_risk": "latency-only",
-   "skipped_tick_effect": "delays"
+   "skipped_tick_effect": "delays",
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "feed-coverage-auditor",
@@ -12459,7 +12555,11 @@
      "on": "2026-09-06",
      "why": "docs/proposals/a-declared-input-must-actually-be-read.md"
     }
-   ]
+   ],
+   "retired": {
+    "on": "2026-09-02",
+    "why": "2026-09-02: the crypto (Binance/Bybit) path, retired when the goal pivoted to the Indian market. Off the live spine; captured_venues is empty, so a venue part refuses to start by design."
+   }
   },
   {
    "id": "quote-level-sampler",
@@ -14868,5 +14968,12 @@
   "origin": "the operator, 2026-09-13 -- \"yes do A B and C\"",
   "applied_by": "dashboard/blueprint_edits/apply_2026-09-13_the_picker_learns_from_the_enforcers_verdict.py",
   "proposal": "docs/proposals/the-picker-learns-from-the-enforcers-verdict.md"
+ },
+ "_proposal_2026-09-13_retired_crypto_parts_are_marked": {
+  "what": "Parts retired with the crypto path carry a `retired` record in the blueprint, so a checker can tell a retired part from a broken one.",
+  "evidence": "Full suite 2026-09-13: symbol-catalogue-reader and stream-budget-planner failed test_every_launchable_part_starts by refusing to start on captured_venues = [], their designed response to crypto being switched off.",
+  "origin": "the operator, 2026-09-13 -- \"yes do A B and C\"",
+  "applied_by": "dashboard/blueprint_edits/apply_2026-09-13_retired_crypto_parts_are_marked.py",
+  "proposal": "docs/proposals/retired-crypto-parts-are-marked.md"
  }
 }

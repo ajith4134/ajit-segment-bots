@@ -8,10 +8,22 @@ and a number nobody can check is decoration.
 A probe that fails is a result, not a gap. A probe that hangs is worse than one
 that fails, because it stops every probe behind it, so each is bounded by a
 deadline and a timeout is itself a recorded outcome.
+
+**The deadline is enforced, since 2026-09-13.** Until then it was checked after
+the probe returned, so it bounded nothing: `capture:tape_freshness` took 415s off
+a cold page cache (777s measured live), every probe behind it waited, and the
+part could not report health for the whole sweep --
+`test_every_launchable_part_starts` saw it silent for 30s and failed it. A probe
+is now interrupted at `probe_timeout` by a real-time timer on the part's own
+single thread, and a tick runs at most one due probe, so the heartbeat goes out
+between probes rather than after all of them.
 """
 
 from __future__ import annotations
 
+import contextlib
+import signal
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -52,6 +64,37 @@ class ProbeResult:
         return self.outcome == MEASURED
 
 
+class ProbeDeadlineExceeded(TimeoutError):
+    """Raised inside a probe that ran past its deadline."""
+
+
+@contextlib.contextmanager
+def interrupt_after(seconds: float):
+    """Raise `ProbeDeadlineExceeded` in the running probe once `seconds` pass.
+
+    A real-time interval timer rather than a watcher thread: a part is one
+    process with one thread (the runtime spec's fork rule), a thread cannot be
+    killed anyway, and a probe abandoned on a thread keeps running while the
+    next sweep starts another copy. Off the main thread -- which a part never
+    is, but a caller might be -- signals cannot be installed, so the probe runs
+    unbounded and the post-hoc check still records it as slow.
+    """
+    if seconds <= 0 or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def expire(_signum, _frame):
+        raise ProbeDeadlineExceeded(f"interrupted at its {seconds:.2f}s deadline")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 @dataclass
 class RunnerStanding:
     runs: int = 0
@@ -72,6 +115,8 @@ class ProbeRunner:
         rest_multiple: float = 0.0,
         monotonic=time.monotonic,
         now_ns=time.time_ns,
+        deadline=interrupt_after,
+        minimum_rest_seconds: float = 0.0,
     ) -> None:
         """`rest_multiple` is how many times its own cost a probe rests before rerunning.
 
@@ -99,6 +144,11 @@ class ProbeRunner:
                 f"rerun, so it cannot be negative -- got {rest_multiple!r}"
             )
         self._timeout = timeout_seconds
+        self._deadline = deadline
+        # The least a probe rests, however cheap. The live part passes its health
+        # interval, which is how often the whole sweep ran before a tick ran one
+        # probe: without it a probe that costs nothing is due every tick.
+        self._minimum_rest = minimum_rest_seconds
         self._rest_multiple = rest_multiple
         self._monotonic = monotonic
         self._now_ns = now_ns
@@ -136,7 +186,8 @@ class ProbeRunner:
         started = self._monotonic()
         self.standing.runs += 1
         try:
-            value = probe()
+            with self._deadline(self._timeout):
+                value = probe()
         except TimeoutError as timeout:
             duration = self._monotonic() - started
             self.standing.timed_out += 1
@@ -181,6 +232,34 @@ class ProbeRunner:
         if self._rest_multiple <= 0:
             return True
         return self._monotonic() >= self._may_run_at.get(name, float("-inf"))
+
+    def run_next_due(self) -> tuple[ProbeResult, ...] | None:
+        """Run at most one due probe -- the one waiting longest -- and every current answer.
+
+        None when nothing was due, so a caller publishes only when something was
+        measured. One probe a tick is what bounds a tick at `probe_timeout`: a
+        whole sweep in one tick is as long as every probe together, and the part
+        says nothing about its own health until it ends. A probe never run yet
+        reads NOT_RUN, with its command, rather than being left out.
+        """
+        due = [name for name in sorted(self._probes) if self.is_due(name)]
+        if not due:
+            return None
+        name = min(due, key=lambda probe_name: self._may_run_at.get(probe_name, float("-inf")))
+        result = self.run(name)
+        self._last_result[name] = result
+        self._may_run_at[name] = self._monotonic() + max(
+            result.duration_seconds * self._rest_multiple, self._minimum_rest
+        )
+        return tuple(
+            self._last_result.get(probe_name)
+            or ProbeResult(
+                name=probe_name, outcome=NOT_RUN, value=None,
+                command=self._probes[probe_name][1], duration_seconds=0.0,
+                failure="not run yet: probes run one a tick", measured_at_ns=self._now_ns(),
+            )
+            for probe_name in sorted(self._probes)
+        )
 
     def run_all(self) -> tuple[ProbeResult, ...]:
         """Every probe's current answer, rerunning only the ones that are due.
@@ -244,8 +323,6 @@ def start_part(context) -> int:
     many parts the heartbeat table says are reporting, and the journal gaps
     seen. Run once per health interval; the bus inputs wake the part between.
     """
-    import time as _time
-
     from runtime.input_assembly import Batch, LatestValue
     from runtime.probes import capture_probes, substrate_probes, trading_probes
 
@@ -255,6 +332,7 @@ def start_part(context) -> int:
     runner = ProbeRunner(
         timeout_seconds=context.number("probe_timeout"),
         rest_multiple=context.number("probe_rest_multiple"),
+        minimum_rest_seconds=context.health_interval_seconds,
     )
     gaps_seen = [0]
 
@@ -276,18 +354,12 @@ def start_part(context) -> int:
 
     runner.register("bus:parts-reporting", parts_reporting, command="read the latest heartbeat-table on the bus")
     runner.register("bus:journal-gaps", journal_gaps, command="count journal-gap messages on the bus")
-    last_run = [float("-inf")]
-
     def tick() -> None:
         gaps_seen[0] += len(gaps.payloads())
         tables.value()
-        now = _time.monotonic()
-        if now - last_run[0] < context.health_interval_seconds:
-            return
-        results = runner.run_all()
+        results = runner.run_next_due()
         if results:
-            publish_results(tuple(results))
-        last_run[0] = now
+            publish_results(results)
 
     return run_part(
         declaration=PART_DECLARATION,

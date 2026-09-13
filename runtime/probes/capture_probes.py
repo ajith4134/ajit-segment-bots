@@ -20,12 +20,22 @@ Three states, and the difference between them matters:
 - **FAILING** -- the tape exists, and the last thing written to it is older than
   a market ever goes quiet for. That is the tile that says a capture has stopped
   without anyone noticing.
+
+**A retired venue is named, never failing** (2026-09-13). Binance and Bybit were
+retired on 2026-09-02; their tapes and health logs stay on disk, and until this
+date both tiles went red on them for twenty days -- a red tile for a decision
+rather than a fault, which trains a reader to ignore red. A venue is retired when
+this build has an adapter module for it under `runtime/venues/` and
+`captured_venues` does not name it: derived from the code and the operator's
+setting, never a list typed here. It is left out of the FAILING decision and
+stated in the tile's value, so the board still says it is there.
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import pkgutil
 import time
 from dataclasses import dataclass
 
@@ -85,6 +95,65 @@ def _read_tape_root() -> tuple[pathlib.Path | None, str]:
 
 def _index_files(tape_root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(tape_root.glob(f"*/*/*{INDEX_SUFFIX}"))
+
+
+def _retired_venues() -> frozenset[str]:
+    """Venues this build has an adapter for that `captured_venues` does not name.
+
+    The adapter modules are the ones `runtime.venues.adapter_registry` resolves a
+    venue id to; the setting is the operator's. A venue in neither -- `upstox`,
+    `news` -- is not a retired crypto venue and is judged as it always was.
+    Settings that cannot be read retire nothing: failing towards judging a venue
+    rather than towards excusing one.
+    """
+    import runtime.venues as venue_package
+    from runtime.venues.adapter_registry import (
+        ADAPTER_FACTORY_NAME,
+        CAPTURED_VENUES_SETTING,
+        VENUE_PACKAGE,
+    )
+    import importlib
+
+    settings_path = settings_directory() / "runtime.toml"
+    try:
+        captured = set(
+            load_settings_document(settings_path, "runtime").read_value(CAPTURED_VENUES_SETTING)
+        )
+    except (SettingsParseRefused, KeyError, OSError):
+        return frozenset()
+    with_an_adapter = set()
+    for module_info in pkgutil.iter_modules(venue_package.__path__):
+        try:
+            module = importlib.import_module(f"{VENUE_PACKAGE}.{module_info.name}")
+        except Exception:  # noqa: BLE001 -- a module that does not import is not an adapter
+            continue
+        if callable(getattr(module, ADAPTER_FACTORY_NAME, None)):
+            with_an_adapter.add(module_info.name.replace("_", "-"))
+    return frozenset(with_an_adapter - captured)
+
+
+def _day_of(index_path: pathlib.Path) -> str:
+    """The session day an index belongs to: `2026-09-13` of `2026-09-13.book.index`."""
+    return index_path.name.split(".", 1)[0]
+
+
+def _newest_day_index_files(tape_root: pathlib.Path) -> dict[str, list[pathlib.Path]]:
+    """Per venue, only the index files of that venue's newest day.
+
+    The newest record a venue wrote is in its newest day's files, so reading
+    every older day's index answers nothing new. Measured 2026-09-13: 166,204
+    index files, 162,754 of them Upstox's, and reading the last record of each
+    took 415s off a cold page cache -- 777s on the live spine -- while the newest
+    day alone is 9,789 files and gave the same answer for all four venues.
+    """
+    by_venue: dict[str, list[pathlib.Path]] = {}
+    for index_path in _index_files(tape_root):
+        by_venue.setdefault(index_path.parent.parent.name, []).append(index_path)
+    newest: dict[str, list[pathlib.Path]] = {}
+    for venue, paths in by_venue.items():
+        latest = max(_day_of(path) for path in paths)
+        newest[venue] = [path for path in paths if _day_of(path) == latest]
+    return newest
 
 
 def _newest_record_time_ns(index_path: pathlib.Path) -> int | None:
@@ -160,37 +229,53 @@ def probe_tape_freshness() -> CaptureProbeResult:
 
     now_ns = time.time_ns()
     newest_by_venue: dict[str, int] = {}
-    for index_path in _index_files(tape_root):
-        newest = _newest_record_time_ns(index_path)
-        if newest is None:
-            continue
-        venue = index_path.parent.parent.name
-        newest_by_venue[venue] = max(newest_by_venue.get(venue, 0), newest)
+    for venue, index_paths in _newest_day_index_files(tape_root).items():
+        for index_path in index_paths:
+            newest = _newest_record_time_ns(index_path)
+            if newest is None:
+                continue
+            newest_by_venue[venue] = max(newest_by_venue.get(venue, 0), newest)
 
     if not newest_by_venue:
         return CaptureProbeResult(
             "Tape freshness", NOT_BUILT, "no venue has written a record yet", str(tape_root)
         )
 
+    retired = _retired_venues()
     staleness = {
         venue: (now_ns - newest) / NANOSECONDS_PER_SECOND
         for venue, newest in newest_by_venue.items()
     }
-    detail = ", ".join(f"{venue} {seconds:.0f}s ago" for venue, seconds in sorted(staleness.items()))
-    stale = [venue for venue, seconds in staleness.items() if seconds > STALE_TAPE_SECONDS]
+    live = {venue: seconds for venue, seconds in staleness.items() if venue not in retired}
+    detail = ", ".join(f"{venue} {seconds:.0f}s ago" for venue, seconds in sorted(live.items()))
+    retired_detail = _retired_note(
+        {venue: seconds for venue, seconds in staleness.items() if venue in retired}
+    )
+    proof = (
+        f"last record in each venue's newest day of index files under {tape_root}"
+        + (f"; retired = an adapter under runtime/venues/ not named in captured_venues" if retired_detail else "")
+    )
+    if not live:
+        return CaptureProbeResult(
+            "Tape freshness", NOT_BUILT, f"no live venue has written a record{retired_detail}", proof
+        )
+    stale = [venue for venue, seconds in live.items() if seconds > STALE_TAPE_SECONDS]
     if stale:
         return CaptureProbeResult(
             "Tape freshness",
             FAILING,
-            f"{', '.join(sorted(stale))} stopped writing ({detail})",
-            f"last record in each venue's newest index under {tape_root}, "
-            f"against {STALE_TAPE_SECONDS:.0f}s",
+            f"{', '.join(sorted(stale))} stopped writing ({detail}){retired_detail}",
+            f"{proof}, against {STALE_TAPE_SECONDS:.0f}s",
         )
-    return CaptureProbeResult(
-        "Tape freshness",
-        OK,
-        detail,
-        f"last record in each venue's newest index under {tape_root}",
+    return CaptureProbeResult("Tape freshness", OK, f"{detail}{retired_detail}", proof)
+
+
+def _retired_note(seconds_by_venue: dict[str, float]) -> str:
+    """`; retired: binance-usdm (last wrote 1740231s ago)`, or nothing."""
+    if not seconds_by_venue:
+        return ""
+    return "; retired: " + ", ".join(
+        f"{venue} (last wrote {seconds:.0f}s ago)" for venue, seconds in sorted(seconds_by_venue.items())
     )
 
 
@@ -236,19 +321,32 @@ def probe_capture_readers() -> CaptureProbeResult:
             str(health_directory),
         )
 
-    silent = [venue for venue, seconds in reported.items() if seconds > STALE_HEALTH_SECONDS]
-    detail = ", ".join(f"{venue} {seconds:.0f}s ago" for venue, seconds in sorted(reported.items()))
+    retired = _retired_venues()
+    retired_detail = _retired_note(
+        {venue: seconds for venue, seconds in reported.items() if venue in retired}
+    )
+    live = {venue: seconds for venue, seconds in reported.items() if venue not in retired}
+    if not live:
+        return CaptureProbeResult(
+            "Capture readers",
+            NOT_BUILT,
+            f"no live reader reports here{retired_detail}",
+            f"last line of each {health_directory}/*.jsonl; retired = an adapter under "
+            f"runtime/venues/ not named in captured_venues",
+        )
+    silent = [venue for venue, seconds in live.items() if seconds > STALE_HEALTH_SECONDS]
+    detail = ", ".join(f"{venue} {seconds:.0f}s ago" for venue, seconds in sorted(live.items()))
     if silent:
         return CaptureProbeResult(
             "Capture readers",
             FAILING,
-            f"{', '.join(sorted(silent))} stopped reporting ({detail})",
+            f"{', '.join(sorted(silent))} stopped reporting ({detail}){retired_detail}",
             f"last line of each {health_directory}/*.jsonl, against {STALE_HEALTH_SECONDS:.0f}s",
         )
     return CaptureProbeResult(
         "Capture readers",
         OK,
-        f"{len(reported)} reporting ({detail})",
+        f"{len(live)} reporting ({detail}){retired_detail}",
         f"last line of each {health_directory}/*.jsonl",
     )
 

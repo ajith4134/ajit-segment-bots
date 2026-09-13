@@ -41,6 +41,10 @@ def tape_root(durable_tmp_path, monkeypatch):
     monkeypatch.setattr(
         capture_probes, "_read_tape_root", lambda: (root, "a tape this test wrote")
     )
+    # This suite writes a binance-usdm tape as a live venue. Which venues are
+    # retired is read from the operator's own settings, so it is pinned here to
+    # none; the retirement tests below pin it themselves.
+    monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset())
     return root
 
 
@@ -190,3 +194,66 @@ def test_a_probe_that_crashes_reports_unmeasured_rather_than_vanishing(tape_root
     assert len(results) == 1
     assert results[0].state == NOT_MEASURED
     assert "RuntimeError" in results[0].value
+
+
+# ---- retired venues and the newest day (2026-09-13) --------------------------
+
+def test_a_retired_venue_is_named_but_does_not_redden_the_freshness_tile(tape_root, monkeypatch):
+    now = time.time_ns()
+    write_records(tape_root, 3, at_ns=now - int(3600 * NANOSECONDS_PER_SECOND), venue=VENUE)
+    write_records(tape_root, 3, at_ns=now, venue="upstox", symbol="NSE_EQ|INE002A01018")
+    monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset({VENUE}))
+
+    result = probe_tape_freshness()
+
+    assert result.state == OK, result.value
+    assert "retired: binance-usdm" in result.value
+
+
+def test_a_tape_holding_only_retired_venues_is_not_built_rather_than_failing(tape_root, monkeypatch):
+    write_records(tape_root, 3, at_ns=time.time_ns() - int(3600 * NANOSECONDS_PER_SECOND))
+    monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset({VENUE}))
+    assert probe_tape_freshness().state == NOT_BUILT
+
+
+def test_a_retired_reader_is_named_but_does_not_redden_the_readers_tile(tape_root, monkeypatch):
+    write_health(tape_root, VENUE, time.time_ns() - int(3600 * NANOSECONDS_PER_SECOND))
+    monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset({VENUE}))
+    result = probe_capture_readers()
+    assert result.state == NOT_BUILT
+    assert "retired: binance-usdm" in result.value
+
+
+def test_a_live_venue_that_stopped_is_still_red_beside_a_retired_one(tape_root, monkeypatch):
+    stale = time.time_ns() - int(3600 * NANOSECONDS_PER_SECOND)
+    write_records(tape_root, 3, at_ns=stale, venue=VENUE)
+    write_records(tape_root, 3, at_ns=stale, venue="upstox", symbol="NSE_EQ|INE002A01018")
+    monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset({VENUE}))
+    result = probe_tape_freshness()
+    assert result.state == FAILING
+    assert result.value.startswith("upstox stopped writing")
+
+
+def test_freshness_reads_only_each_venues_newest_day(tape_root, monkeypatch):
+    now = time.time_ns()
+    write_records(tape_root, 3, at_ns=now - int(3 * 86400 * NANOSECONDS_PER_SECOND))
+    write_records(tape_root, 3, at_ns=now)
+    opened = []
+    real = capture_probes._newest_record_time_ns
+    monkeypatch.setattr(
+        capture_probes, "_newest_record_time_ns",
+        lambda path: opened.append(path.name) or real(path),
+    )
+
+    assert probe_tape_freshness().state == OK
+    days = {name.split(".", 1)[0] for name in opened}
+    assert len(days) == 1, opened
+
+
+def test_the_retired_set_is_derived_from_the_adapters_and_the_setting():
+    """Against this build and the operator's own settings: the two crypto adapters, not Upstox."""
+    retired = capture_probes._retired_venues()
+    assert "upstox" not in retired
+    assert "news" not in retired
+    assert retired <= {"binance-usdm", "bybit-linear"}
+

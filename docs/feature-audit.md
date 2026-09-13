@@ -2274,3 +2274,29 @@ Three changes, on the operator's word (`docs/proposals/the-picker-learns-from-th
 **Seen, not fixed:** the enforcer publishes its repair request on `llm-request` as
 a plain dict, not an `LlmRequest`; every reader of that wire does `getattr` on it,
 so a repair reaches the renderer with no purpose and no facts.
+
+### 2026-09-13 — the three parts that did not start
+
+The full suite (5,003 passed, 5 failed) failed three parts in
+`test_every_launchable_part_starts`.
+
+- **`probe-runner` — a real defect.** `probe_timeout` (10s) was checked after a
+  probe returned, so it bounded nothing, and a tick ran the whole sweep before the
+  part could report. `capture:tape_freshness` read the last record of all 166,204
+  index files (162,754 of them Upstox's): **415s** cold, 777s measured live. Now the
+  deadline interrupts a probe (a real-time timer on the part's one thread), a tick
+  runs one due probe with every probe resting at least a health interval, and
+  freshness reads only each venue's newest day — 9,789 files, same answer for all
+  four venues, 4.3s live against 415s.
+- **`symbol-catalogue-reader`, `stream-budget-planner` — not faults.** Retired
+  crypto feed parts refusing on `captured_venues = []`, by design. 24 retired parts
+  now carry a `retired` record in `docs/features.json`
+  (`docs/proposals/retired-crypto-parts-are-marked.md`); the start test skips one by
+  name only if it fails to start.
+- **Capture tiles** name Binance/Bybit as retired rather than reading red on them;
+  a venue is retired when it has an adapter under `runtime/venues/` and
+  `captured_venues` does not name it.
+
+**Seen, not fixed:** `Tape freshness` reads FAILING for `upstox` whenever the market
+is shut (1,804s stale on a Sunday) — `STALE_TAPE_SECONDS` is 60s, fitted to a
+24-hour crypto market. It should ask `market-session-calendar`.

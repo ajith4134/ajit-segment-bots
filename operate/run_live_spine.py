@@ -123,6 +123,13 @@ LIVE_SPINE = (
     # same reason the CLOSED findings in the crypto-retirement audit gave: a
     # bought option has no leverage dial and cannot be liquidated.
     #
+    # Correction, 2026-09-13: three of the parts named above are back on this
+    # spine -- venue-outage-rider, clock-skew-monitor (converted to watch the
+    # broker) and leverage-selector -- and funding-rate-forecaster and venue-
+    # premium-stream-reader were never declared. The retired set is now stated
+    # in docs/features.json as a `retired` record on each part (24 of them), which
+    # is what a checker reads; this comment is history.
+    #
     # broker-token-refresh-scheduler auto-refreshes today's Upstox token
     # (upstox-totp, no human in the loop); broker-instrument-catalogue-reader
     # needs no token (Upstox's instrument files are public). Both start with
@@ -1099,7 +1106,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--without-feed",
         action="store_true",
-        help="run everything except the three feed parts, leaving the capture script to write the tape",
+        help=(
+            "skip the check that operate/start_trade_capture.py is not running. The three "
+            "parts this removes (symbol-catalogue-reader, stream-budget-planner, "
+            "venue-trade-stream-reader) are the crypto feed, retired 2026-09-02 and already "
+            "off this spine, and that script captures crypto venues only -- so today this "
+            "does not hand the Indian tape to anything"
+        ),
     )
     arguments = parser.parse_args(argv)
 

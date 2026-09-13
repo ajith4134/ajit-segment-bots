@@ -57,6 +57,19 @@ def launchable_part_ids() -> list[str]:
 
 LAUNCHABLE = launchable_part_ids()
 
+# Parts the blueprint marks retired (dashboard/blueprint_edits/
+# apply_2026-09-13_retired_crypto_parts_are_marked.py). Still started: a retired
+# part that reports passes like any other. One that exits before reporting is
+# skipped by name with its retirement record rather than failed -- the crypto feed
+# parts refuse on `captured_venues = []`, which is their designed answer to crypto
+# being switched off, and until 2026-09-13 this suite could not tell that from a
+# broken part because only a comment in operate/run_live_spine.py knew.
+RETIRED = {
+    feature["id"]: feature["retired"]
+    for feature in load_blueprint()["features"]
+    if feature.get("retired")
+}
+
 
 @pytest.fixture(scope="module")
 def bus_root():
@@ -160,6 +173,11 @@ def test_the_part_starts_and_reports_on(part_id, launcher, bus_root):
                 break
             time.sleep(0.05)
         exit_code = None if launched.is_running else launched.process.exitcode
+        if not launched.is_running and part_id in RETIRED:
+            pytest.skip(
+                f"{part_id} is retired ({RETIRED[part_id]['why']}) and exited with {exit_code} "
+                f"before reporting"
+            )
         assert launched.is_running, (
             f"{part_id} exited with {exit_code} before reporting health -- read the part's "
             f"stderr; a missing setting or an input it cannot bind ends the process"
