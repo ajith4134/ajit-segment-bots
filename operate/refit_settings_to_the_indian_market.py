@@ -547,6 +547,46 @@ REFITS: dict[str, tuple] = {
         "sharing one old stamp. The monitor reads that lag as clock drift; its DRIFTING "
         "state on this feed has so far meant 'behind', not 'skewed'.",
     ),
+    # ---- the drift guard's own remainder, 2026-09-13 ------------------------------
+    "capital_state_parts": (
+        '["paper-account-keeper", "position-recorder", "cost-basis-tracker", "inr-pnl-accountant", "paper-fill-simulator"]',
+        "Claude, 2026-09-13: named usdt-pnl-accountant, which was renamed "
+        "inr-pnl-accountant on 2026-09-12 (docs/proposals/the-settlement-currency-is-the-"
+        "rupee.md). No part has the old id, so unattended-run-warden has been restarting "
+        "the rupee P&L accountant blindly and part-replacement-planner would swap it "
+        "without a flat book -- the two things this list exists to prevent. The rule is "
+        "unchanged; the id is the one on the spine.",
+    ),
+    "reference_price_maximum_age_seconds": (
+        "60.0",
+        "Claude, 2026-09-13: the ceiling on instrument-selector's learned believable age "
+        "for a price. The rule is kept: 'at sixty seconds every symbol's 95th-percentile "
+        "drift is at or above the median stop distance ... a price that old cannot place a "
+        "stop at all' -- then measured on BTCUSDT and peers against a 0.1866% stop. "
+        "MEASURED on option contract distinct trades, 2026-09-07/08: p95 |price change| "
+        "4.76% at 15s, 5.56% at 30s, 7.14% at 60s, 9.20% at 120s "
+        "(measurements/2026-09-13-indian-guard-remainder/), against the 6.09% option stop "
+        "distance used across this file (p80 option pullback, "
+        "measurements/2026-09-13-indian-option-retracements/). 60s is the first measured "
+        "age whose p95 drift passes that stop, so the ceiling stands on Indian evidence. "
+        "Pooled over contracts, not per symbol as the crypto note measured.",
+    ),
+    "volatility_gap_minimum_fraction": (
+        "0.29",
+        "Claude, 2026-09-13: how far implied volatility must sit from the forecast, as "
+        "(implied - forecast) / forecast, before volatility-gap-detector raises a candidate. "
+        "Was 0.2, 'the spread between the two on BTC on an ordinary day in the literature "
+        "... unmeasured here'. The rule is kept and MEASURED on NSE: the median "
+        "implied_volatility Upstox states for near-the-money contracts (0.4 <= |delta| <= "
+        "0.6) against the same underlying's realised volatility that session, annualised "
+        "from one-minute log returns, over 31 underlying-days on 2026-09-07/08: |gap| p20 "
+        "0.123, p50 0.290, p80 0.501 (measurements/2026-09-13-indian-guard-remainder/). "
+        "Two caveats stated rather than hidden: realised stands in for the forecast, "
+        "because realised-vol-regressor has produced no forecast yet, and two sessions is "
+        "thin -- NIFTY's gap was +1.73 on 09-07 and +0.49 on 09-08. Dormant: "
+        "implied-vol-reader has published no surface, so the detector reads "
+        "no_implied_surface on every test.",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -866,6 +906,9 @@ REFITS: dict[str, tuple] = {
 # really on disk -- an entry whose evidence vanishes fails rather than passing
 # quietly.
 ALREADY_INDIAN: dict[str, str] = {
+    # Written for NSE option series on 2026-09-13 (commit cb5ce63); its note names crypto
+    # only to say what the warm-up was sized for before.
+    "price_gap_warmup_gaps": "measurements/2026-09-13-indian-series-gaps/",
     # Proved by a measurement or an Indian model that exists in the tree.
     "signal_label_move_fraction": "measurements/2026-09-07-indian-price-staleness/",
     "options_flat_brokerage": "runtime/indian_options_fee_model.py",
@@ -903,6 +946,26 @@ ALREADY_INDIAN: dict[str, str] = {
 # if one of these parts ever comes back on the spine, its setting is crypto again
 # that day, which is what the note has to say.
 INERT_WITH_THE_CRYPTO_PATH: dict[str, str] = {
+    # ---- the drift guard's own remainder, 2026-09-13 ----
+    "symbol_selection_momentum_weight": "symbol-catalogue-reader, off the spine since the 2026-09-02 cutover",
+    "symbol_selection_short_window_scan_size": "symbol-catalogue-reader, off the spine",
+    "book_depth_levels": (
+        "order-book-reader, stream-budget-planner and the Bybit adapter, all off the spine; "
+        "Upstox's book depth is set by its feed mode, not by this setting"
+    ),
+    "venue_reconnect_backoff_floor": (
+        "order-book-reader, ccxt-venue-reader, venue-trade-stream-reader, "
+        "venue-quote-stream-reader and start_trade_capture, all off the spine; the Upstox "
+        "feed reconnects on broker_reconnect_backoff_floor"
+    ),
+    "venue_reconnect_backoff_ceiling": "the same crypto readers as venue_reconnect_backoff_floor, all off the spine",
+    "api_key_rejection_rest": "api-key-pool-rotator, off the spine -- no crypto keys are held",
+    "feed_jump_threshold_increments": (
+        "feed-jump-detector, which is on the spine, reads it only for a symbol that has "
+        "declared a price increment, and nothing in the tree calls set_price_increment -- so "
+        "every Upstox symbol is judged against feed_jump_threshold_fraction and this tick "
+        "count is never used"
+    ),
     "cash_equity_shortlist_liquidity_pool_size": (
         "cash-equity-shortlist-ranker, whose segment cash-equity-intraday was "
         "retired on 2026-09-12. The part is still built and still on the spine, "
@@ -1090,6 +1153,13 @@ NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
 # than ignored, because "nothing to do" has to be a stated answer or it is
 # indistinguishable from "nobody looked" (Rule 8).
 MARKET_INDEPENDENT: dict[str, str] = {
+    "settings_recheck_interval": (
+        "SettingsDirectoryWatch's periodic re-read of this directory, a backstop for "
+        "watchdog discarding the kernel's inotify overflow marker -- a property of this "
+        "box's filesystem watch. The drift guard matched 'Binance' in the section comment "
+        "that follows this setting in the file ('the operator does not decide that "
+        "Binance allows 1024 streams'), which belongs to captured_venues"
+    ),
     "profit_lock_minimum_observations": (
         "how many retracements profit-lock needs on a symbol before it trails by "
         "the measured quantile instead of the prior. Its note's reason is "
@@ -1205,6 +1275,20 @@ MARKET_INDEPENDENT: dict[str, str] = {
 # not repeat a measurement that did not work -- but it is not progress and must
 # not read as any.
 MEASURED_BUT_INCONCLUSIVE: dict[str, str] = {
+    "feed_jump_threshold_fraction": (
+        "2026-09-13, measured on closed I1 bars of 1,350 NSE contracts and F&O underlyings "
+        "with 20+ moves on 2026-09-07/08 (measurements/2026-09-13-indian-guard-remainder/): "
+        "close-to-open move p50 0.31%, p99 11.8% pooled; per-symbol p99 p50 5.85%, p80 "
+        "10.2%, p95 17.7%. The crypto rule -- above every symbol's p99 -- cannot be kept by "
+        "one number here. Over each symbol's first 8 moves, judged against this floor "
+        "alone, 0.005 calls 50.2% of ordinary bars a jump (and paper-fill-simulator refuses "
+        "to fill a flagged symbol), 0.05 calls 10.9%, 0.2 calls 1.5%. But the floor is also "
+        "the permanent lower bound after warm-up (bound = max(floor, patience x own p99)), "
+        "so a floor above ordinary contract moves would blind the detector on an index, "
+        "whose p99 bar move was 0.056% on 2026-09-04. What would settle it is the part, not "
+        "the number: a floor that gives way to the symbol's own bound once measured, or a "
+        "warm-up floor per instrument kind"
+    ),
     "spread_reversion_horizon": (
         "2026-09-13, docs/settings-fitted-to-crypto-the-guard-cannot-see.md. The note's "
         "rule is a half-life of about 14 observations turned into time, with room. Its "

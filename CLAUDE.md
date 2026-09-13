@@ -47,9 +47,19 @@ The measurements are in `measurements/2026-09-12-indian-order-sizes/`,
 `-indian-feed-cadence/`, `-indian-return-distribution/` and
 `-indian-pair-behaviour/`.
 
-**The 7 left are named in the guard's output**, and four need measurements this
-session could not make: candle-boundary jumps, an implied-vs-realised volatility
-gap, a price-drift-by-age curve, and a spread half-life on time-spaced bars.
+**Since 2026-09-13 the guard reads 6, and all 6 are measured but inconclusive** --
+none is unexamined. Three of the four measurements named here were made that day
+(candle-boundary jumps, implied-vs-realised gap, drift by age;
+`measurements/2026-09-13-indian-guard-remainder/`); the spread half-life on
+time-spaced bars is still open, and it is what the three cointegration settings and
+`spread_reversion_horizon` wait on. `feed_jump_threshold_fraction` is open for a
+design reason, not a missing number: one floor cannot sit above ordinary contract
+bar moves and below an index break. `docs/settings-fitted-to-crypto-the-guard-cannot-see.md`
+is the ledger for the 34 the guard could not see.
+
+**`symbol-price-frame` carries contracts and underlyings** (two producers:
+broker-underlying-price-frame-bridge and price-level-sampler). A setting read off it
+serves both; measure both, as distinct trades, before refitting one.
 
 ## SCOPE CHANGE — 2026-09-12, read before any segment work
 

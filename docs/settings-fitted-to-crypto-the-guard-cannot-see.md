@@ -92,6 +92,19 @@ underlying windows reverting; now 5.0% each way). `regime_window_length` 256 kep
 on contract trades the estimator's spread is 0.149 at 256 and 0.128 at 1024, never under 0.1. Feature-window and
 `tail_window_length` notes corrected to state contract spans (64 trades about 6 minutes trade-weighted).
 Classification of the 34 is unchanged by this.
+2026-09-13 (last) — **the drift guard's own list, 18 -> 6, all 6 measured but inconclusive.** Found live:
+`capital_state_parts` still named `usdt-pnl-accountant`, renamed `inr-pnl-accountant` on 2026-09-12, so the
+rupee P&L accountant was being restarted blindly and could be swapped without a flat book; corrected.
+Inert (reader off the spine, or a branch nothing reaches): the two symbol-selection settings, `book_depth_levels`,
+both venue reconnect backoffs, `api_key_rejection_rest`, and `feed_jump_threshold_increments` (nothing calls
+`set_price_increment`). `settings_recheck_interval` market-independent (the match was a comment belonging to the
+next setting). `price_gap_warmup_gaps` recorded as already Indian. Measured in
+`measurements/2026-09-13-indian-guard-remainder/`: `reference_price_maximum_age_seconds` 60 kept on Indian evidence
+(contract p95 drift 5.56% at 30s, 7.14% at 60s, against the 6.09% option stop); `volatility_gap_minimum_fraction`
+0.2 -> 0.29 (median |implied - realised| / realised over 31 underlying-days; realised stands in for a forecast
+nobody has produced yet); `feed_jump_threshold_fraction` MEASURED BUT INCONCLUSIVE -- at 0.005 half of every
+symbol's first eight bars read as a jump, but the floor is also the permanent lower bound, so raising it to the
+contract figure (about 0.18) would blind the detector on indices (p99 0.056%). That needs the part changed.
 
 ## Costs and spreads taken from the crypto venues (7)
 

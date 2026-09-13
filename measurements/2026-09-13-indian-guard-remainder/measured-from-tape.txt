@@ -1,0 +1,51 @@
+-- 1. close-to-open move between closed I1 bars, contracts and F&O underlyings --
+  all moves n=156,899: p50 0.00305  p95 0.05263  p99 0.11811
+  per-symbol p99 over 1,350 symbols with 20+ moves: p50 0.05854  p80 0.10161  p95 0.17725  max 0.86167
+  first 8 moves of each symbol-day (judged against the floor alone), n=14,837:
+    floor 0.005  called a jump: 50.21%
+    floor 0.01   called a jump: 36.23%
+    floor 0.02   called a jump: 23.35%
+    floor 0.05   called a jump: 10.93%
+    floor 0.1    called a jump: 4.64%
+    floor 0.2    called a jump: 1.48%
+
+-- 2. p95 |price change| over an age, option contract distinct trades --
+    15s  n=1,311,989  p50 0.00517  p95 0.04762  <  option stop 0.0609
+    30s  n=1,307,255  p50 0.00722  p95 0.05556  <  option stop 0.0609
+    60s  n=1,298,086  p50 0.01025  p95 0.07143  >= option stop 0.0609
+   120s  n=1,281,429  p50 0.01481  p95 0.09195  >= option stop 0.0609
+   300s  n=1,235,990  p50 0.02344  p95 0.13861  >= option stop 0.0609
+
+-- 3. implied (near-the-money median) against same-day realised volatility --
+  NSE_EQ|INE002A01018              2026-09-07  realised 0.1217  implied 0.1733  gap +0.424  (2720 greeks)
+  NSE_EQ|INE002A01018              2026-09-08  realised 0.2421  implied 0.1776  gap -0.266  (1035 greeks)
+  NSE_EQ|INE009A01021              2026-09-07  realised 0.1315  implied 0.2649  gap +1.014  (1676 greeks)
+  NSE_EQ|INE009A01021              2026-09-08  realised 0.2269  implied 0.2637  gap +0.162  (697 greeks)
+  NSE_EQ|INE018A01030              2026-09-07  realised 0.1648  implied 0.1584  gap -0.039  (551 greeks)
+  NSE_EQ|INE018A01030              2026-09-08  realised 0.2984  implied 0.1575  gap -0.472  (204 greeks)
+  NSE_EQ|INE030A01027              2026-09-07  realised 0.1342  implied 0.1569  gap +0.169  (876 greeks)
+  NSE_EQ|INE030A01027              2026-09-08  realised 0.2359  implied 0.1538  gap -0.348  (433 greeks)
+  NSE_EQ|INE040A01034              2026-09-07  realised 0.1111  implied 0.1770  gap +0.593  (2517 greeks)
+  NSE_EQ|INE040A01034              2026-09-08  realised 0.1293  implied 0.1746  gap +0.350  (729 greeks)
+  NSE_EQ|INE062A01020              2026-09-07  realised 0.1268  implied 0.1904  gap +0.501  (1562 greeks)
+  NSE_EQ|INE062A01020              2026-09-08  realised 0.1573  implied 0.1862  gap +0.183  (301 greeks)
+  NSE_EQ|INE081A01020              2026-09-07  realised 0.1833  implied 0.2490  gap +0.359  (2536 greeks)
+  NSE_EQ|INE081A01020              2026-09-08  realised 0.2900  implied 0.2490  gap -0.141  (496 greeks)
+  NSE_EQ|INE090A01021              2026-09-07  realised 0.1471  implied 0.1526  gap +0.037  (720 greeks)
+  NSE_EQ|INE090A01021              2026-09-08  realised 0.3469  implied 0.1508  gap -0.565  (557 greeks)
+  NSE_EQ|INE154A01025              2026-09-07  realised 0.1377  implied 0.1562  gap +0.135  (258 greeks)
+  NSE_EQ|INE154A01025              2026-09-08  realised 0.2400  implied 0.1514  gap -0.369  (191 greeks)
+  NSE_EQ|INE237A01036              2026-09-07  realised 0.1592  implied 0.1611  gap +0.012  (444 greeks)
+  NSE_EQ|INE237A01036              2026-09-08  realised 0.2006  implied 0.1562  gap -0.221  (244 greeks)
+  NSE_EQ|INE238A01034              2026-09-07  realised 0.1417  implied 0.1636  gap +0.154  (502 greeks)
+  NSE_EQ|INE238A01034              2026-09-08  realised 0.3299  implied 0.1617  gap -0.510  (319 greeks)
+  NSE_EQ|INE397D01024              2026-09-07  realised 0.1629  implied 0.1648  gap +0.012  (1855 greeks)
+  NSE_EQ|INE397D01024              2026-09-08  realised 0.2244  implied 0.1593  gap -0.290  (367 greeks)
+  NSE_EQ|INE467B01029              2026-09-07  realised 0.1683  implied 0.2448  gap +0.454  (680 greeks)
+  NSE_EQ|INE467B01029              2026-09-08  realised 0.2777  implied 0.2435  gap -0.123  (227 greeks)
+  NSE_EQ|INE585B01010              2026-09-07  realised 0.1878  implied 0.1939  gap +0.032  (5873 greeks)
+  NSE_INDEX|Nifty 50               2026-09-07  realised 0.0383  implied 0.1047  gap +1.732  (12329 greeks)
+  NSE_INDEX|Nifty 50               2026-09-08  realised 0.0712  implied 0.1064  gap +0.493  (2720 greeks)
+  NSE_INDEX|Nifty Bank             2026-09-07  realised 0.0637  implied 0.1171  gap +0.837  (13687 greeks)
+  NSE_INDEX|Nifty Bank             2026-09-08  realised 0.1171  implied 0.1158  gap -0.011  (6304 greeks)
+  31 underlying-days: |gap| p20 0.123  p50 0.290  p80 0.501
