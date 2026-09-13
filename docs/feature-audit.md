@@ -2395,3 +2395,29 @@ After restart: 10 instruments, 0 disagreeing; detector and cost-basis restored 1
   10 positions, 10 stops each exactly the position's size, 0 orphan orders.
   Still true: none of the 10 has a target resting — the manager's checkpoint holds no
   target for any of them.
+
+### 2026-09-13 — stock-options positions never got a take-profit target
+
+`exit-order-chainer` registered each `stop-target-plan` under the plan's `symbol`,
+the intent's. Stock-options intents name the underlying ("AXISBANK", 400 of 400
+sampled) while orders and fills name the contract, so no stock-options fill ever
+found its plan: nothing chained, no target, and the only stop came from
+`profit-lock`'s trail. Journal of 2026-09-07: AXISBANK 1260 CE got one stop request
+and no target. Index options were unaffected — their intents name the contract.
+Fixed (0f3fd23): plans register under `priced_for_contract`. The integration tests
+registered plans under the contract by hand, which is why they never saw it.
+
+**Found while verifying, fixed (d519eb3):** `stop-order-manager` did not count
+`replaced` or `targets_placed` as checkpoint changes, so a trailed stop was never
+written down, and the restart re-sent the stop it had replaced beside its
+replacement — ICICIBANK 1440 PE held -1437 and -1442. The duplicate was removed from
+the paper book with the spine stopped (backup kept); 10 positions, 10 stops, the
+manager's ids equal the book's.
+
+**Not fixed, needs a decision:**
+- The 10 positions already open still have no target. Their plans existed only in
+  memory on 2026-09-07 and are gone; nothing recorded the target each was planned
+  with, so a target for them now would be a new decision, not a restored one.
+- `profit-lock` trailed ICICIBANK 1440 PE's sell stop to 54.3015 while the contract
+  last traded at 39.60 (tape, 2026-09-08): a sell stop above the market, which
+  triggers on the first price. It re-issued that on every restart today.
