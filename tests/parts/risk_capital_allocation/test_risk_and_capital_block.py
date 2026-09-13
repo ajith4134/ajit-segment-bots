@@ -2311,3 +2311,71 @@ def test_a_position_gone_flat_stops_counting_against_the_ceiling():
     gate.observe_position(VENUE, SYMBOL, 0.0)
 
     assert gate.held_capital(sized_for_gate(quantity=1.0, entry=100.0)) == 0.0
+
+
+# ---- a stock-options fill finds its plan (2026-09-13) --------------------------
+
+# The first AXISBANK 1260 CE entry fill of 2026-09-07, verbatim from this project's
+# own journal.trade-lifecycle-recorder: the intent named "AXISBANK", the fill names
+# the contract.
+AXISBANK_ENTRY_FILL = {
+    "fee": 113.18405543749999, "fill_id": "paper-620c4753971836bef8d861e32933e136-324",
+    "filled_at_ns": 1788773352612477922, "is_paper": True, "leverage": 1.0,
+    "order_id": "620c4753971836bef8d861e32933e136", "price": 24.54230769230769,
+    "quantity": 8125.0, "segment": "stock-options", "side": "buy",
+    "symbol": "AXISBANK 1260 CE 29 SEP 26", "venue_id": "upstox",
+}
+
+
+def an_axisbank_plan():
+    """The plan risk makes for the AXISBANK intent: underlying symbol, contract prices."""
+    return placer().place(
+        "upstox", "AXISBANK", BUY,
+        entry_price=AXISBANK_ENTRY_FILL["price"], volatility_forecast=0.05,
+        target_price=AXISBANK_ENTRY_FILL["price"] * 1.2,
+        priced_for_contract=AXISBANK_ENTRY_FILL["symbol"],
+    )
+
+
+def test_a_stock_options_fill_finds_the_plan_priced_for_its_contract():
+    """Registered under "AXISBANK", no contract fill ever found it: no target was ever placed."""
+    from parts.risk_capital_allocation.exit_order_chainer import plan_registration_of
+
+    plan = an_axisbank_plan()
+    assert plan.is_placeable and plan.target_price is not None
+    chainer = ExitOrderChainer()
+    chainer.register_plan(**plan_registration_of(plan))
+
+    fill = AXISBANK_ENTRY_FILL
+    exits = chainer.observe_entry_fill(
+        fill_id=fill["fill_id"], entry_order_id=fill["order_id"], venue_id=fill["venue_id"],
+        symbol=fill["symbol"], entry_side=fill["side"], filled_quantity=fill["quantity"],
+        fill_price=fill["price"], filled_at_ns=fill["filled_at_ns"],
+    )
+    assert exits.outcome == CHAINED
+    assert exits.target_price is not None and exits.target_price > fill["price"]
+    assert exits.stop_price < fill["price"]
+    assert exits.entry_filled_at_ns == fill["filled_at_ns"]
+
+
+def test_registered_under_the_underlying_the_same_fill_found_no_plan():
+    """What the chainer did until 2026-09-13, kept as the evidence the fix is needed."""
+    from parts.risk_capital_allocation.exit_order_chainer import plan_registration_of
+
+    plan = an_axisbank_plan()
+    chainer = ExitOrderChainer()
+    chainer.register_plan(**(plan_registration_of(plan) | {"symbol": plan.symbol}))
+    fill = AXISBANK_ENTRY_FILL
+    exits = chainer.observe_entry_fill(
+        fill_id=fill["fill_id"], entry_order_id=fill["order_id"], venue_id=fill["venue_id"],
+        symbol=fill["symbol"], entry_side=fill["side"], filled_quantity=fill["quantity"],
+        fill_price=fill["price"],
+    )
+    assert exits.outcome == NO_PLAN
+
+
+def test_a_plan_naming_no_contract_is_registered_under_its_own_symbol():
+    from parts.risk_capital_allocation.exit_order_chainer import plan_registration_of
+
+    plan = placer().place(VENUE, SYMBOL, BUY, entry_price=100.0, volatility_forecast=0.02)
+    assert plan_registration_of(plan)["symbol"] == SYMBOL

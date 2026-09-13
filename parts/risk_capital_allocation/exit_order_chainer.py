@@ -254,6 +254,34 @@ def describe_chaining(chainer: ExitOrderChainer) -> dict:
     }
 
 
+def plan_registration_of(plan) -> dict:
+    """One `stop-target-plan` as the chainer registers it: under the instrument that fills.
+
+    **Under the contract the plan was priced for, not the intent's symbol**
+    (2026-09-13). A plan's `symbol` is the intent's, and a stock-options intent
+    names the underlying -- "AXISBANK" -- while the order, and so the fill, names
+    the contract, "AXISBANK 1260 CE 29 SEP 26". Registered under the underlying,
+    no stock-options fill ever found its plan: nothing was chained, no target was
+    ever placed, and the only stop a position got was profit-lock's trail.
+    Measured on the journal of 2026-09-07: AXISBANK 1260 CE received one stop
+    request and no target, and the ten stock-options positions still open held no
+    target between them. Index options were unaffected only because their intents
+    already name the contract. `priced_for_contract` is the contract every price
+    in the plan is on the scale of, so it is also the name its fill carries; a
+    plan that names none is registered under its own symbol, as before.
+    """
+    return {
+        "venue_id": plan.venue_id,
+        "symbol": getattr(plan, "priced_for_contract", None) or plan.symbol,
+        "entry_side": plan.side,
+        "stop_price": plan.stop_price,
+        "target_price": plan.target_price,
+        # What the plan was computed against, so its stop and target can
+        # be kept as distances and re-priced onto the fill.
+        "entry_price": plan.entry_price,
+    }
+
+
 def run_exit_order_chainer(
     chainer: ExitOrderChainer, control_socket, read_plans_and_fills, publish_exits,
     health_interval_seconds: float, emit_health,
@@ -302,18 +330,7 @@ def start_part(context) -> int:
     # exactly right: exits do not chain exits.
     def read_plans_and_fills():
         registered = tuple(
-            {
-                "venue_id": plan.venue_id,
-                "symbol": plan.symbol,
-                "entry_side": plan.side,
-                "stop_price": plan.stop_price,
-                "target_price": plan.target_price,
-                # What the plan was computed against, so its stop and target can
-                # be kept as distances and re-priced onto the fill.
-                "entry_price": plan.entry_price,
-            }
-            for plan in plans.payloads()
-            if plan.is_placeable
+            plan_registration_of(plan) for plan in plans.payloads() if plan.is_placeable
         )
         seen_fills = tuple(
             {
