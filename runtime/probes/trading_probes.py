@@ -10,13 +10,21 @@ suggest trading is happening unless a fill has actually been recorded.** A green
 dangerous thing on this board, so readiness is reported as what is built and what
 is not, and the trading tile stays NOT BUILT until real orders exist.
 
-Where the state lives:
+Where the state lives, since the Indian pivot (every probe here reads these):
 
-    ~/.local/share/ajit-segment-bots/trading/orders.jsonl    every order sent
-    ~/.local/share/ajit-segment-bots/trading/fills.jsonl     every fill received
-    ~/.local/share/ajit-segment-bots/trading/positions.json  what is held now
+    <position_state_root>/paper-account-keeper.paper-account-<segment>.json
+        each built segment's paper account: fills applied, cash, realised, held
+    <position_state_root>/position-close-detector.positions.json
+        the lot book every open position is closed against
+    journal.position-recorder.sqlite
+        every position change and every closed trade, hash-chained JSONL
 
-None of those exist yet, and that absence is what the probes report.
+**Until 2026-09-13 two of these tiles read `trading/orders.jsonl` and
+`trading/positions.json`**, a crypto-era location nothing has written since the
+pivot and which does not exist on this machine. So "Trading" said "no order has
+ever been placed" and "Open positions" said "nothing has ever held a position" on
+a project with 2,768 paper fills and 15 open option positions -- the same
+absence-as-evidence inversion `probe_realised_result` was fixed for the day before.
 """
 
 from __future__ import annotations
@@ -33,10 +41,11 @@ NOT_BUILT = "NOT BUILT"
 FAILING = "FAILING"
 NOT_MEASURED = "NOT MEASURED"
 
-TRADING_STATE_DIRECTORY = pathlib.Path.home() / ".local" / "share" / "ajit-segment-bots" / "trading"
-ORDERS_PATH = TRADING_STATE_DIRECTORY / "orders.jsonl"
-FILLS_PATH = TRADING_STATE_DIRECTORY / "fills.jsonl"
-POSITIONS_PATH = TRADING_STATE_DIRECTORY / "positions.json"
+# The checkpoints `paper-account-keeper` and `position-close-detector` restore
+# from, under the operator's `position_state_root`. The same files the parts act
+# on, so the board cannot disagree with the book the bots trade against.
+PAPER_ACCOUNT_FILE = "paper-account-keeper.paper-account-{segment}.json"
+LOT_BOOK_FILE = "position-close-detector.positions.json"
 
 # Where a realised result really lives (2026-09-12). `position-recorder` writes a
 # hash-chained JSONL -- the `.sqlite` extension is historical and wrong -- and a
@@ -111,36 +120,6 @@ class TradingProbeResult:
     proof: str
 
 
-def _count_lines(path: pathlib.Path) -> int | None:
-    try:
-        with open(path, "rb") as handle:
-            return sum(1 for line in handle if line.strip())
-    except OSError:
-        return None
-
-
-def _last_record(path: pathlib.Path) -> dict | None:
-    """The last complete JSON object in a JSONL file, read from its tail."""
-    try:
-        size = path.stat().st_size
-        if size == 0:
-            return None
-        with open(path, "rb") as handle:
-            window = min(size, 64 * 1024)
-            handle.seek(size - window)
-            tail = handle.read(window)
-    except OSError:
-        return None
-    for line in reversed(tail.splitlines()):
-        try:
-            record = json.loads(line)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        if isinstance(record, dict):
-            return record
-    return None
-
-
 def _built_part_ids() -> set[str]:
     """Which parts have an implementation file, read the way the board reads it."""
     import sys
@@ -160,80 +139,167 @@ def _built_part_ids() -> set[str]:
     }
 
 
-def probe_trading_state() -> TradingProbeResult:
-    """Whether an order has ever actually been placed by this system.
+def _runtime_settings():
+    from runtime.settings_reader import load_settings_document, settings_directory
 
-    Reads the record of orders, not the presence of code. Code that can place an
-    order and has not is not trading, and the difference is the whole question.
-    """
-    if not ORDERS_PATH.exists():
-        return TradingProbeResult(
-            "Trading",
-            NOT_BUILT,
-            "NOT TRADING -- no order has ever been placed",
-            f"{ORDERS_PATH} does not exist",
-        )
-
-    orders = _count_lines(ORDERS_PATH)
-    if orders is None:
-        return TradingProbeResult(
-            "Trading", NOT_MEASURED, "the order record could not be read", str(ORDERS_PATH)
-        )
-    if orders == 0:
-        return TradingProbeResult(
-            "Trading", NOT_BUILT, "NOT TRADING -- the order record is empty", str(ORDERS_PATH)
-        )
-
-    last = _last_record(ORDERS_PATH) or {}
-    placed_at = last.get("placed_at_ns")
-    if not isinstance(placed_at, int):
-        return TradingProbeResult(
-            "Trading",
-            NOT_MEASURED,
-            f"{orders} orders recorded, none carrying a timestamp",
-            str(ORDERS_PATH),
-        )
-
-    quiet_for = (time.time_ns() - placed_at) / NANOSECONDS_PER_SECOND
-    mode = "paper" if last.get("is_paper", True) else "LIVE MONEY"
-    if quiet_for > STALE_TRADING_SECONDS:
-        return TradingProbeResult(
-            "Trading",
-            FAILING,
-            f"STOPPED -- {orders} orders in {mode}, last one {quiet_for / 3600:.1f}h ago",
-            f"last order in {ORDERS_PATH}, against {STALE_TRADING_SECONDS / 3600:.0f}h",
-        )
-    return TradingProbeResult(
-        "Trading",
-        OK,
-        f"TRADING in {mode} -- {orders} orders, last {quiet_for:.0f}s ago",
-        f"last order in {ORDERS_PATH}",
+    return settings_directory(), load_settings_document(
+        settings_directory() / "runtime.toml", scope="runtime"
     )
 
 
-def probe_open_positions() -> TradingProbeResult:
-    """What is held right now. Nothing held is a state, not an absence."""
-    if not POSITIONS_PATH.exists():
+def _position_state_root() -> pathlib.Path:
+    _, document = _runtime_settings()
+    return pathlib.Path(str(document.read_value("position_state_root"))).expanduser()
+
+
+def _built_segments_and_money_modes() -> list[tuple[str, str]]:
+    """Each segment this spine trades, with the money mode its own file states."""
+    from runtime.settings_reader import load_settings_document
+
+    directory, document = _runtime_settings()
+    segments = []
+    for segment in document.read_value("built_segments"):
+        segment_document = load_settings_document(
+            directory / "segments" / f"{segment}.toml", scope=f"segment:{segment}"
+        )
+        segments.append((str(segment), str(segment_document.read_value("money_mode"))))
+    return segments
+
+
+def _newest_position_change_ns() -> int | None:
+    """When a position last changed, from the tail of `position-recorder`'s journal."""
+    if not CLOSED_TRADE_JOURNAL.exists():
+        return None
+    newest = None
+    size = CLOSED_TRADE_JOURNAL.stat().st_size
+    with open(CLOSED_TRADE_JOURNAL, encoding="utf-8", errors="replace") as handle:
+        if size > CLOSED_TRADE_TAIL_BYTES:
+            handle.seek(size - CLOSED_TRADE_TAIL_BYTES)
+            handle.readline()
+        for line in handle:
+            try:
+                changed_at = (json.loads(line).get("payload") or {}).get("updated_at_ns")
+            except json.JSONDecodeError:
+                continue
+            if isinstance(changed_at, int) and (newest is None or changed_at > newest):
+                newest = changed_at
+    return newest
+
+
+def probe_trading_state() -> TradingProbeResult:
+    """Whether the segment bots have traded, from their own paper accounts.
+
+    Reads the fills each built segment's `paper-account-keeper` has applied, not
+    the presence of code. How recently is read from the newest position change in
+    `position-recorder`'s journal, and judged against the exchange session asked of
+    `market-session-calendar`: a bot that has not traded for an hour while NSE is
+    open is STOPPED; one that has not traded since the close is not.
+    """
+    from runtime.market_session_answer import IN_SESSION, read_the_calendars_live_answer
+
+    try:
+        root = _position_state_root()
+        segments = _built_segments_and_money_modes()
+    except Exception as failure:  # noqa: BLE001 -- unreadable settings are unmeasured
         return TradingProbeResult(
-            "Open positions",
-            NOT_BUILT,
-            "none -- nothing has ever held a position",
-            f"{POSITIONS_PATH} does not exist",
+            "Trading", NOT_MEASURED, f"settings unreadable: {type(failure).__name__}", str(failure)
+        )
+
+    fills_by_segment: dict[str, int] = {}
+    unreadable = []
+    for segment, _mode in segments:
+        path = root / PAPER_ACCOUNT_FILE.format(segment=segment)
+        if not path.exists():
+            fills_by_segment[segment] = 0
+            continue
+        try:
+            fills_by_segment[segment] = int(json.loads(path.read_text())["state"]["fills_applied"])
+        except (OSError, ValueError, KeyError, TypeError):
+            unreadable.append(segment)
+    proof = f"fills_applied in {root}/{PAPER_ACCOUNT_FILE}, newest updated_at_ns in {CLOSED_TRADE_JOURNAL}"
+    if unreadable and not fills_by_segment:
+        return TradingProbeResult(
+            "Trading", NOT_MEASURED, f"paper accounts unreadable: {', '.join(unreadable)}", proof
+        )
+
+    modes = sorted({mode for _segment, mode in segments})
+    mode = "LIVE MONEY" if any(m != "paper" for m in modes) else "paper"
+    detail = ", ".join(f"{segment} {count:,}" for segment, count in fills_by_segment.items())
+    if unreadable:
+        detail += f"; unreadable: {', '.join(unreadable)}"
+    total = sum(fills_by_segment.values())
+    if total == 0:
+        return TradingProbeResult(
+            "Trading", NOT_BUILT, f"NOT TRADING -- no segment has applied a fill ({detail})", proof
+        )
+
+    newest = _newest_position_change_ns()
+    if newest is None:
+        return TradingProbeResult(
+            "Trading", NOT_MEASURED,
+            f"{total:,} fills in {mode} ({detail}), but when the last one was is not readable",
+            proof,
+        )
+    quiet_for = (time.time_ns() - newest) / NANOSECONDS_PER_SECOND
+    session, session_proof = read_the_calendars_live_answer()
+    summary = f"{total:,} fills in {mode} ({detail}), last position change {quiet_for / 3600:.1f}h ago"
+    proof = f"{proof}; session: {session_proof}"
+    if quiet_for <= STALE_TRADING_SECONDS:
+        return TradingProbeResult("Trading", OK, f"TRADING -- {summary}", proof)
+    if session is None:
+        return TradingProbeResult(
+            "Trading", NOT_MEASURED, f"cannot tell stopped from shut -- {summary}", proof
+        )
+    if session == IN_SESSION:
+        return TradingProbeResult(
+            "Trading", FAILING, f"STOPPED while NSE is in session -- {summary}",
+            f"{proof}, against {STALE_TRADING_SECONDS / 3600:.0f}h",
+        )
+    return TradingProbeResult("Trading", OK, f"NSE out of session -- {summary}", proof)
+
+
+def probe_open_positions() -> TradingProbeResult:
+    """What is held right now, from the lot book positions are closed against.
+
+    Nothing held is a state (`flat`), not an absence. Quantities are summed as
+    `Decimal` from their strings, the way `position-close-detector` itself sums
+    them, so a book the part reads as flat is flat here too.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        path = _position_state_root() / LOT_BOOK_FILE
+    except Exception as failure:  # noqa: BLE001 -- unreadable settings are unmeasured
+        return TradingProbeResult(
+            "Open positions", NOT_MEASURED, f"settings unreadable: {type(failure).__name__}", str(failure)
+        )
+    if not path.exists():
+        return TradingProbeResult(
+            "Open positions", NOT_BUILT, "no lot book yet -- nothing has opened a position", str(path)
         )
     try:
-        positions = json.loads(POSITIONS_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as failure:
+        checkpoint = json.loads(path.read_text())
+        books = checkpoint["state"]["books"]
+        held = {
+            key: sum((Decimal(str(lot["quantity"])) for lot in lots), Decimal(0))
+            for key, lots in books.items()
+        }
+    except (OSError, ValueError, KeyError, TypeError, InvalidOperation) as failure:
         return TradingProbeResult(
-            "Open positions", NOT_MEASURED, f"{type(failure).__name__}: {failure}", str(POSITIONS_PATH)
+            "Open positions", NOT_MEASURED, f"{type(failure).__name__}: {failure}", str(path)
         )
-    open_positions = [p for p in positions if p.get("quantity")]
+    age_hours = (time.time_ns() - int(checkpoint.get("saved_at_ns", 0))) / NANOSECONDS_PER_SECOND / 3600
+    proof = f"summed lots in {path}, checkpointed {age_hours:.1f}h ago"
+    open_positions = sorted(
+        ((key.split("|", 1)[-1], quantity) for key, quantity in held.items() if quantity != 0),
+        key=lambda entry: entry[0],
+    )
     if not open_positions:
-        return TradingProbeResult(
-            "Open positions", OK, "flat -- no position open", str(POSITIONS_PATH)
-        )
-    detail = ", ".join(f"{p['symbol']} {p['quantity']:+g}" for p in open_positions[:5])
+        return TradingProbeResult("Open positions", OK, "flat -- no position open", proof)
+    shown = ", ".join(f"{symbol} {float(quantity):+,.0f}" for symbol, quantity in open_positions[:5])
+    more = f" and {len(open_positions) - 5} more" if len(open_positions) > 5 else ""
     return TradingProbeResult(
-        "Open positions", OK, f"{len(open_positions)} open ({detail})", str(POSITIONS_PATH)
+        "Open positions", OK, f"{len(open_positions)} open ({shown}{more})", proof
     )
 
 
