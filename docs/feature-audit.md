@@ -2387,6 +2387,11 @@ After restart: 10 instruments, 0 disagreeing; detector and cost-basis restored 1
   — the pre-trade guard let orders through that the account could not pay for.
 - `Realised result` reads closed trades from `position-recorder`'s journal, which the
   rebuild does not rewrite; the trim's sells are not in it.
-- `paper-fill-simulator` keeps resting orders in memory only while
-  `stop-order-manager` checkpoints what it believes rests: after any restart a
-  position whose stop needs no resize can have no real stop on the paper book.
+- ~~`paper-fill-simulator` keeps resting orders in memory only~~ — **fixed the same
+  day (commit 2c24727).** The paper book checkpoints on every change and restores on
+  start; `stop-order-manager` re-sends each restored exit once, paper only, under its
+  own id. Proven on two restarts: first, book restored 0 and the manager re-sent 10
+  stops; second, book restored 10 and the 10 re-sends changed nothing (book_changes 0).
+  10 positions, 10 stops each exactly the position's size, 0 orphan orders.
+  Still true: none of the 10 has a target resting — the manager's checkpoint holds no
+  target for any of them.
