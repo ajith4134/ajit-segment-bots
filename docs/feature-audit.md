@@ -2457,3 +2457,14 @@ trigger 0.0467 (the note's own rule: 3 x 0.008532 round trip + 2.11% p50).
   how these three were missed; there may be others fitted to a crypto *measurement*
   whose note never says so.
 
+
+### 2026-09-13 — settings fitted to crypto that the drift guard cannot see
+
+**34 settings**, read by live parts, whose notes justify their numbers with crypto
+evidence but name no venue — listed with readers and the quoted basis in
+`docs/settings-fitted-to-crypto-the-guard-cannot-see.md`. Two are visibly acting:
+`liquidity-grader` grades 68 of 91 symbols untradeable on thresholds that are "a third
+of the 1.5% stop", and `regime-classifier` has 20,901 unclassified readings on a
+1,024-trade window measured on crypto print rates. Also: `CRYPTO_PROVENANCE` in the
+guard is case-sensitive, so "Binance"/"Bybit" never match (fixing that alone: 4 -> 12).
+Nothing changed yet.
