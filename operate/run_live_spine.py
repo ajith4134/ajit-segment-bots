@@ -260,6 +260,16 @@ LIVE_SPINE = (
     "news-tape-writer",
     "news-latency-meter",
     "news-source-health-monitor",
+    # The block's single LLM read and the resolver below it, started 2026-09-13
+    # on the operator's word -- the structurer spends subscription calls, bounded
+    # by llm_subscription_calls_per_hour. The structurer states its own output
+    # schema on every request, so prompt-template-author writes this purpose's
+    # template from that question rather than the shared venue/symbol/text shape,
+    # under which no answer could carry back the story_key it is matched by. The
+    # resolver reads the rolling restatement of broker-instrument-listing, so
+    # starting after the catalogue reader costs at most one restatement cycle.
+    "news-text-structurer",
+    "news-symbol-resolver",
     # The governor's deciding half, acting since 2026-08-24. duty-cycle-planner
     # counts market activity per UTC hour, so it starts after the reader; the
     # switching-planner weighs all fourteen inputs into a switch-plan; and

@@ -222,6 +222,10 @@ class NewsTextStructurer:
             maximum_sentences=self._maximum_sentences,
             now_ns=self._now_ns,
             asked_by=PART_ID,
+            # Stated, so `prompt-template-author` writes this purpose's template
+            # from this part's own question. The shared venue/symbol/text shape
+            # carries no `story_key`, and without it no answer can be matched.
+            output_schema=OUTPUT_SCHEMA,
         )
 
     def observe_answer(self, output) -> StructuredNewsItem | None:

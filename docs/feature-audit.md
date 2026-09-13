@@ -2220,9 +2220,29 @@ than aliased by hand. The docstring said 11 of 13 and was corrected to the measu
 Declarations were brought back to the blueprint (`resource_class` compute-bound on
 the structurer, `skipped_tick_effect` corrupts on the resolver).
 
-**Still open:** neither part is on `operate/run_live_spine.py`. The structurer
-spends subscription calls (bounded by `llm_subscription_calls_per_hour`), so
-starting it is the operator's call. `news_wait_for_the_model_seconds` (60) is
+**On the spine since 2026-09-13 06:58 UTC, on the operator's word.** One more
+defect had to be fixed first, and it would have been invisible live:
+`prompt-template-author` wrote every purpose's first template with the shared
+`venue_id / symbol / text` shape under "state what they show about <purpose>".
+The structurer matches answers by the `story_key` it sends, so under that
+template every paid answer would have arrived keyless and been counted as
+`answers_for_a_story_not_awaited`. `LlmRequest` now carries an optional
+`output_schema`; a part that states one has its own instruction and shape written
+as the purpose's first template (`first_template_job`), and the structurer's tests
+now build the enforcer's version from that author rather than from the part's own
+constants.
+
+Measured about four minutes after start: structurer 118 stories seen, 95 asked,
+**0 answered, 95 structured source-only**; resolver 95 items, 0 names (source-only
+items carry none), 961 of 2,871 instruments learned while the catalogue restates.
+The zero is chain-wide, not news-specific: `prompt-renderer` refused 523 requests
+`refused_missing_context` and `context-assembler` built 0 contexts, because with
+the market shut there is no `verified-snapshot` -- so nothing was called and
+nothing was spent. The first live answer can come at Monday's open at the
+earliest, and whether it does is the reading to take then (`structured_by_a_model`,
+`answers_for_a_story_not_awaited`). Also still refusing: `llm-model-picker`
+`refused_no_model_clears_the_bar` 474 of 526. `news-symbol-tagging` has no
+consumer yet (`news-segment-classifier` is unbuilt), so its 95 undelivered are expected. `news_wait_for_the_model_seconds` (60) is
 chosen, not measured end to end, and its note says so. A story the router refuses
 falls back source-only and is never asked about again.
 

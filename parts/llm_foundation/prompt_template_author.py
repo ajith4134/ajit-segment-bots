@@ -363,6 +363,48 @@ def run_prompt_template_author(
     )
 
 
+def first_template_job(
+    purpose: str,
+    evidence: tuple,
+    draft: str | None,
+    shared_output_schema: dict,
+    stated_by_the_asker: tuple[str, dict] | None,
+) -> dict:
+    """The first template for one purpose, as a job for `PromptTemplateAuthor.write`.
+
+    **A part that states its own shape gets its own instruction and shape.**
+    Until 2026-09-13 every first template was the shared venue/symbol/text shape
+    under "state what they show about <purpose>", whatever the asking part
+    needed. `news-text-structurer` correlates answers by a `story_key` it sends
+    and reads names, figures and a tense; under the shared shape none of those
+    could ever come back, so every call it paid for would have been counted as
+    an answer for a story nobody awaited. The asker is the only part that knows
+    what it will read, and a template that cannot be read by its asker is a
+    template for nobody.
+
+    The stated instruction still goes through every guard `write` applies -- a
+    stated shape waives nothing but the author's guess at the question.
+    """
+    if stated_by_the_asker is not None:
+        instruction, stated_schema = stated_by_the_asker
+        return {
+            "template_id": f"template:{purpose}", "purpose": purpose,
+            "instruction": instruction, "output_schema": dict(stated_schema),
+            "required_context_kinds": ("verified-facts",),
+            "is_the_first_for_this_purpose": True,
+        }
+    instruction = draft or (
+        "Using only the measured facts given, state what they show about "
+        + purpose + "."
+        + (" " + " ".join(str(item) for item in evidence) if evidence else "")
+    )
+    return {
+        "template_id": f"template:{purpose}", "purpose": purpose, "instruction": instruction,
+        "output_schema": dict(shared_output_schema), "required_context_kinds": ("verified-facts",),
+        "is_the_first_for_this_purpose": True,
+    }
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -389,6 +431,9 @@ def start_part(context) -> int:
     # a twelfth part was added.
     purposes_asked_for: set[str] = set()
     written_for: set[str] = set()
+    # purpose -> (instruction, output schema), from the first request for that
+    # purpose that stated a shape of its own. See `first_template_job`.
+    shapes_stated_by_the_asker: dict[str, tuple[str, dict]] = {}
     # **In `structured-output-enforcer`'s own vocabulary**, which is a rule per
     # field and not a type name. Until 2026-09-12 this wrote `{"venue_id": "str"}`
     # and the enforcer does `rule.get("type")`, so every template this part has
@@ -425,6 +470,12 @@ def start_part(context) -> int:
             # writing the prompt it is already writing.
             if purpose and not purpose.startswith("draft-a-prompt-for-"):
                 purposes_asked_for.add(purpose)
+                stated = getattr(request, "output_schema", None)
+                if stated and purpose not in shapes_stated_by_the_asker:
+                    shapes_stated_by_the_asker[purpose] = (
+                        str(getattr(request, "instruction", "") or ""),
+                        dict(stated),
+                    )
         for finding in findings.payloads():
             author.observe_finding(finding)
             purposes_with_evidence[finding.topic] = purposes_with_evidence.get(finding.topic, 0) + 1
@@ -452,16 +503,13 @@ def start_part(context) -> int:
             if not evidence and purpose not in purposes_asked_for:
                 continue
             written_for.add(purpose)
-            instruction = drafts.get(purpose) or (
-                "Using only the measured facts given, state what they show about "
-                + purpose + "."
-                + (" " + " ".join(str(item) for item in evidence) if evidence else "")
-            )
-            jobs.append({
-                "template_id": f"template:{purpose}", "purpose": purpose, "instruction": instruction,
-                "output_schema": dict(output_schema), "required_context_kinds": ("verified-facts",),
-                "is_the_first_for_this_purpose": True,
-            })
+            jobs.append(first_template_job(
+                purpose,
+                evidence=evidence,
+                draft=drafts.get(purpose),
+                shared_output_schema=output_schema,
+                stated_by_the_asker=shapes_stated_by_the_asker.get(purpose),
+            ))
         return tuple(jobs)
 
     return run_prompt_template_author(

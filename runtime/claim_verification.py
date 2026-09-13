@@ -64,6 +64,15 @@ class LlmRequest:
     # because they did not say who they are are counted by name in
     # `llm-request-router`'s standing rather than silently refused.
     asked_by: str = ""
+    # The answer's shape, when the asking part has one of its own. Added
+    # 2026-09-13: `prompt-template-author` wrote every purpose's first template
+    # with one shared shape -- venue, symbol, text -- and a generic instruction,
+    # so a part that correlates its answers by a key it sends
+    # (`news-text-structurer`'s `story_key`) could never get that key back and
+    # would have paid for every call and used none. A part that states a shape
+    # has its own instruction and shape written as the purpose's first template;
+    # None keeps the shared one for every part that does not.
+    output_schema: dict | None = None
 
     @property
     def is_answerable_from_facts(self) -> bool:
@@ -223,6 +232,7 @@ def make_request(
     maximum_sentences: int,
     now_ns=time.time_ns,
     asked_by: str = "",
+    output_schema: dict | None = None,
 ) -> LlmRequest:
     """One request, carrying the facts its answer will be checked against.
 
@@ -246,6 +256,7 @@ def make_request(
         maximum_sentences=maximum_sentences,
         requested_at_ns=now_ns(),
         asked_by=asked_by,
+        output_schema=dict(output_schema) if output_schema else None,
     )
 
 

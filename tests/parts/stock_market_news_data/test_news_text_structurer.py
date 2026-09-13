@@ -23,6 +23,10 @@ import pathlib
 
 import pytest
 
+from parts.llm_foundation.prompt_template_author import (
+    PromptTemplateAuthor,
+    first_template_job,
+)
 from parts.llm_foundation.structured_output_enforcer import StructuredOutputEnforcer
 from parts.stock_market_news_data.broker_news_reader import BrokerNewsReader
 from parts.stock_market_news_data.news_item_deduplicator import NewsItemDeduplicator
@@ -93,14 +97,46 @@ def a_structurer(clock) -> NewsTextStructurer:
     )
 
 
+# `prompt-template-author`'s shared first-template shape, as its `start_part`
+# declares it -- what this purpose got before a request could state its own.
+SHARED_OUTPUT_SCHEMA = {
+    "venue_id": {"type": "string", "required": True},
+    "symbol": {"type": "string", "required": True},
+    "text": {"type": "string", "required": True},
+}
+
+
+def the_template_written_for(request):
+    """This purpose's first template, written by the real author from the real request."""
+    job = first_template_job(
+        request.purpose,
+        evidence=(),
+        draft=None,
+        shared_output_schema=SHARED_OUTPUT_SCHEMA,
+        stated_by_the_asker=(
+            (request.instruction, request.output_schema) if request.output_schema else None
+        ),
+    )
+    written = PromptTemplateAuthor(minimum_evidence=3).write(**job)
+    assert written.is_usable, written.reason
+    return written.template
+
+
 def the_validated_output(answer: dict, request, clock):
-    """The captured answer, through the real enforcer, as the spine delivers it."""
+    """The captured answer, through the real enforcer, as the spine delivers it.
+
+    The version is built from the template `prompt-template-author` writes for
+    this request, not from this part's constants: on the spine the enforcer
+    checks against the registry's version, and a test that handed it the part's
+    own schema passed while the spine's template asked for venue, symbol, text.
+    """
+    template = the_template_written_for(request)
     version = PromptVersion(
         version_id="structure-a-news-item-v1",
-        template_id="structure-a-news-item",
-        purpose=PURPOSE,
-        instruction=INSTRUCTION,
-        output_schema=OUTPUT_SCHEMA,
+        template_id=template.template_id,
+        purpose=template.purpose,
+        instruction=template.instruction,
+        output_schema=template.output_schema,
         required_context_kinds=(),
         is_active=True,
         promoted_at_ns=clock(),
@@ -226,6 +262,39 @@ def test_the_oil_story_is_read_into_the_names_and_figures_it_states(
 
     assert item.names_mentioned == ("Reliance", "HPCL", "IndiGo", "BPCL")
     assert item.figures_cited == ("17-week high", "$110 per barrel")
+
+
+def test_the_template_author_writes_this_parts_own_question_and_shape(
+    captured_answers, distinct_stories
+):
+    """The shape the spine's enforcer checks is the shape this part reads."""
+    clock = Clock()
+    structurer = a_structurer(clock)
+    structurer.observe_story(distinct_stories[captured_answers["answers"][0]["story_key"]])
+    (request,) = structurer.requests_for_this_tick()
+
+    template = the_template_written_for(request)
+    assert template.instruction == INSTRUCTION
+    assert template.output_schema == OUTPUT_SCHEMA
+    assert "story_key" in template.output_schema
+
+
+def test_under_the_shared_shape_a_real_answer_could_never_be_used(
+    captured_answers, distinct_stories
+):
+    """What would have run live: every paid answer arrives without a story_key."""
+    clock = Clock()
+    structurer = a_structurer(clock)
+    answer = captured_answers["answers"][0]
+    structurer.observe_story(distinct_stories[answer["story_key"]])
+    structurer.requests_for_this_tick()
+
+    job = first_template_job(
+        PURPOSE, evidence=(), draft=None,
+        shared_output_schema=SHARED_OUTPUT_SCHEMA, stated_by_the_asker=None,
+    )
+    assert "story_key" not in job["output_schema"]
+    assert job["instruction"] != INSTRUCTION
 
 
 def test_a_figure_the_story_never_stated_is_still_refused(captured_answers, distinct_stories):
