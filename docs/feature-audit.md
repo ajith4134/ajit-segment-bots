@@ -2297,6 +2297,17 @@ The full suite (5,003 passed, 5 failed) failed three parts in
   a venue is retired when it has an adapter under `runtime/venues/` and
   `captured_venues` does not name it.
 
-**Seen, not fixed:** `Tape freshness` reads FAILING for `upstox` whenever the market
-is shut (1,804s stale on a Sunday) — `STALE_TAPE_SECONDS` is 60s, fitted to a
-24-hour crypto market. It should ask `market-session-calendar`.
+**Fixed the same day, on the operator's word:** `Tape freshness` read FAILING for
+`upstox` whenever the market was shut (1,804s stale on a Sunday) — `STALE_TAPE_SECONDS`
+is 60s, fitted to a 24-hour crypto market. It now asks `market-session-calendar`,
+through that part's own standing in the heartbeat table (`is_open`, `is_holiday`,
+`has_a_holiday_list`, added because standing reaches the table as numbers only).
+A venue with a module under `runtime/brokers/` is judged by the session: in session
+the 60s bound, out of session no bound, no fresh answer NOT MEASURED. Live after
+restart: `upstox 1s ago, NSE out of session`, OK. Cannot see a feed that dies
+mid-session once the close has passed.
+
+**Seen, not fixed:** `operate/replay_a_captured_session.the_market_is_open_now()`
+builds a `MarketSessionCalendar` without ever reading a holiday list, and
+`session_at` answers CLOSED (`no holiday list has been read yet`) whenever none has
+been read — so the replay treats every moment as shut, open market included.

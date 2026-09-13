@@ -98,6 +98,10 @@ class MarketSessionCalendar:
         )
 
     @property
+    def has_a_holiday_list(self) -> bool:
+        return self._has_a_holiday_list
+
+    @property
     def holidays_known(self) -> int:
         return len(self._holiday_reason_by_date)
 
@@ -110,6 +114,16 @@ def describe_calendar(calendar: MarketSessionCalendar, moment) -> dict:
         "session": str(state.kind),
         "reason": state.reason,
         "holidays_known": calendar.holidays_known,
+        # The session as numbers, because a part's standing reaches the heartbeat
+        # table as numbers only and `session` above is dropped on the way. Added
+        # 2026-09-13 so the capture board's tape-freshness tile can ask this part
+        # whether NSE is open rather than keep its own hours: a second calendar is
+        # a second answer to disagree with the one the bot trades on.
+        # `has_a_holiday_list` is 0 until the list is read, and then `is_open` 0
+        # means "not measured", not "closed" -- `session_at` answers CLOSED for both.
+        "is_open": 1.0 if state.kind is SessionKind.OPEN else 0.0,
+        "is_holiday": 1.0 if state.kind is SessionKind.HOLIDAY else 0.0,
+        "has_a_holiday_list": 1.0 if calendar.has_a_holiday_list else 0.0,
     }
 
 

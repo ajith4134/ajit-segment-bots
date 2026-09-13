@@ -229,6 +229,7 @@ def test_a_live_venue_that_stopped_is_still_red_beside_a_retired_one(tape_root, 
     write_records(tape_root, 3, at_ns=stale, venue=VENUE)
     write_records(tape_root, 3, at_ns=stale, venue="upstox", symbol="NSE_EQ|INE002A01018")
     monkeypatch.setattr(capture_probes, "_retired_venues", lambda: frozenset({VENUE}))
+    monkeypatch.setattr(capture_probes, "_session_answer", lambda: (capture_probes.IN_SESSION, "calendar"))
     result = probe_tape_freshness()
     assert result.state == FAILING
     assert result.value.startswith("upstox stopped writing")
@@ -257,3 +258,95 @@ def test_the_retired_set_is_derived_from_the_adapters_and_the_setting():
     assert "news" not in retired
     assert retired <= {"binance-usdm", "bybit-linear"}
 
+
+
+# ---- the broker tape is judged against the exchange session (2026-09-13) -----
+
+UPSTOX = "upstox"
+AN_OPTION = "NSE_FO|12345"
+
+
+def a_stale_upstox_tape(tape_root, seconds_old=1800):
+    write_records(
+        tape_root, 3, at_ns=time.time_ns() - int(seconds_old * NANOSECONDS_PER_SECOND),
+        venue=UPSTOX, symbol=AN_OPTION,
+    )
+
+
+def test_a_quiet_broker_tape_out_of_session_is_not_failing(tape_root, monkeypatch):
+    """Sunday 2026-09-13 read `upstox` FAILING at 1,804s stale. The market was shut."""
+    a_stale_upstox_tape(tape_root)
+    monkeypatch.setattr(capture_probes, "_session_answer", lambda: (capture_probes.OUT_OF_SESSION, "calendar"))
+    result = probe_tape_freshness()
+    assert result.state == OK, result.value
+    assert "NSE out of session" in result.value
+
+
+def test_a_quiet_broker_tape_in_session_is_failing(tape_root, monkeypatch):
+    a_stale_upstox_tape(tape_root)
+    monkeypatch.setattr(capture_probes, "_session_answer", lambda: (capture_probes.IN_SESSION, "calendar"))
+    assert probe_tape_freshness().state == FAILING
+
+
+def test_with_no_session_answer_a_quiet_broker_tape_is_unmeasured_not_green(tape_root, monkeypatch):
+    a_stale_upstox_tape(tape_root)
+    monkeypatch.setattr(capture_probes, "_session_answer", lambda: (None, "no answer"))
+    result = probe_tape_freshness()
+    assert result.state == NOT_MEASURED
+    assert "cannot tell" in result.value
+
+
+def test_a_venue_with_no_broker_module_keeps_the_plain_bound(tape_root, monkeypatch):
+    """`news` has no session: the calendar does not excuse it."""
+    write_records(
+        tape_root, 3, at_ns=time.time_ns() - int(1800 * NANOSECONDS_PER_SECOND),
+        venue="news", symbol="upstox-news",
+    )
+    monkeypatch.setattr(capture_probes, "_session_answer", lambda: (capture_probes.OUT_OF_SESSION, "calendar"))
+    assert probe_tape_freshness().state == FAILING
+
+
+def a_heartbeat_table(path, collected_seconds_ago, standing, state="reporting"):
+    path.write_text(json.dumps({
+        "collected_at_ns": time.time_ns() - int(collected_seconds_ago * NANOSECONDS_PER_SECOND),
+        "heartbeats": [{"part_id": "market-session-calendar", "state": state, "standing": standing}],
+    }))
+
+
+@pytest.fixture
+def heartbeat_table(durable_tmp_path, monkeypatch):
+    path = durable_tmp_path / "heartbeat-table.json"
+    values = {"heartbeat_table_path": str(path), "heartbeat_silent_after_seconds": 10.0}
+
+    class Document:
+        def read_value(self, name):
+            return values[name]
+
+    monkeypatch.setattr(capture_probes, "load_settings_document", lambda *_: Document())
+    return path
+
+
+@pytest.mark.parametrize(
+    ("standing", "expected"),
+    [
+        ({"is_open": 1.0, "has_a_holiday_list": 1.0}, "in session"),
+        ({"is_open": 0.0, "has_a_holiday_list": 1.0}, "out of session"),
+        ({"is_open": 0.0, "has_a_holiday_list": 0.0}, None),
+        ({"holidays_known": 20.0}, None),
+    ],
+)
+def test_the_session_is_read_from_the_calendars_own_standing(heartbeat_table, standing, expected):
+    a_heartbeat_table(heartbeat_table, 1, standing)
+    assert capture_probes._session_answer()[0] == expected
+
+
+def test_a_stale_heartbeat_table_is_no_session_answer(heartbeat_table):
+    a_heartbeat_table(heartbeat_table, 60, {"is_open": 0.0, "has_a_holiday_list": 1.0})
+    answer, proof = capture_probes._session_answer()
+    assert answer is None
+    assert "old" in proof
+
+
+def test_a_silent_calendar_is_no_session_answer(heartbeat_table):
+    a_heartbeat_table(heartbeat_table, 1, {"is_open": 0.0, "has_a_holiday_list": 1.0}, state="silent")
+    assert capture_probes._session_answer()[0] is None

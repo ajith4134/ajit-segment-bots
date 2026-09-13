@@ -29,10 +29,21 @@ this build has an adapter module for it under `runtime/venues/` and
 `captured_venues` does not name it: derived from the code and the operator's
 setting, never a list typed here. It is left out of the FAILING decision and
 stated in the tile's value, so the board still says it is there.
+
+**A broker's tape is judged against the exchange session** (2026-09-13). The
+sixty-second bound was fitted to a twenty-four-hour crypto market; on NSE it read
+`upstox` FAILING every evening, weekend and holiday. The session is asked of
+`market-session-calendar` -- read from its own standing in the heartbeat table,
+the live spine's answer -- never worked out here, because a second calendar is a
+second answer to disagree with the one the bot trades on. In session the bound
+applies; out of session an old tape is expected and says so; with no fresh answer
+from the calendar the tile is NOT MEASURED for that venue, never green. What this
+cannot see: a feed that died mid-session reads red only until the close.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import pathlib
 import pkgutil
@@ -130,6 +141,63 @@ def _retired_venues() -> frozenset[str]:
         if callable(getattr(module, ADAPTER_FACTORY_NAME, None)):
             with_an_adapter.add(module_info.name.replace("_", "-"))
     return frozenset(with_an_adapter - captured)
+
+
+# The part whose standing answers "is NSE in session", and the package a tape
+# venue must have a broker module in for that answer to govern its tape.
+SESSION_CALENDAR_PART = "market-session-calendar"
+BROKER_PACKAGE = "runtime.brokers"
+IN_SESSION = "in session"
+OUT_OF_SESSION = "out of session"
+
+
+def _session_governed_venues(venues) -> frozenset[str]:
+    """Tape venues written by a broker on an exchange with sessions: `upstox`, not `news`.
+
+    Derived from the code, like `_retired_venues`: a venue is governed when
+    `runtime/brokers/<venue>.py` exists. Nothing is imported to find out.
+    """
+    governed = set()
+    for venue in venues:
+        try:
+            if importlib.util.find_spec(f"{BROKER_PACKAGE}.{venue.replace('-', '_')}") is not None:
+                governed.add(venue)
+        except (ImportError, ValueError):
+            continue
+    return frozenset(governed)
+
+
+def _session_answer() -> tuple[str | None, str]:
+    """`market-session-calendar`'s own answer, read from the heartbeat table, and its proof.
+
+    None when there is no answer to trust: settings or table unreadable, the table
+    older than `heartbeat_silent_after_seconds`, the calendar not reporting, or no
+    holiday list read yet -- in which last case the calendar says CLOSED, and that
+    CLOSED is an absence of measurement rather than a closed market.
+    """
+    settings_path = settings_directory() / "runtime.toml"
+    try:
+        document = load_settings_document(settings_path, "runtime")
+        table_path = pathlib.Path(str(document.read_value("heartbeat_table_path"))).expanduser()
+        silent_after = float(document.read_value("heartbeat_silent_after_seconds"))
+        table = json.loads(table_path.read_text())
+    except (SettingsParseRefused, KeyError, OSError, ValueError) as failure:
+        return None, f"no session answer: {type(failure).__name__}: {failure}"
+
+    age = (time.time_ns() - int(table.get("collected_at_ns", 0))) / NANOSECONDS_PER_SECOND
+    if age > silent_after:
+        return None, f"no session answer: {table_path} is {age:.0f}s old, past {silent_after:.0f}s"
+    row = next(
+        (row for row in table.get("heartbeats", []) if row.get("part_id") == SESSION_CALENDAR_PART),
+        None,
+    )
+    if row is None or row.get("state") != "reporting":
+        return None, f"no session answer: {SESSION_CALENDAR_PART} is not reporting in {table_path}"
+    standing = row.get("standing") or {}
+    if "is_open" not in standing or not standing.get("has_a_holiday_list"):
+        return None, f"no session answer: {SESSION_CALENDAR_PART} has not read its holiday list"
+    answer = IN_SESSION if standing["is_open"] else OUT_OF_SESSION
+    return answer, f"{SESSION_CALENDAR_PART} standing in {table_path}"
 
 
 def _day_of(index_path: pathlib.Path) -> str:
@@ -247,7 +315,6 @@ def probe_tape_freshness() -> CaptureProbeResult:
         for venue, newest in newest_by_venue.items()
     }
     live = {venue: seconds for venue, seconds in staleness.items() if venue not in retired}
-    detail = ", ".join(f"{venue} {seconds:.0f}s ago" for venue, seconds in sorted(live.items()))
     retired_detail = _retired_note(
         {venue: seconds for venue, seconds in staleness.items() if venue in retired}
     )
@@ -259,13 +326,41 @@ def probe_tape_freshness() -> CaptureProbeResult:
         return CaptureProbeResult(
             "Tape freshness", NOT_BUILT, f"no live venue has written a record{retired_detail}", proof
         )
-    stale = [venue for venue, seconds in live.items() if seconds > STALE_TAPE_SECONDS]
+
+    governed = _session_governed_venues(live)
+    session, session_proof = _session_answer() if governed else (None, "")
+    stale, unjudged, notes = [], [], []
+    for venue, seconds in sorted(live.items()):
+        if venue not in governed:
+            notes.append(f"{venue} {seconds:.0f}s ago")
+            if seconds > STALE_TAPE_SECONDS:
+                stale.append(venue)
+        elif session == IN_SESSION:
+            notes.append(f"{venue} {seconds:.0f}s ago, NSE in session")
+            if seconds > STALE_TAPE_SECONDS:
+                stale.append(venue)
+        elif session == OUT_OF_SESSION:
+            notes.append(f"{venue} {seconds:.0f}s ago, NSE out of session")
+        else:
+            notes.append(f"{venue} {seconds:.0f}s ago, session not measured")
+            if seconds > STALE_TAPE_SECONDS:
+                unjudged.append(venue)
+    detail = ", ".join(notes)
+    if governed:
+        proof = f"{proof}; session: {session_proof}"
     if stale:
         return CaptureProbeResult(
             "Tape freshness",
             FAILING,
-            f"{', '.join(sorted(stale))} stopped writing ({detail}){retired_detail}",
+            f"{', '.join(stale)} stopped writing ({detail}){retired_detail}",
             f"{proof}, against {STALE_TAPE_SECONDS:.0f}s",
+        )
+    if unjudged:
+        return CaptureProbeResult(
+            "Tape freshness",
+            NOT_MEASURED,
+            f"cannot tell whether {', '.join(unjudged)} stopped or NSE is shut ({detail}){retired_detail}",
+            proof,
         )
     return CaptureProbeResult("Tape freshness", OK, f"{detail}{retired_detail}", proof)
 

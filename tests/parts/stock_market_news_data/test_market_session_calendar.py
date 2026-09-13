@@ -122,3 +122,22 @@ def test_the_holiday_count_is_reported_so_an_empty_list_is_visible():
 def test_a_clock_time_is_read_from_the_setting_s_own_string():
     assert read_clock_time("09:15") == datetime.time(9, 15)
     assert read_clock_time("15:30") == datetime.time(15, 30)
+
+
+def test_the_session_reaches_the_heartbeat_table_as_numbers():
+    """The capture board's freshness tile reads these; a string standing never arrives."""
+    from parts.stock_market_news_data.market_session_calendar import describe_calendar
+    from runtime.part_process import countable_standing
+
+    calendar = _calendar()
+    moment = datetime.datetime(2026, 9, 7, 10, 0, tzinfo=IST)
+    standing = dict(countable_standing(describe_calendar(calendar, moment)))
+    assert standing["is_open"] == 1.0
+    assert standing["has_a_holiday_list"] == 1.0
+
+    unread = MarketSessionCalendar(
+        segment="FO", opens_at=datetime.time(9, 15), closes_at=datetime.time(15, 30), timezone=IST
+    )
+    unmeasured = dict(countable_standing(describe_calendar(unread, moment)))
+    assert unmeasured["is_open"] == 0.0
+    assert unmeasured["has_a_holiday_list"] == 0.0
