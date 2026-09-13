@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from runtime import market_session_answer
 from runtime.probes import capture_probes
 from runtime.probes.capture_probes import (
     FAILING,
@@ -322,7 +323,7 @@ def heartbeat_table(durable_tmp_path, monkeypatch):
         def read_value(self, name):
             return values[name]
 
-    monkeypatch.setattr(capture_probes, "load_settings_document", lambda *_: Document())
+    monkeypatch.setattr(market_session_answer, "load_settings_document", lambda *_: Document())
     return path
 
 

@@ -2238,7 +2238,7 @@ items carry none), 961 of 2,871 instruments learned while the catalogue restates
 The zero is chain-wide, not news-specific: `prompt-renderer` refused 523 requests
 `refused_missing_context` and `context-assembler` built 0 contexts, because with
 the market shut there is no `verified-snapshot` -- so nothing was called and
-nothing was spent. The first live answer can come at Monday's open at the
+nothing was spent. The first live answer can come at Tuesday 2026-09-15's open (Monday 14th is an NSE holiday, Ganesh Chaturthi) at the
 earliest, and whether it does is the reading to take then (`structured_by_a_model`,
 `answers_for_a_story_not_awaited`). Also still refusing: `llm-model-picker`
 `refused_no_model_clears_the_bar` 474 of 526. `news-symbol-tagging` has no
@@ -2307,7 +2307,12 @@ the 60s bound, out of session no bound, no fresh answer NOT MEASURED. Live after
 restart: `upstox 1s ago, NSE out of session`, OK. Cannot see a feed that dies
 mid-session once the close has passed.
 
-**Seen, not fixed:** `operate/replay_a_captured_session.the_market_is_open_now()`
-builds a `MarketSessionCalendar` without ever reading a holiday list, and
+**Fixed the same day, on the operator's word:** `operate/replay_a_captured_session.the_market_is_open_now()`
+built a `MarketSessionCalendar` without ever reading a holiday list, and
 `session_at` answers CLOSED (`no holiday list has been read yet`) whenever none has
-been read — so the replay treats every moment as shut, open market included.
+been read — so every replay run treated the market as shut, open or not. It now
+asks the running calendar's answer first (`runtime/market_session_answer.py`, shared
+with the freshness tile), then with no spine a calendar given NSE's real holiday
+list, then None. Checked against NSE's live list: Tuesday 2026-09-15 10:00 IST
+open; **Monday 2026-09-14 is a trading holiday (Ganesh Chaturthi)**, so the next
+session after this weekend is Tuesday, not Monday.

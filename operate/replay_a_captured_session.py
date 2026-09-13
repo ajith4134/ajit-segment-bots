@@ -327,25 +327,43 @@ def derived_membership_for(master: dict) -> dict:
     }
 
 
-def the_market_is_open_now() -> bool | None:
+def the_market_is_open_now(
+    live_answer=None, fetch_holidays=None, now=None,
+) -> bool | None:
     """Whether NSE is in a trading session right now, asked of the calendar part.
 
     `market-session-calendar` is the live spine's own answer to this, so a replay
     that reimplemented the hours could disagree with the bot about whether the
     market was open -- which is the difference between "replay history" and
-    "trade live". Holidays are not fetched here: this is asked to choose a data
-    source, and a holiday shows up as a day with no prints, which the source
-    then skips on its own evidence.
+    "trade live".
 
-    None when it cannot be asked at all, which is a different answer from
-    "closed" and is treated as closed by the caller -- an unmeasured session is
-    not an open one (Rule 8).
+    **Until 2026-09-13 this could never answer True.** It built a
+    `MarketSessionCalendar` and never gave it a holiday list, and `session_at`
+    answers CLOSED ("no holiday list has been read yet") whenever none has been
+    read -- so every run, market open or not, replayed history. Asked in order now:
+
+    1. the running calendar part's own answer, read from its standing in the
+       heartbeat table (`runtime/market_session_answer.py`, which the capture
+       board's freshness tile reads too);
+    2. with no spine running, a calendar built the way the part builds it,
+       holiday list fetched from NSE the way the part fetches it;
+    3. None when neither can answer -- a different answer from "closed", treated
+       as closed by the caller, because an unmeasured session is not an open one
+       (Rule 8).
+
+    `live_answer`, `fetch_holidays` and `now` are seams for tests; left as None
+    they are the real reader, the real NSE fetch and the real clock.
     """
     import zoneinfo
 
     from parts.stock_market_news_data.market_session_calendar import (
-        EXCHANGE_TIMEZONE, MarketSessionCalendar, read_clock_time,
+        EXCHANGE_TIMEZONE, HOLIDAY_URL, MarketSessionCalendar, read_clock_time,
     )
+    from runtime.market_session_answer import IN_SESSION, read_the_calendars_live_answer
+
+    answer, _proof = (live_answer or read_the_calendars_live_answer)()
+    if answer is not None:
+        return answer == IN_SESSION
 
     context = SettingsContext()
     try:
@@ -356,7 +374,17 @@ def the_market_is_open_now() -> bool | None:
             closes_at=read_clock_time(str(context.setting("market_session_closes_at_ist").value)),
             timezone=timezone,
         )
-        return calendar.session_at(datetime.datetime.now(timezone)).is_tradeable
+        if fetch_holidays is None:
+            from runtime.nse_public_data import NsePublicData, open_browser_session
+
+            nse = NsePublicData(
+                session=open_browser_session(),
+                timeout_seconds=float(context.setting("nse_public_data_timeout_seconds").value),
+            )
+            fetch_holidays = lambda: nse.read_json(HOLIDAY_URL)  # noqa: E731
+        calendar.observe_holidays(fetch_holidays())
+        moment = now or datetime.datetime.now(timezone)
+        return calendar.session_at(moment).is_tradeable
     except Exception:
         return None
 

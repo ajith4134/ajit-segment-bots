@@ -50,6 +50,7 @@ import pkgutil
 import time
 from dataclasses import dataclass
 
+from runtime import market_session_answer
 from runtime.settings_reader import (
     SettingsParseRefused,
     load_settings_document,
@@ -143,12 +144,12 @@ def _retired_venues() -> frozenset[str]:
     return frozenset(with_an_adapter - captured)
 
 
-# The part whose standing answers "is NSE in session", and the package a tape
-# venue must have a broker module in for that answer to govern its tape.
-SESSION_CALENDAR_PART = "market-session-calendar"
+# The package a tape venue must have a broker module in for the exchange session
+# to govern its tape. The session itself is asked of `market-session-calendar`,
+# through runtime/market_session_answer.py, which the replay asks as well.
 BROKER_PACKAGE = "runtime.brokers"
-IN_SESSION = "in session"
-OUT_OF_SESSION = "out of session"
+IN_SESSION = market_session_answer.IN_SESSION
+OUT_OF_SESSION = market_session_answer.OUT_OF_SESSION
 
 
 def _session_governed_venues(venues) -> frozenset[str]:
@@ -168,36 +169,8 @@ def _session_governed_venues(venues) -> frozenset[str]:
 
 
 def _session_answer() -> tuple[str | None, str]:
-    """`market-session-calendar`'s own answer, read from the heartbeat table, and its proof.
-
-    None when there is no answer to trust: settings or table unreadable, the table
-    older than `heartbeat_silent_after_seconds`, the calendar not reporting, or no
-    holiday list read yet -- in which last case the calendar says CLOSED, and that
-    CLOSED is an absence of measurement rather than a closed market.
-    """
-    settings_path = settings_directory() / "runtime.toml"
-    try:
-        document = load_settings_document(settings_path, "runtime")
-        table_path = pathlib.Path(str(document.read_value("heartbeat_table_path"))).expanduser()
-        silent_after = float(document.read_value("heartbeat_silent_after_seconds"))
-        table = json.loads(table_path.read_text())
-    except (SettingsParseRefused, KeyError, OSError, ValueError) as failure:
-        return None, f"no session answer: {type(failure).__name__}: {failure}"
-
-    age = (time.time_ns() - int(table.get("collected_at_ns", 0))) / NANOSECONDS_PER_SECOND
-    if age > silent_after:
-        return None, f"no session answer: {table_path} is {age:.0f}s old, past {silent_after:.0f}s"
-    row = next(
-        (row for row in table.get("heartbeats", []) if row.get("part_id") == SESSION_CALENDAR_PART),
-        None,
-    )
-    if row is None or row.get("state") != "reporting":
-        return None, f"no session answer: {SESSION_CALENDAR_PART} is not reporting in {table_path}"
-    standing = row.get("standing") or {}
-    if "is_open" not in standing or not standing.get("has_a_holiday_list"):
-        return None, f"no session answer: {SESSION_CALENDAR_PART} has not read its holiday list"
-    answer = IN_SESSION if standing["is_open"] else OUT_OF_SESSION
-    return answer, f"{SESSION_CALENDAR_PART} standing in {table_path}"
+    """`market-session-calendar`'s live answer. A seam so the tile's tests can pin it."""
+    return market_session_answer.read_the_calendars_live_answer()
 
 
 def _day_of(index_path: pathlib.Path) -> str:
