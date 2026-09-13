@@ -259,6 +259,11 @@ class UpstoxAdapter(BrokerAdapter):
                     segment=row["segment"],
                     instrument_type=row["instrument_type"],
                     trading_symbol=row.get("trading_symbol", ""),
+                    # Upstox's own `name`: "RELIANCE INDUSTRIES LTD" beside
+                    # "RELIANCE". Carried rather than dropped because it is the
+                    # only thing in this master that a news item's "Reliance
+                    # Industries" can be matched against.
+                    name=row.get("name", ""),
                     lot_size=row.get("lot_size"),
                     tick_size=tick_size_in_rupees(row.get("tick_size")),
                     freeze_quantity=row.get("freeze_quantity"),

@@ -310,9 +310,9 @@ independent failures.
 | `news-sentiment-model` | NOT MEASURED | nothing has reached it | nothing published |
 | `news-source-health-monitor` | NOT MEASURED | nothing has reached it | nothing published |
 | `news-surprise-scorer` | NOT MEASURED | nothing has reached it | nothing published |
-| `news-symbol-resolver` | NOT MEASURED | nothing has reached it | nothing published |
+| `news-symbol-resolver` | SERVING ITS PURPOSE on captured data — not yet on the spine | every EQ and INDEX row of the real Upstox master (2,871) and the 13 names `haiku` really wrote for two real Upstox stories | 12 of 13 resolved to the right instrument key (Larsen & Toubro -> LT, State Bank of India -> SBIN, NIFTY50 -> NSE_INDEX Nifty 50); the 13th, `HPCL`, is named in `names_not_resolved` because the master never writes it. 0 ambiguous. `tests/parts/stock_market_news_data/test_news_symbol_resolver.py`, 2026-09-13 |
 | `news-tape-writer` | NOT MEASURED | nothing has reached it | nothing published |
-| `news-text-structurer` | NOT MEASURED | nothing has reached it | nothing published |
+| `news-text-structurer` | SERVING ITS PURPOSE on captured data — not yet on the spine | the 31 real distinct stories `broker-news-reader` + `news-item-deduplicator` make of the 2026-09-12 Upstox capture, and two real `haiku` answers passed through the real `structured-output-enforcer` | both answers structured with tense `happened`, names and figures the story's own text states (oil story: Reliance; HPCL; IndiGo; BPCL / 17-week high; $110 per barrel). **Before the 2026-09-13 fix the enforcer rejected both real answers** — `claim_verification` ignored text facts, so a figure copied out of the headline traced to nothing. A figure changed 110 -> 120 is still refused. Without a model: source-only item marked `read_by` so, tense `not-stated` |
 | `regulator-circular-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `results-calendar-reader` | NOT MEASURED | nothing has reached it | nothing published |
 | `social-chatter-reader` | NOT MEASURED | nothing has reached it | nothing published |

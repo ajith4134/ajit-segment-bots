@@ -1,0 +1,50 @@
+{
+ "purpose": "structure-a-news-item",
+ "output_schema": {
+  "story_key": {
+   "type": "string",
+   "required": true
+  },
+  "event_phrase": {
+   "type": "string",
+   "required": true
+  },
+  "names_mentioned": {
+   "type": "string",
+   "required": true
+  },
+  "figures_cited": {
+   "type": "string",
+   "required": true
+  },
+  "tense": {
+   "type": "string",
+   "required": true,
+   "one_of": [
+    "happened",
+    "scheduled",
+    "anticipated",
+    "not-stated"
+   ]
+  }
+ },
+ "model": "haiku",
+ "answers": [
+  {
+   "story_key": "https://upstox.com/news/market-news/stocks/reliance-hpcl-bpcl-indigo-asian-paints-indian-oil-oil-sensitive-stocks-tumble-as-crude-oil-prices-jump-to-near-110-barrel/article-200159/",
+   "prompt": "INSTRUCTION\nRead the news item in the facts. Answer with: story_key exactly as given; event_phrase, one short clause saying what happened, using the item's own words; names_mentioned, the company and index names the item names, semicolon separated, empty if none; figures_cited, the figures the item states with their units, semicolon separated, empty if none; and tense, one of happened, scheduled, anticipated, not-stated. Do not add anything the item does not say.\n\nMEASURED FACTS (the only numbers you may use)\nbody = Oil-sensitive stocks declined on Friday, September 11, as global crude oil prices surged to a 17-week high nearing $110 per barrel amid the re-escalations in West Asia.\nheadline = Reliance, HPCL, IndiGo, BPCL: Oil-sensitive stocks tumble as crude oil prices jump to near $110/barrel\nstory_key = https://upstox.com/news/market-news/stocks/reliance-hpcl-bpcl-indigo-asian-paints-indian-oil-oil-sensitive-stocks-tumble-as-crude-oil-prices-jump-to-near-110-barrel/article-200159/\n\nANSWER WITH ONE JSON OBJECT AND NOTHING ELSE (no prose, no code fence)\n{\n  \"event_phrase\": string\n  \"figures_cited\": string\n  \"names_mentioned\": string\n  \"story_key\": string\n  \"tense\": string and one of 'happened', 'scheduled', 'anticipated', 'not-stated'\n}",
+   "answer_text": "```json\n{\n  \"event_phrase\": \"Oil-sensitive stocks declined as global crude oil prices surged to a 17-week high nearing $110 per barrel\",\n  \"figures_cited\": \"17-week high; $110 per barrel\",\n  \"names_mentioned\": \"Reliance; HPCL; IndiGo; BPCL\",\n  \"story_key\": \"https://upstox.com/news/market-news/stocks/reliance-hpcl-bpcl-indigo-asian-paints-indian-oil-oil-sensitive-stocks-tumble-as-crude-oil-prices-jump-to-near-110-barrel/article-200159/\",\n  \"tense\": \"happened\"\n}\n```",
+   "finish_reason": "end_turn",
+   "input_tokens": 20678,
+   "output_tokens": 1263
+  },
+  {
+   "story_key": "https://upstox.com/news/market-news/stocks/sensex-nifty-50-resume-decline-after-a-day-s-pause-dragged-by-reliance-industries-larsen-and-toubro/article-200198/",
+   "prompt": "INSTRUCTION\nRead the news item in the facts. Answer with: story_key exactly as given; event_phrase, one short clause saying what happened, using the item's own words; names_mentioned, the company and index names the item names, semicolon separated, empty if none; figures_cited, the figures the item states with their units, semicolon separated, empty if none; and tense, one of happened, scheduled, anticipated, not-stated. Do not add anything the item does not say.\n\nMEASURED FACTS (the only numbers you may use)\nbody = Reliance Industries, Larsen & Toubro, Axis Bank, ICICI Bank, Bajaj Finance, State Bank of India and Mahindra & Mahindra were top drags on the SENSEX.\n\nheadline = SENSEX, NIFTY50 resume decline after a day's pause dragged by Reliance Industries, Larsen & Toubro\nstory_key = https://upstox.com/news/market-news/stocks/sensex-nifty-50-resume-decline-after-a-day-s-pause-dragged-by-reliance-industries-larsen-and-toubro/article-200198/\n\nANSWER WITH ONE JSON OBJECT AND NOTHING ELSE (no prose, no code fence)\n{\n  \"event_phrase\": string\n  \"figures_cited\": string\n  \"names_mentioned\": string\n  \"story_key\": string\n  \"tense\": string and one of 'happened', 'scheduled', 'anticipated', 'not-stated'\n}",
+   "answer_text": "```json\n{\n  \"event_phrase\": \"SENSEX, NIFTY50 resume decline after a day's pause dragged by Reliance Industries, Larsen & Toubro\",\n  \"figures_cited\": \"\",\n  \"names_mentioned\": \"SENSEX; NIFTY50; Reliance Industries; Larsen & Toubro; Axis Bank; ICICI Bank; Bajaj Finance; State Bank of India; Mahindra & Mahindra\",\n  \"story_key\": \"https://upstox.com/news/market-news/stocks/sensex-nifty-50-resume-decline-after-a-day-s-pause-dragged-by-reliance-industries-larsen-and-toubro/article-200198/\",\n  \"tense\": \"happened\"\n}\n```",
+   "finish_reason": "end_turn",
+   "input_tokens": 20672,
+   "output_tokens": 1523
+  }
+ ]
+}

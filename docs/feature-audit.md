@@ -2193,3 +2193,36 @@ and reports 0 silent. But a suite that cannot be run whole is a suite whose gree
 is an assumption, and pinning the fixture interaction is worth a session of its
 own.
 
+### 2026-09-13 — `stock-market-news-data`: the structurer and the resolver
+
+`news-text-structurer` and `news-symbol-resolver` were written on 2026-09-12 and
+left uncommitted with no test and none of the three settings the structurer reads.
+Tested now on real data only: the 2026-09-12 Upstox news capture through the two
+parts that produce `distinct-news-item`, the full company-and-index slice of the
+real instrument master (`tests/captured/upstox/2026-09-05-master-companies-and-indices.json`,
+2,871 rows), and the two answers `haiku` really wrote to this part's own prompt.
+
+**A defect only a real answer could show, and it was in the LLM block, not the
+news block.** `runtime/claim_verification._matches_a_fact` skipped every fact that
+was not a number. A news item's facts are its headline and body, so `$110 per
+barrel`, copied straight from the headline, traced to nothing and
+`structured-output-enforcer` rejected **both** real answers whole
+(`every-sentence-asserted-something-unmeasured`). The structurer would have run
+live, paid for every call, and published only its source-only fallback — which
+reads as a working part. A number stated in a text fact now traces to it, parsed
+by the same `numbers_in` on both sides; a figure changed 110 -> 120 is still
+refused (tested).
+
+Resolver: 12 of 13 real mentions resolve, 0 ambiguous; `HPCL` does not, because
+the master writes `HINDPETRO`, and it is reported in `names_not_resolved` rather
+than aliased by hand. The docstring said 11 of 13 and was corrected to the measurement.
+
+Declarations were brought back to the blueprint (`resource_class` compute-bound on
+the structurer, `skipped_tick_effect` corrupts on the resolver).
+
+**Still open:** neither part is on `operate/run_live_spine.py`. The structurer
+spends subscription calls (bounded by `llm_subscription_calls_per_hour`), so
+starting it is the operator's call. `news_wait_for_the_model_seconds` (60) is
+chosen, not measured end to end, and its note says so. A story the router refuses
+falls back source-only and is never asked about again.
+

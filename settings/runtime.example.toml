@@ -4775,6 +4775,20 @@ value = 691200
 unit  = "seconds"
 note  = "Claude, 2026-09-12: how far back news-item-deduplicator can recognise a story it has already seen. Derived from the source's own backlog, measured twice on real captures the same day: 14 stories for 2 underlyings spanned 153.27 hours, and 31 stories for the 30 underlyings the option segments actually track spanned 167.08 hours (2026-09-05 05:11 to 2026-09-12 04:16 UTC). Upstox's news endpoint is a rolling backlog, so broker-news-reader re-delivers those same stories on every sweep -- about every sixteen minutes at 2,871 instruments and 30 keys a request -- and a memory shorter than the backlog republishes a week-old story as breaking news, forever. EIGHT days (691,200s) is the next whole day above the measured 167.08 hours; whole days because a backlog refilled daily is bounded in days. The first derivation of this number said seven days off the narrower capture, which left 0.92 hours of margin -- the wider capture is why it is eight, and it is also the warning that this margin is measured, not generous. Cost is memory: stories_held in the standing says how many are held, each with its headline tokens."
 
+[news_wait_for_the_model_seconds]
+value = 60.0
+unit  = "seconds"
+note  = "Claude, 2026-09-13: how long news-text-structurer holds a story for a model's answer before structuring it from the source's own heading and summary instead, marked read_by the-source-own-fields-only-no-model-answered. CHOSEN, not yet measured end to end, and saying so is the point. The one measured input is llm_subscription_measured_latency_seconds, 8s for a call on a loaded spine; the request also crosses prompt-renderer, llm-model-picker, llm-request-router, the caller and structured-output-enforcer, a tick each, and no measurement of that whole path exists yet. Sixty seconds is 7.5 times the call alone. Too short costs twice: the story is published source-only and the answer, when it lands, is counted as answers_for_a_story_not_awaited and paid for anyway. Re-derive from the standing once the structurer runs live: if answers_for_a_story_not_awaited climbs beside gave_up_waiting, this is too short."
+
+[news_stories_asked_about_per_tick]
+value = 1
+unit  = "stories"
+note  = "Claude, 2026-09-13: how many not-yet-asked stories news-text-structurer turns into llm-requests each tick, oldest first. One. The ceiling that actually binds is llm_subscription_calls_per_hour (20) at about $0.041 a call, enforced by llm-request-router; asking more per tick does not buy more answers, it buys more refusals, and a refused story falls back to its source fields after news_wait_for_the_model_seconds and is never asked about again. Measured backlog on 2026-09-12: about 31 distinct stories across the 30 underlyings the option segments track, over 167 hours, so one a tick clears a real backlog in well under a minute of ticks and the router's hourly bound is what paces the money."
+
+[news_structuring_maximum_sentences]
+value = 4
+unit  = "sentences"
+note  = "Claude, 2026-09-13: the most sentences news-text-structurer's request permits. Four, the same bound llm_maximum_sentences gives every brain part and for the same reason -- every sentence is one more claim to verify against the facts. The answer is one JSON object with five short fields, so four is headroom, not a squeeze: both captured haiku answers (tests/captured/upstox/2026-09-12-two-real-stories-read-by-haiku.json) fit it."
 
 [news_latency_window_observations]
 value = 500

@@ -200,9 +200,192 @@ class NewsSourceStanding:
     observed_at_ns: int
 
 
+class Tense(enum.StrEnum):
+    """When the thing an item describes happened. T-5: countable, from a vocabulary.
+
+    The blueprint asks a structured item for "the claim's tense", and it decides
+    whether an item is tradable at all: a results announcement that HAPPENED is a
+    fact the market is pricing now, the same announcement SCHEDULED for Thursday
+    is a date, and an ANTICIPATED one is somebody's opinion about Thursday.
+    Collapsing the three is how a bot trades a rumour as though it were a filing.
+    """
+
+    HAPPENED = "happened"
+    SCHEDULED = "scheduled"
+    ANTICIPATED = "anticipated"
+    # The text does not say. Its own state rather than a guess at `happened`,
+    # which is the reading that costs money (Rule 8).
+    NOT_STATED = "not-stated"
+
+
+class ReadBy(enum.StrEnum):
+    """What turned an item's prose into fields.
+
+    A field a model read and a field a fallback filled are not the same
+    evidence, and a consumer that cannot tell them apart is weighing a guess as
+    though it were a reading. `news-text-structurer` is the block's single LLM
+    read; when no model answers it still structures what the source itself
+    stated, and says which happened.
+    """
+
+    A_MODEL = "a-model-read-the-text"
+    THE_SOURCE_ITSELF = "the-source-own-fields-only-no-model-answered"
+
+
+class NewsCategory(enum.StrEnum):
+    """What kind of news an item is. Routing depends on it: a halt is not an
+    analyst note, and the blueprint names these eight."""
+
+    RESULTS = "results"
+    CORPORATE_ACTION = "corporate-action"
+    REGULATORY = "regulatory"
+    MACRO = "macro"
+    HALT = "halt"
+    ANALYST = "analyst"
+    RUMOUR = "rumour"
+    BLOCK_DEAL = "block-deal"
+    # Nothing in the text places it in any of the eight. Kept rather than forced
+    # into the nearest one: a misrouted halt is worse than an unrouted item.
+    UNCLASSIFIED = "unclassified"
+
+
+@dataclass(frozen=True)
+class StructuredNewsItem:
+    """One item read into fields: what happened, to whom, the figures, the tense.
+
+    `names_mentioned` is deliberately unresolved text — the names as the article
+    wrote them. Turning "Reliance Industries" into `NSE_EQ|INE002A01018` is
+    `news-symbol-resolver`'s job, against the broker's own listings, because an
+    alias table written here would be the hardcoded table the blueprint refuses.
+    """
+
+    story_key: str
+    source_ids: tuple[str, ...]
+    url: str
+    headline: str
+    body: str
+    # What happened, in the words the reader selected from the item itself.
+    event_phrase: str
+    # The names the text mentions, as written. Unresolved on purpose.
+    names_mentioned: tuple[str, ...]
+    # The figures the text states, as written -- "$110/barrel", "12%". Strings
+    # rather than floats: a figure's unit is part of it, and parsing one into a
+    # number here would throw away the difference between 12% and 12 rupees.
+    figures_cited: tuple[str, ...]
+    tense: Tense
+    read_by: ReadBy
+    published_at_ns: int
+    first_observed_at_ns: int
+    structured_at_ns: int
+
+    @property
+    def was_read_by_a_model(self) -> bool:
+        return self.read_by is ReadBy.A_MODEL
+
+
+@dataclass(frozen=True)
+class NewsSymbolTagging:
+    """Which instruments an item names, resolved against the broker's own master.
+
+    `underlying_symbols` are trading symbols from the instrument listing —
+    never an alias table written by hand, which is the one thing the blueprint
+    says about this part. `names_not_resolved` is carried beside them because a
+    name nothing matched is the evidence that the resolver is missing something,
+    and an empty tagging with no explanation is indistinguishable from an item
+    about nothing.
+    """
+
+    story_key: str
+    underlying_symbols: tuple[str, ...]
+    instrument_keys: tuple[str, ...]
+    names_not_resolved: tuple[str, ...]
+    # True when the item names an index rather than a company. The segment
+    # classifier routes on it, and the two are different markets.
+    names_an_index: bool
+    resolved_at_ns: int
+
+    @property
+    def names_anything_tradable(self) -> bool:
+        return bool(self.underlying_symbols)
+
+
+@dataclass(frozen=True)
+class NewsCategoryTagging:
+    """What kind of news an item is, and how sure that is.
+
+    `confidence` is the share of the evidence that pointed at the winning
+    category, measured from the item's own words rather than declared. An
+    unclassified item carries 0.0 and says so: a category picked at random routes
+    a halt to an analyst-note reader.
+    """
+
+    story_key: str
+    category: NewsCategory
+    confidence: float
+    # The words in the item that put it in that category. Provenance, so a
+    # classification can be argued with rather than only believed (Rule 8).
+    matched_words: tuple[str, ...]
+    classified_at_ns: int
+
+
+@dataclass(frozen=True)
+class NewsCredibilityRating:
+    """How far a source has earned trust, learned from later confirmation.
+
+    `is_fitted` is False until the source has been observed enough times to say
+    anything, and then `rating` is the prior rather than a measurement — which is
+    exactly the distinction a consumer weighting by credibility has to see.
+    """
+
+    source_id: str
+    rating: float
+    observations: int
+    is_fitted: bool
+    confirmed: int
+    contradicted: int
+    rated_at_ns: int
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    """The published news fact. What every consumer outside the news block reads.
+
+    Assembled rather than decided: the structured item, the instruments it names,
+    the segments it belongs to, its category and its source's credibility, each
+    from the part that owns that question. `news-segment-classifier` puts them
+    together because the segment tagging is the last thing added and the one that
+    makes "divided by segments" real.
+    """
+
+    story_key: str
+    structured: StructuredNewsItem
+    symbols: NewsSymbolTagging
+    category: NewsCategoryTagging
+    # None until `news-credibility-scorer` has anything to say about the source.
+    # None rather than a default number: a consumer weighting by credibility must
+    # be able to tell "unrated" from "rated badly".
+    credibility: NewsCredibilityRating | None
+    segments: tuple[str, ...]
+    published_at_ns: int
+    first_observed_at_ns: int
+    assembled_at_ns: int
+
+    @property
+    def belongs_to_a_built_segment(self) -> bool:
+        return bool(self.segments)
+
+
 __all__ = [
     "Collapse",
     "Delivery",
+    "NewsCategory",
+    "NewsCategoryTagging",
+    "NewsCredibilityRating",
+    "NewsItem",
+    "NewsSymbolTagging",
+    "ReadBy",
+    "StructuredNewsItem",
+    "Tense",
     "DistinctNewsItem",
     "NANOSECONDS_PER_MILLISECOND",
     "NewsLatencyReading",

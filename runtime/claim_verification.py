@@ -119,15 +119,34 @@ def _matches_a_fact(value: float, is_percentage: bool, facts: dict, tolerance: f
     """
     candidates = [value, value / 100.0] if is_percentage else [value]
     for name, fact in facts.items():
-        if not isinstance(fact, (int, float)) or isinstance(fact, bool):
-            continue
-        for candidate in candidates:
-            if abs(fact) <= tolerance:
-                if abs(candidate - fact) <= tolerance:
+        for stated in _numbers_a_fact_states(fact):
+            for candidate in candidates:
+                if abs(stated) <= tolerance:
+                    if abs(candidate - stated) <= tolerance:
+                        return name
+                elif abs(candidate - stated) <= abs(stated) * tolerance:
                     return name
-            elif abs(candidate - fact) <= abs(fact) * tolerance:
-                return name
     return None
+
+
+def _numbers_a_fact_states(fact) -> list:
+    """The numbers one fact carries: itself if a number, what its text states if text.
+
+    Text facts were skipped until 2026-09-13, and that refused every real answer
+    `news-text-structurer` ever got: a news item's facts are its headline and
+    body, so "$110 per barrel" copied straight out of the headline traced to
+    nothing and both captured `haiku` answers were rejected whole. A number
+    written in a fact's own text is as measured as that text is; it is parsed with
+    `numbers_in`, the same parser the answer goes through, so the two sides cannot
+    disagree about what a number is.
+    """
+    if isinstance(fact, bool):
+        return []
+    if isinstance(fact, (int, float)):
+        return [fact]
+    if isinstance(fact, str):
+        return [value for _raw, value, _is_percentage in numbers_in(fact)]
+    return []
 
 
 def split_sentences(text: str) -> list:

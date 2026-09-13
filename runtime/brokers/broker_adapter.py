@@ -148,6 +148,15 @@ class InstrumentListing:
     # company under a post-closing-auction regime, or a fresh IPO -- none of
     # which an intraday bot may treat as an ordinary share.
     security_type: str | None = None
+    # The company's or index's name as the broker's own master states it --
+    # "LARSEN & TOUBRO LTD." beside the trading symbol "LT". Read since
+    # 2026-09-12 for `news-symbol-resolver`: a news item writes "Larsen &
+    # Toubro", which nothing about the symbol `LT` could ever match, and the
+    # blueprint says that resolver works off the broker's own listing rather
+    # than a hardcoded alias table. This field is what makes that possible.
+    # Defaulted so a master that does not carry a name reads as absent rather
+    # than breaking every reader of the type.
+    name: str = ""
     # The underlying's own plain name, as the master states it on the contract
     # itself -- "NIFTY" on "NIFTY 24500 CE". Read since 2026-09-06 because
     # `underlying_key` alone is not enough to name an underlying: resolving that
