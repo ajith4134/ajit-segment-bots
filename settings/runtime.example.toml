@@ -3261,6 +3261,16 @@ value = 0.6
 unit  = "probability"
 note  = "operator, 2026-08-23: the measured quality a model must show on a purpose before the picker chooses it for that purpose. Three in five."
 
+[llm_picker_minimum_verdicts]
+value = 19
+unit  = "answer verdicts per model and purpose"
+note  = "Claude, 2026-09-13: how many llm-answer-verdicts a model needs on a purpose before llm-model-picker treats its quality there as measured and may refuse it for falling below llm_quality_bar. Until this day the picker borrowed decoding_minimum_trades, a count of closed trades, which gave 20 with no reason that applied to model answers. DERIVED from the picker's own estimator (RateEstimator with learning_prior_hit_rate 0.5 at learning_prior_weight 4) against llm_quality_bar 0.6, by exact binomial: the smallest count after which, for every larger count too, both errors stay under 5% -- a model that is usable 80% of the time being measured below the bar (2.3% at 19), and one usable 40% of the time being measured at or above it (3.5% at 19). The 0.8 and 0.4 are the choice in this derivation: a model 0.2 either side of the bar is the difference worth telling apart, and one closer than that is not worth refusing on this little evidence. Re-derive if llm_quality_bar or the learning prior changes."
+
+[llm_enforcer_rendered_request_hold_seconds]
+value = 600
+unit  = "seconds"
+note  = "Claude, 2026-09-13: how long structured-output-enforcer keeps a rendered request's facts waiting for its response, and holds a response waiting for its facts, before dropping it unjudged (responses_dropped_without_their_facts). DERIVED from the slowest answer the subscription caller can produce: llm_maximum_retries 3 means four attempts at runtime/llm_providers.DEFAULT_TIMEOUT_SECONDS 120 each, plus backoffs of 2, 4 and 8 seconds (llm_initial_backoff_seconds 2 doubling by llm_backoff_multiplier) -- 494 seconds -- rounded up to the next ten minutes. The bound matters because most rendered requests are refused by llm-request-router and never produce a response; without it the enforcer would hold every refusal's facts forever. Re-derive if the caller's timeout or retry settings change."
+
 [llm_cache_maximum_entries]
 value = 1000
 unit  = "responses"

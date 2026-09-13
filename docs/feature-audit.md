@@ -2246,3 +2246,31 @@ consumer yet (`news-segment-classifier` is unbuilt), so its 95 undelivered are e
 chosen, not measured end to end, and its note says so. A story the router refuses
 falls back source-only and is never asked about again.
 
+
+### 2026-09-13 — `llm-services`: why `llm-model-picker` refused 474 of 526
+
+Reproduced exactly off the live settings by the picker alone: one model declared
+(the subscription's haiku; the Kimi provider has no key installed), nothing ever
+measured, `llm_exploration_share` 0.1 -- so every tenth pick explored and the other
+nine were refused as "a downgrade nobody chose", with nothing to downgrade from.
+Three changes, on the operator's word (`docs/proposals/the-picker-learns-from-the-enforcers-verdict.md`):
+
+- **A.** A purpose no model has been measured on is explored, never refused;
+  refusal stays for a model measured below the bar. The exploration turn is
+  counted per purpose, not across every part's traffic.
+- **B.** Quality is learned from `llm-answer-verdict`, published by
+  `structured-output-enforcer` for every response it judges, not from
+  `llm-call-record.succeeded` ("the call returned"). A failed call still counts bad
+  from its record; an answered one only by its verdict, so none is counted twice.
+  **B exposed a worse defect:** the spine's enforcer judged every response against
+  `{}` with `require_a_citation` on, which rejects every real answer (tested on both
+  captured haiku answers). It now reads `rendered-llm-request` for the facts, held
+  for `llm_enforcer_rendered_request_hold_seconds` (600, derived from the caller's
+  slowest possible answer, 494s).
+- **C.** `llm_picker_minimum_verdicts` 19, derived by exact binomial on the
+  picker's own prior-weighted estimator, replacing the borrowed
+  `decoding_minimum_trades`.
+
+**Seen, not fixed:** the enforcer publishes its repair request on `llm-request` as
+a plain dict, not an `LlmRequest`; every reader of that wire does `getattr` on it,
+so a repair reaches the renderer with no purpose and no facts.

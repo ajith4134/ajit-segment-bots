@@ -237,6 +237,28 @@ class ValidatedLlmOutput:
 
 
 @dataclass(frozen=True)
+class LlmAnswerVerdict:
+    """Whether one model answer was usable, as `structured-output-enforcer` judged it.
+
+    What `llm-model-picker` learns a model's quality on a purpose from. Added
+    2026-09-13: the picker learned from `LlmCallRecord.succeeded`, which is "the
+    call returned", so an answer the enforcer threw away counted as a good one.
+    `was_usable` is the enforcer's own answer to the question the picker's
+    docstring always asked. A response sent back for repair is not usable: a
+    model that needed a second try did worse on that purpose than one that did not.
+    """
+
+    response_id: str
+    rendered_id: str
+    version_id: str
+    purpose: str
+    model_id: str
+    was_usable: bool
+    state: str
+    judged_at_ns: int
+
+
+@dataclass(frozen=True)
 class LlmCallRecord:
     """One call as an accounting fact: who asked, what it cost, in which currency."""
 

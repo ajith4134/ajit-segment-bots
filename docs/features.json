@@ -3529,6 +3529,11 @@
    "description": "Today's ranked top-N ordinary NSE shares for the cash-equity-intraday segment, blended from momentum, volume surge, 52-week range proximity, gap, VWAP deviation and ATR-normalised move within a liquidity-qualified pool. A level, restated on an interval.",
    "origin": "proposed",
    "proposed": "2026-09-05"
+  },
+  {
+   "id": "llm-answer-verdict",
+   "name": "LLM answer verdict",
+   "description": "Whether one model answer survived structural and factual checking: the model, the purpose, and the enforcer's state. What llm-model-picker learns a model's quality on a purpose from."
   }
  ],
  "features": [
@@ -4904,7 +4909,8 @@
    "category": "llm-services",
    "consumes": [
     "llm-request",
-    "llm-call-record"
+    "llm-call-record",
+    "llm-answer-verdict"
    ],
    "produces": [
     "llm-model-choice",
@@ -12102,12 +12108,14 @@
    "category": "llm-foundation",
    "consumes": [
     "llm-response",
-    "prompt-version"
+    "prompt-version",
+    "rendered-llm-request"
    ],
    "produces": [
     "validated-llm-output",
     "llm-request",
-    "part-health"
+    "part-health",
+    "llm-answer-verdict"
    ],
    "switchable": true,
    "off_releases_resources": true,
@@ -14853,5 +14861,12 @@
   "origin": "the user, 2026-09-08 -- \"fix all the design questions and errors of no new trades opening in 3 segments\"",
   "applied_by": "dashboard/blueprint_edits/apply_2026-09-08_the_floor_charges_the_symbols_own_cost.py",
   "proposal": "docs/proposals/the-floor-charges-the-symbols-own-cost.md"
+ },
+ "_proposal_2026-09-13_the_picker_learns_from_the_enforcers_verdict": {
+  "what": "structured-output-enforcer reads rendered-llm-request for the facts it checks against and publishes llm-answer-verdict; llm-model-picker learns quality from that verdict rather than from whether a call returned, and explores a purpose no model has been measured on instead of refusing it.",
+  "evidence": "Live spine 2026-09-13: llm-model-picker 526 requests, 52 chosen, 474 refused_no_model_clears_the_bar, reproduced exactly by the picker alone on the live settings; structured-output-enforcer's start_part enforced every response against {} with require_a_citation on.",
+  "origin": "the operator, 2026-09-13 -- \"yes do A B and C\"",
+  "applied_by": "dashboard/blueprint_edits/apply_2026-09-13_the_picker_learns_from_the_enforcers_verdict.py",
+  "proposal": "docs/proposals/the-picker-learns-from-the-enforcers-verdict.md"
  }
 }

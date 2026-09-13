@@ -6,8 +6,10 @@ ranking is not global: a model that writes better prose can be worse at returnin
 strict structure, and the purpose decides which of those matters.
 
 So quality is tracked per (model, purpose) pair from outcomes this system observed:
-did the answer pass the enforcer, and did it agree with what happened. Three
-consequences that a single global ranking cannot express:
+did the answer pass the enforcer -- read from `llm-answer-verdict` since
+2026-09-13; before that from `llm-call-record.succeeded`, which is only "the call
+returned", so a rejected answer counted as a good one. Three consequences that a
+single global ranking cannot express:
 
 - **The cheapest model that clears the purpose's bar wins.** Not the best one. A
   purpose with a low bar answered by an expensive model is money spent on headroom
@@ -16,6 +18,12 @@ consequences that a single global ranking cannot express:
   small share of calls goes to unmeasured models, because a model never tried is a
   model whose quality is a guess forever -- and that exploration is a named setting
   with its own share, not a random accident.
+- **A purpose no model has been measured on is explored, never refused.** Refusal
+  stops a downgrade -- answering with a model measured below the bar -- and with
+  nothing measured there is nothing to downgrade from. Until 2026-09-13 it refused
+  anyway: one model declared, nothing measured, and 474 of 526 live requests were
+  discarded while the exploration share let every tenth through, which protected
+  nothing and starved the only thing that could ever produce a measurement.
 - **A model that got worse loses its place.** Providers change models under their
   own names, so quality is estimated with decay and a model's history stops
   protecting it.
@@ -39,7 +47,7 @@ PART_ID = "llm-model-picker"
 
 PART_DECLARATION = PartDeclaration(
     part_id="llm-model-picker",
-    consumes=("llm-request", "llm-call-record"),
+    consumes=("llm-request", "llm-call-record", "llm-answer-verdict"),
     produces=("llm-model-choice", "part-health"),
     resource_class="compute-bound",
     rate_risk="latency-only",
@@ -71,6 +79,10 @@ class PickerStanding:
     choices_made: int = 0
     exploratory_choices: int = 0
     refused_no_model_clears_the_bar: int = 0
+    # Chosen because no model had been measured on the purpose at all. Counted
+    # apart from exploratory_choices: those are a share taken from a purpose that
+    # already has a measured model, these are the only way a purpose gets one.
+    choices_for_a_purpose_nothing_is_measured_on: int = 0
     outcomes_observed: int = 0
     models_declared: int = 0
     times_the_cheapest_qualifying_model_won: int = 0
@@ -107,6 +119,7 @@ class LlmModelPicker:
         self._latency: dict[str, float] = {}
         self._best_of: dict[str, str] = {}
         self._call_count = 0
+        self._calls_by_purpose: dict[str, int] = {}
         self.standing = PickerStanding()
 
     def declare_model(
@@ -151,6 +164,8 @@ class LlmModelPicker:
             )
 
         self._call_count += 1
+        calls_for_purpose = self._calls_by_purpose.get(purpose, 0) + 1
+        self._calls_by_purpose[purpose] = calls_for_purpose
         considered = []
         qualifying = []
         unmeasured = []
@@ -163,15 +178,34 @@ class LlmModelPicker:
             elif quality >= quality_bar:
                 qualifying.append((model_id, facts, quality))
 
+        # Nothing measured on this purpose: nothing to downgrade from, so the
+        # cheapest unmeasured model answers and starts the purpose's record.
+        if unmeasured and len(unmeasured) == len(considered):
+            model_id, facts = min(unmeasured, key=lambda entry: entry[1]["cost_per_call"])
+            self.standing.choices_for_a_purpose_nothing_is_measured_on += 1
+            self.standing.exploratory_choices += 1
+            self.standing.choices_made += 1
+            return self._choice(
+                request_id, EXPLORING,
+                self._as_choice(request_id, purpose, model_id, facts, self._prior_quality, False,
+                                "no model is measured on this purpose yet; cheapest one measures it"),
+                tuple(considered),
+                f"{model_id} chosen because no model has been measured on {purpose}. Refusing "
+                f"would protect against a downgrade from nothing, and would stop the purpose "
+                f"ever being measured",
+            )
+
         # Exploration is deliberate and bounded: a model never tried is a model whose
-        # quality stays a guess forever.
+        # quality stays a guess forever. Counted per purpose, so whether a purpose's
+        # request lands on an exploring turn depends on that purpose's own traffic
+        # rather than on how it interleaves with every other part's.
         should_explore = (
             unmeasured
             and self._exploration_share > 0
-            and (self._call_count % max(int(1 / self._exploration_share), 1) == 0)
+            and (calls_for_purpose % max(int(1 / self._exploration_share), 1) == 0)
         )
         if should_explore:
-            model_id, facts = unmeasured[self._call_count % len(unmeasured)]
+            model_id, facts = unmeasured[calls_for_purpose % len(unmeasured)]
             self.standing.exploratory_choices += 1
             self.standing.choices_made += 1
             return self._choice(
@@ -254,6 +288,9 @@ def describe_model_picking(picker: LlmModelPicker) -> dict:
         "refused_no_model_clears_the_bar": (
             picker.standing.refused_no_model_clears_the_bar
         ),
+        "choices_for_a_purpose_nothing_is_measured_on": (
+            picker.standing.choices_for_a_purpose_nothing_is_measured_on
+        ),
         "outcomes_observed": picker.standing.outcomes_observed,
         "models_declared": picker.standing.models_declared,
         "times_the_cheapest_qualifying_model_won": (
@@ -264,6 +301,22 @@ def describe_model_picking(picker: LlmModelPicker) -> dict:
         "always_picks_the_best_model": False,
         "makes_a_call": False,
     }
+
+
+def observe_outcomes(picker: LlmModelPicker, records, verdicts) -> None:
+    """Each answered call counted once, by whether its answer was usable.
+
+    A call that returned is judged by `structured-output-enforcer`, and its
+    verdict is the outcome. A call that failed outright never reaches the
+    enforcer, so its record is the only evidence and it counts as bad. Reading
+    a succeeded record as good as well would count every answered call twice,
+    once as good whatever the enforcer later said.
+    """
+    for record in records:
+        if not bool(record.succeeded):
+            picker.observe_outcome(record.model_id, record.purpose, False)
+    for verdict in verdicts:
+        picker.observe_outcome(verdict.model_id, verdict.purpose, bool(verdict.was_usable))
 
 
 def run_llm_model_picker(
@@ -312,10 +365,11 @@ def start_part(context) -> int:
 
     requests = Batch(read=context.bus.reader("llm-request"))
     records = Batch(read=context.bus.reader("llm-call-record"))
+    verdicts = Batch(read=context.bus.reader("llm-answer-verdict"))
     publish_choices = context.bus.publisher_for("llm-model-choice")
     picker = LlmModelPicker(
         exploration_share=context.number("llm_exploration_share"),
-        minimum_observations=int(context.number("decoding_minimum_trades")),
+        minimum_observations=int(context.number("llm_picker_minimum_verdicts")),
         prior_quality=context.number("learning_prior_hit_rate"),
         prior_weight=context.number("learning_prior_weight"),
         half_life_observations=context.number("learning_half_life_observations"),
@@ -357,8 +411,7 @@ def start_part(context) -> int:
         )
 
     def read_requests():
-        for record in records.payloads():
-            picker.observe_outcome(record.model_id, record.purpose, bool(record.succeeded))
+        observe_outcomes(picker, records.payloads(), verdicts.payloads())
         return tuple(
             (f"{request.purpose}:{request.venue_id}:{request.symbol}:{request.requested_at_ns}", request.purpose, quality_bar)
             for request in requests.payloads()

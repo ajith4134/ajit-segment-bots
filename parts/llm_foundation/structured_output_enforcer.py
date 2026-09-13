@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.claim_verification import verify_against_facts
-from runtime.llm_types import ValidatedLlmOutput
+from runtime.llm_types import LlmAnswerVerdict, ValidatedLlmOutput
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -41,8 +41,8 @@ PART_ID = "structured-output-enforcer"
 
 PART_DECLARATION = PartDeclaration(
     part_id="structured-output-enforcer",
-    consumes=("llm-response", "prompt-version"),
-    produces=("validated-llm-output", "llm-request", "part-health"),
+    consumes=("llm-response", "prompt-version", "rendered-llm-request"),
+    produces=("validated-llm-output", "llm-request", "part-health", "llm-answer-verdict"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
@@ -90,6 +90,30 @@ class EnforcerStanding:
     repairs_exhausted: int = 0
     sentences_removed: int = 0
     defaults_filled_in: int = 0
+    verdicts_published: int = 0
+    # A response whose rendered request -- and so whose facts -- never arrived
+    # inside the hold. Dropped unjudged rather than judged against nothing: a
+    # verdict against empty facts rejects every answer, which is what this part
+    # did on the spine until 2026-09-13.
+    responses_dropped_without_their_facts: int = 0
+
+
+def verdict_of(outcome: EnforcementOutcome, response, version, now_ns=time.time_ns) -> LlmAnswerVerdict:
+    """What `llm-model-picker` learns from: was this model's answer on this purpose usable.
+
+    Published for every outcome, rejections included -- a picker that only heard
+    about the answers that passed would learn every model is perfect.
+    """
+    return LlmAnswerVerdict(
+        response_id=response.response_id,
+        rendered_id=response.rendered_id,
+        version_id=response.version_id,
+        purpose=version.purpose,
+        model_id=response.model_id,
+        was_usable=outcome.is_usable,
+        state=outcome.state,
+        judged_at_ns=now_ns(),
+    )
 
 
 def json_text_of(answer: str) -> tuple[str, bool]:
@@ -323,6 +347,10 @@ def describe_enforcement(enforcer: StructuredOutputEnforcer) -> dict:
         "sentences_removed_as_unsupported": enforcer.standing.sentences_removed,
         "fills_missing_fields_with_defaults": False,
         "defaults_filled_in": enforcer.standing.defaults_filled_in,
+        "verdicts_published": enforcer.standing.verdicts_published,
+        "responses_dropped_without_their_facts": (
+            enforcer.standing.responses_dropped_without_their_facts
+        ),
     }
 
 
@@ -331,10 +359,14 @@ def run_structured_output_enforcer(
     publish_retries, health_interval_seconds: float, emit_health,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    publish_verdicts=None,
 ) -> int:
     def tick() -> None:
         for response, version, facts in read_responses():
             outcome = enforcer.enforce(response, version, facts)
+            if publish_verdicts is not None:
+                publish_verdicts(verdict_of(outcome, response, version))
+                enforcer.standing.verdicts_published += 1
             if outcome.retry_request is not None:
                 publish_retries(outcome.retry_request)
             if outcome.is_usable:
@@ -356,38 +388,60 @@ def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
     A response is enforced against the version that rendered it and the
-    facts the response's rendered request carried. The rendered request is
-    not on this part's inputs, so the facts it is checked against are the
-    ones the version's purpose was last rendered with -- none, until a
-    response arrives whose version this part has seen. A response whose
-    version is unknown here cannot be enforced and is held until the
-    version arrives.
+    facts its rendered request carried, matched by `rendered_id`.
+
+    **Until 2026-09-13 the rendered request was not on this part's inputs**
+    and every response was enforced against `{}`, with `require_a_citation`
+    on -- so every real answer on the spine would have been rejected, and
+    once `llm-model-picker` learned from these verdicts it would have learned
+    that every model is bad at every purpose. A response whose version or
+    rendered request has not arrived is held; one still unmatched after
+    `llm_enforcer_rendered_request_hold_seconds` is dropped and counted rather
+    than judged against nothing.
     """
     from runtime.input_assembly import Batch
 
     responses = Batch(read=context.bus.reader("llm-response"))
     versions = Batch(read=context.bus.reader("prompt-version"))
+    rendered = Batch(read=context.bus.reader("rendered-llm-request"))
     publish_outputs = context.bus.publisher_for("validated-llm-output")
+    publish_verdicts = context.bus.publisher_for("llm-answer-verdict")
     publish_retries = context.bus.publisher_for("llm-request")
+    hold_ns = int(context.number("llm_enforcer_rendered_request_hold_seconds") * 1_000_000_000)
     enforcer = StructuredOutputEnforcer(
         maximum_repairs=int(context.number("llm_maximum_repairs")),
         relative_tolerance=context.number("llm_claim_relative_tolerance"),
         require_a_citation=True,
     )
     version_by_id: dict[str, object] = {}
+    # rendered_id -> (facts, seen_at_ns). Aged out, because most rendered
+    # requests are refused by the router and never produce a response to
+    # match -- without the bound this map is every refusal, forever.
+    facts_by_rendered_id: dict[str, tuple[dict, int]] = {}
     held: list = []
 
     def read_responses():
+        now = time.time_ns()
         for version in versions.payloads():
             version_by_id[version.version_id] = version
-        held.extend(responses.payloads())
+        for request in rendered.payloads():
+            facts_by_rendered_id[request.rendered_id] = (dict(request.facts), now)
+        for rendered_id in [
+            key for key, (_, seen_at) in facts_by_rendered_id.items() if now - seen_at > hold_ns
+        ]:
+            del facts_by_rendered_id[rendered_id]
+        held.extend((response, now) for response in responses.payloads())
         jobs, still_held = [], []
-        for response in held:
+        for response, arrived_at in held:
             version = version_by_id.get(response.version_id)
-            if version is None:
-                still_held.append(response)
+            known = facts_by_rendered_id.get(response.rendered_id)
+            if version is None or known is None:
+                if now - arrived_at > hold_ns:
+                    enforcer.standing.responses_dropped_without_their_facts += 1
+                else:
+                    still_held.append((response, arrived_at))
                 continue
-            jobs.append((response, version, {}))
+            jobs.append((response, version, known[0]))
         held[:] = still_held
         return tuple(jobs)
 
@@ -397,6 +451,7 @@ def start_part(context) -> int:
         read_responses=read_responses,
         publish_outputs=lambda output: publish_outputs((output,)),
         publish_retries=lambda request: publish_retries((request,)),
+        publish_verdicts=lambda verdict: publish_verdicts((verdict,)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
