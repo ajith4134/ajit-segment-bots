@@ -1,0 +1,25 @@
+Upstox one-minute closes, 2026-07-01..2026-09-11; contracts from NSE bhavcopy 2026-09-04, expiry 2026-09-29, top by traded volume
+
+stock: 966 sessions, 3,195 continuation pullbacks
+  p50  2.6144%
+  p80  7.3394%
+  p90  11.3164%
+  p95  14.7059%
+  p99  21.3650%
+  deeper than the crypto prior 1%: 77.1%; deeper than 10%: 12.8%
+
+index: 484 sessions, 2,261 continuation pullbacks
+  p50  1.5241%
+  p80  4.2151%
+  p90  7.1344%
+  p95  10.2642%
+  p99  17.8661%
+  deeper than the crypto prior 1%: 62.4%; deeper than 10%: 5.3%
+
+all: 1450 sessions, 5,456 continuation pullbacks
+  p50  2.1097%
+  p80  6.0870%
+  p90  9.8361%
+  p95  12.9996%
+  p99  20.1646%
+  deeper than the crypto prior 1%: 71.0%; deeper than 10%: 9.7%

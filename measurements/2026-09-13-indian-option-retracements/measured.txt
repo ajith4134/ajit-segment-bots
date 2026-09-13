@@ -1,0 +1,10 @@
+tape 2026-09-07, 2026-09-08; 1194 option contracts, 1194 sessions, 240,464 distinct prints
+continuation retracements measured: 4,076
+  p50  1.3677%
+  p80  4.7619%
+  p90  9.0820%
+  p95  13.9785%
+  p99  26.0870%
+  mean 3.4355%
+  share of retracements deeper than the crypto prior of 1%: 60.3%
+  share deeper than the 10% maximum trail: 8.3%

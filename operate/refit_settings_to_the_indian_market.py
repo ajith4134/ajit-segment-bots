@@ -53,6 +53,55 @@ DESK_ORDER_SIZE = 150_000.0
 
 # (value, provenance) or (value, provenance, unit) where the unit changes too.
 REFITS: dict[str, tuple] = {
+    # ---- profit-lock, 2026-09-13 ------------------------------------------------
+    # Missed by the 2026-09-12 pass: none of the three notes names a venue, so the
+    # drift guard never counted them, and each is fitted to the crypto tape of
+    # 2026-08-23. Found because profit-lock trailed ICICIBANK 1440 PE 29 SEP 26's stop
+    # to 1% under its real last price -- inside the noise of an option whose median
+    # session range is 12.89%.
+    "profit_lock_prior_retracement": (
+        "0.0609",
+        "Claude, 2026-09-13: the retracement a winner is assumed to give back before "
+        "profit-lock has measured the symbol's own. Was 0.01, whose note gives the "
+        "crypto basis: 'below the 1.5% largest intraday move measured today' "
+        "(2026-08-23, BTCUSDT and peers). MEASURED on Upstox's one-minute history, "
+        "2026-07-01 to 2026-09-11, for the 30 stock and 10 index option contracts "
+        "expiring 2026-09-29 that NSE's own bhavcopy of 2026-09-04 ranks highest by "
+        "traded volume (measurements/2026-09-13-indian-option-retracements/"
+        "measured-from-history.txt): 1,450 sessions, 5,456 pullbacks that ended in a "
+        "new high. p80 6.0870% across both; 7.3394% on stock options, 4.2151% on "
+        "index options -- one setting serves both segments, so the pooled figure. "
+        "0.0609 is the p80, the quantile profit-lock itself trails by "
+        "(RETRACEMENT_QUANTILE). At the crypto 1%, 71.0% of ordinary continuation "
+        "pullbacks would have stopped a winner out. The tape's two sessions "
+        "(measured.txt, 1,194 contracts, 4,076 pullbacks) gave a p80 of 4.7619% -- "
+        "operator, 2026-09-13: use many days of history, not only the bot's own trades.",
+    ),
+    "profit_lock_maximum_trail": (
+        "0.1300",
+        "Claude, 2026-09-13: the widest a trailing stop may sit below the peak, "
+        "whatever the measured retracement says. Was 0.10, 'a trail wider than that "
+        "is not locking profit, it is a new stop' -- true of a crypto perpetual whose "
+        "intraday move was 1.5%, not of an NSE option. MEASURED on the same 1,450 "
+        "sessions of Upstox history: 9.7% of continuation pullbacks were deeper than "
+        "10% (12.8% on stock options), so a 10% cap forced the trail inside ordinary "
+        "noise for the most volatile contracts. 0.1300 is the pooled p95 (12.9996%; "
+        "stock 14.7059%, index 10.2642%) -- the cap bounds a symbol's own measured "
+        "quantile, and the p95 is where ordinary ends, the same reading "
+        "risk_maximum_stop_fraction takes of the p95 session range.",
+    ),
+    "profit_lock_break_even_trigger": (
+        "0.0467",
+        "Claude, 2026-09-13: how far ahead a position must be before its stop moves "
+        "to break-even. Was 0.02, whose note states the rule: 'about three times the "
+        "two-fee round trip plus the measured typical adverse excursion'. The rule is "
+        "kept and re-applied to Indian numbers: three times "
+        "reference_price_materiality_fraction (0.008532, the option round trip "
+        "re-derived 2026-09-12) plus the typical option pullback, the pooled p50 of "
+        "the same 1,450 sessions of Upstox history (2.1097%): "
+        "3 x 0.008532 + 0.021097 = 0.046693. At 2% a break-even stop sat inside the "
+        "ordinary pullback of roughly half of all winning option moves.",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -543,6 +592,14 @@ NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
 # than ignored, because "nothing to do" has to be a stated answer or it is
 # indistinguishable from "nobody looked" (Rule 8).
 MARKET_INDEPENDENT: dict[str, str] = {
+    "profit_lock_minimum_observations": (
+        "how many retracements profit-lock needs on a symbol before it trails by "
+        "the measured quantile instead of the prior. Its note's reason is "
+        "statistical -- 'the least a quantile of a small sample can mean' -- and "
+        "a sample size for a quantile does not depend on which market produced "
+        "the sample. Recorded 2026-09-13 with the three profit-lock settings that "
+        "did need re-deriving"
+    ),
     "broker_reconnect_backoff_floor": (
         "the first wait after a dropped feed connection before doubling. A "
         "reconnection policy is about being a well-behaved client of whatever "

@@ -2418,6 +2418,42 @@ manager's ids equal the book's.
 - The 10 positions already open still have no target. Their plans existed only in
   memory on 2026-09-07 and are gone; nothing recorded the target each was planned
   with, so a target for them now would be a new decision, not a restored one.
-- `profit-lock` trailed ICICIBANK 1440 PE's sell stop to 54.3015 while the contract
-  last traded at 39.60 (tape, 2026-09-08): a sell stop above the market, which
-  triggers on the first price. It re-issued that on every restart today.
+- ~~`profit-lock` trailed ICICIBANK 1440 PE's sell stop above the market~~ —
+  **wrong, corrected the same day.** 39.60 was the 2026-09-08 print; the contract
+  last traded at **54.85 on 2026-09-11** (the feed's own snapshot, tape
+  `NSE_FO|111551` 2026-09-12/13), so 54.3015 sat 1% *below* the real price. The trail
+  mechanism was right. What was wrong were its numbers — see the next section.
+
+### 2026-09-13 — profit-lock's three settings were fitted to crypto
+
+`profit_lock_prior_retracement` (1%), `profit_lock_maximum_trail` (10%) and
+`profit_lock_break_even_trigger` (2%) were fitted on 2026-08-23 to crypto ("below
+the 1.5% largest intraday move measured today"). The 2026-09-12 refit and the drift
+guard both missed them: none of their notes names a venue. On NSE options a 1% trail
+stops a winner out on ordinary noise.
+
+Re-derived on **Upstox one-minute history, 2026-07-01..2026-09-11**, for the 40
+contracts expiring 2026-09-29 that NSE's bhavcopy of 2026-09-04 ranks highest by
+traded volume (30 stock, 10 index), at the operator's instruction to use many days of
+history rather than only the bot's own tape
+(`measurements/2026-09-13-indian-option-retracements/`):
+
+| pullbacks before a new high | sessions | pullbacks | p50 | p80 | p95 | deeper than 1% |
+|---|---|---|---|---|---|---|
+| stock options | 966 | 3,195 | 2.61% | 7.34% | 14.71% | 77.1% |
+| index options | 484 | 2,261 | 1.52% | 4.22% | 10.26% | 62.4% |
+| pooled | 1,450 | 5,456 | 2.11% | 6.09% | 13.00% | 71.0% |
+| bot's tape, 2 sessions | 1,194 | 4,076 | 1.37% | 4.76% | 13.98% | 60.3% |
+
+Applied through `operate/refit_settings_to_the_indian_market.py`: prior 0.0609 (pooled
+p80, the quantile the part trails by), maximum trail 0.1300 (pooled p95), break-even
+trigger 0.0467 (the note's own rule: 3 x 0.008532 round trip + 2.11% p50).
+`profit_lock_minimum_observations` recorded market-independent.
+
+**Open:**
+- Stock and index options differ (p80 7.34% vs 4.22%) and one runtime setting serves
+  both; a per-segment prior would need `profit-lock` to read segment scope.
+- The drift guard counts a setting as crypto only when its note names a venue, which is
+  how these three were missed; there may be others fitted to a crypto *measurement*
+  whose note never says so.
+
