@@ -1,0 +1,13 @@
+days 2026-09-07, 2026-09-08, in session
+
+-- theta carry: |theta| / premium, per calendar day --
+  contracts not expiring within a day              n= 774,206  p5 0  p20 0.007471  p50 0.03856  p80 0.3152  p95 3.723  p99 4.739 
+  contracts expiring within a day                  n=  45,077  p5 0  p20 0.2464  p50 9.705  p80 43.82  p95 143.8  p99 873.7 
+  per contract-day median                          n=   2,676  p5 0  p20 0.001458  p50 0.04014  p80 0.1602  p95 3.731  p99 35.21 
+  trade-weighted median per contract-day: 16.9942%
+    over 300s, not expiring within a day           n= 774,206  p5 0  p20 2.594e-05  p50 0.0001339  p80 0.001094  p95 0.01293  p99 0.01645 
+    over 300s, expiring within a day               n=  45,077  p5 0  p20 0.0008557  p50 0.0337  p80 0.1521  p95 0.4992  p99 3.034 
+    over 3600s, not expiring within a day          n= 774,206  p5 0  p20 0.0003113  p50 0.001606  p80 0.01313  p95 0.1551  p99 0.1974 
+    over 3600s, expiring within a day              n=  45,077  p5 0  p20 0.01027  p50 0.4044  p80 1.826  p95 5.99  p99 36.4 
+
+-- clock offset: superseded -- this first version sampled every 50th record and over-weighted backlog bursts; see measured-clock-offset.txt --

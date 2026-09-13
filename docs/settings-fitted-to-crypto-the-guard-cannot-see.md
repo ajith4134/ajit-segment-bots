@@ -55,6 +55,24 @@ the Indian half-life is unmeasured, and an order's latency cannot be measured on
 (commit 7f8e1e0), but regime-classifier reads `symbol-price-frame` -- underlyings. Re-measure on underlyings.
 **Not a setting:** 95.8% of journalled entry candidates name a contract, and every part above that windows
 `symbol-price-frame` has no window for a contract, so it stands those candidates down. That is wiring.
+2026-09-13 (night) — the crypto-mechanisms group. None of the six gated anything live: nothing calls
+`observe_funding_rate` or `observe_funding_settlement`, `event-risk-limiter` has never received a `market-event`,
+and the balance watch is not live. Measured in `measurements/2026-09-13-indian-carry-and-clock/`:
+**theta is the Indian carry, and it is large** -- |theta| / premium p50 3.9% a day (17.0% trade-weighted) on
+contracts not expiring that day, p50 40% an hour on expiry day; over an hour p80 1.31%, so a 1% bound would bind.
+The two bear carry settings and both event windows are recorded NEEDS AN INDIAN MECHANISM: theta from
+`broker-option-greeks` integrated over holding time (and for bull positions too -- a one-sided carry filter is the
+shape of funding, not of an option), and the unbuilt `results-calendar-reader`, `macro-event-calendar-reader`,
+`regulator-circular-reader` and `exchange-filing-reader`. `live_balance_tolerance_fraction` 0.02 -> 0.0136, the
+heaviest measured day of Upstox charges against a Rs75 lakh allocation (no funding on a bought option).
+`clock_drift_warning` 1.0 kept on an Indian basis: Upstox requests carry no timestamp, so nothing is rejected;
+1.0s is `reference_price_minimum_age_seconds`, the tightest age judgment. Clock offset p5 9-12 ms both days (the
+clock is fine), but half-hour medians of 42s and 66s on 09-08 and 0.5-14s through much of 09-07 -- this system
+receiving late, which `clock-skew-monitor` would report as drift. **The whole list is now classified: 0 of the 34
+unexamined; 6 need a mechanism, 2 measured but inconclusive.**
+Wiring findings from this group: the balance watch can never read a live Upstox balance (it names no segment)
+and compares equity, which moves by P&L; `clock-skew-monitor` conflates lag with skew. Seen on the spine, not
+caused here: `order-flow-state-encoder` escalated "taking longer every tick" 9 times on 09-12 and 16 times on 09-13.
 
 ## Costs and spreads taken from the crypto venues (7)
 
@@ -103,12 +121,12 @@ the Indian half-life is unmeasured, and an order's latency cannot be measured on
 
 | setting | value | read by | what its note rests on |
 |---|---|---|---|
-| `bear_maximum_carry_fraction_of_horizon` | 0.01 fraction of price | bear-setup-filter | "the most funding a short may be projected to pay" |
-| `bear_invalidation_carry_fraction_of_expected_move` | 0.5 fraction | bear-position-invalidation-watcher | "its funding carry" |
-| `live_balance_tolerance_fraction` | 0.02 fraction of the allocation | live-balance-divergence-watch | "about a day of funding and fees" |
-| `event_risk_scheduled_window` | 900.0 seconds | event-risk-limiter | "repricing around a funding settlement or a listing" |
-| `event_risk_announcement_window` | 3600.0 seconds | event-risk-limiter | "both venues announce maintenance at least an hour ahead" |
-| `clock_drift_warning` | 1.0 seconds | clock-skew-monitor | "both venues reject a signed request" |
+| ~~`bear_maximum_carry_fraction_of_horizon`~~ NEEDS AN INDIAN MECHANISM 2026-09-13 | 0.01 fraction of price | bear-setup-filter | "the most funding a short may be projected to pay" |
+| ~~`bear_invalidation_carry_fraction_of_expected_move`~~ NEEDS AN INDIAN MECHANISM 2026-09-13 | 0.5 fraction | bear-position-invalidation-watcher | "its funding carry" |
+| ~~`live_balance_tolerance_fraction`~~ DONE 2026-09-13 | 0.02 fraction of the allocation | live-balance-divergence-watch | "about a day of funding and fees" |
+| ~~`event_risk_scheduled_window`~~ NEEDS AN INDIAN MECHANISM 2026-09-13 | 900.0 seconds | event-risk-limiter | "repricing around a funding settlement or a listing" |
+| ~~`event_risk_announcement_window`~~ NEEDS AN INDIAN MECHANISM 2026-09-13 | 3600.0 seconds | event-risk-limiter | "both venues announce maintenance at least an hour ahead" |
+| ~~`clock_drift_warning`~~ DONE 2026-09-13 | 1.0 seconds | clock-skew-monitor | "both venues reject a signed request" |
 
 ## Not counted here
 

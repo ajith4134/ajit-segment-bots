@@ -511,6 +511,42 @@ REFITS: dict[str, tuple] = {
         "The thin end, as the crypto note took its thinnest symbol: at p20, a slice of "
         "0.16 of the interval's volume fits inside the touch on four snapshots in five.",
     ),
+    # ---- crypto mechanisms that do have an Indian number, 2026-09-13 -----------------
+    "live_balance_tolerance_fraction": (
+        "0.0136",
+        "Claude, 2026-09-13: how far a live segment's balance may differ from its "
+        "allocation before live-balance-divergence-watch alerts. Was 0.02, 'about a day "
+        "of funding and fees on a fully deployed allocation'. A bought option pays no "
+        "funding, so the Indian day is fees alone. MEASURED on this project's own paper "
+        "fills, charged Upstox's real stack by paper-fill-simulator "
+        "(fills-extracted-for-book-rebuild-2026-09-13.jsonl, 2,885 Upstox fills): fees per "
+        "segment-day against the Rs7,500,000 allocation were 0.0001, 0.0010, 0.0019 and "
+        "0.0136 -- the last stock-options on 2026-09-07, 2,713 fills turning over 5.6x the "
+        "allocation. The heaviest measured day is the tolerance, 0.0136. Dormant in paper "
+        "mode. Two wiring facts a tolerance cannot fix: the watch reads only a balance "
+        "that names a segment, and Upstox's funds reading names none, so a live segment "
+        "would read UNREADABLE; and it compares equity, which moves by P&L on any real "
+        "day, not only by fees.",
+    ),
+    "clock_drift_warning": (
+        "1.0",
+        "Claude, 2026-09-13: how far the broker's stamp may sit from this machine's "
+        "clock before clock-skew-monitor warns. Was 1.0 because 'both venues reject a "
+        "signed request whose timestamp is more than a few seconds off' -- Binance's and "
+        "Bybit's recvWindow. Upstox rejects nothing on time: its order requests "
+        "authenticate by bearer token and carry no timestamp (runtime/brokers/upstox.py, "
+        "parts/broker_adapter/broker_order_router.place_order). What a skewed clock "
+        "breaks here is every age judgment against a broker stamp, the tightest being "
+        "reference_price_minimum_age_seconds, 1.0s; past that, the freshest price reads "
+        "older than the floor anything here judges by. So 1.0 stands on an Indian basis. "
+        "MEASURED, received_at minus broker_time on every in-session record of 300 "
+        "contracts (measurements/2026-09-13-indian-carry-and-clock/measured-clock-offset.txt): "
+        "p5 9-12 ms both days, so the clock itself is in step; ordinary half hours 13-28 "
+        "ms on 2026-09-08, but half-hour medians of 42s and 66s that day and 0.5-14s "
+        "through much of 2026-09-07 -- this system receiving late under load, many records "
+        "sharing one old stamp. The monitor reads that lag as clock drift; its DRIFTING "
+        "state on this feed has so far meant 'behind', not 'skewed'.",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -922,6 +958,53 @@ def note_insertion_point(block: str) -> int | None:
 # design question with a named answer, and the note says what that answer is so
 # the next session does not have to rediscover it.
 NEEDS_AN_INDIAN_MECHANISM: dict[str, str] = {
+    # ---- crypto mechanisms, 2026-09-13 --------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md, "Crypto mechanisms".
+    "bear_maximum_carry_fraction_of_horizon": (
+        "bear-setup-filter refuses a short whose projected FUNDING over its horizon "
+        "passes this. Nothing on the spine calls observe_funding_rate -- "
+        "symbols_with_a_funding_rate reads 0 -- so projected_carry is always None and "
+        "the bound gates nothing. The Indian carry is real and large: a bought option "
+        "pays theta, which broker-option-greeks already streams. Measured on the "
+        "2026-09-07/08 tape (measurements/2026-09-13-indian-carry-and-clock/), |theta| / "
+        "premium per calendar day p50 3.9% on contracts not expiring that day and 17.0% "
+        "trade-weighted per contract-day; over a 3600s horizon p50 0.16%, p80 1.31%, and "
+        "on a contract expiring that day p50 40%. So a 1% bound on theta would refuse a "
+        "fifth of non-expiring setups and nearly every expiry-day one. Two things a number "
+        "cannot fix: nothing feeds theta to this part, and theta is paid by a bought call "
+        "as much as a bought put, so a carry filter on the bear side alone is the shape "
+        "of perpetual funding (one side paid, one side paid-to), not of an option"
+    ),
+    "bear_invalidation_carry_fraction_of_expected_move": (
+        "bear-position-invalidation-watcher closes a short once the funding it has paid "
+        "reaches this share of its expected move. Nothing calls "
+        "observe_funding_settlement, so carry paid stays 0.0 and the clock never runs. "
+        "The Indian carry is theta accrued while held -- p50 0.16% of premium per hour on "
+        "contracts not expiring that day, p50 40% per hour on expiry day "
+        "(measurements/2026-09-13-indian-carry-and-clock/) -- which accrues continuously "
+        "rather than at a settlement, so it needs theta from broker-option-greeks "
+        "integrated over holding time, and it applies to bull positions as much as bear"
+    ),
+    "event_risk_scheduled_window": (
+        "event-risk-limiter shrinks the limit this far either side of a scheduled event: "
+        "'a funding settlement or a listing', both crypto. It has never received a "
+        "market-event: its live inputs are market-anomaly and turbulence-index only, "
+        "market-event-reader has read 0 announcements, and the Indian scheduled-event "
+        "producers the 2026-09-02 news design declares -- results-calendar-reader "
+        "(quarterly results, board meetings) and macro-event-calendar-reader (RBI policy, "
+        "CPI, budget) -- are not built (docs/part-purpose-audit.md: NOT MEASURED, nothing "
+        "published). With no Indian event there is no anticipation window to measure; "
+        "measure how far ahead of those events NSE option premiums reprice once they exist"
+    ),
+    "event_risk_announcement_window": (
+        "how long an announcement's shrink stands: 'both venues announce maintenance at "
+        "least an hour ahead'. The Indian announcer is NSE, through circulars and "
+        "corporate filings -- regulator-circular-reader and exchange-filing-reader, "
+        "declared and not built -- and exchange-announcement-reader, which is on the spine, "
+        "has seen 0 rows. How far ahead NSE announces is a property of those sources, "
+        "not measured here, and is what this window should be derived from once one "
+        "produces"
+    ),
     "anomaly_disagreement_threshold": (
         "market-anomaly-detector calls the VENUES in disagreement when one venue's "
         "print sits this far from the consolidated price. It needs two venues "
