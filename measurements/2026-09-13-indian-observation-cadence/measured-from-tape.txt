@@ -1,0 +1,27 @@
+==== UNDERLYINGS (symbol-price-frame) ====
+  2026-09-04: 18 underlyings with trades
+  2026-09-07: 16 underlyings with trades
+  2026-09-08: 16 underlyings with trades
+  distinct trades a minute, per underlying-day n=      50  p5 1.77575  p20 5.65838  p50 8.98311  p80 23.7688  p95 76.5536  
+  seconds spanned by bull/bear_feature_short_window (64) n=      46  p5 18  p20 53.7855  p50 138.673  p80 279.803  p95 515.5  s
+  seconds spanned by bear_entry_window_length (256) n=      40  p5 73.7  p20 226.855  p50 563.242  p80 1182.86  p95 2571  s
+  seconds spanned by regime_window_length (256) n=      40  p5 73.7  p20 226.855  p50 563.242  p80 1182.86  p95 2571  s
+  seconds spanned by tail_window_length (50)   n=      46  p5 14  p20 40.689  p50 109.245  p80 214  p95 397.5  s
+  seconds spanned by bull_feature_long_window (512) n=      38  p5 146.65  p20 450.966  p50 1462.45  p80 3366.24  p95 9889.33  s
+  bounce peak over bear_entry_window_length    n=   9,195  p5 2.60815e-06  p20 1.22677e-05  p50 4.97207e-05  p80 0.000177914  p95 0.000444226  fraction
+  completed sustained move over tail_window_length n=  45,221  p5 4.2075e-06  p20 1.47984e-05  p50 5.91695e-05  p80 0.000232806  p95 0.000828402  fraction
+  continuation pullback                        n=     504  p5 1.27412e-05  p20 5.01993e-05  p50 0.000152168  p80 0.000515624  p95 0.00196966  fraction
+  silent >=    60s: share of underlyings  p50 0.600  p95 1.000  max 1.000  over 1897 samples
+  silent >=   150s: share of underlyings  p50 0.562  p95 1.000  max 1.000  over 1897 samples
+  silent >=   300s: share of underlyings  p50 0.500  p95 1.000  max 1.000  over 1897 samples
+  silent >=   600s: share of underlyings  p50 0.286  p95 1.000  max 1.000  over 1897 samples
+  silent >=   900s: share of underlyings  p50 0.125  p95 1.000  max 1.000  over 1897 samples
+  silent >=  1800s: share of underlyings  p50 0.000  p95 1.000  max 1.000  over 1897 samples
+
+==== CONTRACTS (market-data) ====
+  distinct trades a minute, per contract-day   n=   2,212  p5 0.0015689  p20 0.0219431  p50 0.211223  p80 1.94635  p95 9.88377  
+  ... of those stating a quantity              n=   2,212  p5 0.0015689  p20 0.0219431  p50 0.211223  p80 1.94635  p95 9.88377  
+  trade-weighted median trades a minute: 10.105; with a quantity: 10.105
+  seconds spanned by 3 trades                  n=   2,035  p5 2.36285  p20 14.1316  p50 95.124  p80 2264.4  p95 12268.1  s
+  trade-weighted median seconds for 3 trades: nan
+  touch ask quantity / quantity traded in the prior 10s n= 229,146  p5 0.153846  p20 0.5  p50 2  p80 54.5312  p95 1190.29  ratio

@@ -1,0 +1,8 @@
+days 2026-09-07, 2026-09-08; in-session book snapshots, every 10th
+
+-- option contracts: touch ask quantity / exchange volume per 10s (previous closed minute) --
+  ratio                                                n= 302,582  p5 0.0170455  p20 0.157312  p50 1.09091  p80 10.0082  p95 223.353
+  snapshots whose previous minute traded nothing: 20,999 (6.5%) -- excluded, a ratio against zero is undefined
+
+-- F&O underlying shares: half touch spread, 14 shares --
+  half spread                                          n=  16,518  p5 2.70378e-05  p20 3.80851e-05  p50 7.04275e-05  p80 0.000137545  p95 0.0001975

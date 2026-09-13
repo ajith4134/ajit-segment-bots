@@ -31,6 +31,30 @@ measured -- and it is the only normal move the tail parts ever use, because noth
 and one more this list missed, `tail_minimum_trail_fraction` 0.002 -> 0.0196 ("a few spreads"). **17 remain.**
 The guard's `CRYPTO_PROVENANCE` is case-insensitive now: its count went 8 -> 18, ten notes naming "Binance" or
 "Bybit" it could never see, two of them false (a part named usdt-pnl-accountant, a misattributed comment).
+2026-09-13 (evening) — the counts-and-times group, and **a correction to the move-size group**. Two facts the
+move-size pass missed, both in `measurements/2026-09-13-indian-observation-cadence/`:
+**`symbol-price-frame` carries underlyings only** (its one producer on this feed is
+`broker-underlying-price-frame-bridge`), so bear-entry-timer, the tail parts, both feature builders,
+regime-classifier and venue-outage-rider never see a contract price. Contracts travel on `market-data`. And **an
+observation is a distinct trade**: `RollingWindow` skips a re-delivered (time, price), and only 17.8% of option
+tape records are a new trade. The move-size pass measured option tape records, so four values were on the wrong
+series and are corrected by the refit script's new `CORRECTIONS` step:
+`bear_entry_prior_extension_floor` 0.0117 -> 0.000049, `tail_prior_normal_move_fraction` 0.0100 -> 0.000059,
+`tail_prior_trail_fraction` 0.0609 -> 0.00043, `tail_minimum_trail_fraction` 0.0196 -> 0.00042. The old crypto
+1% was twenty times the p95 underlying bounce, so the timer and the qualifier could never have fired on an
+underlying either way.
+Counts and times: feature windows (64 / 512 / minimum 64, both bots) kept, now measured (64 underlying trades
+span p50 104s; the conviction checkpoints learned at 64); `tail_window_length` 50 kept (p50 80s);
+`liquidity_turnover_window` 60 -> 10; `limit_walk_cadence` 2 -> 12s; `outage_silence_seconds` 60 -> 900
+(shortest candidate where ordinary trading never read 0.8 of underlyings silent; sampled on 16-18 underlyings,
+re-measure on the first full 216-underlying session); `order_participation_cap` 0.1 -> 0.16 (touch against
+exchange candle volume). `spread_reversion_horizon` and `order_latency_prior` recorded MEASURED BUT INCONCLUSIVE:
+the Indian half-life is unmeasured, and an order's latency cannot be measured on paper (Upstox reads 28-54 ms).
+**8 of the 34 remain**: the six crypto mechanisms and those two.
+**Reopened, not in this list:** `regime_window_length` and the two Hurst thresholds were fitted on option sessions
+(commit 7f8e1e0), but regime-classifier reads `symbol-price-frame` -- underlyings. Re-measure on underlyings.
+**Not a setting:** 95.8% of journalled entry candidates name a contract, and every part above that windows
+`symbol-price-frame` has no window for a contract, so it stands those candidates down. That is wiring.
 
 ## Costs and spreads taken from the crypto venues (7)
 
@@ -61,19 +85,19 @@ The guard's `CRYPTO_PROVENANCE` is case-insensitive now: its count went 8 -> 18,
 
 | setting | value | read by | what its note rests on |
 |---|---|---|---|
-| `bull_feature_short_window` | 64 observations | bull-feature-builder | "202-883 trades a second ... on Binance aggregates" |
-| `bear_feature_short_window` | 64 observations | bear-feature-builder | "202-883 trades a second ... on Binance aggregates" |
-| `bull_feature_minimum_observations` | 64 observations | bull-feature-builder | "set to the short window" |
-| `bear_feature_minimum_observations` | 64 observations | bear-feature-builder | "set to the short window" |
+| ~~`bull_feature_short_window`~~ DONE 2026-09-13 | 64 observations | bull-feature-builder | "202-883 trades a second ... on Binance aggregates" |
+| ~~`bear_feature_short_window`~~ DONE 2026-09-13 | 64 observations | bear-feature-builder | "202-883 trades a second ... on Binance aggregates" |
+| ~~`bull_feature_minimum_observations`~~ DONE 2026-09-13 | 64 observations | bull-feature-builder | "set to the short window" |
+| ~~`bear_feature_minimum_observations`~~ DONE 2026-09-13 | 64 observations | bear-feature-builder | "set to the short window" |
 | ~~`regime_window_length`~~ DONE 2026-09-13 | 1024 trades | regime-classifier | "measured on 60000 real trades from four symbols" — **live 2026-09-13: regime-classifier unclassified 20,901, symbols_forgotten_silent 748** |
 | ~~`regime_minimum_observations`~~ DONE 2026-09-13 | 1024 trades | regime-classifier | "set equal to the window" — **live 2026-09-13: regime-classifier unclassified 20,901** |
-| `liquidity_turnover_window` | 60 observations | liquidity-grader | "about a minute on the captured symbols" |
-| `order_participation_cap` | 0.1 fraction of traded volume | fill-volume-capper, participation-capped-order-splitter | "the thinnest captured symbol trades about 30 prints a minute" |
-| `outage_silence_seconds` | 60.0 seconds since a symbol's last print | venue-outage-rider | "the top-30 symbols captured all print far inside a minute" |
-| `tail_window_length` | 50 prints | tail-move-remaining-estimator, tail-mover-qualifier | "a few minutes on the captured symbols" |
-| `spread_reversion_horizon` | 60.0 seconds | bear-position-invalidation-watcher, bull-position-invalidation-watcher, label-builder, spread-reversion-detector | "0.07 s on a symbol printing 200 a second" |
-| `limit_walk_cadence` | 2.0 seconds | limit-price-walker | "a few prints on the captured symbols" |
-| `order_latency_prior` | 0.25 seconds | order-latency-simulator | "REST order placement to both venues ... 80 to 200 ms" |
+| ~~`liquidity_turnover_window`~~ DONE 2026-09-13 | 60 observations | liquidity-grader | "about a minute on the captured symbols" |
+| ~~`order_participation_cap`~~ DONE 2026-09-13 | 0.1 fraction of traded volume | fill-volume-capper, participation-capped-order-splitter | "the thinnest captured symbol trades about 30 prints a minute" |
+| ~~`outage_silence_seconds`~~ DONE 2026-09-13 | 60.0 seconds since a symbol's last print | venue-outage-rider | "the top-30 symbols captured all print far inside a minute" |
+| ~~`tail_window_length`~~ DONE 2026-09-13 | 50 prints | tail-move-remaining-estimator, tail-mover-qualifier | "a few minutes on the captured symbols" |
+| `spread_reversion_horizon` MEASURED, INCONCLUSIVE 2026-09-13 | 60.0 seconds | bear-position-invalidation-watcher, bull-position-invalidation-watcher, label-builder, spread-reversion-detector | "0.07 s on a symbol printing 200 a second" |
+| ~~`limit_walk_cadence`~~ DONE 2026-09-13 | 2.0 seconds | limit-price-walker | "a few prints on the captured symbols" |
+| `order_latency_prior` MEASURED, INCONCLUSIVE 2026-09-13 | 0.25 seconds | order-latency-simulator | "REST order placement to both venues ... 80 to 200 ms" |
 
 ## Crypto mechanisms: funding, venue maintenance, signed requests (6)
 

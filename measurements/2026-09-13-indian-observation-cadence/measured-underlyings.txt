@@ -1,0 +1,20 @@
+==== UNDERLYINGS (symbol-price-frame) ====
+  2026-09-04: 18 underlyings with trades; tape recording in 22 piece(s) totalling 176 min (holes over 60s with no underlying trading cut out)
+  2026-09-07: 16 underlyings with trades; tape recording in 2 piece(s) totalling 363 min (holes over 60s with no underlying trading cut out)
+  2026-09-08: 16 underlyings with trades; tape recording in 12 piece(s) totalling 117 min (holes over 60s with no underlying trading cut out)
+  distinct trades a minute, per underlying-day n=      50  p5 0.908283  p20 3.06115  p50 18.2744  p80 29.8459  p95 120.879  
+  trade-weighted median trades a minute: 71.52
+  seconds spanned by bull/bear_feature_short_window (64) n=     108  p5 17  p20 32.0778  p50 103.939  p80 187.545  p95 414.675  s
+  seconds spanned by bear_entry_window_length (256) n=      86  p5 69  p20 126  p50 386.639  p80 648.325  p95 1321.28  s
+  seconds spanned by regime_window_length (256) n=      86  p5 69  p20 126  p50 386.639  p80 648.325  p95 1321.28  s
+  seconds spanned by tail_window_length (50)   n=     109  p5 13  p20 26.4946  p50 80.213  p80 147.445  p95 317  s
+  seconds spanned by bull_feature_long_window (512) n=      61  p5 137  p20 155  p50 554.592  p80 1319.34  p95 3419.23  s
+  bounce peak over bear_entry_window_length    n=   8,934  p5 2.53911e-06  p20 1.20149e-05  p50 4.86967e-05  p80 0.000171544  p95 0.000433746  fraction
+  completed sustained move over tail_window_length n=  44,949  p5 4.20737e-06  p20 1.47903e-05  p50 5.88827e-05  p80 0.00022813  p95 0.000795872  fraction
+  continuation pullback                        n=     922  p5 1.25897e-05  p20 4.8581e-05  p50 0.000134387  p80 0.000425741  p95 0.00106409  fraction
+  silent >=    60s: share of underlyings  p50 0.083  p95 0.812  max 0.938  over 1013 samples
+  silent >=   150s: share of underlyings  p50 0.000  p95 0.750  max 0.938  over 1013 samples
+  silent >=   300s: share of underlyings  p50 0.000  p95 0.600  max 0.875  over 1013 samples
+  silent >=   600s: share of underlyings  p50 0.000  p95 0.500  max 0.875  over 1013 samples
+  silent >=   900s: share of underlyings  p50 0.000  p95 0.333  max 0.600  over 1013 samples
+  silent >=  1800s: share of underlyings  p50 0.000  p95 0.111  max 0.333  over 1013 samples

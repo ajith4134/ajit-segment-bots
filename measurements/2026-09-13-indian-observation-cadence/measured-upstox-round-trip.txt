@@ -1,0 +1,2 @@
+funds  40 ok, 0 failed  p50 37 ms  p90 45 ms  max 54 ms
+ltp    40 ok, 0 failed  p50 28 ms  p90 37 ms  max 39 ms

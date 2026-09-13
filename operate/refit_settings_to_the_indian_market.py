@@ -277,38 +277,45 @@ REFITS: dict[str, tuple] = {
     # docs/settings-fitted-to-crypto-the-guard-cannot-see.md, "Move sizes fitted to
     # crypto's intraday range". Each rests on the 1.5% largest intraday move of the
     # captured crypto thirty on 2026-08-23, or on a stop sized from it.
+    # **Corrected the same day.** The first pass of these four measured option contract
+    # prints; the parts that read them build their windows from `symbol-price-frame`,
+    # whose only producer on this feed carries underlyings, and count distinct trades
+    # rather than tape records. See CORRECTIONS below and
+    # measurements/2026-09-13-indian-observation-cadence/.
     "bear_entry_prior_extension_floor": (
-        "0.0117",
+        "0.000049",
         "Claude, 2026-09-13: the bounce above its mean bear-entry-timer waits for before "
         "it has measured a detector's entries. Was 0.01, 'below the 1.5% largest "
         "intraday move measured on the captured thirty, so an ordinary bounce reaches "
-        "it' -- crypto, 2026-08-23. MEASURED with the part's own definition, extension "
-        "= (price - mean) / mean over the last bear_entry_window_length (256) prints, one "
-        "bounce per run above the mean and its size the run's peak, on this project's "
-        "tape for 2026-09-07/08: 53,326 bounces across 2,704 option contract-days "
-        "(measurements/2026-09-13-indian-option-move-sizes/): p20 0.22%, p50 1.17%, "
-        "p80 3.33%. 'An ordinary bounce reaches it' is the median, 0.0117. Close to the "
-        "old figure by coincidence of two different markets, now a measurement rather "
-        "than an assumption. Contracts, not underlyings: 95.8% of 116,179 journalled "
-        "entry candidates name a contract; an underlying's bounce is far smaller "
-        "(p50 0.0064%), so on a volatility-gap candidate this prior is loose until the "
-        "timer learns that detector's own.",
+        "it' -- crypto, 2026-08-23. MEASURED with the part's own definition on the series "
+        "the part actually reads: its prices come from symbol-price-frame, whose only "
+        "producer (broker-underlying-price-frame-bridge) carries the underlyings, and its "
+        "window skips a re-delivered trade, so an observation is a distinct trade. "
+        "Extension = (price - mean) / mean over the last bear_entry_window_length (256) "
+        "trades, one bounce per run above the mean, sized at its peak: 8,934 bounces on "
+        "F&O underlyings on 2026-09-04/07/08 with the tape's recording holes cut out "
+        "(measurements/2026-09-13-indian-observation-cadence/): p20 0.0012%, p50 0.0049%, "
+        "p80 0.0172%. 'An ordinary bounce reaches it' is the median, 0.000049. At 0.01 "
+        "the timer waited for a bounce twenty times the p95 underlying one (0.043%), "
+        "which is waiting forever. A contract candidate -- 95.8% of them -- has no "
+        "window in this part at all, a wiring fact this setting cannot change.",
     ),
     "tail_prior_normal_move_fraction": (
-        "0.0100",
+        "0.000059",
         "Claude, 2026-09-13: the normal move assumed before completed moves are "
         "measured on a symbol. Was 0.01, 'under the 1.5% largest intraday move measured "
         "on the captured thirty today' -- crypto. MATTERS MORE THAN A PRIOR USUALLY DOES: "
         "nothing in parts/ calls observe_completed_move on tail-mover-qualifier or "
         "tail-move-remaining-estimator, so this number is the normal move they use "
         "forever. MEASURED with tail_mover_qualifier._sustained_move's own logic over "
-        "tail_window_length (50) prints and tail_minimum_observations_in_move (5), a "
-        "move completing when its run ends, on the 2026-09-07/08 tape: 193,800 moves "
-        "on 2,704 option contract-days, p20 0.29%, p50 1.0042%, p80 2.77% "
-        "(measurements/2026-09-13-indian-option-move-sizes/). tail_move_quantile is the "
-        "median, so 0.0100 -- numerically the old value, now measured. It depends on "
-        "tail_window_length, itself still sized to crypto print rates; re-measure when "
-        "that is refitted. tail-copy-selector also reads it, for external-position, "
+        "tail_window_length (50) and tail_minimum_observations_in_move (5), on the "
+        "series the parts read -- underlyings from symbol-price-frame, distinct trades -- "
+        "on 2026-09-04/07/08 with recording holes cut out: 44,949 completed moves, "
+        "p20 0.0015%, p50 0.0059%, p80 0.0228% "
+        "(measurements/2026-09-13-indian-observation-cadence/). tail_move_quantile is the "
+        "median. At 0.01 a move had to go 0.2% before it was 'a fifth of normal', past "
+        "the p95 completed underlying move (0.080%), so the qualifier could only ever "
+        "answer BARELY_STARTED. tail-copy-selector also reads it, for external-position, "
         "whose only producer is onchain-position-reader -- a crypto source.",
     ),
     "forecast_prior_absolute_return": (
@@ -320,32 +327,38 @@ REFITS: dict[str, tuple] = {
         "forecast_horizon (300s) later, non-overlapping, on the 2026-09-07/08 tape: "
         "72,341 five-minute moves on option contracts, p50 0.2907% (p80 2.93%); on "
         "underlyings 3,096, p50 0.0743% "
-        "(measurements/2026-09-13-indian-option-move-sizes/). Contracts, for the reason "
-        "bear_entry_prior_extension_floor gives.",
+        "(measurements/2026-09-13-indian-option-move-sizes/). Contracts: this part's "
+        "entropy comes from order-flow-state-encoder, which reads market-data "
+        "(broker-market-data-bridge, every instrument's own prints) and skips a print "
+        "with no size -- every index print, so its flow is contracts and shares, and "
+        "contracts are nearly all of it.",
     ),
     "tail_prior_trail_fraction": (
-        "0.0609",
+        "0.00043",
         "Claude, 2026-09-13: the trail tail-trailing-exit-planner assumes before exit "
         "counterfactuals have measured one. Was 0.01, 'as for "
-        "profit_lock_prior_retracement' -- and that setting was re-derived today to "
-        "0.0609, the p80 of 5,456 NSE option pullbacks that ended in a new high on "
-        "Upstox history 2026-07-01..2026-09-11 "
-        "(measurements/2026-09-13-indian-option-retracements/). The rule is kept, so the "
-        "value follows it. 71.0% of those pullbacks were deeper than the old 1%.",
+        "profit_lock_prior_retracement'. The rule is kept -- the p80 of pullbacks that "
+        "ended in a new high -- but on the series this part trails: its prices come from "
+        "symbol-price-frame, the underlyings, not the option premium profit-lock trails. "
+        "Measured with the same definition on F&O underlyings, distinct trades, "
+        "2026-09-04/07/08 with recording holes cut out: 922 pullbacks, p50 0.0134%, "
+        "p80 0.0426% (measurements/2026-09-13-indian-observation-cadence/). A 1% trail on "
+        "an underlying never triggers inside a session.",
     ),
     "tail_minimum_trail_fraction": (
-        "0.0196",
+        "0.00042",
         "Claude, 2026-09-13: the narrowest a tail trail may be. Was 0.002, 'twenty "
         "basis points, a few spreads' -- crypto spreads, and not on the 2026-09-13 audit "
         "list because its note names no venue. The rule is kept with 'a few' read as "
-        "three: an NSE option touch spread is 2 x the print-weighted p50 half spread, "
-        "0.00653 (measurements/2026-09-13-indian-option-spreads/), so three is 0.0196. "
-        "A floor under that width is inside ordinary bid-ask bounce and stops a follow "
-        "out on the spread alone. The operator's own figure that day made twenty basis "
-        "points 'ten spreads' (resting_order_prior_distance_fraction), which would give "
-        "0.0653; the smaller reading is taken because this is a floor under a measured "
-        "width, and a floor above the measured index-option trail (p80 4.22% x 1.5) "
-        "would override the measurement it exists to bound.",
+        "three, and the spread is the underlying's, because this part trails "
+        "symbol-price-frame: the touch spread of the 14 F&O shares on the book tape of "
+        "2026-09-07/08 is 2 x a p50 half spread of 0.00704%, 0.000141, so three is "
+        "0.00042 (measurements/2026-09-13-indian-observation-cadence/). Indices have no "
+        "book; their tick is finer still. It sits under the measured trail (p80 pullback "
+        "0.0426% x tail_trail_safety_multiple 1.5), so it bounds the measurement rather "
+        "than overriding it. The operator's figure that day made twenty basis points "
+        "'ten spreads' (resting_order_prior_distance_fraction), which would give 0.0014 "
+        "and override most measured trails.",
     ),
     "bear_setup_weight_prior_loss_fraction": (
         "0.0642",
@@ -368,6 +381,135 @@ REFITS: dict[str, tuple] = {
         "0.02, 'so the prior tail ratio is one and a detector is neither favoured nor "
         "discounted on no evidence'. The rule is kept: equal to "
         "bear_setup_weight_prior_loss_fraction, re-derived today to 0.0642.",
+    ),
+    # ---- counts and times, 2026-09-13 --------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md, "Counts and times sized
+    # to crypto print rates". measurements/2026-09-13-indian-observation-cadence/ says
+    # which series each part reads and counts an observation as the part does: a
+    # distinct trade. Underlyings (symbol-price-frame) on 2026-09-04/07/08 with the
+    # tape's recording holes cut out: 18.3 distinct trades a minute for the median
+    # underlying-day, 71.5 trade-weighted. Contracts (market-data) on 2026-09-07/08:
+    # 0.21 a minute for the median contract-day, 10.1 trade-weighted.
+    "bull_feature_short_window": (
+        "64",
+        "Claude, 2026-09-13: the shorter of the two price windows whose ratio tells the "
+        "bull bot whether volatility is rising. Was 64 on 'a third of a second of market "
+        "on Binance aggregates -- fast enough to be a current reading rather than a "
+        "memory'. The rule is kept; its crypto time cannot be, since no NSE underlying "
+        "trades 200 times a second. MEASURED on what bull-feature-builder reads -- "
+        "underlyings from symbol-price-frame, distinct trades: 64 trades span p50 104s, "
+        "p20 32s, p80 188s on 2026-09-04/07/08 "
+        "(measurements/2026-09-13-indian-observation-cadence/). About a minute and a "
+        "half is current against the five-minute horizon the single-symbol detectors "
+        "forecast over (forecast_horizon), so the count stands. Kept rather than "
+        "re-sized also because bull-conviction-model's checkpoint learned its "
+        "normalisation on features built at 64; a different window is a different "
+        "feature and would need that model retrained, which a setting change cannot do.",
+    ),
+    "bear_feature_short_window": (
+        "64",
+        "Claude, 2026-09-13: the short side's mirror of bull_feature_short_window, kept at "
+        "64 for the reason given there: 64 distinct underlying trades span p50 104s "
+        "(p20 32s, p80 188s) on 2026-09-04/07/08 "
+        "(measurements/2026-09-13-indian-observation-cadence/), current against the "
+        "300s detector horizon, and bear-conviction-model learned on features built at 64.",
+    ),
+    "bull_feature_minimum_observations": (
+        "64",
+        "Claude, 2026-09-13: the fewest prices before a feature is computed. The rule "
+        "('set to the short window, so a feature is either measured over a full window "
+        "or reported as missing') names no market; the short window it follows was "
+        "re-measured on NSE underlyings today and kept at 64, so this stays 64.",
+    ),
+    "bear_feature_minimum_observations": (
+        "64",
+        "Claude, 2026-09-13: mirrors bull_feature_minimum_observations -- set to the "
+        "short window, re-measured on NSE underlyings today and kept at 64.",
+    ),
+    "bull_feature_long_window": (
+        "512",
+        "Claude, 2026-09-13: the longer window in the volatility ratio, eight times the "
+        "short one so a burst must persist across an order of magnitude of market time. "
+        "Not on the audit list -- its note names no venue -- but its 'market time' was "
+        "crypto's. MEASURED on NSE underlyings, distinct trades: 512 span p50 555s, p20 "
+        "155s, p80 1,319s on 2026-09-04/07/08 "
+        "(measurements/2026-09-13-indian-observation-cadence/), against 104s for 64 -- "
+        "the eight-to-one ratio holds in time as well as count. Kept for the model "
+        "reason bull_feature_short_window gives.",
+    ),
+    "bear_feature_long_window": (
+        "512",
+        "Claude, 2026-09-13: mirrors bull_feature_long_window: 512 distinct underlying "
+        "trades span p50 555s against 104s for the short window "
+        "(measurements/2026-09-13-indian-observation-cadence/), so the ratio holds in "
+        "time; kept for bear-conviction-model's checkpoint.",
+    ),
+    "tail_window_length": (
+        "50",
+        "Claude, 2026-09-13: how many recent trades the tailgating bot keeps per symbol "
+        "to measure the move under way. Was 50, 'a few minutes on the captured symbols; "
+        "a move is a thing of minutes'. MEASURED on what tail-mover-qualifier reads -- "
+        "underlyings from symbol-price-frame, distinct trades: 50 span p50 80s, p80 147s, "
+        "p95 317s on 2026-09-04/07/08 "
+        "(measurements/2026-09-13-indian-observation-cadence/). A move of one to five "
+        "minutes is 'a thing of minutes', so the count stands; three minutes at the "
+        "median underlying's 18.3 trades a minute would be 55, too close to move a "
+        "window tail_prior_normal_move_fraction was just measured at.",
+    ),
+    "liquidity_turnover_window": (
+        "10",
+        "Claude, 2026-09-13: how many recent trades' quote volume liquidity-grader sums "
+        "as turnover. Was 60, 'about a minute on the captured symbols'. The rule is "
+        "kept on what the grader reads -- market-data, every contract's own trades, "
+        "those stating a size: 10.1 distinct sized trades a minute trade-weighted on "
+        "2026-09-07/08 (median contract-day 0.21) "
+        "(measurements/2026-09-13-indian-observation-cadence/), so a minute is 10. "
+        "'The captured symbols' were the liquid ones, hence trade-weighted. At 60 a "
+        "turnover on an NSE contract summed six minutes of trading.",
+    ),
+    "limit_walk_cadence": (
+        "12.0",
+        "Claude, 2026-09-13: how often limit-price-walker steps a resting limit order "
+        "towards the touch. Was 2.0, 'a few prints on the captured symbols; faster would "
+        "chase every tick'. The rule is kept, 'a few' as three, on what the walker reads "
+        "-- contract trades from market-data: 10.1 distinct trades a minute "
+        "trade-weighted on 2026-09-07/08, so three trades are two gaps of 5.9s, 11.9s "
+        "(measurements/2026-09-13-indian-observation-cadence/). At 2s the walker would "
+        "step six times between two trades on a liquid contract. Dormant: every order "
+        "these bots place is a market order.",
+    ),
+    "outage_silence_seconds": (
+        "900.0",
+        "Claude, 2026-09-13: how long a symbol must be quiet to count as silent when "
+        "venue-outage-rider judges the venue; when outage_venue_wide_fraction (0.8) of "
+        "them are, it reads the connection as lost. Was 60.0, 'the top-30 symbols "
+        "captured all print far inside a minute'. MEASURED on what the rider reads -- "
+        "the underlyings on symbol-price-frame: sampled every 30s through 2026-09-04/07/08, "
+        "recording holes cut out and each piece's first 15 minutes skipped, the share of "
+        "underlyings silent at least S reached p95/max: 60s 0.81/0.94, 150s 0.75/0.94, "
+        "300s 0.60/0.88, 600s 0.50/0.88, 900s 0.33/0.60, 1800s 0.11/0.33 "
+        "(measurements/2026-09-13-indian-observation-cadence/). 900s is the shortest "
+        "candidate at which ordinary trading never crossed 0.8; at 60s it did on more "
+        "than one sample in twenty, each a false 'connection lost'. The cost is a deaf "
+        "feed taking fifteen minutes to be called -- feed-gap-detector still judges each "
+        "symbol on its own at feed_gap_threshold. Sampled on 16-18 underlyings; the live "
+        "frame carries 216, many thinner, so re-measure on the first full session.",
+    ),
+    "order_participation_cap": (
+        "0.16",
+        "Claude, 2026-09-13: the share of a symbol's traded volume one slice may be "
+        "before participation-capped-order-splitter splits it, and the share of a bar's "
+        "volume fill-volume-capper lets a backtest fill. Was 0.1: 'a slice that is a "
+        "tenth of a minute's volume moves the price by about one spread' on the thinnest "
+        "captured crypto symbol. The rule is kept: a slice moves the price about one "
+        "spread while it fits inside what rests at the touch. MEASURED on NSE option "
+        "books against the exchange's own one-minute candle volume (not the LTP ticker, "
+        "which drops trades between updates), per order_slice_interval of 10s, on "
+        "2026-09-07/08: ask quantity at the touch / volume traded per 10s, p20 0.157, "
+        "p50 1.09, p80 10.0 over 302,582 snapshots; 6.5% followed a minute that traded "
+        "nothing and were excluded (measurements/2026-09-13-indian-observation-cadence/). "
+        "The thin end, as the crypto note took its thinnest symbol: at p20, a slice of "
+        "0.16 of the interval's volume fits inside the touch on four snapshots in five.",
     ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
@@ -980,6 +1122,35 @@ MARKET_INDEPENDENT: dict[str, str] = {
 # not repeat a measurement that did not work -- but it is not progress and must
 # not read as any.
 MEASURED_BUT_INCONCLUSIVE: dict[str, str] = {
+    "spread_reversion_horizon": (
+        "2026-09-13, docs/settings-fitted-to-crypto-the-guard-cannot-see.md. The note's "
+        "rule is a half-life of about 14 observations turned into time, with room. Its "
+        "two halves on this market: the time is measured -- spread-reversion-detector's "
+        "legs come from symbol-price-frame, the underlyings, where 14 distinct trades "
+        "take about 46s at the median underlying's 18.3 trades a minute and about 4.6 "
+        "minutes at the p20 underlying's 3.06 "
+        "(measurements/2026-09-13-indian-observation-cadence/) -- but the half-life is "
+        "not: it was measured on crypto pairs, and the one Indian attempt "
+        "(measurements/2026-09-12-indian-pair-behaviour/, 30 shares, one session) "
+        "found a median reversion per step of 0.0000, which gives no half-life at all. "
+        "Converting a crypto half-life into Indian seconds would be a derived-looking "
+        "number built on the unmeasured half. What would settle it: the spread "
+        "half-life on time-spaced bars across several sessions of the F&O underlyings, "
+        "the measurement cointegration_window_length is already waiting on"
+    ),
+    "order_latency_prior": (
+        "2026-09-13: the note's basis was REST order placement to Binance and Bybit "
+        "from this box, 80-200 ms, with the prior set above the slowest so a paper fill "
+        "is never faster than a live one. Measured to Upstox from this box, 40 "
+        "authenticated read-only GETs each on a fresh connection "
+        "(measurements/2026-09-13-indian-observation-cadence/measure_upstox_round_trip.py): "
+        "get-funds-and-margin p50 37 ms, max 54 ms; market-quote ltp p50 28 ms, max "
+        "39 ms. That is a lower bound on an order, which does more work at the broker "
+        "and waits on the exchange's acknowledgement, and no order can be placed to "
+        "measure it in paper mode. 0.25s is 4.6 times the slowest measured read, on the "
+        "side the rule requires. What would settle it: order-latency-simulator's own "
+        "observe_live_round_trip on the first real orders"
+    ),
     "cointegration_minimum_correlation": (
         "measured on 30 NSE share series from 2026-09-08, 435 pairs at the 256 "
         "window: median |correlation| 0.367, q75 0.575, q90 0.701. The crypto "
@@ -1176,6 +1347,49 @@ def refit(
     return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{was} -> {new_value}"
 
 
+# ---- corrections ------------------------------------------------------------------
+# A refit this script already applied, found to be measured on the wrong series.
+# `refit` will never touch a converted setting again, which is right for idempotence
+# and wrong for a mistake, so a correction is its own step with its own marker: it
+# replaces the value only while the value is still the wrong one, and records why.
+CORRECTED_MARKER = "CORRECTED 2026-09-13"
+WRONG_SERIES = (
+    "The value this replaces was measured earlier the same day on option contract "
+    "tape records (measurements/2026-09-13-indian-option-move-sizes/). The part reads "
+    "symbol-price-frame, whose only producer on this feed carries the underlyings, and "
+    "its window counts distinct trades, not records -- 17.8% of option tape records "
+    "are a new trade."
+)
+CORRECTIONS: dict[str, str] = {
+    "bear_entry_prior_extension_floor": "0.0117",
+    "tail_prior_normal_move_fraction": "0.0100",
+    "tail_prior_trail_fraction": "0.0609",
+    "tail_minimum_trail_fraction": "0.0196",
+}
+
+
+def correct(text: str, name: str, wrong_value: str, new_value: str, note: str) -> tuple[str, str]:
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if CORRECTED_MARKER in block:
+        return text, "correction already recorded"
+    current = re.search(r"^value\s*=\s*(.+)$", block, re.M)
+    if current is None:
+        return text, "NO VALUE LINE"
+    if current.group(1).strip() != wrong_value:
+        return text, f"not corrected: value is {current.group(1).strip()}, not the wrong {wrong_value}"
+    updated = block[:current.start(1)] + new_value + block[current.end(1):]
+    at = note_insertion_point(updated)
+    if at is None:
+        return text, "NO NOTE"
+    addition = f" {CORRECTED_MARKER}, was {wrong_value}. {WRONG_SERIES} {note}"
+    updated = updated[:at] + addition.replace('"', "'") + updated[at:]
+    return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{wrong_value} -> {new_value} (corrected)"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="write. Without it, report only.")
@@ -1220,6 +1434,12 @@ def main() -> int:
         value, note = entry[0], entry[1]
         new_unit = entry[2] if len(entry) > 2 else None
         text, what = refit(text, name, value, note, new_unit)
+        print(f"  {name:46} {what}")
+        if "->" in what:
+            changed += 1
+    for name, wrong_value in CORRECTIONS.items():
+        value, note = REFITS[name][0], REFITS[name][1]
+        text, what = correct(text, name, wrong_value, value, note)
         print(f"  {name:46} {what}")
         if "->" in what:
             changed += 1
