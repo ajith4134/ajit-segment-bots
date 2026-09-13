@@ -1,0 +1,16 @@
+tape 2026-09-07, 2026-09-08; order size 150,000; one book a minute per instrument
+
+future: 2,565 books; 0 (0.0%) too shallow to absorb the order at any shown price
+  round-trip book cost where measurable: p25 0.021%  p50 0.035%  p75 0.056%  p90 0.071%
+  old bands (0.004266, 0.005, 0.02): deep 100.0%
+  new bands (0.004266, 0.0203, 0.0609): deep 100.0%
+
+option: 154,771 books; 57,447 (37.1%) too shallow to absorb the order at any shown price
+  round-trip book cost where measurable: p25 0.819%  p50 2.280%  p75 8.000%  p90 22.222%
+  old bands (0.004266, 0.005, 0.02): deep 8.8%, tradeable 1.8%, thin 19.0%, untradeable 70.2%, ungradeable 0.2%
+  new bands (0.004266, 0.0203, 0.0609): deep 8.8%, tradeable 21.0%, thin 13.6%, untradeable 56.4%, ungradeable 0.2%
+
+share-or-index: 11,923 books; 5,620 (47.1%) too shallow to absorb the order at any shown price
+  round-trip book cost where measurable: p25 0.023%  p50 0.052%  p75 0.089%  p90 0.169%
+  old bands (0.004266, 0.005, 0.02): deep 50.3%, tradeable 0.1%, thin 1.2%, untradeable 47.3%, ungradeable 1.1%
+  new bands (0.004266, 0.0203, 0.0609): deep 50.3%, tradeable 1.3%, thin 0.2%, untradeable 47.1%, ungradeable 1.1%

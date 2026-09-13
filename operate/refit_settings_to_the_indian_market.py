@@ -53,6 +53,81 @@ DESK_ORDER_SIZE = 150_000.0
 
 # (value, provenance) or (value, provenance, unit) where the unit changes too.
 REFITS: dict[str, tuple] = {
+    # ---- regime-classifier, 2026-09-13 --------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md. Live that day the part
+    # held 20,901 unclassified readings: its window was sized to crypto print rates.
+    "regime_window_length": (
+        "256",
+        "Claude, 2026-09-13: how many distinct prices regime-classifier keeps per symbol "
+        "for its Hurst estimate. Was 1024, 'measured on 60000 real trades from four "
+        "symbols ... 1024 trades is 1.2-6.8 seconds on the busiest symbols' -- crypto. "
+        "MEASURED on Indian data (measurements/2026-09-13-indian-regime-window/): only "
+        "3.1% of 1,562 option instrument-sessions on the tape (2026-09-07/08) ever reach "
+        "1,024 distinct prints, 8.8% of shares, 0% of futures, so the part classified "
+        "almost nothing. The part's own geometry sets the floor: its bands sit 0.1 from "
+        "the random-walk value, so the estimator's spread across windows must be inside "
+        "0.1 or noise alone flips the regime. The spread of runtime.rolling_statistics."
+        "hurst_exponent first falls inside 0.1 at 256: 0.080 on tape option prints "
+        "(0.112 at 128) and 0.078 on 1,452 sessions of Upstox one-minute option history "
+        "2026-07-01..2026-09-11 (0.105 at 128). At 256, 18.1% of option sessions, 26.9% "
+        "of share sessions and 82.4% of futures sessions fill the window.",
+    ),
+    "regime_minimum_observations": (
+        "256",
+        "Claude, 2026-09-13: the fewest prices regime-classifier estimates on. Was 1024, "
+        "'set equal to the window, so it classifies only on a full one' -- the rule is "
+        "kept and follows regime_window_length to 256 "
+        "(measurements/2026-09-13-indian-regime-window/).",
+    ),
+    "regime_trending_hurst_above": (
+        "0.696",
+        "Claude, 2026-09-13: the Hurst estimate above which a series is called trending. "
+        "Was 0.6, whose note gives the crypto basis: 'the median Hurst is 0.48-0.52 ... "
+        "and 0.60 is about the 95th percentile', so roughly one window in ten "
+        "classifies. The rule is kept. On Indian option series at the 256 window the "
+        "median is not 0.5 -- 0.535 on tape prints, 0.577 on one-minute history, partly "
+        "the rescaled-range estimator's small-sample bias -- so 0.6 would call about a "
+        "third of all windows trending. The p95 at 256 "
+        "(measurements/2026-09-13-indian-regime-window/): 0.660 on 782 tape windows, "
+        "0.708 on 1,399 windows of Upstox history, 0.696 pooled over 2,181 -- the pooled "
+        "figure, weighted to the many days of history.",
+    ),
+    "regime_reverting_hurst_below": (
+        "0.429",
+        "Claude, 2026-09-13: the Hurst estimate below which a series is called "
+        "reverting. Was 0.4, the mirror of the crypto 0.6. The p5 at the 256 window "
+        "(measurements/2026-09-13-indian-regime-window/): 0.394 on tape prints, 0.447 on "
+        "Upstox history, 0.429 pooled over 2,181 windows -- the pooled figure, the same "
+        "choice as regime_trending_hurst_above.",
+    ),
+    # ---- liquidity-grader, 2026-09-13 --------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md: both notes rest on "the
+    # 1.5% stop the exit plans set", a crypto stop, and no venue is named. Live that
+    # day the grader called 68 of 91 symbols untradeable.
+    "liquidity_tradeable_cost_fraction": (
+        "0.0203",
+        "Claude, 2026-09-13: the round-trip book cost at or below which a symbol is "
+        "tradeable. Was 0.005, 'a third of the 1.5% stop the exit plans set' -- the "
+        "rule is kept, the stop is not: 1.5% was a crypto stop. The Indian equivalent "
+        "is the pullback an option stop must sit beyond, the p80 of 5,456 option "
+        "pullbacks on Upstox history 2026-07-01..2026-09-11 "
+        "(measurements/2026-09-13-indian-option-retracements/), 6.0870%; a third of it "
+        "is 0.0203. Measured on 154,771 real NSE option books from the tape "
+        "(measurements/2026-09-13-indian-liquidity-grades/), graded by the part's own "
+        "engine at 150,000: under 0.005 only 1.8% of option books were tradeable; "
+        "under 0.0203, 21.0%. The median measurable option round trip is 2.280%.",
+    ),
+    "liquidity_thin_cost_fraction": (
+        "0.0609",
+        "Claude, 2026-09-13: the round-trip book cost above which a symbol is "
+        "untradeable rather than thin. Was 0.02, 'more than the stop; a symbol that "
+        "costs more to enter than the trade risks is not traded' -- the rule is kept "
+        "with the Indian stop: the 6.0870% p80 option pullback a stop must sit beyond "
+        "(measurements/2026-09-13-indian-option-retracements/). On the same 154,771 "
+        "option books: untradeable 70.2% -> 56.4%. 37.1 of those points are books whose "
+        "five shown levels cannot absorb 150,000 at any price -- untradeable at this "
+        "size whatever the bands, which is a depth question, not this setting's.",
+    ),
     # ---- profit-lock, 2026-09-13 ------------------------------------------------
     # Missed by the 2026-09-12 pass: none of the three notes names a venue, so the
     # drift guard never counted them, and each is fitted to the crypto tape of

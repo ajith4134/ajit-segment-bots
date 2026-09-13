@@ -12,7 +12,7 @@ naming a venue at all.
 classification marker; 759 of those were first written before the 2026-09-01 pivot; 688 are read by
 a part on the live spine. Their notes were triaged by what they cite and every candidate with a
 market-scaled unit was read by hand. The 34 below cite crypto evidence for a number a live part acts on.
-Nothing here has been changed.
+**Progress:** 2026-09-13 — `liquidity_tradeable_cost_fraction`, `liquidity_thin_cost_fraction`, `regime_window_length`, `regime_minimum_observations` refitted (plus `regime_trending_hurst_above` / `regime_reverting_hurst_below`, which were not in this list and should have been). 30 remain.
 
 ## Costs and spreads taken from the crypto venues (7)
 

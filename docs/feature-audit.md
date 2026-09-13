@@ -2468,3 +2468,29 @@ of the 1.5% stop", and `regime-classifier` has 20,901 unclassified readings on a
 1,024-trade window measured on crypto print rates. Also: `CRYPTO_PROVENANCE` in the
 guard is case-sensitive, so "Binance"/"Bybit" never match (fixing that alone: 4 -> 12).
 Nothing changed yet.
+
+### 2026-09-13 — liquidity-grader and regime-classifier re-derived on Indian data
+
+**liquidity-grader.** Its bands kept their rule — tradeable at most a third of the stop
+a plan sets, thin at most the stop — with the Indian stop, the 6.09% p80 option pullback
+(Upstox history), in place of crypto's 1.5%: tradeable 0.005 -> 0.0203, thin 0.02 ->
+0.0609. On 154,771 real option books from the tape, graded by the part's own engine at
+150,000 (`measurements/2026-09-13-indian-liquidity-grades/`): tradeable 1.8% -> 21.0%,
+untradeable 70.2% -> 56.4%. **37.1% of option books stay untradeable whatever the bands:**
+their five shown levels cannot absorb 150,000 — a depth question, not a threshold one.
+
+**regime-classifier.** Window 1024 -> 256 and minimum 1024 -> 256: only 3.1% of option
+sessions ever reach 1,024 prints; the estimator's spread first fits inside the 0.1 band
+at 256 (0.080 tape prints, 0.078 on 1,452 sessions of Upstox history). Thresholds 0.6/0.4
+-> 0.696/0.429, the p95/p5 at 256 pooled over 2,181 windows, keeping the note's own rule
+(`measurements/2026-09-13-indian-regime-window/`). **Replay shows the window was not the only
+block:** with the part's real gap rule the new settings classify 0.4% of option sessions
+at session end, against 23.9% with gap clearing off — series break a median 5 times a
+session, and even liquid futures break 4-5 times, which matches the spine restarting
+through 2026-09-08. `price_series_maximum_gap_seconds` and the adaptive bound's warm-up
+(`length // 2` gaps at the 150s floor) are shared by many detectors and are the next thing
+to study, on a day without restarts.
+
+Not verifiable live until 2026-09-15 (market shut; grader sees empty books, classifier
+restarted cold because its checkpoint was written under a different window).
+

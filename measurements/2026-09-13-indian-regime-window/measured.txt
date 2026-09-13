@@ -1,0 +1,51 @@
+tape 2026-09-07, 2026-09-08: distinct prints per instrument-session
+  future             17 sessions, median 363 prints   >=64: 88.2%  >=128: 88.2%  >=256: 82.4%  >=512: 17.6%  >=1024: 0.0%
+  option           1562 sessions, median 30 prints   >=64: 39.9%  >=128: 29.1%  >=256: 18.1%  >=512: 9.3%  >=1024: 3.1%
+  share-or-index    171 sessions, median 65 prints   >=64: 50.9%  >=128: 39.8%  >=256: 26.9%  >=512: 18.1%  >=1024: 8.8%
+
+Hurst estimator on tape prints: option
+      N  windows  median H  sd of H     p10-p90 of H
+     64     3289     0.574    0.176   0.348-0.779
+    128     1467     0.559    0.112   0.405-0.691
+    256      592     0.542    0.080   0.440-0.638
+    512      199     0.553    0.045   0.492-0.603
+   1024       48     0.567    0.031   0.533-0.599
+
+Hurst estimator on tape prints: share-or-index
+      N  windows  median H  sd of H     p10-p90 of H
+     64      834     0.534    0.182   0.284-0.743
+    128      388     0.532    0.120   0.356-0.662
+    256      173     0.519    0.094   0.400-0.631
+    512       72     0.531    0.065   0.439-0.608
+   1024       26     0.535    0.042   0.464-0.567
+
+Hurst estimator on tape prints: future
+      N  windows  median H  sd of H     p10-p90 of H
+     64       90     0.530    0.169   0.293-0.738
+    128       41     0.505    0.126   0.336-0.650
+    256       17   too few windows
+    512        3   too few windows
+   1024        0   too few windows
+
+Hurst estimator on Upstox one-minute closes, 1452 option sessions 2026-07-01..2026-09-11 (windows inside one session)
+      N  windows  median H  sd of H     p10-p90 of H
+     64     7760     0.580    0.149   0.401-0.786
+    128     3750     0.576    0.105   0.443-0.715
+    256     1399     0.577    0.078   0.471-0.679
+    512        0   too few windows
+   1024        0   too few windows
+  N=256 tape     windows   782: p5 0.394  p50 0.535  p95 0.660
+  N=256 history  windows  1399: p5 0.447  p50 0.577  p95 0.708
+  N=256 all      windows  2181: p5 0.429  p50 0.562  p95 0.696
+
+replay: the part's own RegimeClassifier over every instrument-session on the tape, classified at session end
+  old 1024 / 0.6 / 0.4: unclassified 1749 (99.9%), random-walk 1 (0.1%)
+  new 256 / 0.696 / 0.429: unclassified 1728 (98.7%), random-walk 18 (1.0%), trending 2 (0.1%), reverting 2 (0.1%)
+
+replay by kind: share of instrument-sessions classified at session end
+  old window 1024, gap rule as set: future 0.0% of 17; option 0.1% of 1562; share-or-index 0.0% of 171
+  new window 256, gap rule as set: future 0.0% of 17; option 0.4% of 1562; share-or-index 9.4% of 171
+  new window 256, no gap clearing (diagnostic only): future 88.2% of 17; option 23.9% of 1562; share-or-index 34.5% of 171
+  series breaks per session under the gap rule, future: median 4, p90 5
+  series breaks per session under the gap rule, option: median 5, p90 25
+  series breaks per session under the gap rule, share-or-index: median 5, p90 16
