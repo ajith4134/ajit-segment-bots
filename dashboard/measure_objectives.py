@@ -182,9 +182,15 @@ def coverage() -> dict | None:
 # that merely mentions Binance, such a number is silently *acting* every tick.
 # Word boundaries matter here: an unanchored search for "eth" or "sol" matches
 # "method" and "resolution" and reports 176 where the truth is 82.
+# Case-insensitive since 2026-09-13: notes write "Binance" and "Bybit", and the
+# lower-case alternatives never matched them, so the guard read 8 where 18 settings
+# named a crypto venue. Two of the ten it newly finds are false (a part named
+# usdt-pnl-accountant, and a comment that precedes the next table) -- the
+# direction this probe is allowed to be wrong in.
 CRYPTO_PROVENANCE = re.compile(
     r"\b(binance|bybit|[A-Z]{2,10}USDT|USDT|BTC|ETH|SOL|perpetuals?|crypto"
-    r"|the venues'|taker fee|funding rate)\b"
+    r"|the venues'|taker fee|funding rate)\b",
+    re.IGNORECASE,
 )
 
 

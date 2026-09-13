@@ -273,6 +273,102 @@ REFITS: dict[str, tuple] = {
         "limit_walk_maximum_total_fraction took on 2026-09-07. At 1% an option resting "
         "order would be cancelled by ordinary one-second movement (p90 1.20%).",
     ),
+    # ---- move sizes, 2026-09-13 --------------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md, "Move sizes fitted to
+    # crypto's intraday range". Each rests on the 1.5% largest intraday move of the
+    # captured crypto thirty on 2026-08-23, or on a stop sized from it.
+    "bear_entry_prior_extension_floor": (
+        "0.0117",
+        "Claude, 2026-09-13: the bounce above its mean bear-entry-timer waits for before "
+        "it has measured a detector's entries. Was 0.01, 'below the 1.5% largest "
+        "intraday move measured on the captured thirty, so an ordinary bounce reaches "
+        "it' -- crypto, 2026-08-23. MEASURED with the part's own definition, extension "
+        "= (price - mean) / mean over the last bear_entry_window_length (256) prints, one "
+        "bounce per run above the mean and its size the run's peak, on this project's "
+        "tape for 2026-09-07/08: 53,326 bounces across 2,704 option contract-days "
+        "(measurements/2026-09-13-indian-option-move-sizes/): p20 0.22%, p50 1.17%, "
+        "p80 3.33%. 'An ordinary bounce reaches it' is the median, 0.0117. Close to the "
+        "old figure by coincidence of two different markets, now a measurement rather "
+        "than an assumption. Contracts, not underlyings: 95.8% of 116,179 journalled "
+        "entry candidates name a contract; an underlying's bounce is far smaller "
+        "(p50 0.0064%), so on a volatility-gap candidate this prior is loose until the "
+        "timer learns that detector's own.",
+    ),
+    "tail_prior_normal_move_fraction": (
+        "0.0100",
+        "Claude, 2026-09-13: the normal move assumed before completed moves are "
+        "measured on a symbol. Was 0.01, 'under the 1.5% largest intraday move measured "
+        "on the captured thirty today' -- crypto. MATTERS MORE THAN A PRIOR USUALLY DOES: "
+        "nothing in parts/ calls observe_completed_move on tail-mover-qualifier or "
+        "tail-move-remaining-estimator, so this number is the normal move they use "
+        "forever. MEASURED with tail_mover_qualifier._sustained_move's own logic over "
+        "tail_window_length (50) prints and tail_minimum_observations_in_move (5), a "
+        "move completing when its run ends, on the 2026-09-07/08 tape: 193,800 moves "
+        "on 2,704 option contract-days, p20 0.29%, p50 1.0042%, p80 2.77% "
+        "(measurements/2026-09-13-indian-option-move-sizes/). tail_move_quantile is the "
+        "median, so 0.0100 -- numerically the old value, now measured. It depends on "
+        "tail_window_length, itself still sized to crypto print rates; re-measure when "
+        "that is refitted. tail-copy-selector also reads it, for external-position, "
+        "whose only producer is onchain-position-reader -- a crypto source.",
+    ),
+    "forecast_prior_absolute_return": (
+        "0.0029",
+        "Claude, 2026-09-13: the absolute return entropy-magnitude-forecaster assumes "
+        "per horizon before it has measured outcomes. Was 0.001, 'the median "
+        "five-minute move on the liquid captured symbols today' -- crypto. The rule is "
+        "kept and MEASURED: |return| from a print to the first print at least "
+        "forecast_horizon (300s) later, non-overlapping, on the 2026-09-07/08 tape: "
+        "72,341 five-minute moves on option contracts, p50 0.2907% (p80 2.93%); on "
+        "underlyings 3,096, p50 0.0743% "
+        "(measurements/2026-09-13-indian-option-move-sizes/). Contracts, for the reason "
+        "bear_entry_prior_extension_floor gives.",
+    ),
+    "tail_prior_trail_fraction": (
+        "0.0609",
+        "Claude, 2026-09-13: the trail tail-trailing-exit-planner assumes before exit "
+        "counterfactuals have measured one. Was 0.01, 'as for "
+        "profit_lock_prior_retracement' -- and that setting was re-derived today to "
+        "0.0609, the p80 of 5,456 NSE option pullbacks that ended in a new high on "
+        "Upstox history 2026-07-01..2026-09-11 "
+        "(measurements/2026-09-13-indian-option-retracements/). The rule is kept, so the "
+        "value follows it. 71.0% of those pullbacks were deeper than the old 1%.",
+    ),
+    "tail_minimum_trail_fraction": (
+        "0.0196",
+        "Claude, 2026-09-13: the narrowest a tail trail may be. Was 0.002, 'twenty "
+        "basis points, a few spreads' -- crypto spreads, and not on the 2026-09-13 audit "
+        "list because its note names no venue. The rule is kept with 'a few' read as "
+        "three: an NSE option touch spread is 2 x the print-weighted p50 half spread, "
+        "0.00653 (measurements/2026-09-13-indian-option-spreads/), so three is 0.0196. "
+        "A floor under that width is inside ordinary bid-ask bounce and stops a follow "
+        "out on the spread alone. The operator's own figure that day made twenty basis "
+        "points 'ten spreads' (resting_order_prior_distance_fraction), which would give "
+        "0.0653; the smaller reading is taken because this is a floor under a measured "
+        "width, and a floor above the measured index-option trail (p80 4.22% x 1.5) "
+        "would override the measurement it exists to bound.",
+    ),
+    "bear_setup_weight_prior_loss_fraction": (
+        "0.0642",
+        "Claude, 2026-09-13: the size of a losing short assumed before a detector's "
+        "losses are measured. Was 0.02, 'the stop the plans set plus slippage through "
+        "it' -- a crypto stop. The rule is kept with this market's figures: the stop an "
+        "option position needs sits beyond its ordinary pullback, the p80 of 5,456 "
+        "NSE option pullbacks on Upstox history, 0.0609 "
+        "(measurements/2026-09-13-indian-option-retracements/; the same stop "
+        "liquidity_tradeable_cost_fraction was refitted to), plus slippage through it "
+        "of one half spread, print-weighted p50 0.00327 "
+        "(measurements/2026-09-13-indian-option-spreads/): 0.0642. The open positions' "
+        "own stops were not used: on 2026-09-13 six of ten sat above entry and three more "
+        "within 0.5% of it, trailed by profit-lock, so they measure a trail, not a "
+        "plan's stop.",
+    ),
+    "bear_setup_weight_prior_win_fraction": (
+        "0.0642",
+        "Claude, 2026-09-13: the size of a winning short assumed before measured. Was "
+        "0.02, 'so the prior tail ratio is one and a detector is neither favoured nor "
+        "discounted on no evidence'. The rule is kept: equal to "
+        "bear_setup_weight_prior_loss_fraction, re-derived today to 0.0642.",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",

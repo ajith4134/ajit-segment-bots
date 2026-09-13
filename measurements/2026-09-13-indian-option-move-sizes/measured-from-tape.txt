@@ -1,0 +1,12 @@
+days 2026-09-07, 2026-09-08; bear_entry_window_length 256, tail_window_length 50, tail_minimum_observations_in_move 5, forecast_horizon 300s
+
+-- option contracts: 2,704 instrument-days, 4,075,399 in-session prints --
+  bounce peak above the mean         n=   53,326  p20 0.002245  p50 0.011659  p80 0.033300  p95 0.071130  (fraction of price)
+  completed sustained move           n=  193,800  p20 0.002920  p50 0.010042  p80 0.027671  p95 0.071429  (fraction of price)
+  |return| over 300s                 n=   72,341  p20 0.000000  p50 0.002907  p80 0.029262  p95 0.083333  (fraction of price)
+
+-- underlyings: 266 instrument-days, 333,110 in-session prints --
+  bounce peak above the mean         n=    8,608  p20 0.000015  p50 0.000064  p80 0.000224  p95 0.000565  (fraction of price)
+  completed sustained move           n=   39,922  p20 0.000019  p50 0.000090  p80 0.000473  p95 0.002194  (fraction of price)
+  |return| over 300s                 n=    3,096  p20 0.000133  p50 0.000743  p80 0.002934  p95 0.010026  (fraction of price)
+

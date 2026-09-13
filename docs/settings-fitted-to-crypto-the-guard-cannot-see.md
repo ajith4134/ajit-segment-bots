@@ -21,7 +21,16 @@ half spread p50 0.3167% per snapshot, 0.3265% print-weighted, p80 print-weighted
 this list missed because its note cites nothing. `exploration_maximum_cost_fraction` had become
 unpassable again after the 2026-09-12 fee refit (pair cost 1.71% against a 0.25% ceiling). Live after a
 restart: `counterfactual-replayer` `round_trip_cost_charged` 0.0011 -> 0.008532. **23 remain.**
-Still open: the guard's `CRYPTO_PROVENANCE` is still case-sensitive.
+2026-09-13 (later still) — the move-size group, measured on the 2026-09-07/08 tape with each part's own definition
+(`measurements/2026-09-13-indian-option-move-sizes/`, 4,075,399 in-session option prints): bounce above the
+256-print mean p50 1.17%, completed sustained move p50 1.00%, five-minute |return| p50 0.29%. Refitted
+`bear_entry_prior_extension_floor` 0.0117, `tail_prior_normal_move_fraction` 0.0100 (numerically unchanged, now
+measured -- and it is the only normal move the tail parts ever use, because nothing calls
+`observe_completed_move`), `forecast_prior_absolute_return` 0.0029, `tail_prior_trail_fraction` 0.0609,
+`bear_setup_weight_prior_loss_fraction` / `_win_fraction` 0.0642 (the 6.09% option stop plus a half spread),
+and one more this list missed, `tail_minimum_trail_fraction` 0.002 -> 0.0196 ("a few spreads"). **17 remain.**
+The guard's `CRYPTO_PROVENANCE` is case-insensitive now: its count went 8 -> 18, ten notes naming "Binance" or
+"Bybit" it could never see, two of them false (a part named usdt-pnl-accountant, a misattributed comment).
 
 ## Costs and spreads taken from the crypto venues (7)
 
@@ -39,14 +48,14 @@ Still open: the guard's `CRYPTO_PROVENANCE` is still case-sensitive.
 
 | setting | value | read by | what its note rests on |
 |---|---|---|---|
-| `bear_entry_prior_extension_floor` | 0.01 fraction of price | bear-entry-timer | "below the 1.5% largest intraday move measured on the captured thirty" |
-| `tail_prior_normal_move_fraction` | 0.01 fraction of price | tail-copy-selector, tail-move-remaining-estimator, tail-mover-qualifier | "under the 1.5% largest intraday move measured on the captured thirty today" |
-| `tail_prior_trail_fraction` | 0.01 fraction of price | tail-trailing-exit-planner | "as for profit_lock_prior_retracement" |
-| `forecast_prior_absolute_return` | 0.001 fraction of price | entropy-magnitude-forecaster | "the median five-minute move on the liquid captured symbols today" |
-| `liquidity_tradeable_cost_fraction` | 0.005 fraction of price | liquidity-grader | "a third of the 1.5% stop the exit plans set" — **live 2026-09-13: liquidity-grader grades 68 of 91 symbols untradeable and 4 thin** |
-| `liquidity_thin_cost_fraction` | 0.02 fraction of price | liquidity-grader | "more than the stop" — **live 2026-09-13: same grader, 68 of 91 untradeable** |
-| `bear_setup_weight_prior_loss_fraction` | 0.02 fraction of price | bear-setup-weight-learner | "the stop the plans set plus slippage" |
-| `bear_setup_weight_prior_win_fraction` | 0.02 fraction of price | bear-setup-weight-learner | "so the prior tail ratio is one" |
+| ~~`bear_entry_prior_extension_floor`~~ DONE 2026-09-13 | 0.01 fraction of price | bear-entry-timer | "below the 1.5% largest intraday move measured on the captured thirty" |
+| ~~`tail_prior_normal_move_fraction`~~ DONE 2026-09-13 | 0.01 fraction of price | tail-copy-selector, tail-move-remaining-estimator, tail-mover-qualifier | "under the 1.5% largest intraday move measured on the captured thirty today" |
+| ~~`tail_prior_trail_fraction`~~ DONE 2026-09-13 | 0.01 fraction of price | tail-trailing-exit-planner | "as for profit_lock_prior_retracement" |
+| ~~`forecast_prior_absolute_return`~~ DONE 2026-09-13 | 0.001 fraction of price | entropy-magnitude-forecaster | "the median five-minute move on the liquid captured symbols today" |
+| ~~`liquidity_tradeable_cost_fraction`~~ DONE 2026-09-13 | 0.005 fraction of price | liquidity-grader | "a third of the 1.5% stop the exit plans set" — **live 2026-09-13: liquidity-grader grades 68 of 91 symbols untradeable and 4 thin** |
+| ~~`liquidity_thin_cost_fraction`~~ DONE 2026-09-13 | 0.02 fraction of price | liquidity-grader | "more than the stop" — **live 2026-09-13: same grader, 68 of 91 untradeable** |
+| ~~`bear_setup_weight_prior_loss_fraction`~~ DONE 2026-09-13 | 0.02 fraction of price | bear-setup-weight-learner | "the stop the plans set plus slippage" |
+| ~~`bear_setup_weight_prior_win_fraction`~~ DONE 2026-09-13 | 0.02 fraction of price | bear-setup-weight-learner | "so the prior tail ratio is one" |
 
 ## Counts and times sized to crypto print rates (13)
 
@@ -56,8 +65,8 @@ Still open: the guard's `CRYPTO_PROVENANCE` is still case-sensitive.
 | `bear_feature_short_window` | 64 observations | bear-feature-builder | "202-883 trades a second ... on Binance aggregates" |
 | `bull_feature_minimum_observations` | 64 observations | bull-feature-builder | "set to the short window" |
 | `bear_feature_minimum_observations` | 64 observations | bear-feature-builder | "set to the short window" |
-| `regime_window_length` | 1024 trades | regime-classifier | "measured on 60000 real trades from four symbols" — **live 2026-09-13: regime-classifier unclassified 20,901, symbols_forgotten_silent 748** |
-| `regime_minimum_observations` | 1024 trades | regime-classifier | "set equal to the window" — **live 2026-09-13: regime-classifier unclassified 20,901** |
+| ~~`regime_window_length`~~ DONE 2026-09-13 | 1024 trades | regime-classifier | "measured on 60000 real trades from four symbols" — **live 2026-09-13: regime-classifier unclassified 20,901, symbols_forgotten_silent 748** |
+| ~~`regime_minimum_observations`~~ DONE 2026-09-13 | 1024 trades | regime-classifier | "set equal to the window" — **live 2026-09-13: regime-classifier unclassified 20,901** |
 | `liquidity_turnover_window` | 60 observations | liquidity-grader | "about a minute on the captured symbols" |
 | `order_participation_cap` | 0.1 fraction of traded volume | fill-volume-capper, participation-capped-order-splitter | "the thinnest captured symbol trades about 30 prints a minute" |
 | `outage_silence_seconds` | 60.0 seconds since a symbol's last print | venue-outage-rider | "the top-30 symbols captured all print far inside a minute" |
