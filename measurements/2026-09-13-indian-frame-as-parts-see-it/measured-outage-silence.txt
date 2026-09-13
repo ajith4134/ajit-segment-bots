@@ -1,0 +1,12 @@
+2026-09-07: 1,389 symbols traded; 39 recorded piece(s), 408 min
+2026-09-08: 1,372 symbols traded; 69 recorded piece(s), 296 min
+
+share of seen symbols silent >= S (connection judged lost at 0.8):
+  S=   60s  p5 0.396  p50 0.618  p95 0.985  max 0.997  samples at or over 0.8: 22.1% of 493
+  S=  150s  p5 0.270  p50 0.497  p95 0.950  max 0.988  samples at or over 0.8: 15.6% of 493
+  S=  300s  p5 0.185  p50 0.413  p95 0.796  max 0.970  samples at or over 0.8: 4.7% of 493
+  S=  600s  p5 0.102  p50 0.307  p95 0.580  max 0.700  samples at or over 0.8: 0.0% of 493
+  S=  900s  p5 0.048  p50 0.234  p95 0.378  max 0.433  samples at or over 0.8: 0.0% of 493
+  S= 1800s  p5 0.000  p50 0.135  p95 0.251  max 0.284  samples at or over 0.8: 0.0% of 493
+  S= 3600s  p5 0.000  p50 0.054  p95 0.114  max 0.124  samples at or over 0.8: 0.0% of 493
+  S= 7200s  p5 0.000  p50 0.010  p95 0.068  max 0.073  samples at or over 0.8: 0.0% of 493

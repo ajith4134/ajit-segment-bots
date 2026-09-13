@@ -1436,6 +1436,9 @@ def refit(
 # and wrong for a mistake, so a correction is its own step with its own marker: it
 # replaces the value only while the value is still the wrong one, and records why.
 CORRECTED_MARKER = "CORRECTED 2026-09-13"
+# **This first round's premise was itself wrong** -- symbol-price-frame has a second
+# producer, price-level-sampler, which carries every contract. Kept verbatim as what
+# was done and why; SECOND_CORRECTIONS below undoes it with the evidence.
 WRONG_SERIES = (
     "The value this replaces was measured earlier the same day on option contract "
     "tape records (measurements/2026-09-13-indian-option-move-sizes/). The part reads "
@@ -1471,6 +1474,135 @@ def correct(text: str, name: str, wrong_value: str, new_value: str, note: str) -
     addition = f" {CORRECTED_MARKER}, was {wrong_value}. {WRONG_SERIES} {note}"
     updated = updated[:at] + addition.replace('"', "'") + updated[at:]
     return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{wrong_value} -> {new_value} (corrected)"
+
+
+# ---- second correction round, 2026-09-13 -----------------------------------------
+# The first round's claim that symbol-price-frame carries only underlyings is false.
+# price-level-sampler reads market-data -- every subscribed instrument, 1,995 symbols
+# live -- and publishes all of them on symbol-price-frame; regime-classifier's own
+# checkpoint held 1,775 contract series beside 220 underlyings. The windows hold both,
+# and one setting serves both. Re-measured on both, distinct trades, recording holes
+# cut out: measurements/2026-09-13-indian-frame-as-parts-see-it/.
+RECORRECTED_MARKER = "CORRECTED AGAIN 2026-09-13"
+FIRST_ROUND_WAS_WRONG = (
+    "The correction before this one rested on a false reading of the wiring: "
+    "symbol-price-frame has two producers, broker-underlying-price-frame-bridge (the "
+    "underlyings) and price-level-sampler, which reads market-data and publishes every "
+    "subscribed instrument (symbols_tracked 1,995 on 2026-09-13). The windows hold option "
+    "contracts and underlyings alike, and contracts are 111,265 of 116,179 journalled "
+    "entry candidates. Measured on both as distinct trades "
+    "(measurements/2026-09-13-indian-frame-as-parts-see-it/)."
+)
+# name -> (value the file holds that is wrong, the value, why)
+SECOND_CORRECTIONS: dict[str, tuple[str, str, str]] = {
+    "bear_entry_prior_extension_floor": ("0.000049", "0.0129", (
+        "Bounce peak over the 256-trade mean, distinct trades: option contracts p50 "
+        "1.29% (34,472 bounces, 2026-09-07/08), underlyings p50 0.0049%. The contract "
+        "figure, because the timer judges the candidate's own symbol and contracts are "
+        "95.8% of candidates; an underlying candidate meets a loose prior until the timer "
+        "learns that detector's entries. The record-counted 0.0117 of the first pass was "
+        "close by luck."
+    )),
+    "tail_prior_normal_move_fraction": ("0.000059", "0.0093", (
+        "Completed sustained move over 50 trades with 5 progressing, distinct trades: "
+        "option contracts p50 0.93% (207,879 moves, 2026-09-07/08), underlyings p50 "
+        "0.0059%. The contract figure, for the reason bear_entry_prior_extension_floor "
+        "gives. Nothing calls observe_completed_move, so this is the normal move the tail "
+        "parts use forever: at 0.000059 an ordinary 1% contract move read as 170 normal "
+        "moves, ALREADY_FINISHED on every contract candidate."
+    )),
+    "tail_prior_trail_fraction": ("0.00043", "0.0609", (
+        "Restored to follow profit_lock_prior_retracement, 0.0609, the p80 of 5,456 option "
+        "pullbacks on Upstox one-minute history (measurements/2026-09-13-indian-option-"
+        "retracements/), as its own note directs. On two days of contract distinct trades "
+        "the p80 is 3.09% (11,631 pullbacks); the history figure is the operator's chosen "
+        "basis for retracements, many days over two."
+    )),
+    "tail_minimum_trail_fraction": ("0.00042", "0.0196", (
+        "Restored to three option touch spreads, 3 x 0.00653 "
+        "(measurements/2026-09-13-indian-option-spreads/): the trail sits on the "
+        "candidate's own series, a contract nearly always; a floor of three share spreads "
+        "(0.00042) is a quarter of one 0.05 tick on a Rs30 premium (0.0017)."
+    )),
+    "outage_silence_seconds": ("900.0", "600.0", (
+        "Re-measured over every symbol the rider judges -- 1,389 and 1,372 traded "
+        "contracts and underlyings on 2026-09-07/08, sampled each minute "
+        "(measurements/2026-09-13-indian-frame-as-parts-see-it/measured-outage-silence.txt). "
+        "Share of seen symbols silent at least S reaching the 0.8 venue-wide fraction: "
+        "60s 22.1% of samples, 150s 15.6%, 300s 4.7%, 600s 0.0% (max 0.70), 900s 0.0% "
+        "(max 0.43). 600s is the shortest candidate at which ordinary trading never read "
+        "as a lost connection; the 900s before it was measured on 16-18 underlyings only."
+    )),
+    "regime_trending_hurst_above": ("0.696", "0.649", (
+        "The p95 of runtime.rolling_statistics.hurst_exponent at the 256 window on what "
+        "the classifier holds, distinct trades pooled over option contracts (4,302 windows, "
+        "2026-09-07/08) and F&O underlyings (1,012 windows, 2026-09-04/07/08): 0.649. "
+        "Separately contracts p95 0.657, underlyings 0.585. The previous 0.696 pooled option "
+        "tape with one-minute option history, a coarser series than the one-trade steps the "
+        "window holds."
+    )),
+    "regime_reverting_hurst_below": ("0.429", "0.192", (
+        "The p5 of the estimator at 256 on the same pooled windows: 0.192 (contracts 0.181, "
+        "underlyings 0.283). At 0.696/0.429 the windows read trending 1.2% and reverting "
+        "35.3% pooled -- 31.0% of contract and 53.5% of underlying windows reverting, the "
+        "regime mean-reversion-detector requires; at 0.649/0.192, 5.0% each way, the "
+        "note's one in twenty each side "
+        "(measurements/2026-09-13-indian-frame-as-parts-see-it/measured-regime-band-rates.txt)."
+    )),
+    "regime_window_length": ("256", "256", (
+        "Kept, and the rule it was chosen by is NOT met on the full series: on contract "
+        "distinct trades the estimator's spread is 0.218 at 64, 0.149 at 256 and still "
+        "0.128 at 1024, never inside 0.1, while only 19.7% of contract series reach 256 and "
+        "8.2% reach 1024 (underlyings: 0.092 at 256). A longer window buys little precision "
+        "and classifies almost nothing, so 256 stands on reach -- and a contract regime "
+        "reading at 256 is noisier than the bands assume, which the p5/p95 bands at least "
+        "make rare rather than common."
+    )),
+    "bull_feature_short_window": ("64", "64", (
+        "The value stands; the spans in the note before this were underlyings only. On "
+        "option contracts, which the frame also carries, 64 distinct trades take about "
+        "6.3 minutes at the trade-weighted 10.1 trades a minute and hours on the median "
+        "contract (0.21 a minute) (measurements/2026-09-13-indian-observation-cadence/)."
+    )),
+    "bear_feature_short_window": ("64", "64", (
+        "As bull_feature_short_window: on contracts 64 distinct trades take about 6.3 "
+        "minutes trade-weighted, hours on the median contract."
+    )),
+    "bull_feature_long_window": ("512", "512", (
+        "The value stands; on contracts 512 distinct trades take about 51 minutes at the "
+        "trade-weighted 10.1 trades a minute (measurements/2026-09-13-indian-observation-cadence/)."
+    )),
+    "bear_feature_long_window": ("512", "512", (
+        "As bull_feature_long_window: about 51 minutes of contract trading trade-weighted."
+    )),
+    "tail_window_length": ("50", "50", (
+        "The value stands; on contracts, which the frame also carries, 50 distinct trades "
+        "take about 5 minutes at the trade-weighted 10.1 a minute, still 'a thing of "
+        "minutes', and tail_prior_normal_move_fraction is measured at this window."
+    )),
+}
+
+
+def correct_again(text: str, name: str, wrong_value: str, new_value: str, why: str) -> tuple[str, str]:
+    start = text.find(f"[{name}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    if RECORRECTED_MARKER in block:
+        return text, "second correction already recorded"
+    current = re.search(r"^value\s*=\s*(.+)$", block, re.M)
+    if current is None:
+        return text, "NO VALUE LINE"
+    if current.group(1).strip() != wrong_value:
+        return text, f"not corrected: value is {current.group(1).strip()}, not {wrong_value}"
+    updated = block[:current.start(1)] + new_value + block[current.end(1):]
+    at = note_insertion_point(updated)
+    if at is None:
+        return text, "NO NOTE"
+    addition = f" {RECORRECTED_MARKER}, was {wrong_value}. {FIRST_ROUND_WAS_WRONG} {why}"
+    updated = updated[:at] + addition.replace('"', "'") + updated[at:]
+    return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{wrong_value} -> {new_value} (corrected again)"
 
 
 def main() -> int:
@@ -1523,6 +1655,11 @@ def main() -> int:
     for name, wrong_value in CORRECTIONS.items():
         value, note = REFITS[name][0], REFITS[name][1]
         text, what = correct(text, name, wrong_value, value, note)
+        print(f"  {name:46} {what}")
+        if "->" in what:
+            changed += 1
+    for name, (wrong_value, value, why) in SECOND_CORRECTIONS.items():
+        text, what = correct_again(text, name, wrong_value, value, why)
         print(f"  {name:46} {what}")
         if "->" in what:
             changed += 1

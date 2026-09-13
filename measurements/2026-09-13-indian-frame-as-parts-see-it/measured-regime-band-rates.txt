@@ -1,0 +1,12 @@
+  2026-09-07: 1,135 instruments with trades
+  2026-09-08: 1,077 instruments with trades
+  2026-09-04: 18 instruments with trades
+  2026-09-07: 16 instruments with trades
+  2026-09-08: 16 instruments with trades
+N=256 band rates (trending, reverting):
+  0.696/0.429 (in use)         contracts    trending 1.5%  reverting 31.0%  of 4302
+  0.696/0.429 (in use)         underlyings  trending 0.2%  reverting 53.5%  of 1012
+  0.696/0.429 (in use)         pooled       trending 1.2%  reverting 35.3%  of 5314
+  0.649/0.192 (pooled p95/p5)  contracts    trending 6.0%  reverting 6.0%  of 4302
+  0.649/0.192 (pooled p95/p5)  underlyings  trending 0.8%  reverting 0.7%  of 1012
+  0.649/0.192 (pooled p95/p5)  pooled       trending 5.0%  reverting 5.0%  of 5314

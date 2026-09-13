@@ -73,6 +73,25 @@ unexamined; 6 need a mechanism, 2 measured but inconclusive.**
 Wiring findings from this group: the balance watch can never read a live Upstox balance (it names no segment)
 and compares equity, which moves by P&L; `clock-skew-monitor` conflates lag with skew. Seen on the spine, not
 caused here: `order-flow-state-encoder` escalated "taking longer every tick" 9 times on 09-12 and 16 times on 09-13.
+**2026-09-13 (late) — CORRECTION: the evening entry above is wrong about the wiring.** It says
+`symbol-price-frame` carries underlyings only. It has two producers: `broker-underlying-price-frame-bridge`
+and **`price-level-sampler`, which reads `market-data` and publishes every subscribed instrument** (1,995
+symbols live). Found because regime-classifier's own checkpoint held 1,775 contract series beside 220
+underlyings, while a regime correction built on the same false premise was about to be applied -- that
+change was restored from the refit backup before the spine ever loaded it. Consequently the "not a setting"
+wiring finding above (contract candidates have no window) is false, and the four first-round corrections put
+contract-judging parts on underlying scale -- `tail_prior_normal_move_fraction` 0.000059 read an ordinary 1%
+contract move as 170 normal moves. A second correction round (`SECOND_CORRECTIONS`, marker
+`CORRECTED AGAIN 2026-09-13`), measured on contracts and underlyings as distinct trades
+(`measurements/2026-09-13-indian-frame-as-parts-see-it/`): `bear_entry_prior_extension_floor` 0.0129
+(contract p50), `tail_prior_normal_move_fraction` 0.0093 (contract p50), `tail_prior_trail_fraction` back to
+0.0609 and `tail_minimum_trail_fraction` back to 0.0196; `outage_silence_seconds` 900 -> 600 (over all 1,389
+symbols the rider judges, 600s is the shortest threshold that never read 0.8 silent); regime bands
+0.696/0.429 -> 0.649/0.192, the pooled p95/p5 at 256 (in use they read 31.0% of contract and 53.5% of
+underlying windows reverting; now 5.0% each way). `regime_window_length` 256 kept but its rule is **not met**:
+on contract trades the estimator's spread is 0.149 at 256 and 0.128 at 1024, never under 0.1. Feature-window and
+`tail_window_length` notes corrected to state contract spans (64 trades about 6 minutes trade-weighted).
+Classification of the 34 is unchanged by this.
 
 ## Costs and spreads taken from the crypto venues (7)
 
