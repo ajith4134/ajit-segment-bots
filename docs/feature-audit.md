@@ -2356,3 +2356,37 @@ Also seen, not acted on: `paper-account-keeper` holds 16 stock-options positions
 1260 CE: 12,207.8 against 8,244.2) — two books of one portfolio that do not agree.
 Several lots carry fractional option quantities (1,281.15), from before the 2026-09-12
 whole-lot fix.
+
+### 2026-09-13 — the four position books agree again
+
+`paper-account-keeper`, `fill-reconciler`, `cost-basis-tracker` and
+`position-close-detector` disagreed on 22 instruments. Four causes, each proven on
+the real fills, fixed in code in commit 02dc183:
+
+| cause | measured | fix |
+|---|---|---|
+| the keeper refused *executed* fills for want of cash | 114 on 2026-09-07; replay reproduced the live account to the rupee | apply and count (`fills_applied_beyond_cash`) |
+| fill ids ended in a sequence that restarts with the part | 3 real fills dropped by every book | the fill/exit id carries its moment |
+| `RESIZE` was never in `is_actionable` | re-cut stops never withdrawn; stop -1338 sold 1,430.081 on flat NIFTY 23700 CE | RESIZE published; exits for an already-closed position refused |
+| the 2026-09-07 trim cut two lot books only, with no fill and no proceeds | 6 symbols | kept, as paper sells (below) |
+
+**Rebuilt** by `operate/rebuild_position_books_from_the_fill_journal.py` from the
+2,885 journal fills through the parts' own engines, spine stopped, old checkpoints in
+`positions-before-book-rebuild-2026-09-13T094852/`. The trim was kept (operator):
+recomputed with its own `trim()` on the replayed book, whose capital matched the
+record to the paisa for all six symbols, and applied as six paper sells at the
+recorded prices. The detector replayed with shorts allowed, because 12 stale exits
+(28,935.687 units) really executed and were covered; no book ends short.
+
+After restart: 10 instruments, 0 disagreeing; detector and cost-basis restored 10;
+`stop-order-manager` re-cut 7 stops to the rebuilt positions. stock-options cash
+2,989,677 -> 5,880,111.68 (the 114 fills and the trim's proceeds); fills 2,613 -> 2,736.
+
+**Recorded, not fixed:**
+- stock-options ran 329 fills beyond its cash on 2026-09-07 (shortfall 4,291,953.90)
+  — the pre-trade guard let orders through that the account could not pay for.
+- `Realised result` reads closed trades from `position-recorder`'s journal, which the
+  rebuild does not rewrite; the trim's sells are not in it.
+- `paper-fill-simulator` keeps resting orders in memory only while
+  `stop-order-manager` checkpoints what it believes rests: after any restart a
+  position whose stop needs no resize can have no real stop on the paper book.
