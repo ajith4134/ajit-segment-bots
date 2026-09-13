@@ -34,7 +34,7 @@ and filling there manufactures profit out of a data artefact.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from runtime.indian_equity_fee_model import upstox_equity_intraday_order_cost
 from runtime.indian_options_fee_model import upstox_options_order_cost
@@ -167,12 +167,26 @@ class RestingOrder:
         return (self.venue_id, self.symbol)
 
 
+# What this part's checkpoint is called under `position_state_root`.
+CHECKPOINT_COMPONENT = "resting-orders"
+
+
 @dataclass
 class SimulatorStanding:
     orders_seen: int = 0
     filled: int = 0
     partially_filled: int = 0
     resting: int = 0
+    # The paper book, carried across a restart since 2026-09-13. Named
+    # `restored_symbols` because that is the field `restore_and_arm_checkpoint`
+    # sets (T-4). Until then the book lived in memory alone while
+    # `stop-order-manager` checkpointed what it believed was resting, so every
+    # restart left positions the manager counted as protected with no stop on
+    # the paper book at all -- the venue a real order rests at does not forget
+    # it when the process that placed it restarts, and neither may this one.
+    restored_symbols: int = 0
+    checkpoint_verdict: str = "no checkpoint has been read yet"
+    book_changes: int = 0
     held_in_flight: int = 0
     released_without_a_verdict: int = 0
     refused_feed_jump: int = 0
@@ -296,6 +310,39 @@ class PaperFillSimulator:
         # holds an order under, and it is what a cancel names.
         self._resting: dict[str, RestingOrder] = {}
         self.standing = SimulatorStanding()
+
+    def read_checkpoint_state(self) -> dict:
+        """The paper book, and how much of each resting order has already filled."""
+        return {
+            "resting": [asdict(order) for order in self.resting_orders],
+            "filled_so_far": {
+                client_order_id: filled
+                for client_order_id, filled in self._filled_so_far.items()
+                if client_order_id in self._resting
+            },
+        }
+
+    def restore_from_checkpoint(self, state: dict) -> int:
+        """Put the book back. Returns how many orders came back resting."""
+        known = {field_.name for field_ in fields(RestingOrder)}
+        self._resting = {}
+        for entry in state.get("resting") or ():
+            order = RestingOrder(**{name: value for name, value in entry.items() if name in known})
+            self._resting[order.client_order_id] = order
+        self._filled_so_far = {
+            client_order_id: float(filled)
+            for client_order_id, filled in (state.get("filled_so_far") or {}).items()
+            if client_order_id in self._resting
+        }
+        self.standing.orders_on_the_book = len(self._resting)
+        return len(self._resting)
+
+    def book_signature(self) -> tuple:
+        """What is resting, as a value that changes exactly when the book does."""
+        return tuple(sorted(
+            (order.client_order_id, order.quantity, order.stop_price, order.limit_price)
+            for order in self._resting.values()
+        ))
 
     def _upstox_fee_for(self, order, turnover: float) -> float:
         """Which of Upstox's two charge stacks this fill pays, and what it costs.
@@ -949,6 +996,9 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "stops_triggered": simulator.standing.stops_triggered,
         "cancelled": simulator.standing.cancelled,
         "cancels_for_an_unknown_order": simulator.standing.cancels_for_an_unknown_order,
+        "restored_symbols": simulator.standing.restored_symbols,
+        "checkpoint_verdict": simulator.standing.checkpoint_verdict,
+        "book_changes": simulator.standing.book_changes,
         "refused_because_the_decision_was_stale": simulator.standing.refused_decision_stale,
         "held_in_flight": simulator.standing.held_in_flight,
         "released_without_a_verdict": simulator.standing.released_without_a_verdict,
@@ -1016,6 +1066,7 @@ def run_paper_fill_simulator(
     health_interval_seconds: float, emit_health, read_prices=None,
     input_descriptors: tuple[int, ...] = (),
     tick_floor_seconds: float = 0.0,
+    write_checkpoint=None,
 ) -> int:
     """`read_prices` gives the latest live price per symbol, for the book.
 
@@ -1024,12 +1075,20 @@ def run_paper_fill_simulator(
     trigger is only checked when another message mentions it is not a stop.
     """
     def tick() -> None:
+        book_before = simulator.book_signature()
         orders = read_orders(simulator)
         results = [simulator.simulate(**order) for order in orders]
         if read_prices is not None:
             prices, fidelity = read_prices()
             results.extend(simulator.evaluate_resting(prices, price_fidelity=fidelity))
         publish_fills(tuple(result.fill for result in results if result.did_fill))
+        if write_checkpoint is not None and simulator.book_signature() != book_before:
+            # After the fills go out: a checkpoint written first would drop an
+            # order from the book whose fill no part ever received. Only when the
+            # book changed -- this part ticks on every trade, and rewriting an
+            # unchanged book at that rate is the level-on-every-tick defect.
+            simulator.standing.book_changes += 1
+            write_checkpoint(simulator.standing.book_changes)
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -1303,32 +1362,51 @@ def start_part(context) -> int:
         kinds = set(last_price_fidelity.values())
         return dict(last_price), (kinds.pop() if len(kinds) == 1 else None)
 
-    return run_paper_fill_simulator(
-        simulator=PaperFillSimulator(
-            taker_fee_rate=context.number("taker_fee_rate"),
-            maker_fee_rate=context.number("maker_fee_rate"),
-            options_flat_brokerage=context.number("options_flat_brokerage"),
-            options_stt_sell_rate=context.number("options_stt_sell_rate"),
-            options_exchange_transaction_charge_rate=context.number(
-                "options_exchange_transaction_charge_rate"
-            ),
-            options_ipft_charge_rate=context.number("options_ipft_charge_rate"),
-            options_stamp_duty_buy_rate=context.number("options_stamp_duty_buy_rate"),
-            options_gst_rate=context.number("options_gst_rate"),
-            equity_intraday_rates={
-                "flat_brokerage": context.number("equity_intraday_flat_brokerage"),
-                "brokerage_rate": context.number("equity_intraday_brokerage_rate"),
-                "stt_sell_rate": context.number("equity_intraday_stt_sell_rate"),
-                "exchange_transaction_charge_rate": context.number(
-                    "equity_intraday_exchange_transaction_charge_rate"
-                ),
-                "ipft_charge_rate": context.number("equity_intraday_ipft_charge_rate"),
-                "stamp_duty_buy_rate": context.number("equity_intraday_stamp_duty_buy_rate"),
-                "sebi_charge_rate": context.number("equity_intraday_sebi_charge_rate"),
-                "gst_rate": context.number("equity_intraday_gst_rate"),
-            },
-            kinds_by_segment=one_kind_per_segment(context),
+    simulator = PaperFillSimulator(
+        taker_fee_rate=context.number("taker_fee_rate"),
+        maker_fee_rate=context.number("maker_fee_rate"),
+        options_flat_brokerage=context.number("options_flat_brokerage"),
+        options_stt_sell_rate=context.number("options_stt_sell_rate"),
+        options_exchange_transaction_charge_rate=context.number(
+            "options_exchange_transaction_charge_rate"
         ),
+        options_ipft_charge_rate=context.number("options_ipft_charge_rate"),
+        options_stamp_duty_buy_rate=context.number("options_stamp_duty_buy_rate"),
+        options_gst_rate=context.number("options_gst_rate"),
+        equity_intraday_rates={
+            "flat_brokerage": context.number("equity_intraday_flat_brokerage"),
+            "brokerage_rate": context.number("equity_intraday_brokerage_rate"),
+            "stt_sell_rate": context.number("equity_intraday_stt_sell_rate"),
+            "exchange_transaction_charge_rate": context.number(
+                "equity_intraday_exchange_transaction_charge_rate"
+            ),
+            "ipft_charge_rate": context.number("equity_intraday_ipft_charge_rate"),
+            "stamp_duty_buy_rate": context.number("equity_intraday_stamp_duty_buy_rate"),
+            "sebi_charge_rate": context.number("equity_intraday_sebi_charge_rate"),
+            "gst_rate": context.number("equity_intraday_gst_rate"),
+        },
+        kinds_by_segment=one_kind_per_segment(context),
+    )
+    import pathlib
+
+    from runtime.durable_state import (
+        CheckpointSchedule,
+        DurableStateStore,
+        restore_and_arm_checkpoint,
+    )
+
+    store = DurableStateStore(
+        pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
+    )
+    store.root.mkdir(parents=True, exist_ok=True)
+    # Every change to the book: a resting stop lost to a restart is a position
+    # with no stop, which is what this checkpoint exists to prevent.
+    write_checkpoint = restore_and_arm_checkpoint(
+        store, CheckpointSchedule(1), PART_ID, CHECKPOINT_COMPONENT, simulator, {},
+    )
+
+    return run_paper_fill_simulator(
+        simulator=simulator,
         control_socket=context.control_socket,
         read_orders=read_orders,
         publish_fills=publish_fills,
@@ -1337,4 +1415,5 @@ def start_part(context) -> int:
         tick_floor_seconds=context.tick_floor_seconds,
         emit_health=context.emit_health,
         read_prices=read_prices,
+        write_checkpoint=write_checkpoint,
     )

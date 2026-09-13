@@ -187,6 +187,8 @@ class ManagerStanding:
     refused_no_position: int = 0
     # Exits that arrived after the position they were for had already closed.
     refused_exits_for_a_closed_position: int = 0
+    # Restored exits sent to the paper book again after a restart (2026-09-13).
+    exits_reasserted_after_restart: int = 0
     refused_no_mode: int = 0
     unprotected_windows: int = 0
     stops_resting: int = 0
@@ -203,6 +205,7 @@ class StopOrderManager:
     def __init__(self, now_ns=time.time_ns) -> None:
         self._now_ns = now_ns
         self._resting: dict[tuple[str, str], _RestingStop] = {}
+        self._not_yet_reasserted: set[tuple[str, str]] = set()
         # Whose money is in each held position, so its exits can name it.
         self._segment_of: dict[tuple[str, str], str] = {}
         self._sequence = 0
@@ -260,6 +263,9 @@ class StopOrderManager:
             for text, held in (state.get("resting") or {}).items()
         }
         self._sequence = int(state.get("sequence") or 0)
+        # Every restored exit is re-sent once, when its position is next seen
+        # held -- see `reassert_restored_exits`.
+        self._not_yet_reasserted = set(self._resting)
         self.standing.stops_resting = len(self._resting)
         return self.standing.stops_resting
 
@@ -270,6 +276,55 @@ class StopOrderManager:
         was" is a reason to send nothing only when something is already there.
         """
         return (venue_id, symbol) in self._resting
+
+    def reassert_restored_exits(
+        self, venue_id: str, symbol: str, direction: str, money_mode,
+    ) -> tuple:
+        """Send a restored position's exits to the paper book again, once, under their own ids.
+
+        This part checkpoints the exits it believes are resting; until 2026-09-13
+        `paper-fill-simulator` did not checkpoint the book they rest on. Every
+        restart therefore left positions this part counted as protected with no
+        stop on the paper book -- and a stop that needed no resize was never sent
+        again. The book checkpoints now; this is what makes a book lost anyway (a
+        checkpoint that cannot be read, or the restarts before it existed) heal
+        on the first position message rather than stay silently empty.
+
+        The same client order ids, because the paper book holds one order per id
+        and ignores an id it already has: re-sending to a book that kept the order
+        changes nothing, and re-sending to one that lost it restores it exactly.
+
+        Paper only. A live venue keeps its own book across this process's
+        restarts, and re-sending there is a question for the venue's own
+        idempotency, not an assumption to make here. Nothing is sent until the
+        money mode is known, and then never again for that position.
+        """
+        key = (venue_id, symbol)
+        if key not in self._not_yet_reasserted or money_mode is None:
+            return ()
+        self._not_yet_reasserted.discard(key)
+        held = self._resting.get(key)
+        if held is None or money_mode.mode == "live":
+            return ()
+        side = SELL if direction == LONG else BUY
+        actions = []
+        if held.order_id:
+            actions.append(self._action(
+                venue_id, symbol, PLACE_NEW, PAPER_BOOK, held.order_id, None,
+                side, held.quantity, held.stop_price, None,
+                f"re-sending the stop restored from this part's checkpoint at "
+                f"{held.stop_price:g} under its own id; the paper book did not keep its "
+                f"orders across a restart before 2026-09-13",
+            ))
+        if held.target_order_id and held.target_price is not None:
+            actions.append(self._action(
+                venue_id, symbol, PLACE_TARGET, PAPER_BOOK, held.target_order_id, None,
+                side, held.target_quantity or held.quantity, held.target_price, None,
+                f"re-sending the target restored from this part's checkpoint at "
+                f"{held.target_price:g} under its own id",
+            ))
+        self.standing.exits_reasserted_after_restart += len(actions)
+        return tuple(actions)
 
     def observe_position_closed(self, venue_id: str, symbol: str) -> tuple:
         """The position is flat; withdraw whatever exits were protecting it.
@@ -619,6 +674,7 @@ def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
         "resized_to_the_position": manager.standing.resized_to_the_position,
         "resized_target_to_the_position": manager.standing.resized_target_to_the_position,
         "refused_no_position": manager.standing.refused_no_position,
+        "exits_reasserted_after_restart": manager.standing.exits_reasserted_after_restart,
         "refused_exits_for_a_closed_position": (
             manager.standing.refused_exits_for_a_closed_position
         ),
@@ -671,6 +727,11 @@ def run_stop_order_manager(
             for venue_id, symbol, direction, quantity, mode in (
                 read_positions_to_cut_stops_to()
             ):
+                # Before any resize: a resize cancels the id it replaces, and the
+                # paper book has to hold that id for the cancel to mean anything.
+                actions.extend(manager.reassert_restored_exits(
+                    venue_id=venue_id, symbol=symbol, direction=direction, money_mode=mode,
+                ))
                 resize = manager.resize_stop_to_the_position(
                     venue_id=venue_id, symbol=symbol, direction=direction,
                     quantity=quantity, money_mode=mode,

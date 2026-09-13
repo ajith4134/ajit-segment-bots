@@ -1815,3 +1815,101 @@ def test_exits_for_an_entry_the_position_had_already_closed_past_are_not_placed(
     # Held again: the exits apply to a live position, whatever closed before.
     held = {(venue, symbol): 1560.0}
     assert isinstance(read_adjustment(exits_for(entry), held, None, closed_at), dict)
+
+
+# ---- a stop survives a restart (2026-09-13) -----------------------------------
+
+NIFTY_VENUE, NIFTY_SYMBOL = "upstox", "NIFTY 23700 CE 15 SEP 26"
+
+
+def a_nifty_stop(client_order_id, quantity, stop_price, market_price):
+    """A resting sell stop at the real 2026-09-08 prices of NIFTY 23700 CE."""
+    return a_stop(
+        client_order_id=client_order_id, venue_id=NIFTY_VENUE, symbol=NIFTY_SYMBOL,
+        quantity=quantity, stop_price=stop_price, market_price=market_price,
+    )
+
+
+def test_the_paper_book_comes_back_after_a_restart_and_its_stop_still_fires():
+    """The price the stop really fired at on 2026-09-08 (126.5) fires the restored stop."""
+    quantity = nifty_fill(BUY, 1430.081)["quantity"]
+    fired_at = nifty_fill(SELL, 1430.081)["price"]
+    before = fill_simulator()
+    assert before.simulate(**a_nifty_stop("stop-1338", quantity, 126.57, 127.67)).outcome == RESTING_STOP
+
+    restarted = fill_simulator()
+    assert restarted.restore_from_checkpoint(before.read_checkpoint_state()) == 1
+    assert [order.client_order_id for order in restarted.resting_orders] == ["stop-1338"]
+
+    fills = restarted.evaluate_resting({(NIFTY_VENUE, NIFTY_SYMBOL): fired_at})
+    assert len(fills) == 1 and fills[0].fill.quantity == pytest.approx(quantity)
+
+
+def test_the_book_signature_changes_exactly_when_the_book_does():
+    """The checkpoint is written on a change, not on every trade the part ticks for."""
+    subject = fill_simulator()
+    empty = subject.book_signature()
+    subject.simulate(**a_nifty_stop("stop-1", 75.0, 126.57, 127.67))
+    rested = subject.book_signature()
+    assert rested != empty
+    subject.evaluate_resting({(NIFTY_VENUE, NIFTY_SYMBOL): 127.0})
+    assert subject.book_signature() == rested
+    subject.cancel("stop-1", "test")
+    assert subject.book_signature() == empty
+
+
+def a_restarted_manager_with_a_stop_and_a_target():
+    manager = StopOrderManager()
+    manager.apply_adjustment(NIFTY_VENUE, NIFTY_SYMBOL, LONG, 1430.081, 126.57, Mode("paper"))
+    manager.place_target(
+        venue_id=NIFTY_VENUE, symbol=NIFTY_SYMBOL, direction=LONG, quantity=1430.081,
+        target_price=130.5, money_mode=Mode("paper"),
+    )
+    restarted = StopOrderManager()
+    restarted.restore_from_checkpoint(manager.read_checkpoint_state())
+    return manager, restarted
+
+
+def test_restored_exits_are_re_sent_once_under_their_own_ids():
+    original, restarted = a_restarted_manager_with_a_stop_and_a_target()
+    held = original._resting[(NIFTY_VENUE, NIFTY_SYMBOL)]
+
+    assert restarted.reassert_restored_exits(NIFTY_VENUE, NIFTY_SYMBOL, LONG, None) == ()
+    actions = restarted.reassert_restored_exits(NIFTY_VENUE, NIFTY_SYMBOL, LONG, Mode("paper"))
+    assert [action.place_order_id for action in actions] == [held.order_id, held.target_order_id]
+    assert all(action.is_actionable and action.cancel_order_id is None for action in actions)
+    assert restarted.reassert_restored_exits(NIFTY_VENUE, NIFTY_SYMBOL, LONG, Mode("paper")) == ()
+    assert restarted.standing.exits_reasserted_after_restart == 2
+
+
+def test_a_live_venue_keeps_its_own_book_and_is_not_re_sent_to():
+    _, restarted = a_restarted_manager_with_a_stop_and_a_target()
+    assert restarted.reassert_restored_exits(NIFTY_VENUE, NIFTY_SYMBOL, LONG, Mode("live")) == ()
+
+
+@pytest.mark.parametrize("book_was_kept", [True, False])
+def test_after_a_restart_the_paper_book_holds_each_exit_exactly_once(book_was_kept):
+    """Whether the paper book's checkpoint survived or not, one stop and one target rest."""
+    from parts.paper_live_trading.stop_order_manager import as_order_request
+
+    original, restarted_manager = a_restarted_manager_with_a_stop_and_a_target()
+    book = fill_simulator()
+    held = original._resting[(NIFTY_VENUE, NIFTY_SYMBOL)]
+    book.simulate(**a_nifty_stop(held.order_id, held.quantity, held.stop_price, 127.67))
+    book.simulate(**a_nifty_stop(held.target_order_id, held.target_quantity, 130.5, 127.67)
+                  | {"order_type": TAKE_PROFIT_MARKET})
+
+    restarted_book = fill_simulator()
+    if book_was_kept:
+        restarted_book.restore_from_checkpoint(book.read_checkpoint_state())
+
+    for action in restarted_manager.reassert_restored_exits(
+        NIFTY_VENUE, NIFTY_SYMBOL, LONG, Mode("paper")
+    ):
+        request = as_order_request(action)
+        restarted_book.simulate(**a_nifty_stop(
+            request.client_order_id, request.quantity, request.stop_price, 127.67,
+        ) | {"order_type": request.order_type})
+
+    resting = sorted(order.client_order_id for order in restarted_book.resting_orders)
+    assert resting == sorted([held.order_id, held.target_order_id])
