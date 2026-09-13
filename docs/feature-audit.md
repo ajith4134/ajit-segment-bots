@@ -2330,3 +2330,29 @@ with the freshness tile), then with no spine a calendar given NSE's real holiday
 list, then None. Checked against NSE's live list: Tuesday 2026-09-15 10:00 IST
 open; **Monday 2026-09-14 is a trading holiday (Ganesh Chaturthi)**, so the next
 session after this weekend is Tuesday, not Monday.
+
+### 2026-09-13 — the Trading tiles, and why nothing traded 9-11 September
+
+`Trading` and `Open positions` read `trading/orders.jsonl` and `trading/positions.json`,
+crypto-era paths nothing writes, and said "no order has ever been placed" on 2,768
+paper fills. Both now read the books the bots trade against (commit 6347318): 2,768
+fills (index-options 155, stock-options 2,613), 15 open option positions.
+
+Reading the real books showed **the last position change was 8 September**, and the
+tape holds no Upstox files for 9, 10 or 11 September — three NSE sessions with
+nothing captured and nothing traded. Not a code fault: `journalctl --list-boots`
+shows the VM down from 2026-09-08 10:15 UTC to 2026-09-12 06:17 UTC, and every boot
+on record ends the same day (06 Sep 19:52, 07 Sep 11:53, 08 Sep 10:15, 12 Sep 17:00
+UTC). The spine is `Restart=always` with lingering, so it survives crashes and
+reboots — it cannot survive the machine being off. NSE opens 03:45 UTC; a boot
+starting at 06:17 misses two and a half hours of a session.
+
+**Operator's to decide, not code's:** whether the instance is stopped deliberately
+(cost) or by something else, and whether it can run through NSE hours. Until then
+every session this project learns from is whichever the VM happens to be up for.
+
+Also seen, not acted on: `paper-account-keeper` holds 16 stock-options positions and
+`position-close-detector`'s lot books hold 15, and their quantities disagree (AXISBANK
+1260 CE: 12,207.8 against 8,244.2) — two books of one portfolio that do not agree.
+Several lots carry fractional option quantities (1,281.15), from before the 2026-09-12
+whole-lot fix.
