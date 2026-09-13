@@ -13,18 +13,27 @@ classification marker; 759 of those were first written before the 2026-09-01 piv
 a part on the live spine. Their notes were triaged by what they cite and every candidate with a
 market-scaled unit was read by hand. The 34 below cite crypto evidence for a number a live part acts on.
 **Progress:** 2026-09-13 — `liquidity_tradeable_cost_fraction`, `liquidity_thin_cost_fraction`, `regime_window_length`, `regime_minimum_observations` refitted (plus `regime_trending_hurst_above` / `regime_reverting_hurst_below`, which were not in this list and should have been). 30 remain.
+2026-09-13 (later) — the whole cost group, from one measurement of the NSE option touch on the book tape
+(`measurements/2026-09-13-indian-option-spreads/`: 427,632 in-session snapshots, 2,413 contract-days,
+half spread p50 0.3167% per snapshot, 0.3265% print-weighted, p80 print-weighted round trip 2.37%).
+`maker_fee_rate` recorded INERT (only a non-Upstox fill reads it); the other six refitted, plus
+`resting_order_maximum_distance_fraction` (1% "One percent", no basis, clamped the new prior) — another
+this list missed because its note cites nothing. `exploration_maximum_cost_fraction` had become
+unpassable again after the 2026-09-12 fee refit (pair cost 1.71% against a 0.25% ceiling). Live after a
+restart: `counterfactual-replayer` `round_trip_cost_charged` 0.0011 -> 0.008532. **23 remain.**
+Still open: the guard's `CRYPTO_PROVENANCE` is still case-sensitive.
 
 ## Costs and spreads taken from the crypto venues (7)
 
 | setting | value | read by | what its note rests on |
 |---|---|---|---|
-| `maker_fee_rate` | 0.0002 fraction of notional | paper-fill-simulator | "Both venues publish 0.0200% maker" |
-| `exploration_maximum_cost_fraction` | 0.0025 fraction of notional | exploration-pair-opener | "4x taker_fee_rate (0.0022 at the current 0.00055 rate)" |
-| `regret_cost_fraction` | 0.0011 fraction of notional | counterfactual-replayer, regret-tracker | "Two taker fees at the higher venue's rate" |
-| `slippage_prior_cost_fraction` | 0.001 fraction of price | slippage-learner | "a spread and a fee on a liquid symbol" |
-| `backtest_prior_half_spread_fraction` | 0.0005 fraction of price | execution-cost-model | "the liquid captured symbols on 2026-08-22" |
-| `limit_walk_prior_step_fraction` | 0.0002 fraction of price | limit-price-walker | "about the spread on the liquid captured symbols" |
-| `resting_order_prior_distance_fraction` | 0.002 fraction of price | resting-order-cancel-policy | "ten spreads on the liquid symbols" |
+| ~~`maker_fee_rate`~~ DONE 2026-09-13 | 0.0002 fraction of notional | paper-fill-simulator | "Both venues publish 0.0200% maker" |
+| ~~`exploration_maximum_cost_fraction`~~ DONE 2026-09-13 | 0.0025 fraction of notional | exploration-pair-opener | "4x taker_fee_rate (0.0022 at the current 0.00055 rate)" |
+| ~~`regret_cost_fraction`~~ DONE 2026-09-13 | 0.0011 fraction of notional | counterfactual-replayer, regret-tracker | "Two taker fees at the higher venue's rate" |
+| ~~`slippage_prior_cost_fraction`~~ DONE 2026-09-13 | 0.001 fraction of price | slippage-learner | "a spread and a fee on a liquid symbol" |
+| ~~`backtest_prior_half_spread_fraction`~~ DONE 2026-09-13 | 0.0005 fraction of price | execution-cost-model | "the liquid captured symbols on 2026-08-22" |
+| ~~`limit_walk_prior_step_fraction`~~ DONE 2026-09-13 | 0.0002 fraction of price | limit-price-walker | "about the spread on the liquid captured symbols" |
+| ~~`resting_order_prior_distance_fraction`~~ DONE 2026-09-13 | 0.002 fraction of price | resting-order-cancel-policy | "ten spreads on the liquid symbols" |
 
 ## Move sizes fitted to crypto's intraday range (8)
 

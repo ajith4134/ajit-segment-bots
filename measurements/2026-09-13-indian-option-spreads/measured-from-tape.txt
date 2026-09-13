@@ -1,0 +1,19 @@
+days 2026-09-07, 2026-09-08; in-session book snapshots, every 10th
+
+Upstox charge stack, round trip at Rs150,000: 0.002183 (0.2183%)
+
+-- index options: 307,072 snapshots, 980 contract-days, 980 of them traded, 2,999,235 prints --
+  half spread p50   every snapshot 0.002542   per contract 0.005309   print-weighted 0.002530   -> round trip 0.007242
+  half spread p80   every snapshot 0.012350   per contract 0.037037   print-weighted 0.012048   -> round trip 0.026280
+  half spread p95   every snapshot 0.043478   per contract 0.107045   print-weighted 0.040650   -> round trip 0.083484
+
+-- stock options: 120,560 snapshots, 1,433 contract-days, 1,433 of them traded, 1,182,281 prints --
+  half spread p50   every snapshot 0.004044   per contract 0.012618   print-weighted 0.003984   -> round trip 0.010151
+  half spread p80   every snapshot 0.008221   per contract 0.041940   print-weighted 0.007981   -> round trip 0.018145
+  half spread p95   every snapshot 0.042012   per contract 0.333333   print-weighted 0.041667   -> round trip 0.085517
+
+-- both: 427,632 snapshots, 2,413 contract-days, 2,413 of them traded, 4,181,516 prints --
+  half spread p50   every snapshot 0.003167   per contract 0.009677   print-weighted 0.003265   -> round trip 0.008714
+  half spread p80   every snapshot 0.011041   per contract 0.040000   print-weighted 0.010753   -> round trip 0.023689
+  half spread p95   every snapshot 0.043478   per contract 0.212934   print-weighted 0.040831   -> round trip 0.083845
+

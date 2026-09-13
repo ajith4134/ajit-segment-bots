@@ -177,6 +177,102 @@ REFITS: dict[str, tuple] = {
         "3 x 0.008532 + 0.021097 = 0.046693. At 2% a break-even stop sat inside the "
         "ordinary pullback of roughly half of all winning option moves.",
     ),
+    # ---- costs and spreads, 2026-09-13 ------------------------------------------
+    # docs/settings-fitted-to-crypto-the-guard-cannot-see.md, "Costs and spreads taken
+    # from the crypto venues". Every one rests on a basis-point spread read off the
+    # crypto books; all are re-derived from one measurement of the NSE option touch on
+    # this project's own book tape (measurements/2026-09-13-indian-option-spreads/):
+    # 427,632 in-session snapshots over 2,413 contract-days on 2026-09-07 and -08,
+    # half spread p50 0.3167% per snapshot (the 2026-09-07 study had 0.3175%) and
+    # 0.3265% weighted by how often each contract traded.
+    "regret_cost_fraction": (
+        "0.008532",
+        "Claude, 2026-09-13: the round trip charged against a passed-over opinion. "
+        "Was 0.0011, 'two taker fees at the higher venue's rate, the same round trip "
+        "every other part prices' -- Bybit's. The rule is kept: the round trip every "
+        "other part here prices is reference_price_materiality_fraction, 0.008532, "
+        "Upstox's charge stack plus two half spreads "
+        "(measurements/2026-09-07-indian-price-staleness/). Re-measured on 4,181,516 "
+        "prints of 2026-09-07/08 (measurements/2026-09-13-indian-option-spreads/) the "
+        "print-weighted p50 round trip is 0.008714, within 2%. At 0.0011 every "
+        "counterfactual was charged an eighth of what acting would have cost, so "
+        "regret-tracker would have scored passing on a trade as a mistake when the "
+        "trade could not have paid for itself.",
+    ),
+    "exploration_maximum_cost_fraction": (
+        "0.0474",
+        "Claude, 2026-09-13: the most an exploration pair may cost, compared in "
+        "exploration_pair_opener.py against twice the round trip (both legs pay it). "
+        "Was 0.0025, set on 2026-08-29 to clear 4 x taker_fee_rate at the crypto 0.00055. "
+        "The 2026-09-12 fee refit made the round trip fed to it 2 x 0.004266 = 0.008532, "
+        "so a pair costs 0.017064 and the gate was unpassable again -- the 2026-08-29 "
+        "defect (7,262 disagreements, 0 pairs) restored by a correct fix next door. "
+        "Re-derived: twice the p80 print-weighted round trip of an NSE option, 0.023689 "
+        "on 2026-09-07/08 (measurements/2026-09-13-indian-option-spreads/), = 0.047378. "
+        "A pair on a contract costing up to what four in five traded contracts cost "
+        "passes; a dearer one is refused. The opener is fed one round trip for every "
+        "symbol today, so until it reads a per-contract cost this ceiling admits all "
+        "or none, and on the measured cost it admits all.",
+    ),
+    "slippage_prior_cost_fraction": (
+        "0.0033",
+        "Claude, 2026-09-13: the slippage assumed in a size band before fills there "
+        "are measured. Was 0.001, 'a spread and a fee on a liquid symbol' -- crypto. "
+        "What slippage-learner actually observes is (fill price - decision price) / "
+        "decision price, with no fee in it, so the prior is re-derived as that quantity "
+        "and not as spread plus fee: a market order crosses half the touch spread, whose "
+        "print-weighted p50 on NSE options is 0.3265% over 4,181,516 prints of "
+        "2026-09-07/08 (index 0.2530%, stock 0.3984%; "
+        "measurements/2026-09-13-indian-option-spreads/). One setting serves both "
+        "segments, so the pooled figure.",
+    ),
+    "backtest_prior_half_spread_fraction": (
+        "0.0033",
+        "Claude, 2026-09-13: the half spread execution-cost-model assumes for a symbol "
+        "before it has measured one. Was 0.0005, 'the liquid captured symbols on "
+        "2026-08-22'. MEASURED on this project's NSE option book tape: half the touch "
+        "spread, print-weighted p50 0.3265% over 2,413 contract-days of 2026-09-07/08 "
+        "(p50 per snapshot 0.3167%, agreeing with the 0.3175% of "
+        "measurements/2026-09-07-indian-price-staleness/; index 0.2530%, stock "
+        "0.3984%; measurements/2026-09-13-indian-option-spreads/). At 0.0005 an "
+        "unmeasured option's estimate carried a spread a sixth of the real one.",
+    ),
+    "limit_walk_prior_step_fraction": (
+        "0.0065",
+        "Claude, 2026-09-13: the step limit-price-walker takes before it has measured "
+        "its own. Was 0.0002, 'about the spread on the liquid captured symbols'. The "
+        "rule is kept: the NSE option touch spread is twice the print-weighted p50 half "
+        "spread, 2 x 0.003265 = 0.00653, on 2026-09-07/08 "
+        "(measurements/2026-09-13-indian-option-spreads/). The walker clamps every "
+        "step at the touch, so a step this size reaches it in one move from the mid, "
+        "exactly as two basis points did on a crypto book. Dormant: every order these "
+        "bots place is a market order. A tick-scale step from tick-size-resolver "
+        "(limit_walk_maximum_total_fraction's note) is still the better answer and is "
+        "a change to the part, not to this file.",
+    ),
+    "resting_order_prior_distance_fraction": (
+        "0.06",
+        "Claude, 2026-09-13: how far the market may move from a resting order before "
+        "it is cancelled, until fills have measured it. Was 0.002, 'ten spreads on the "
+        "liquid symbols'. Ten NSE option spreads is 10 x 0.00653 = 0.0653 "
+        "(measurements/2026-09-13-indian-option-spreads/), above the 0.06 ceiling "
+        "resting_order_maximum_distance_fraction now carries, and the part clamps "
+        "every estimate to that ceiling -- so the prior is the ceiling, and learning "
+        "can only tighten it. Dormant: every order these bots place is a market order.",
+    ),
+    "resting_order_maximum_distance_fraction": (
+        "0.06",
+        "Claude, 2026-09-13: the furthest the market may be from a resting order "
+        "before it is cancelled whatever was measured. Was 0.01, 'One percent', with "
+        "no basis given -- written 2026-08-23 beside a crypto prior of twenty basis "
+        "points, and not on the 2026-09-13 audit list because its note cites nothing. "
+        "Set to maximum_decision_price_drift (0.06), the distance past which an order "
+        "is no longer the decision that placed it, re-derived for NSE option premiums "
+        "on 2026-09-05 (measurements/2026-09-05-why-upstox-never-fills/: p99 five-second "
+        "move of the loosest contract 5.86%) -- the same rule "
+        "limit_walk_maximum_total_fraction took on 2026-09-07. At 1% an option resting "
+        "order would be cancelled by ordinary one-second movement (p90 1.20%).",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -547,6 +643,12 @@ INERT_WITH_THE_CRYPTO_PATH: dict[str, str] = {
     "book_symbols_when_thinnable": "stream-budget-planner, off the spine",
     "liquidation_cascade_minimum_cluster_notional": "no code reads it",
     "funding_premium_clamp": "no code reads it",
+    "maker_fee_rate": (
+        "paper-fill-simulator loads it but charges it only on a fill at a venue other "
+        "than Upstox (paper_fill_simulator.py, the non-UPSTOX_VENUE_ID branch); every "
+        "Upstox fill is charged the real six-line options or equity stack instead, and "
+        "every order on this spine is Upstox's"
+    ),
     # whale_minimum_quote_value is read by nothing either, but it was already
     # given an Indian derivation earlier today (REFITS), and converted beats
     # inert: a setting that is right for this market stays right if its reader
