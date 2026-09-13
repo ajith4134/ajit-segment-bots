@@ -53,6 +53,7 @@ NO_OUTPUT_SCHEMA = "the-version-declares-no-output-shape"
 NO_FACTS = "the-request-carries-no-facts-to-check-the-answer-against"
 
 FACTS_HEADING = "MEASURED FACTS (the only numbers you may use)"
+REPAIR_HEADING = "YOUR PREVIOUS ANSWER WAS REJECTED"
 CONTEXT_HEADING = "RETRIEVED MATERIAL (may be wrong; the facts above are not)"
 INSTRUCTION_HEADING = "INSTRUCTION"
 # **What the question is about.** The schema every template declares requires
@@ -200,6 +201,11 @@ class PromptRenderer:
             # asking to find its budget, and this is the only place that knows
             # both the request and what it became.
             asked_by=str(getattr(request, "asked_by", "") or ""),
+            venue_id=str(getattr(request, "venue_id", "") or ""),
+            symbol=str(getattr(request, "symbol", "") or ""),
+            maximum_sentences=int(getattr(request, "maximum_sentences", 0) or 0),
+            repair_of=str(getattr(request, "repair_of", "") or ""),
+            repair_attempt=int(getattr(request, "repair_attempt", 0) or 0),
         )
         self.standing.rendered += 1
         return self._outcome(
@@ -215,6 +221,12 @@ class PromptRenderer:
     @staticmethod
     def _render_text(request, version, context) -> str:
         blocks = [f"{INSTRUCTION_HEADING}\n{version.instruction}"]
+        # A repair shows the model what was wrong with its last answer. Without
+        # this block a repair is the same prompt sent again, and the same prompt
+        # tends to earn the same answer (2026-09-13).
+        previous_failures = str(getattr(request, "previous_failures", "") or "")
+        if previous_failures:
+            blocks.append(f"{REPAIR_HEADING}\n{previous_failures}")
         subject = "\n".join(
             f"{name} = {value}"
             for name, value in (

@@ -191,6 +191,14 @@ class RenderedLlmRequest:
     # by `str(context_id)`, which is the id of an assembled context and never a
     # part id, so the lookup could not have succeeded even once budgets existed.
     asked_by: str = ""
+    # Carried through from the request so `structured-output-enforcer` can build a
+    # repair that is the same question -- same subject, same sentence bound, same
+    # asker -- and count it against the chain it belongs to (2026-09-13).
+    venue_id: str = ""
+    symbol: str = ""
+    maximum_sentences: int = 0
+    repair_of: str = ""
+    repair_attempt: int = 0
 
 
 @dataclass(frozen=True)

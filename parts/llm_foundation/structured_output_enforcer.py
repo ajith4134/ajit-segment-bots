@@ -32,7 +32,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from runtime.claim_verification import verify_against_facts
+from runtime.claim_verification import make_request, verify_against_facts
 from runtime.llm_types import LlmAnswerVerdict, ValidatedLlmOutput
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
@@ -91,6 +91,9 @@ class EnforcerStanding:
     sentences_removed: int = 0
     defaults_filled_in: int = 0
     verdicts_published: int = 0
+    # A rejected answer that could not be repaired because the rendered request
+    # it answers was not known -- no asker to budget a repair, no facts to ground it.
+    repairs_not_possible: int = 0
     # A response whose rendered request -- and so whose facts -- never arrived
     # inside the hold. Dropped unjudged rather than judged against nothing: a
     # verdict against empty facts rejects every answer, which is what this part
@@ -151,7 +154,6 @@ class StructuredOutputEnforcer:
         self._relative_tolerance = relative_tolerance
         self._require_a_citation = require_a_citation
         self._now_ns = now_ns
-        self._attempts: dict[str, int] = {}
         self._sequence = 0
         self.standing = EnforcerStanding()
 
@@ -187,15 +189,25 @@ class StructuredOutputEnforcer:
                     failures.append((WRONG_TYPE, name))
         return tuple(failures)
 
-    def enforce(self, response, version, facts) -> EnforcementOutcome:
+    def enforce(self, response, version, facts, rendered=None) -> EnforcementOutcome:
+        """Judge one response against the version and facts its prompt was rendered with.
+
+        `rendered` is the `RenderedLlmRequest` the response answers. Its
+        `repair_attempt` is how many repairs the chain has already spent, which is
+        what the bound is counted against: every repair is a new render with a new
+        `rendered_id`, so until 2026-09-13, when attempts were counted per
+        `rendered_id`, the bound was never reached. Without it no repair can be
+        built -- a repair has to be the same question from the same asker -- and a
+        rejection is final.
+        """
         self.standing.responses_seen += 1
-        attempts = self._attempts.get(response.rendered_id, 0)
+        attempts = int(getattr(rendered, "repair_attempt", 0) or 0)
 
         if response.was_cut_off:
             self.standing.rejected_truncated += 1
             return self._reject(
                 response, WAS_TRUNCATED, ((WAS_TRUNCATED, "finish_reason"),), attempts,
-                version, facts,
+                version, facts, rendered,
                 "the model stopped mid-answer. A structure that happens to close before "
                 "the truncation is the most dangerous shape this part sees, so a cut-off "
                 "answer fails even when it parses",
@@ -218,7 +230,7 @@ class StructuredOutputEnforcer:
         if not isinstance(value, dict):
             self.standing.rejected_not_json += 1
             return self._reject(
-                response, NOT_JSON, ((NOT_JSON, "root"),), attempts, version, facts,
+                response, NOT_JSON, ((NOT_JSON, "root"),), attempts, version, facts, rendered,
                 "the answer is not the declared structure",
             )
 
@@ -234,7 +246,7 @@ class StructuredOutputEnforcer:
                 elif kind == NOT_IN_THE_SET:
                     self.standing.rejected_not_in_set += 1
             return self._reject(
-                response, failures[0][0], failures, attempts, version, facts,
+                response, failures[0][0], failures, attempts, version, facts, rendered,
                 "; ".join(f"{kind} ({name})" for kind, name in failures)
                 + ". No field is filled with a default: a default is a value nobody "
                   "measured wearing the appearance of an answer",
@@ -250,7 +262,7 @@ class StructuredOutputEnforcer:
         if verified.removed_sentences and not verified.kept_sentences:
             return self._reject(
                 response, NOTHING_SUPPORTED,
-                ((NOTHING_SUPPORTED, "text"),), attempts, version, facts,
+                ((NOTHING_SUPPORTED, "text"),), attempts, version, facts, rendered,
                 f"all {len(verified.removed_sentences)} sentence(s) asserted numbers that "
                 f"trace to no measurement",
             )
@@ -269,7 +281,6 @@ class StructuredOutputEnforcer:
             validated_at_ns=self._now_ns(),
         )
         self.standing.validated += 1
-        self._attempts.pop(response.rendered_id, None)
 
         return EnforcementOutcome(
             response_id=response.response_id, state=VALIDATED, output=output, failures=(),
@@ -293,7 +304,7 @@ class StructuredOutputEnforcer:
         )
 
     def _reject(
-        self, response, state, failures, attempts, version, facts, reason,
+        self, response, state, failures, attempts, version, facts, rendered, reason,
     ) -> EnforcementOutcome:
         if attempts >= self._maximum_repairs:
             self.standing.repairs_exhausted += 1
@@ -307,20 +318,40 @@ class StructuredOutputEnforcer:
                 enforced_at_ns=self._now_ns(),
             )
 
-        self._attempts[response.rendered_id] = attempts + 1
+        if rendered is None or not facts:
+            # A repair is the same question from the same asker; without the
+            # rendered request there is no asker to budget it and no facts to
+            # ground it, and a request on `llm-request` that is not an
+            # `LlmRequest` crashes the renderer and the picker.
+            self.standing.repairs_not_possible += 1
+            return EnforcementOutcome(
+                response_id=response.response_id, state=state, output=None, failures=failures,
+                repair_attempts=attempts, retry_request=None,
+                reason=f"{reason}. Not repaired: the rendered request it answers is not known here",
+                enforced_at_ns=self._now_ns(),
+            )
+
         self.standing.repairs_requested += 1
-        retry = {
-            "rendered_id": response.rendered_id,
-            "version_id": version.version_id,
-            "purpose": version.purpose,
-            "facts": dict(facts),
-            "instruction": (
-                "The previous answer failed these checks: "
+        # An `LlmRequest`, the type every reader of `llm-request` reads -- until
+        # 2026-09-13 this was a plain dict, and the first rejected answer on the
+        # spine would have crashed `prompt-renderer` and `llm-model-picker`.
+        retry = make_request(
+            purpose=version.purpose,
+            venue_id=rendered.venue_id,
+            symbol=rendered.symbol,
+            instruction=version.instruction,
+            facts=dict(facts),
+            maximum_sentences=max(int(rendered.maximum_sentences), 1),
+            now_ns=self._now_ns,
+            asked_by=rendered.asked_by,
+            repair_of=rendered.repair_of or rendered.rendered_id,
+            repair_attempt=attempts + 1,
+            previous_failures=(
+                "It failed these checks: "
                 + "; ".join(f"{kind} ({name})" for kind, name in failures)
                 + ". Return only the declared structure, using only the measured facts."
             ),
-            "attempt": attempts + 1,
-        }
+        )
         return EnforcementOutcome(
             response_id=response.response_id, state=state, output=None, failures=failures,
             repair_attempts=attempts + 1, retry_request=retry, reason=reason,
@@ -348,6 +379,7 @@ def describe_enforcement(enforcer: StructuredOutputEnforcer) -> dict:
         "fills_missing_fields_with_defaults": False,
         "defaults_filled_in": enforcer.standing.defaults_filled_in,
         "verdicts_published": enforcer.standing.verdicts_published,
+        "repairs_not_possible": enforcer.standing.repairs_not_possible,
         "responses_dropped_without_their_facts": (
             enforcer.standing.responses_dropped_without_their_facts
         ),
@@ -362,8 +394,14 @@ def run_structured_output_enforcer(
     publish_verdicts=None,
 ) -> int:
     def tick() -> None:
-        for response, version, facts in read_responses():
-            outcome = enforcer.enforce(response, version, facts)
+        for job in read_responses():
+            response, version, source = job
+            # `source` is the rendered request when the live part supplies it, or a
+            # plain facts dict from a caller that has only the facts.
+            if isinstance(source, dict):
+                outcome = enforcer.enforce(response, version, source)
+            else:
+                outcome = enforcer.enforce(response, version, dict(source.facts), rendered=source)
             if publish_verdicts is not None:
                 publish_verdicts(verdict_of(outcome, response, version))
                 enforcer.standing.verdicts_published += 1
@@ -414,7 +452,7 @@ def start_part(context) -> int:
         require_a_citation=True,
     )
     version_by_id: dict[str, object] = {}
-    # rendered_id -> (facts, seen_at_ns). Aged out, because most rendered
+    # rendered_id -> (rendered request, seen_at_ns). Aged out, because most rendered
     # requests are refused by the router and never produce a response to
     # match -- without the bound this map is every refusal, forever.
     facts_by_rendered_id: dict[str, tuple[dict, int]] = {}
@@ -425,7 +463,7 @@ def start_part(context) -> int:
         for version in versions.payloads():
             version_by_id[version.version_id] = version
         for request in rendered.payloads():
-            facts_by_rendered_id[request.rendered_id] = (dict(request.facts), now)
+            facts_by_rendered_id[request.rendered_id] = (request, now)
         for rendered_id in [
             key for key, (_, seen_at) in facts_by_rendered_id.items() if now - seen_at > hold_ns
         ]:

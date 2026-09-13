@@ -679,27 +679,112 @@ def test_an_unsupported_sentence_is_removed_and_named():
     assert outcome.output.removed_sentences
 
 
-def test_repairs_are_bounded_and_counted():
-    """Retrying without limit converts a prompt problem into an unbounded bill."""
-    subject = an_enforcer(repairs=1)
+def a_rendered_request(renderer, request, schema=ENFORCED_SCHEMA):
+    """What the enforcer judges a response against on the spine: the rendered request."""
+    outcome = renderer.render(request, a_version(schema=schema), a_context())
+    assert outcome.state == RENDERED, outcome.reason
+    return outcome.rendered
+
+
+def an_asked_request(facts=None):
+    return make_request(
+        purpose="explain-a-trade", venue_id="binance-usdm", symbol="BTCUSDT",
+        instruction="Describe what happened using the measured facts.",
+        facts=facts or {"mid": 70_000.0}, maximum_sentences=4, now_ns=Clock(),
+        asked_by="trade-narrative-writer",
+    )
+
+
+def test_a_repair_is_a_request_every_reader_of_the_wire_can_read():
+    """Until 2026-09-13 it was a dict, and `request.purpose` crashed the renderer and picker."""
+    renderer = PromptRenderer(now_ns=Clock())
+    subject = an_enforcer(repairs=2)
+    asked = an_asked_request()
+    rendered = a_rendered_request(renderer, asked)
+
+    outcome = subject.enforce(
+        a_response("not json at all", rendered_id=rendered.rendered_id),
+        a_version(schema=ENFORCED_SCHEMA), dict(rendered.facts), rendered=rendered,
+    )
+
+    repair = outcome.retry_request
+    assert isinstance(repair, type(asked))
+    assert repair.purpose == asked.purpose
+    assert (repair.venue_id, repair.symbol) == (asked.venue_id, asked.symbol)
+    assert repair.asked_by == "trade-narrative-writer"
+    assert repair.facts == asked.facts
+    assert repair.repair_of == rendered.rendered_id
+    assert repair.repair_attempt == 1
+    assert NOT_JSON in repair.previous_failures
+
+
+def test_the_renderer_shows_the_model_why_its_last_answer_was_rejected():
+    renderer = PromptRenderer(now_ns=Clock())
+    rendered = a_rendered_request(renderer, an_asked_request())
+    repair = an_enforcer().enforce(
+        a_response("not json", rendered_id=rendered.rendered_id),
+        a_version(schema=ENFORCED_SCHEMA), dict(rendered.facts), rendered=rendered,
+    ).retry_request
+
+    rerendered = a_rendered_request(renderer, repair)
+
+    assert rerendered.rendered_id != rendered.rendered_id
+    assert "YOUR PREVIOUS ANSWER WAS REJECTED" in rerendered.text
+    assert NOT_JSON in rerendered.text
+    assert rerendered.repair_of == rendered.rendered_id
+    assert rerendered.repair_attempt == 1
+    assert "YOUR PREVIOUS ANSWER WAS REJECTED" not in rendered.text
+
+
+def test_repairs_are_bounded_across_the_chain_not_per_render():
+    """Every repair is a new render. Counted per render, the bound was never reached."""
+    renderer = PromptRenderer(now_ns=Clock())
+    subject = an_enforcer(repairs=2)
     version = a_version(schema=ENFORCED_SCHEMA)
-    first = subject.enforce(a_response("not json at all"), version, {"mid": 70_000.0})
-    assert first.state == NOT_JSON
-    assert first.retry_request is not None
-    second = subject.enforce(a_response("still not json"), version, {"mid": 70_000.0})
-    assert second.state == REPAIRS_EXHAUSTED
-    assert second.retry_request is None
+    rendered = a_rendered_request(renderer, an_asked_request())
+    states = []
+    for _ in range(4):
+        outcome = subject.enforce(
+            a_response("still not json", rendered_id=rendered.rendered_id),
+            version, dict(rendered.facts), rendered=rendered,
+        )
+        states.append(outcome.state)
+        if outcome.retry_request is None:
+            break
+        rendered = a_rendered_request(renderer, outcome.retry_request)
+
+    assert states == [NOT_JSON, NOT_JSON, REPAIRS_EXHAUSTED]
+    assert subject.standing.repairs_requested == 2
+    assert subject.standing.repairs_exhausted == 1
 
 
 def test_the_repair_count_travels_with_a_validated_answer():
+    renderer = PromptRenderer(now_ns=Clock())
     subject = an_enforcer(repairs=3)
     version = a_version(schema=ENFORCED_SCHEMA)
-    subject.enforce(a_response("not json"), version, {"mid": 70_000.0})
+    rendered = a_rendered_request(renderer, an_asked_request())
+    repair = subject.enforce(
+        a_response("not json", rendered_id=rendered.rendered_id),
+        version, dict(rendered.facts), rendered=rendered,
+    ).retry_request
+    rerendered = a_rendered_request(renderer, repair)
+
     outcome = subject.enforce(
-        a_response({"verdict": "yes", "confidence": 0.5, "text": "The mid was 70000.0."}),
-        version, {"mid": 70_000.0},
+        a_response({"verdict": "yes", "confidence": 0.5, "text": "The mid was 70000.0."},
+                   rendered_id=rerendered.rendered_id),
+        version, dict(rerendered.facts), rendered=rerendered,
     )
     assert outcome.output.repair_attempts == 1
+
+
+def test_without_the_rendered_request_a_rejection_is_final_and_counted():
+    subject = an_enforcer()
+    outcome = subject.enforce(
+        a_response("not json"), a_version(schema=ENFORCED_SCHEMA), {"mid": 70_000.0},
+    )
+    assert outcome.state == NOT_JSON
+    assert outcome.retry_request is None
+    assert subject.standing.repairs_not_possible == 1
 
 
 def test_the_enforcer_fills_no_defaults():

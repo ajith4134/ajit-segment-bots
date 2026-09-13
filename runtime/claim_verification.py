@@ -73,6 +73,18 @@ class LlmRequest:
     # has its own instruction and shape written as the purpose's first template;
     # None keeps the shared one for every part that does not.
     output_schema: dict | None = None
+    # A repair of an answer `structured-output-enforcer` rejected. Added 2026-09-13:
+    # the enforcer published its repair on this wire as a plain dict, which
+    # `prompt-renderer` and `llm-model-picker` read as `request.purpose` -- so the
+    # first rejected answer would have crashed both -- and which carried no
+    # `asked_by`, so no budget could pay for it. `repair_of` is the rendered id of
+    # the first answer in the chain and `repair_attempt` how many repairs this is,
+    # so the enforcer's bound counts the chain rather than one render (every
+    # repair is a new render, and counting per render never reached the bound).
+    # `previous_failures` is what the renderer shows the model.
+    repair_of: str = ""
+    repair_attempt: int = 0
+    previous_failures: str = ""
 
     @property
     def is_answerable_from_facts(self) -> bool:
@@ -233,6 +245,9 @@ def make_request(
     now_ns=time.time_ns,
     asked_by: str = "",
     output_schema: dict | None = None,
+    repair_of: str = "",
+    repair_attempt: int = 0,
+    previous_failures: str = "",
 ) -> LlmRequest:
     """One request, carrying the facts its answer will be checked against.
 
@@ -257,6 +272,9 @@ def make_request(
         requested_at_ns=now_ns(),
         asked_by=asked_by,
         output_schema=dict(output_schema) if output_schema else None,
+        repair_of=repair_of,
+        repair_attempt=repair_attempt,
+        previous_failures=previous_failures,
     )
 
 

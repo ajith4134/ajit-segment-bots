@@ -2271,9 +2271,23 @@ Three changes, on the operator's word (`docs/proposals/the-picker-learns-from-th
   picker's own prior-weighted estimator, replacing the borrowed
   `decoding_minimum_trades`.
 
-**Seen, not fixed:** the enforcer publishes its repair request on `llm-request` as
-a plain dict, not an `LlmRequest`; every reader of that wire does `getattr` on it,
-so a repair reaches the renderer with no purpose and no facts.
+**Fixed the same day, on the operator's word — and it was four defects, not one.**
+The enforcer published its repair on `llm-request` as a plain dict:
+1. `prompt-renderer` and `llm-model-picker` read `request.purpose` directly, so the
+   first rejected answer on the spine would have **crashed both**;
+2. the renderer renders the version's instruction, never the request's, so the
+   repair's "the previous answer failed these checks" never reached the model;
+3. attempts were counted per `rendered_id`, and every repair is a new render, so
+   `llm_maximum_repairs` could never be reached;
+4. the dict carried no `asked_by`, so no budget could pay for it.
+
+The repair is now an `LlmRequest` (`make_request`) carrying `repair_of` (the chain's
+first rendered id), `repair_attempt` and `previous_failures`, plus the asker, the
+subject and the sentence bound, which `RenderedLlmRequest` now carries through. The
+renderer adds a `YOUR PREVIOUS ANSWER WAS REJECTED` block; the enforcer counts
+attempts from the rendered request's lineage. Tested through the real loop —
+enforcer, renderer, enforcer — with `llm_maximum_repairs` 2: NOT_JSON, NOT_JSON,
+REPAIRS_EXHAUSTED.
 
 ### 2026-09-13 — the three parts that did not start
 
