@@ -63,7 +63,7 @@ def bars_of(directory: pathlib.Path):
 def replay(patience_multiple: float | None) -> dict:
     detector = FeedJumpDetector(
         jump_threshold_increments=THRESHOLD_INCREMENTS,
-        jump_threshold_fraction=THRESHOLD_FRACTION,
+        warmup_floor_fraction=THRESHOLD_FRACTION,
         patience_multiple=patience_multiple,
         moves_needed=MOVES_NEEDED,
         moves_remembered=MOVES_REMEMBERED,

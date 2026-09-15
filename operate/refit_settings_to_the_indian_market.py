@@ -587,6 +587,21 @@ REFITS: dict[str, tuple] = {
         "implied-vol-reader has published no surface, so the detector reads "
         "no_implied_surface on every test.",
     ),
+    "feed_jump_threshold_increments": (
+        "2",
+        "Claude, 2026-09-13: the permanent minimum, in the symbol's own ticks, below which "
+        "a bar's open is never a jump. Was 20, 'the 99th percentile of the close-to-open "
+        "move at minute boundaries is 1 to 11 ticks' on six perpetuals -- and inert on this "
+        "spine until today, because nothing called set_price_increment. feed-jump-detector "
+        "now consumes price-increment (docs/proposals/a-feed-jump-floor-that-ends-with-"
+        "warm-up.md), and the floor no longer does the warm-up's job: it only has to stop a "
+        "flat contract's one-tick move reading as a break, since after warm-up the "
+        "symbol's own p99 decides. Replayed over the I1 bars of 2026-09-07/08 with "
+        "feed_jump_warmup_floor_fraction 0.05 (measurements/2026-09-13-feed-jump-floor/): "
+        "2 ticks flags 1.02% of ordinary contract bars and 51.5% of bars after a recording "
+        "hole; 20 ticks 0.47% and 32.4% -- a tick floor that high lets real breaks through "
+        "on cheap premiums, where 20 ticks is Rs1.",
+    ),
     # (new value as it should appear after `value = `, the provenance sentence)
     "captured_venues": (
         "[]",
@@ -960,12 +975,6 @@ INERT_WITH_THE_CRYPTO_PATH: dict[str, str] = {
     ),
     "venue_reconnect_backoff_ceiling": "the same crypto readers as venue_reconnect_backoff_floor, all off the spine",
     "api_key_rejection_rest": "api-key-pool-rotator, off the spine -- no crypto keys are held",
-    "feed_jump_threshold_increments": (
-        "feed-jump-detector, which is on the spine, reads it only for a symbol that has "
-        "declared a price increment, and nothing in the tree calls set_price_increment -- so "
-        "every Upstox symbol is judged against feed_jump_threshold_fraction and this tick "
-        "count is never used"
-    ),
     "cash_equity_shortlist_liquidity_pool_size": (
         "cash-equity-shortlist-ranker, whose segment cash-equity-intraday was "
         "retired on 2026-09-12. The part is still built and still on the spine, "
@@ -1275,20 +1284,6 @@ MARKET_INDEPENDENT: dict[str, str] = {
 # not repeat a measurement that did not work -- but it is not progress and must
 # not read as any.
 MEASURED_BUT_INCONCLUSIVE: dict[str, str] = {
-    "feed_jump_threshold_fraction": (
-        "2026-09-13, measured on closed I1 bars of 1,350 NSE contracts and F&O underlyings "
-        "with 20+ moves on 2026-09-07/08 (measurements/2026-09-13-indian-guard-remainder/): "
-        "close-to-open move p50 0.31%, p99 11.8% pooled; per-symbol p99 p50 5.85%, p80 "
-        "10.2%, p95 17.7%. The crypto rule -- above every symbol's p99 -- cannot be kept by "
-        "one number here. Over each symbol's first 8 moves, judged against this floor "
-        "alone, 0.005 calls 50.2% of ordinary bars a jump (and paper-fill-simulator refuses "
-        "to fill a flagged symbol), 0.05 calls 10.9%, 0.2 calls 1.5%. But the floor is also "
-        "the permanent lower bound after warm-up (bound = max(floor, patience x own p99)), "
-        "so a floor above ordinary contract moves would blind the detector on an index, "
-        "whose p99 bar move was 0.056% on 2026-09-04. What would settle it is the part, not "
-        "the number: a floor that gives way to the symbol's own bound once measured, or a "
-        "warm-up floor per instrument kind"
-    ),
     "spread_reversion_horizon": (
         "2026-09-13, docs/settings-fitted-to-crypto-the-guard-cannot-see.md. The note's "
         "rule is a half-life of about 14 observations turned into time, with room. Its "
@@ -1689,6 +1684,52 @@ def correct_again(text: str, name: str, wrong_value: str, new_value: str, why: s
     return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{wrong_value} -> {new_value} (corrected again)"
 
 
+# ---- renamed settings -------------------------------------------------------------
+# A setting whose meaning changed is renamed (Rule 7: a name that lies is worse than
+# one that is vague). The block keeps its history note and gains the new name, value
+# and the reason; a probe then reads it as converted.
+RENAMES: dict[str, tuple[str, str, str]] = {
+    "feed_jump_threshold_fraction": ("feed_jump_warmup_floor_fraction", "0.05", (
+        "Claude, 2026-09-13: RENAMED from feed_jump_threshold_fraction, was 0.005. It was the "
+        "whole jump bound for a symbol's first moves and the permanent minimum after, and no "
+        "single number can be both on NSE: at 0.005 the detector flagged 24.07% of ordinary "
+        "option bars and never an index. It is now the warm-up floor only -- the bound until "
+        "a symbol has shown feed_jump_moves_needed of its own moves, after which max(ticks "
+        "floor, patience x own p99) decides (docs/proposals/a-feed-jump-floor-that-ends-with-"
+        "warm-up.md). MEASURED by replaying the I1 bars of 2026-09-07/08 under each rule "
+        "(measurements/2026-09-13-feed-jump-floor/compared-on-the-tape.txt), with a 2-tick "
+        "floor: warm-up floor 0.02 flags 2.12% of ordinary contract bars, 0.05 flags 1.02%, "
+        "0.10 flags 0.71%, catching 63.4%, 51.5% and 43.4% of bars after a recording hole. "
+        "0.05 puts ordinary false flags near one bar in a hundred on every kind -- contracts "
+        "1.02%, shares 1.50%, index 0.80% -- the original note's 'above the 99th "
+        "percentile' read on this market."
+    )),
+}
+
+
+def rename_setting(text: str, old: str, new: str, value: str, note: str) -> tuple[str, str]:
+    if f"[{new}]" in text:
+        return text, "already renamed"
+    start = text.find(f"[{old}]")
+    if start < 0:
+        return text, "ABSENT"
+    end = text.find("\n[", start + 1)
+    block = text[start:end if end > 0 else len(text)]
+    current = re.search(r"^value\s*=\s*(.+)$", block, re.M)
+    if current is None:
+        return text, "NO VALUE LINE"
+    was = current.group(1).strip()
+    updated = f"[{new}]" + block[len(f"[{old}]"):]
+    current = re.search(r"^value\s*=\s*(.+)$", updated, re.M)
+    updated = updated[:current.start(1)] + value + updated[current.end(1):]
+    at = note_insertion_point(updated)
+    if at is None:
+        return text, "NO NOTE"
+    addition = f" {CONVERTED_MARKER}, was {was}. {note}"
+    updated = updated[:at] + addition.replace('"', "'") + updated[at:]
+    return text[:start] + updated + text[(end if end > 0 else len(text)):], f"{old} {was} -> {new} {value}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="write. Without it, report only.")
@@ -1740,6 +1781,11 @@ def main() -> int:
         value, note = REFITS[name][0], REFITS[name][1]
         text, what = correct(text, name, wrong_value, value, note)
         print(f"  {name:46} {what}")
+        if "->" in what:
+            changed += 1
+    for old_name, (new_name, value, note) in RENAMES.items():
+        text, what = rename_setting(text, old_name, new_name, value, note)
+        print(f"  {old_name:46} {what}")
         if "->" in what:
             changed += 1
     for name, (wrong_value, value, why) in SECOND_CORRECTIONS.items():

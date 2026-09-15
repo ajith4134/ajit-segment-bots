@@ -31,6 +31,18 @@ contract, and that is a real price move.
 
 Both halves are needed for a fill. Without continuity the bound only delays the
 poison; without a fitted bound the symbol re-poisons on the next ordinary tick.
+
+**The fraction floor ends with warm-up, and ticks are the permanent minimum**
+(2026-09-13, docs/proposals/a-feed-jump-floor-that-ends-with-warm-up.md). One
+floor used to do two jobs -- the whole bound for a symbol's first moves and the
+permanent minimum after -- and no single number can: replayed over the I1 bars of
+2026-09-07/08 the live rule flagged 24.07% of ordinary option bars and never
+flagged an index. Now the bound is max(ticks floor, warm-up floor) until the
+symbol has shown `moves_needed` of its own moves, and max(ticks floor, patience x
+own p99) after; the ticks come from `price-increment`, which `tick-size-resolver`
+publishes from the broker's catalogue. Same replay: 1.02% of option bars, 1.50%
+of share bars and 0.80% of index bars flagged
+(measurements/2026-09-13-feed-jump-floor/).
 """
 
 from __future__ import annotations
@@ -46,7 +58,7 @@ PART_ID = "feed-jump-detector"
 
 PART_DECLARATION = PartDeclaration(
     part_id="feed-jump-detector",
-    consumes=("candle",),
+    consumes=("candle", "price-increment"),
     produces=("feed-jump", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
@@ -115,6 +127,11 @@ def continuity_of(jumps) -> tuple:
 @dataclass
 class JumpStanding:
     candles_seen: int = 0
+    # Closed bars delivered again, or older than the last one judged. Upstox
+    # restates the bar it just closed with every message until the next closes;
+    # judging each one compared a bar's open with its own close (2026-09-15:
+    # 15,782 of 17,021 live comparisons over 300 contracts).
+    restated_bars_ignored: int = 0
     jumps_found: int = 0
     continuity_restored: int = 0
     symbols_tracked: int = 0
@@ -133,17 +150,19 @@ class JumpStanding:
 class FeedJumpDetector:
     """Compares each closed candle's open against the previous close.
 
-    The threshold is in price increments where the symbol declares one, because
-    a one-tick difference is the market and not a jump, and a tick is worth a
-    different fraction on every symbol. Where no increment is known the fraction
-    threshold is used and that is reported, so an inferred judgement is never
-    mistaken for a declared one.
+    Two floors, each doing one job. The ticks floor is permanent: a move of a few
+    ticks is the market and never a jump, whatever the symbol's rhythm, and a tick
+    is worth a different fraction on every symbol. The warm-up floor stands only
+    until a symbol has shown `moves_needed` of its own moves; after that the
+    symbol's own p99, times the patience, is the bound. `gap_increments` is None
+    where no tick is known, so an inferred judgement is never mistaken for a
+    declared one.
     """
 
     def __init__(
         self,
         jump_threshold_increments: float,
-        jump_threshold_fraction: float,
+        warmup_floor_fraction: float,
         price_increments: dict[tuple[str, str], float] | None = None,
         patience_multiple: float | None = None,
         moves_needed: int = 8,
@@ -167,7 +186,7 @@ class FeedJumpDetector:
                 f"{moves_needed!r} needed"
             )
         self._threshold_increments = jump_threshold_increments
-        self._threshold_fraction = jump_threshold_fraction
+        self._warmup_floor = warmup_floor_fraction
         self._increments = dict(price_increments or {})
         self._patience_multiple = patience_multiple
         self._moves_needed = moves_needed
@@ -181,32 +200,41 @@ class FeedJumpDetector:
         self._discontinuous: set[tuple[str, str]] = set()
         self.standing = JumpStanding()
 
-    def bound_fraction(self, key, floor_fraction: float) -> tuple[float, bool]:
+    def bound_fraction(self, key, ticks_floor_fraction: float) -> tuple[float, bool]:
         """How far this symbol's open may sit from its prior close, right now.
 
-        The stated floor until this symbol has shown enough of its own moves to
-        be measured against, then the larger of the floor and a multiple of its
-        own p99 move. Returns the bound and whether it is the symbol's own, so a
-        judgement made against an estimate is never reported as one made against
-        the declared threshold.
+        Until this symbol has shown enough of its own moves, the larger of the
+        ticks floor and the warm-up floor. After, the larger of the ticks floor
+        and a multiple of its own p99 move -- the warm-up floor no longer applies,
+        because a floor sized for an option's warm-up is far above anything an
+        index does and would blind the check on it for good. Returns the bound and
+        whether it is the symbol's own, so a judgement made against an estimate is
+        never reported as one made against a stated floor.
 
-        The same rule -- and the same reason -- `RollingWindow._gap_bound_seconds`
-        and `market-anomaly-detector.silence_bound_ns` keep: an estimate from a
-        handful of observations lets one early stretch decide what ordinary looks
-        like forever, so a symbol earns its own bound only by printing enough.
+        The same warm-up rule, and the same reason, as
+        `RollingWindow._gap_bound_seconds` and
+        `market-anomaly-detector.silence_bound_ns`: an estimate from a handful of
+        observations lets one early stretch decide what ordinary looks like
+        forever, so a symbol earns its own bound only by printing enough.
         """
+        warming_up = max(ticks_floor_fraction, self._warmup_floor)
         if self._patience_multiple is None:
-            return floor_fraction, False
+            return warming_up, False
         moves = self._moves.get(key)
         if moves is None or len(moves) < self._moves_needed:
-            return floor_fraction, False
+            return warming_up, False
         ordered = sorted(moves)
         p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
-        widened = self._patience_multiple * p99
-        if widened > floor_fraction:
+        if p99 <= 0 and ticks_floor_fraction <= 0:
+            # Nothing but flat bars and no tick to fall back on: a bound of zero
+            # would flag every real move, and a flagged move is never remembered,
+            # so the symbol could never earn a rhythm. It has not shown one yet.
+            return warming_up, False
+        own = self._patience_multiple * p99
+        if own > ticks_floor_fraction:
             self.standing.checks_inside_a_widened_bound += 1
-            return widened, True
-        return floor_fraction, False
+            return own, True
+        return ticks_floor_fraction, False
 
     def set_price_increment(self, venue_id: str, symbol: str, increment: float | None) -> None:
         if increment:
@@ -224,6 +252,13 @@ class FeedJumpDetector:
         self.standing.candles_seen += 1
         key = (candle.venue_id, candle.symbol)
         previous = self._previous.get(key)
+        # A bar is judged once, when it first arrives closed. Its restatements
+        # carry the same values (first equal to last on all 2,376 closed bars of
+        # 400 instruments, 2026-09-15), so ignoring them loses nothing -- and the
+        # level already published for the bar stays the answer.
+        if previous is not None and candle.open_time_ns <= previous.open_time_ns:
+            self.standing.restated_bars_ignored += 1
+            return None
         self._previous[key] = candle
         self.standing.symbols_tracked = len(self._previous)
         if previous is None or previous.close_price <= 0:
@@ -234,18 +269,14 @@ class FeedJumpDetector:
         increment = self._increments.get(key)
         increments = difference / increment if increment else None
 
-        # Both thresholds are floors expressed as a fraction of price, so one
-        # comparison judges every symbol. Where a tick is declared the floor is
-        # that many ticks at this price, because a one-tick difference is the
-        # market and not a jump and a tick is worth a different fraction on every
-        # symbol; where none is, the stated fraction stands and `gap_increments`
-        # is None, so an inferred judgement is never mistaken for a declared one.
-        floor_fraction = (
-            self._threshold_increments * increment / previous.close_price
-            if increment
-            else self._threshold_fraction
+        # The ticks floor as a fraction of this price, so one comparison judges
+        # every symbol. Where no tick is known it is zero and the warm-up floor or
+        # the symbol's own rhythm decides alone; `gap_increments` is then None, so
+        # an inferred judgement is never mistaken for a declared one.
+        ticks_floor_fraction = (
+            self._threshold_increments * increment / previous.close_price if increment else 0.0
         )
-        bound, bound_is_the_symbols_own = self.bound_fraction(key, floor_fraction)
+        bound, bound_is_the_symbols_own = self.bound_fraction(key, ticks_floor_fraction)
         crossed = fraction > bound
 
         self.standing.largest_gap_fraction = max(self.standing.largest_gap_fraction, fraction)
@@ -314,6 +345,7 @@ def describe_jumps(detector: FeedJumpDetector, levels=None) -> dict:
         **published,
         "part_id": PART_ID,
         "candles_seen": standing.candles_seen,
+        "restated_bars_ignored": standing.restated_bars_ignored,
         "symbols_tracked": standing.symbols_tracked,
         "jumps_found": standing.jumps_found,
         "continuity_restored": standing.continuity_restored,
@@ -381,9 +413,10 @@ def start_part(context) -> int:
     from runtime.level_publishing import LevelPublisherByKey
 
     updates = Batch(read=context.bus.reader("candle"))
+    increments = Batch(read=context.bus.reader("price-increment"))
     detector = FeedJumpDetector(
         jump_threshold_increments=context.number("feed_jump_threshold_increments"),
-        jump_threshold_fraction=context.number("feed_jump_threshold_fraction"),
+        warmup_floor_fraction=context.number("feed_jump_warmup_floor_fraction"),
         patience_multiple=context.number("feed_jump_patience_multiple"),
         moves_needed=int(context.number("feed_jump_moves_needed")),
         moves_remembered=int(context.number("feed_jump_moves_remembered")),
@@ -400,6 +433,12 @@ def start_part(context) -> int:
     )
 
     def tick() -> None:
+        # Increments first, so a symbol whose tick and first bars arrive in one
+        # tick is judged against its tick. A level: the latest statement wins,
+        # and set_price_increment ignores an unknown (None) increment.
+        for increment in increments.payloads():
+            if increment.venue_id and increment.symbol:
+                detector.set_price_increment(increment.venue_id, increment.symbol, increment.increment)
         for update in updates.payloads():
             if not isinstance(update, NormalisedCandle) or not update.is_closed:
                 continue

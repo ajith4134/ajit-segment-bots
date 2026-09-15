@@ -722,14 +722,14 @@ unit  = "bytes"
 note  = "operator, 2026-08-23: SO_SNDBUF on a part's one publishing socket. Every datagram in flight to every consumer is charged to this buffer until that consumer reads it, so at the kernel default of 212992 one consumer 250 messages behind silenced the sends to all thirteen market-data readers: measured on the live spine, each lost the same 250 messages a second. 4194304 is net.core.wmem_max on this box, the most the kernel grants without CAP_NET_ADMIN -- a larger request is clamped to it silently, and the bus reads back what it was given. Twenty times the default, so thirteen consumers each a full inbox behind still leave headroom; a buffer large enough that nothing is ever lost does not exist, because loss is how RL-066 answers a consumer that is slower than its producer."
 
 [feed_jump_threshold_increments]
-value = 20
+value = 2
 unit  = "price increments"
-note  = "operator, 2026-08-23: how far a closed candle's open may sit from the previous close, in the symbol's own tick, before feed-jump-detector calls it a jump. Measured on today's tape across six symbols on both venues: the 99th percentile of the close-to-open move at minute boundaries is 1 to 11 ticks (BTCUSDT 7, ETHUSDT 1, DOGEUSDT 2.6, PUMPUSDT 2.5, TRUMPUSDT 10.8). Twenty sits above all of them, so a normal boundary is never reported and a stop inside the gap is. Re-measure when the universe widens; an illiquid symbol's normal boundary is wider."
+note  = "Claude, 2026-09-13: the permanent minimum, in the symbol's own ticks (from price-increment), below which a bar's open is never a jump -- so a flat contract whose own p99 is zero is not flagged on a tick. Was 20, fitted to six perpetuals and unused on the Upstox spine until feed-jump-detector consumed price-increment. 2 ticks with a 0.05 warm-up floor flags 1.02% of ordinary contract bars and catches 51.5% of bars after a recording hole; 20 ticks catches 32.4% (measurements/2026-09-13-feed-jump-floor/)."
 
-[feed_jump_threshold_fraction]
-value = 0.005
+[feed_jump_warmup_floor_fraction]
+value = 0.05
 unit  = "fraction of price"
-note  = "operator, 2026-08-23: the jump threshold used where the symbol declares no price increment, reported as inferred rather than declared. Measured on today's tape: the 99th percentile boundary move was at most 0.45% (TRUMPUSDT on bybit-linear), with single outliers to 1.46%. Half a percent is above the 99th percentile on every symbol measured and below the outliers that are exactly what this part exists to report."
+note  = "Claude, 2026-09-13: the jump bound for a symbol's first feed_jump_moves_needed moves, before its own p99 decides. RENAMED from feed_jump_threshold_fraction (was 0.005), whose single number was both the warm-up bound and the permanent minimum -- at 0.005 it flagged 24.07% of ordinary NSE option bars and never an index. 0.05 flags 1.02% of ordinary contract bars, 1.50% of share bars and 0.80% of index bars on the replayed I1 bars of 2026-09-07/08 (measurements/2026-09-13-feed-jump-floor/, docs/proposals/a-feed-jump-floor-that-ends-with-warm-up.md)."
 
 [feed_jump_patience_multiple]
 value = 2.8

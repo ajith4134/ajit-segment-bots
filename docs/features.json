@@ -8544,7 +8544,8 @@
    "role": "flag a candle whose open does not meet the prior close, so a stop in the gap still counts as crossed",
    "category": "market-data-feed",
    "consumes": [
-    "candle"
+    "candle",
+    "price-increment"
    ],
    "produces": [
     "feed-jump",

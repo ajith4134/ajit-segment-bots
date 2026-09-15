@@ -1,5 +1,7 @@
 """The eight analysis parts of market-data-feed, on real captured messages."""
 
+import pathlib
+
 import pytest
 
 from parts.market_data_feed.api_key_pool_rotator import ApiKeyPoolRotator
@@ -141,7 +143,7 @@ def test_a_continuous_candle_sequence_says_so_rather_than_saying_nothing():
     two were the same answer before 2026-09-04 and that is exactly why a symbol
     barred from filling could never be released.
     """
-    detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, warmup_floor_fraction=0.01)
     detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
     assert detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1)) is None
     continuous = detector.observe_closed_candle(candle("BTCUSDT", 100.5, 101.0, 2))
@@ -151,15 +153,15 @@ def test_a_continuous_candle_sequence_says_so_rather_than_saying_nothing():
 
 def test_a_symbol_that_jumps_and_then_settles_is_reported_continuous_again():
     """The release the fill path needs: a break, then the break being over."""
-    detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, warmup_floor_fraction=0.01)
     detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
     detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1))
 
-    broke = detector.observe_closed_candle(candle("BTCUSDT", 101.5, 101.6, 2))
+    broke = detector.observe_closed_candle(candle("BTCUSDT", 102.5, 102.6, 2))  # 2% past a 1% warm-up floor
     assert broke is not None and not broke.is_continuous
     assert detector.standing.symbols_discontinuous_now == 1
 
-    settled = detector.observe_closed_candle(candle("BTCUSDT", 101.6, 101.7, 3))
+    settled = detector.observe_closed_candle(candle("BTCUSDT", 102.6, 102.7, 3))
     assert settled is not None and settled.is_continuous
     assert detector.standing.continuity_restored == 1
     assert detector.standing.symbols_discontinuous_now == 0
@@ -174,25 +176,44 @@ def test_a_symbol_is_judged_against_its_own_moves_once_it_has_shown_enough():
     """
     detector = FeedJumpDetector(
         jump_threshold_increments=2.0,
-        jump_threshold_fraction=0.01,
+        warmup_floor_fraction=0.01,
         patience_multiple=2.8,
         moves_needed=8,
     )
     price = 100.0
     # Each bar opens 0.8% above the previous close -- what this part measures is
     # the gap between bars, not the move within one. Eight such gaps, each under
-    # the 1% floor, so each is a move the symbol was allowed to make.
+    # the 1% warm-up floor, so each is a move the symbol was allowed to make.
     for step in range(9):
         price = price * 1.008
         detector.observe_closed_candle(candle("NIFTY-CE", price, price, step))
     assert detector.standing.symbols_with_a_measured_rhythm == 1
 
-    # 2% is twice the floor and would have been a jump; it is inside 2.8x this
-    # symbol's own p99 of 0.8%, so it is the market and not a discontinuity.
+    # 2% is twice the warm-up floor and would have been a jump then; it is inside
+    # 2.8x this symbol's own p99 of 0.8%, so it is the market and not a discontinuity.
     ordinary = detector.observe_closed_candle(candle("NIFTY-CE", price * 1.02, price * 1.02, 99))
     assert ordinary is not None and ordinary.is_continuous
     assert ordinary.bound_is_the_symbols_own
     assert detector.standing.checks_inside_a_widened_bound > 0
+
+
+def test_the_warm_up_floor_does_not_outlive_warm_up():
+    """The defect of 2026-09-13: one floor sized for an option's warm-up blinded the check on an index.
+
+    A symbol that moves a hundredth of a percent a bar -- an index's rhythm, with no
+    declared tick -- is judged against its own p99 once measured, so a move twenty times
+    its ordinary one is a jump even though it sits far under the warm-up floor.
+    """
+    detector = FeedJumpDetector(
+        jump_threshold_increments=2.0, warmup_floor_fraction=0.05, patience_multiple=2.8, moves_needed=8,
+    )
+    price = 23_600.0
+    for step in range(9):
+        price = price * 1.0001
+        detector.observe_closed_candle(candle("NIFTY", price, price, step))
+    broke = detector.observe_closed_candle(candle("NIFTY", price * 1.002, price * 1.002, 99))
+    assert broke is not None and not broke.is_continuous, "a 0.2% index gap is 20 ordinary bars"
+    assert broke.bound_fraction < 0.05
 
 
 def test_a_break_is_not_remembered_as_one_of_the_symbols_own_moves():
@@ -200,7 +221,7 @@ def test_a_break_is_not_remembered_as_one_of_the_symbols_own_moves():
     can ever be a jump again."""
     detector = FeedJumpDetector(
         jump_threshold_increments=2.0,
-        jump_threshold_fraction=0.01,
+        warmup_floor_fraction=0.01,
         patience_multiple=2.8,
         moves_needed=2,
     )
@@ -211,24 +232,203 @@ def test_a_break_is_not_remembered_as_one_of_the_symbols_own_moves():
     assert detector.standing.symbols_with_a_measured_rhythm == 0
 
 
-def test_a_gap_wider_than_two_ticks_is_a_jump():
-    detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
-    detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
-    detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1))
-    jump = detector.observe_closed_candle(candle("BTCUSDT", 101.5, 101.6, 2))
-    assert jump is not None
-    assert jump.previous_close == 100.5 and jump.next_open == 101.5
-    assert jump.gap_increments == pytest.approx(10.0)
+def test_the_ticks_floor_is_permanent_so_a_flat_contract_is_not_flagged_on_a_tick():
+    """After flat bars the symbol's own p99 is zero; a move of a tick or two is still the market."""
+    detector = FeedJumpDetector(
+        jump_threshold_increments=2.0, warmup_floor_fraction=0.05, patience_multiple=2.8, moves_needed=8,
+    )
+    detector.set_price_increment("binance-usdm", "ITC 265 PE", 0.05)
+    for step in range(9):
+        detector.observe_closed_candle(candle("ITC 265 PE", 5.0, 5.0, step))
+    one_tick = detector.observe_closed_candle(candle("ITC 265 PE", 5.05, 5.05, 20))
+    assert one_tick is not None and one_tick.is_continuous
+    five_ticks = detector.observe_closed_candle(candle("ITC 265 PE", 5.30, 5.30, 21))
+    assert five_ticks is not None and not five_ticks.is_continuous
+    assert five_ticks.gap_increments == pytest.approx(5.0)
 
 
-def test_without_a_declared_increment_the_fraction_threshold_is_used():
-    detector = FeedJumpDetector(jump_threshold_increments=2.0, jump_threshold_fraction=0.01)
+def test_a_flat_symbol_with_no_tick_stays_on_the_warm_up_floor_rather_than_a_bound_of_zero():
+    """A zero bound would flag every real move, and a flagged move is never remembered."""
+    detector = FeedJumpDetector(
+        jump_threshold_increments=2.0, warmup_floor_fraction=0.05, patience_multiple=2.8, moves_needed=8,
+    )
+    for step in range(9):
+        detector.observe_closed_candle(candle("QUIET", 100.0, 100.0, step))
+    moved = detector.observe_closed_candle(candle("QUIET", 101.0, 101.0, 20))
+    assert moved is not None and moved.is_continuous and not moved.bound_is_the_symbols_own
+
+
+def test_without_a_declared_increment_the_warm_up_floor_is_used():
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, warmup_floor_fraction=0.01)
     detector.observe_closed_candle(candle("ETHUSDT", 100.0, 100.0, 1))
     inside = detector.observe_closed_candle(candle("ETHUSDT", 100.5, 100.5, 2))
     assert inside is not None and inside.is_continuous
     assert inside.gap_increments is None  # inferred, never mistaken for declared
     outside = detector.observe_closed_candle(candle("ETHUSDT", 105.0, 105.0, 3))
     assert outside is not None and not outside.is_continuous
+
+
+def test_on_real_upstox_bars_ordinary_contract_bars_are_rarely_flagged():
+    """The real I1 bars of the newest trading day on the tape, with Upstox's own declared ticks.
+
+    Under the rule this replaced, 24.07% of ordinary option bars were flagged on
+    2026-09-07/08 and paper-fill-simulator refuses to fill a flagged symbol. The live
+    settings are used, read from the example file this repository ships.
+    """
+    import json as _json
+    import tomllib
+
+    from runtime.tape import read_payload, read_tape_index
+    from tests.conftest import UPSTOX_VENUE, upstox_days_newest_first, upstox_listings_by_key
+
+    settings = tomllib.loads((pathlib.Path(__file__).resolve().parents[3] / "settings/runtime.example.toml").read_text())
+    number = lambda name: float(settings[name]["value"])
+    listings = upstox_listings_by_key()
+    tape = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape" / UPSTOX_VENUE
+
+    def bars(directory, day):
+        index_path = directory / f"{day}.candle.index"
+        if not index_path.exists():
+            return []
+        by_time = {}
+        for record in read_tape_index(index_path):
+            payload = _json.loads(read_payload(directory / f"{day}.candle.blob", record))
+            if payload.get("interval") == "I1" and payload.get("open") and payload.get("close"):
+                by_time[int(payload["bar_time_ms"])] = payload
+        return [by_time[t] for t in sorted(by_time)]
+
+    for day in upstox_days_newest_first():
+        contracts = [d for d in tape.glob("NSE_FO*") if (d / f"{day}.candle.index").exists()][:300]
+        series = {d.name: bars(d, day) for d in contracts}
+        if sum(len(b) for b in series.values()) >= 20_000:
+            break
+    else:
+        pytest.skip("the tape holds no trading day with 20,000 option bars")
+
+    detector = FeedJumpDetector(
+        jump_threshold_increments=number("feed_jump_threshold_increments"),
+        warmup_floor_fraction=number("feed_jump_warmup_floor_fraction"),
+        patience_multiple=number("feed_jump_patience_multiple"),
+        moves_needed=int(number("feed_jump_moves_needed")),
+        moves_remembered=int(number("feed_jump_moves_remembered")),
+    )
+    judged = flagged = 0
+    for key, symbol_bars in series.items():
+        listing = listings.get(key)
+        if listing is not None and listing.tick_size:
+            detector.set_price_increment(UPSTOX_VENUE, key, listing.tick_size)
+        for bar in symbol_bars:
+            verdict = detector.observe_closed_candle(Candle(
+                UPSTOX_VENUE, key, int(bar["bar_time_ms"]) * 1_000_000,
+                bar["open"], bar["close"], bar["high"], bar["low"],
+            ))
+            if verdict is not None:
+                judged += 1
+                flagged += not verdict.is_continuous
+    assert judged >= 10_000
+    assert flagged / judged < 0.03, f"{flagged} of {judged} ordinary option bars flagged on {day}"
+
+
+def test_a_closed_bar_restated_by_the_feed_is_judged_once():
+    """Upstox restates the bar it just closed with every message until the next one closes.
+
+    broker-candle-bridge marks every one of those restatements closed, so the part
+    compared a bar's open against its own close. Measured live on 2026-09-15 over
+    300 contracts: 17,305 closed-marked records for 1,523 distinct bars, and 15,782
+    of 17,021 comparisons were a bar against itself.
+    """
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, warmup_floor_fraction=0.01)
+    detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
+    detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1))
+    # Opens 3% below its own close: a restatement of that bar is not a boundary.
+    assert detector.observe_closed_candle(candle("BTCUSDT", 100.5, 103.5, 2)).is_continuous
+    assert detector.observe_closed_candle(candle("BTCUSDT", 100.5, 103.5, 2)) is None
+    assert detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1)) is None
+    assert detector.standing.jumps_found == 0
+    assert detector.standing.restated_bars_ignored == 2
+    following = detector.observe_closed_candle(candle("BTCUSDT", 103.5, 103.6, 3))
+    assert following is not None and following.is_continuous
+
+
+def test_on_real_upstox_bars_as_the_bridge_delivers_them_the_verdicts_equal_one_bar_one_judgement():
+    """Today's I1 records in arrival order, every one the bridge would mark closed.
+
+    The rule was fitted on one record per bar, which is not what the live part
+    receives: on 2026-09-15 it flagged 10.8% of live candles against the ~1% that
+    replay predicted, and paper-fill-simulator had refused 383 fills on those flags
+    inside twenty minutes. Fed the restated stream, the part must reach exactly
+    the verdicts it reaches on each bar once.
+    """
+    import json as _json
+    import tomllib
+
+    from runtime.tape import read_payload, read_tape_index
+    from tests.conftest import UPSTOX_VENUE, upstox_days_newest_first, upstox_listings_by_key
+
+    settings = tomllib.loads((pathlib.Path(__file__).resolve().parents[3] / "settings/runtime.example.toml").read_text())
+    number = lambda name: float(settings[name]["value"])
+    listings = upstox_listings_by_key()
+    tape = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape" / UPSTOX_VENUE
+    one_minute_ns = 60_000_000_000
+
+    def closed_records(directory, day):
+        index_path = directory / f"{day}.candle.index"
+        if not index_path.exists():
+            return []
+        stream = []
+        for record in read_tape_index(index_path):
+            payload = _json.loads(read_payload(directory / f"{day}.candle.blob", record))
+            if payload.get("interval") != "I1" or not payload.get("open") or not payload.get("close"):
+                continue
+            opened_ns = int(payload["bar_time_ms"]) * 1_000_000
+            if int(record["received_at_ns"]) >= opened_ns + one_minute_ns:
+                stream.append(payload)
+        return stream
+
+    for day in upstox_days_newest_first():
+        contracts = [d for d in tape.glob("NSE_FO*") if (d / f"{day}.candle.index").exists()][:300]
+        series = {d.name: closed_records(d, day) for d in contracts}
+        distinct = sum(len({p["bar_time_ms"] for p in s}) for s in series.values())
+        if distinct >= 1_000 and sum(map(len, series.values())) >= 2 * distinct:
+            break
+    else:
+        pytest.skip("the tape holds no trading day whose closed bars arrive restated")
+
+    def detector():
+        return FeedJumpDetector(
+            jump_threshold_increments=number("feed_jump_threshold_increments"),
+            warmup_floor_fraction=number("feed_jump_warmup_floor_fraction"),
+            patience_multiple=number("feed_jump_patience_multiple"),
+            moves_needed=int(number("feed_jump_moves_needed")),
+            moves_remembered=int(number("feed_jump_moves_remembered")),
+        )
+
+    def verdicts(part, key, bars):
+        found = []
+        for bar in bars:
+            verdict = part.observe_closed_candle(Candle(
+                UPSTOX_VENUE, key, int(bar["bar_time_ms"]) * 1_000_000,
+                bar["open"], bar["close"], bar["high"], bar["low"],
+            ))
+            if verdict is not None:
+                found.append((int(bar["bar_time_ms"]), verdict.is_continuous))
+        return found
+
+    as_delivered, once_per_bar = detector(), detector()
+    delivered_verdicts = once_verdicts = 0
+    for key, stream in series.items():
+        listing = listings.get(key)
+        for part in (as_delivered, once_per_bar):
+            if listing is not None and listing.tick_size:
+                part.set_price_increment(UPSTOX_VENUE, key, listing.tick_size)
+        first_of_each_bar = list({int(p["bar_time_ms"]): p for p in reversed(stream)}.values())[::-1]
+        live = verdicts(as_delivered, key, stream)
+        once = verdicts(once_per_bar, key, first_of_each_bar)
+        assert live == once, f"{key} on {day}: restated delivery changed the verdicts"
+        delivered_verdicts += len(live)
+        once_verdicts += len(once)
+    assert delivered_verdicts == once_verdicts >= 1_000
+    assert as_delivered.standing.restated_bars_ignored >= distinct
 
 
 # ---- tick-size-resolver ------------------------------------------------------
