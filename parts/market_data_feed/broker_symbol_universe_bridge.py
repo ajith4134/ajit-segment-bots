@@ -197,6 +197,7 @@ class BridgeStanding:
     expiry_day_far_strikes_trimmed_by_capacity: int = 0
     expiry_day_underlyings_waiting_for_implied_volatility: int = 0
     spare_subscription_keys: int = 0
+    stock_contracts_yielded_to_expiry_day_strikes: int = 0
     listings_seen: int = 0
     underlyings_resolved: int = 0
     option_contracts_known: int = 0
@@ -558,12 +559,43 @@ class BrokerSymbolUniverseBridge:
             chosen.extend(side[:per_side])
         return tuple(chosen)
 
-    def _expiry_day_far_strike_entries(self, entries: list) -> list:
-        """Far strikes for every index expiring today, inside the connection's spare keys."""
+    def _yield_stock_contracts(self, entries: list, needed: int, protected: set) -> int:
+        """Remove up to `needed` stock-chain contracts furthest from their money.
+
+        Measured live on 2026-09-15: held positions are forced into the universe, so
+        the connection had 4 spare keys rather than 20, and two strikes a side do not
+        reach an expiring index's Rs5 band. A stock chain's contract furthest from its
+        own price -- by fraction of that price, so a Rs100 share and a Rs10,000 one are
+        ranked alike -- is the one least likely to be traded that day. A contract with
+        real capital in it (`protected`) never yields.
+        """
+        candidates = []
+        for index, entry in enumerate(entries):
+            underlying_key = getattr(entry, "underlying_venue_instrument_id", None) or ""
+            if (
+                getattr(entry, "instrument_kind", None) != OPTION
+                or not underlying_key.startswith(f"{NSE_EQUITY_SEGMENT}|")
+                or entry.symbol in protected
+                or entry.strike_price is None
+            ):
+                continue
+            price = self._price_by_underlying_key.get(underlying_key)
+            if not price:
+                continue
+            candidates.append((abs(entry.strike_price - price) / price, entry.symbol, index))
+        candidates.sort(reverse=True)
+        removed = sorted((index for _, _, index in candidates[:needed]), reverse=True)
+        for index in removed:
+            del entries[index]
+        return len(removed)
+
+    def _expiry_day_far_strike_entries(self, entries: list, protected: set | None = None) -> list:
+        """Far strikes for every index expiring today, inside the connection's capacity."""
         self.standing.expiry_day_underlyings = 0
         self.standing.expiry_day_far_strikes_published = 0
         self.standing.expiry_day_far_strikes_trimmed_by_capacity = 0
         self.standing.expiry_day_underlyings_waiting_for_implied_volatility = 0
+        self.standing.stock_contracts_yielded_to_expiry_day_strikes = 0
         if self._far_strikes_per_side <= 0:
             return []
         held_keys = {entry.venue_instrument_id for entry in entries if entry.venue_instrument_id}
@@ -581,7 +613,20 @@ class BrokerSymbolUniverseBridge:
             return []
         # Shared evenly, a call and a put per strike: capacity is what the feed can
         # hold, and the feed stops at it in universe order -- where index keys sort
-        # after every share -- so going past it would drop indices first.
+        # after every share -- so going past it would drop indices first. What the
+        # spare keys cannot hold, the farthest stock strikes give up.
+        chosen = {
+            key: self._far_strikes_for(key, self._far_strikes_per_side) for key, _ in expiring
+        }
+        wanted = sum(
+            1 for strikes in chosen.values() for contract in strikes
+            if contract.instrument_key not in held_keys
+        )
+        if wanted > spare:
+            yielded = self._yield_stock_contracts(entries, wanted - spare, protected or set())
+            self.standing.stock_contracts_yielded_to_expiry_day_strikes = yielded
+            spare += yielded
+            held_keys = {entry.venue_instrument_id for entry in entries if entry.venue_instrument_id}
         per_side = min(self._far_strikes_per_side, spare // (2 * len(expiring)))
         added = []
         for key, listing in expiring:
@@ -830,7 +875,15 @@ class BrokerSymbolUniverseBridge:
         already_covered = {entry.symbol for entry in entries}
         held_entries, forced_in, without_a_listing = self._held_entries(already_covered)
         entries.extend(held_entries)
-        entries.extend(self._expiry_day_far_strike_entries(entries))
+        # Every open position is protected, not only the ones forced in above: a held
+        # contract that still ranks inside its chain was published by the chain.
+        entries.extend(self._expiry_day_far_strike_entries(
+            entries,
+            protected={
+                symbol for (_venue, symbol), position in self._position_by_key.items()
+                if not getattr(position, "is_flat", False)
+            },
+        ))
         self.standing.held_positions_forced_in = forced_in
         self.standing.held_positions_without_a_listing = without_a_listing
 
@@ -888,6 +941,7 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
         "expiry_day_far_strikes_trimmed_by_capacity": bridge.standing.expiry_day_far_strikes_trimmed_by_capacity,
         "expiry_day_underlyings_waiting_for_implied_volatility": bridge.standing.expiry_day_underlyings_waiting_for_implied_volatility,
         "spare_subscription_keys": bridge.standing.spare_subscription_keys,
+        "stock_contracts_yielded_to_expiry_day_strikes": bridge.standing.stock_contracts_yielded_to_expiry_day_strikes,
         "underlyings_resolved": bridge.standing.underlyings_resolved,
         "option_contracts_known": bridge.standing.option_contracts_known,
         "price_frames_seen": bridge.standing.price_frames_seen,

@@ -297,3 +297,57 @@ def test_without_an_implied_volatility_no_far_strike_is_guessed(real_listings):
     bridge.universe()
     assert bridge.standing.expiry_day_far_strikes_published == 0
     assert bridge.standing.expiry_day_underlyings_waiting_for_implied_volatility >= 1
+
+
+def test_on_expiry_day_the_farthest_stock_strikes_yield_their_keys_to_the_expiring_index(real_listings):
+    """Live on 2026-09-15 the connection had 4 spare keys, not 20: held positions are forced in.
+
+    Two strikes a side would not reach the Rs5 band. The index expiring today outranks a
+    stock chain's contract furthest from its money -- a stock's eighth strike is the one
+    least likely to be traded that day -- and positions already held are never touched.
+    """
+    from parts.broker_adapter.broker_price_level_sampler import BrokerPriceFrame, BrokerPriceLevel
+
+    if not any(one.trading_symbol == "NIFTY 23500 CE 15 SEP 26" for one in real_listings):
+        pytest.skip("the master on this machine no longer lists NIFTY's 15 SEP 26 expiry")
+
+    def both_segments(capacity, per_side=5):
+        return BrokerSymbolUniverseBridge(
+            tracked_trading_symbols=("A-NAME-NO-SEGMENT-TRADES",),
+            option_contracts_per_underlying={"A-NAME-NO-SEGMENT-TRADES": CHAIN_WIDTH},
+            option_underlying_selections=(IndexWithAnOption(), StockWithAnOption()),
+            derived_chain_width=CHAIN_WIDTH, now_ms=lambda: AT_0650_UTC_MS,
+            expiry_day_far_strikes_per_side=per_side, expiry_day_far_strike_maximum_abs_delta=0.10,
+            subscription_capacity=capacity, session_closes_at_ist=CLOSE_AT_IST,
+            option_delta_seconds_per_year=31_536_000.0,
+        )
+
+    def priced(bridge):
+        bridge, nifty = priced_with_implied_volatility(bridge, real_listings)
+        reliance = next(one for one in real_listings if one.trading_symbol == "RELIANCE" and one.segment == "NSE_EQ")
+        bridge.observe_price_frame(BrokerPriceFrame(
+            broker_id="upstox",
+            levels=(BrokerPriceLevel(instrument_key=reliance.instrument_key, price=1_390.0, observed_at_ns=1),),
+            published_at_ns=1, part_number=1, of_parts=1,
+        ))
+        return bridge
+
+    baseline = priced(both_segments(CONNECTION_KEY_LIMIT * 10, per_side=0))
+    before = {entry.venue_instrument_id: entry for entry in baseline.universe()}
+
+    bridge = priced(both_segments(capacity=len(before) + 4))
+    after = {entry.venue_instrument_id: entry for entry in bridge.universe()}
+    assert len(after) <= len(before) + 4
+    assert bridge.standing.expiry_day_far_strikes_published == 10
+    assert bridge.standing.expiry_day_far_strikes_trimmed_by_capacity == 0
+    yielded = [before[key] for key in set(before) - set(after)]
+    assert len(yielded) == 6 == bridge.standing.stock_contracts_yielded_to_expiry_day_strikes
+    assert all(entry.underlying_venue_instrument_id.startswith("NSE_EQ|") for entry in yielded)
+
+    # A contract with capital in it keeps its key, even when it ranks furthest out.
+    from runtime.trading_types import Position
+
+    farthest = max(yielded, key=lambda entry: abs(entry.strike_price - 1_390.0))
+    held = priced(both_segments(capacity=len(before) + 4))
+    held.observe_position(Position(venue_id="upstox", symbol=farthest.symbol, quantity=500.0, average_entry_price=5.0, realised_pnl=0.0, fees_paid=0.0, opened_at_ns=1, updated_at_ns=1))
+    assert farthest.symbol in {entry.symbol for entry in held.universe()}
