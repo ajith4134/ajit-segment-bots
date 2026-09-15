@@ -317,6 +317,28 @@ def plan_subscriptions(
     return tuple(accepted)
 
 
+def plan_evictions(
+    existing: Sequence[SubscriptionRequest], universe_keys: Sequence[str], capacity: int,
+) -> tuple[SubscriptionRequest, ...]:
+    """What to unsubscribe so every universe member missing from a full connection fits.
+
+    The subscription only ever grew (2026-09-02's top-up), so once the connection was full
+    a newcomer to the universe could never be carried: on 2026-09-15 the feed filled 2,000
+    keys at connect, before NIFTY's expiry-day far strikes had been chosen, and none of
+    them was ever recorded. Only keys no longer in the universe are given up -- the most
+    recently added first, since the oldest are what the connection was built on -- so a
+    universe member, which includes every open position, is never evicted.
+    """
+    subscribed = {request.instrument_key for request in existing}
+    universe = set(universe_keys)
+    missing = sum(1 for key in universe if key not in subscribed)
+    needed = missing - max(0, capacity - len(existing))
+    if needed <= 0:
+        return ()
+    evictable = [request for request in reversed(existing) if request.instrument_key not in universe]
+    return tuple(evictable[:needed])
+
+
 def plan_additional_subscriptions(
     adapter: BrokerAdapter,
     existing: Sequence[SubscriptionRequest],
@@ -438,7 +460,7 @@ def start_part(context) -> int:
         identity_of=without_observation_time,
     )
 
-    counts = {"decoded_messages": 0}
+    counts = {"decoded_messages": 0, "evicted_for_the_universe": 0}
 
     def on_message(payload: bytes) -> None:
         try:
@@ -518,6 +540,9 @@ def start_part(context) -> int:
         state["backoff_seconds"] = context.number("broker_reconnect_backoff_floor")
         return True
 
+    # What one connection carries in the mode subscribed, as the adapter declares it.
+    subscription_capacity = int(adapter.declared_limits()["full_individual_limit"].value)
+
     def grow_subscriptions_if_due() -> None:
         """The periodic top-up ensure_connected() can't do on its own: it
         only plans a subscription once, at first connect, and this is what
@@ -538,6 +563,22 @@ def start_part(context) -> int:
             listings, tracked_trading_symbols, now_ms=time.time_ns() // 1_000_000,
         )
         state["contracts_left_to_the_universe"] = contracts_left_to_the_universe
+        universe_keys = [
+            key for entry in selected_universe.values()
+            if (key := getattr(entry, "venue_instrument_id", None)) is not None
+        ]
+        evicted = plan_evictions(state["subscribed"], universe_keys, subscription_capacity)
+        if evicted:
+            try:
+                state["connection"].send(adapter.encode_unsubscribe_frame(evicted))
+            except (ConnectionClosed, WebSocketException, OSError) as failure:
+                drop_connection(failure)
+                return
+            gone = {request.instrument_key for request in evicted}
+            state["subscribed"] = tuple(
+                request for request in state["subscribed"] if request.instrument_key not in gone
+            )
+            counts["evicted_for_the_universe"] = counts.get("evicted_for_the_universe", 0) + len(evicted)
         additional = plan_additional_subscriptions(
             adapter,
             state["subscribed"],
@@ -622,6 +663,8 @@ def start_part(context) -> int:
             ),
             "decoded_messages": counts["decoded_messages"],
             "last_failure": counts["last_failure"],
+            # Keys given up so a universe newcomer fits a full connection.
+            "evicted_for_the_universe": counts["evicted_for_the_universe"],
         }
 
     try:

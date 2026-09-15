@@ -368,3 +368,28 @@ def test_the_universe_alone_is_enough_before_any_listing_has_arrived():
     ordered = subscribe_the_universe_first(universe, ())
 
     assert [item.instrument_key for item in ordered] == ["NSE_INDEX|Nifty 50"]
+
+
+def test_a_full_connection_gives_up_what_left_the_universe_for_what_joined_it():
+    """The subscription only ever grew, so a full connection could never take a newcomer.
+
+    2026-09-15: the feed filled all 2,000 keys at connect, before any implied volatility
+    existed and so before broker-symbol-universe-bridge had chosen NIFTY's expiry-day far
+    strikes. The bridge then published ten of them -- and six stock contracts yielded their
+    keys for them -- but the connection stayed full of what it first took, and not one far
+    strike was ever recorded.
+    """
+    from parts.broker_adapter.broker_market_feed_reader import plan_evictions
+
+    full = SubscriptionMode.FULL
+    subscribed = tuple(SubscriptionRequest(f"NSE_FO|{n}", full) for n in range(10))
+    # Two stock contracts left the universe; three far strikes joined it.
+    universe = [f"NSE_FO|{n}" for n in range(8)] + ["NSE_FO|far-1", "NSE_FO|far-2", "NSE_FO|far-3"]
+
+    evicted = plan_evictions(subscribed, universe, capacity=10)
+    assert {one.instrument_key for one in evicted} == {"NSE_FO|8", "NSE_FO|9"}
+
+    # With room, nothing is evicted; nothing in the universe is ever evicted.
+    assert plan_evictions(subscribed, universe, capacity=13) == ()
+    everything = [one.instrument_key for one in subscribed] + ["NSE_FO|far-1"]
+    assert plan_evictions(subscribed, everything, capacity=10) == ()
