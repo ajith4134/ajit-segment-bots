@@ -887,6 +887,67 @@ def test_a_second_with_no_trades_is_a_state_not_a_gap():
     assert subject.standing.empty_seconds_encoded == 4
 
 
+class EncoderThatEncodesEveryQuietSecond(OrderFlowStateEncoder):
+    """The encoder as it was until 2026-09-13: every quiet second encoded, however many."""
+
+    def _encode_quiet_seconds(self, key, first_second, end_second):
+        for empty in range(first_second, end_second):
+            self._encode_empty(key, empty)
+
+
+def test_a_quiet_stretch_longer_than_the_history_encodes_only_what_is_kept():
+    """A weekend closes ~234,000 quiet seconds per symbol; only the retained ones are worth encoding."""
+    subject = an_encoder(window=120, minimum=10)
+    subject.observe_trade(VENUE, SYMBOL, 100.0, 1.0, 0)
+    subject.observe_trade(VENUE, SYMBOL, 101.0, 1.0, 100_000 * SECOND_NS)
+    retained = 120 * 4
+    assert subject.standing.empty_seconds_encoded == retained
+    assert subject.standing.quiet_seconds_beyond_the_history == 100_000 - 1 - retained
+
+
+def test_encoding_only_the_kept_quiet_seconds_changes_nothing_a_reader_can_see_on_real_upstox_prints():
+    """Two real sessions of the same contracts, so the overnight gap between them is a real quiet stretch.
+
+    Compared against the encoder that encodes every quiet second: the retained states,
+    the volume window they were quintiled against, and the last close must be identical,
+    or the shortcut changed what flow-entropy-meter reads.
+    """
+    from tests.conftest import (
+        busiest_upstox_instruments, upstox_days_newest_first, upstox_trades_for,
+    )
+
+    trading_days = []
+    for day in upstox_days_newest_first():
+        keys = busiest_upstox_instruments(day, 8)
+        if keys and len(upstox_trades_for(day, keys[:2], 200)) >= 200:
+            trading_days.append(day)
+        if len(trading_days) == 2:
+            break
+    if len(trading_days) < 2:
+        pytest.skip("the Upstox tape holds fewer than two trading days with real prints")
+    newer, older = trading_days
+    keys = [k for k in busiest_upstox_instruments(newer, 40) if k in set(busiest_upstox_instruments(older, 400))][:6]
+    if not keys:
+        pytest.skip(f"no NSE_FO contract traded busily on both {older} and {newer}")
+    trades = upstox_trades_for(older, keys, 5_000) + upstox_trades_for(newer, keys, 5_000)
+    trades = [trade for trade in trades if trade.quantity is not None]
+
+    shortcut = OrderFlowStateEncoder(volume_window_seconds=300, minimum_volume_observations=30)
+    reference = EncoderThatEncodesEveryQuietSecond(volume_window_seconds=300, minimum_volume_observations=30)
+    for trade in trades:
+        for encoder in (shortcut, reference):
+            encoder.observe_trade(trade.venue_id, trade.symbol, trade.price, trade.quantity, trade.venue_time_ns)
+
+    assert shortcut.standing.quiet_seconds_beyond_the_history > 0, (
+        "no real quiet stretch exceeded the history, so this proved nothing"
+    )
+    for key in reference._states:
+        assert shortcut._states[key] == reference._states[key], key
+        assert shortcut._volumes[key] == reference._volumes[key], key
+        assert shortcut._last_close[key] == reference._last_close[key], key
+    assert shortcut.standing.seconds_encoded < reference.standing.seconds_encoded
+
+
 def test_the_volume_quintile_is_relative_to_recent_activity():
     """A fixed threshold would measure the symbol's size rather than its flow."""
     subject = an_encoder(minimum=5)

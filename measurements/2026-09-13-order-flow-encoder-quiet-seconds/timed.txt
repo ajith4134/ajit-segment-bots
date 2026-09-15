@@ -1,0 +1,14 @@
+Two runs of time_the_encoder_across_a_real_overnight.py, 2026-09-13, same 60 contracts and prints.
+
+Run 1 -- quintile still sorted the window on every encoded second:
+60 contracts, 841,682 sized prints over 2026-09-07 and 2026-09-08
+  every quiet second (before)        179.92s  seconds encoded  6,478,733  quiet encoded  6,052,140  beyond the history          0  per print    213.8 us
+  retained history only (after)       83.12s  seconds encoded  1,968,721  quiet encoded  1,542,128  beyond the history  4,510,012  per print     98.8 us
+
+Run 2 -- quintile counts without sorting (both columns inherit it, so "before" here is no longer the original):
+60 contracts, 841,682 sized prints over 2026-09-07 and 2026-09-08
+  every quiet second (before)        133.73s  seconds encoded  6,478,733  quiet encoded  6,052,140  beyond the history          0  per print    158.9 us
+  retained history only (after)       44.23s  seconds encoded  1,968,721  quiet encoded  1,542,128  beyond the history  4,510,012  per print     52.5 us
+
+Original (run 1, before) to final (run 2, after): 179.92s -> 44.23s, 4.07x less work, same retained output
+(tests/parts/prediction/test_prediction_block.py::test_encoding_only_the_kept_quiet_seconds_changes_nothing_a_reader_can_see_on_real_upstox_prints).

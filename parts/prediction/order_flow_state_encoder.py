@@ -91,6 +91,9 @@ class EncoderStanding:
     trades_seen: int = 0
     seconds_encoded: int = 0
     empty_seconds_encoded: int = 0
+    # Quiet seconds older than the retained history when their stretch closed:
+    # never encoded, because nothing encoded that far back survives to be read.
+    quiet_seconds_beyond_the_history: int = 0
     symbols_tracked: int = 0
     by_state: dict = field(default_factory=dict)
     quintile_windows_short: int = 0
@@ -136,8 +139,7 @@ class OrderFlowStateEncoder:
             # Seconds with no trades between the two are still seconds, and the
             # flow was quiet in them. Skipping them would splice two
             # non-adjacent seconds into a transition that never happened.
-            for empty in range(building.second_ns + 1, second):
-                self._encode_empty(key, empty)
+            self._encode_quiet_seconds(key, building.second_ns + 1, second)
             self._building[key] = SecondUnderConstruction(second, price, quantity, 1)
             return
 
@@ -186,6 +188,44 @@ class OrderFlowStateEncoder:
     def _close_second(self, key, building: SecondUnderConstruction) -> None:
         self._encode(key, building.second_ns, building.close, building.volume, building.trades)
 
+    def _retained_seconds(self) -> int:
+        """How many encoded seconds a symbol keeps; anything older is discarded."""
+        return self._window * 4
+
+    def _encode_quiet_seconds(self, key, first_second: int, end_second: int) -> None:
+        """Encode the quiet seconds [first_second, end_second), keeping only what survives.
+
+        **Only the newest `_retained_seconds()` of a quiet stretch are encoded**
+        (2026-09-13). Each encoded second is appended to a history trimmed to
+        that length, and each one sorts the trailing volume window, so a stretch
+        longer than the history does work that is thrown away before anything
+        can read it. It is not a small amount of work on NSE: an option contract
+        trades minutes or hours apart, and the first trade after a weekend closes
+        about 234,000 quiet seconds for each of the 373 symbols the encoder
+        tracked on 2026-09-13 -- which is what unattended-run-warden escalated as
+        taking-longer-every-tick on 09-12 and 09-13, and the shape of the 11-14s
+        receive lag measured through the morning of 2026-09-07
+        (measurements/2026-09-13-indian-carry-and-clock/measured-clock-offset.txt).
+
+        The result is identical to encoding every second. A quiet second carries
+        volume 0 and the last close, so the only state older quiet seconds leave
+        behind is the zeros they push into the volume window; that window is set
+        to exactly what they would have left before the retained seconds are
+        encoded against it. What is not reproduced is counting: those seconds are
+        tallied in `quiet_seconds_beyond_the_history`, not in `by_state`.
+        """
+        total = end_second - first_second
+        if total <= 0:
+            return
+        skipped = max(0, total - self._retained_seconds())
+        if skipped:
+            volumes = self._volumes.setdefault(key, [])
+            volumes.extend([0.0] * min(skipped, self._window))
+            del volumes[: max(0, len(volumes) - self._window)]
+            self.standing.quiet_seconds_beyond_the_history += skipped
+        for empty in range(first_second + skipped, end_second):
+            self._encode_empty(key, empty)
+
     def _encode_empty(self, key, second_ns: int) -> None:
         self.standing.empty_seconds_encoded += 1
         self._encode(key, second_ns, self._last_close.get(key, 0.0), 0.0, 0)
@@ -207,7 +247,7 @@ class OrderFlowStateEncoder:
         )
         states = self._states.setdefault(key, [])
         states.append(state)
-        del states[: max(0, len(states) - self._window * 4)]
+        del states[: max(0, len(states) - self._retained_seconds())]
 
         self.standing.seconds_encoded += 1
         self.standing.by_state[str(state)] = self.standing.by_state.get(str(state), 0) + 1
@@ -227,9 +267,11 @@ class OrderFlowStateEncoder:
             self.standing.quintile_windows_short += 1
             return 3
 
-        ordered = sorted(volumes)
-        below = sum(1 for value in ordered if value <= volume)
-        fraction = below / len(ordered)
+        # A count, not an order statistic: how many of the window sit at or below
+        # this volume. Sorting first changed nothing but the cost, once per encoded
+        # second, which on NSE is mostly quiet seconds (2026-09-13).
+        below = sum(1 for value in volumes if value <= volume)
+        fraction = below / len(volumes)
         quintile = min(5, max(1, math.ceil(5 * fraction) or 1))
 
         volumes.append(volume)
@@ -251,6 +293,7 @@ def describe_encoding(encoder: OrderFlowStateEncoder) -> dict:
         "trades_seen": encoder.standing.trades_seen,
         "seconds_encoded": encoder.standing.seconds_encoded,
         "empty_seconds_encoded": encoder.standing.empty_seconds_encoded,
+        "quiet_seconds_beyond_the_history": encoder.standing.quiet_seconds_beyond_the_history,
         "seconds_before_the_volume_window_filled": encoder.standing.quintile_windows_short,
         "symbols_tracked": encoder.standing.symbols_tracked,
         "by_state": dict(sorted(encoder.standing.by_state.items())),
