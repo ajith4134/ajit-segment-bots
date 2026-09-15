@@ -235,3 +235,21 @@ def test_the_outstanding_close_record_does_not_grow_without_bound():
     )
 
     assert len(subject._closes_asked_for) == 1
+
+
+def test_closing_a_position_that_is_already_flat_is_refused_not_a_crash():
+    """A flat position has no side to trade against, and asking which was the crash.
+
+    2026-09-15: a close intent arrived for a symbol whose position had just gone flat;
+    `order_side_for("flat")` raised inside the refusal, and position-sizer restarted
+    rather than refusing.
+    """
+    from runtime.trading_types import FLAT
+
+    order = sizer().close_order(
+        venue_id="upstox", symbol="NIFTY 23400 CE 15 SEP 26",
+        position_quantity=0.0, position_side=FLAT,
+        entry_price=28.7, quantity_increment=65.0,
+    )
+    assert order.outcome == REFUSED_NO_POSITION_TO_CLOSE
+    assert not order.is_tradeable

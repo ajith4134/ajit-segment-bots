@@ -33,7 +33,7 @@ from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.risk_types import NO_RISK_ALLOWED
 from runtime.trade_intent import CLOSE, OPEN, REDUCE
-from runtime.trading_types import BUY, LONG, SELL, SHORT, order_side_for
+from runtime.trading_types import BUY, FLAT, LONG, SELL, SHORT, order_side_for
 
 PART_ID = "position-sizer"
 
@@ -435,8 +435,13 @@ class PositionSizer:
         """
         if position_quantity == 0:
             self.standing.refused_no_position_to_close += 1
+            # A flat position has no side an order could be placed on, and
+            # translating one raised inside this refusal: position-sizer restarted
+            # on a close for a position that had just gone flat (2026-09-15).
+            # Nothing is placed from a refusal, so the position's own word stands.
+            side = position_side if position_side == FLAT else order_side_for(position_side)
             return self._refusal(
-                venue_id, symbol, order_side_for(position_side), 0.0, 0.0,
+                venue_id, symbol, side, 0.0, 0.0,
                 REFUSED_NO_POSITION_TO_CLOSE, 1.0,
                 "the intent asks to close a position this part has no record of holding",
                 intent_id, segment, action,
