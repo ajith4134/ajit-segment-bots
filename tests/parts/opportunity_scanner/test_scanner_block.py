@@ -1266,3 +1266,27 @@ def test_the_two_skips_are_reported_separately_on_the_standing():
 
     assert subject.standing.skipped_unmeasurable == 1
     assert subject.standing.skipped_for_a_missing_measurement == 1
+
+
+def test_a_contract_is_judged_against_its_underlyings_forecast_not_its_own_premiums():
+    """Implied volatility is about the share; a premium's own volatility is not.
+
+    2026-09-15, minutes after the units were fixed: 87 of 87 candidates read "implied
+    cheap" -- CROMPTON, MAXHEALTH and the rest were compared as a contract's premium
+    volatility (0.39) against its underlying's implied volatility (0.16). A premium
+    moves several times its underlying, so every contract read cheap.
+    """
+    subject = gap_detector(minimum_gap=0.29)
+    contract = "HINDUNILVR 1980 PE 29 SEP 26"
+    subject.observe_forecast(VENUE, contract, over_the_horizon(1.20), GAP_HORIZON_SECONDS)
+    subject.observe_forecast(VENUE, "HINDUNILVR", over_the_horizon(0.16), GAP_HORIZON_SECONDS)
+    subject.observe_implied(VENUE, contract, 0.165)
+    candidate, outcome = subject.detect(VENUE, contract)
+    assert outcome == GAP_TOO_SMALL, "0.165 implied against the share's 0.16 is no gap"
+
+    # With no forecast for the underlying, the contract is not judged at all.
+    lonely = gap_detector(minimum_gap=0.29)
+    lonely.observe_forecast(VENUE, contract, over_the_horizon(1.20), GAP_HORIZON_SECONDS)
+    lonely.observe_implied(VENUE, contract, 0.165)
+    from parts.opportunity_scanner.volatility_gap_detector import NO_FORECAST
+    assert lonely.detect(VENUE, contract)[1] == NO_FORECAST

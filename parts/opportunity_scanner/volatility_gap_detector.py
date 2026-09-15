@@ -116,7 +116,10 @@ class VolatilityGapDetector:
     def detect(self, venue_id: str, symbol: str, regime_name: str = "any") -> tuple[object | None, str]:
         self.standing.tests += 1
         key = (venue_id, symbol)
-        forecast = self._forecast.get(key)
+        # The forecast of what the implied volatility describes: the underlying.
+        # A contract's own premium moves several times its share, and judged on it
+        # every contract read "implied cheap" (87 of 87, 2026-09-15).
+        forecast = self._forecast.get((venue_id, underlying_of_a_trading_symbol(symbol)))
         implied = self._implied.get(key)
 
         if forecast is None or forecast <= 0:
