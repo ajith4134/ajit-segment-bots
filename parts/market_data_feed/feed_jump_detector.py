@@ -357,6 +357,40 @@ def describe_jumps(detector: FeedJumpDetector, levels=None) -> dict:
     }
 
 
+class ContinuityLevels:
+    """Each symbol's latest continuity, published on change and restated when due.
+
+    Until 2026-09-15 every restatement of an already-closed bar reached this part
+    and re-published the symbol's level, which was the only thing keeping a level
+    current between bars. Judging each bar once removed that, and a contract's
+    next bar can be 30 minutes away (p99 1,800s between new bars across 300
+    contracts, 2026-09-08) -- so a paper-fill-simulator that restarted, or lost one
+    datagram, would fill a symbol flagged discontinuous for that long. The last
+    verdict per symbol is kept and offered again once per sweep; the keyed
+    publisher decides whether it is due, so nothing is said more often than before.
+    """
+
+    def __init__(self, publisher, sweep_interval_seconds: float, monotonic=time.monotonic) -> None:
+        self._publisher = publisher
+        self._sweep_interval_seconds = sweep_interval_seconds
+        self._monotonic = monotonic
+        self._latest: dict[tuple[str, str], FeedJump] = {}
+        self._last_sweep = float("-inf")
+
+    def publish(self, jump: FeedJump) -> None:
+        key = (jump.venue_id, jump.symbol)
+        self._latest[key] = jump
+        self._publisher.publish_level(key, (jump,))
+
+    def restate_what_is_due(self) -> None:
+        now = self._monotonic()
+        if now - self._last_sweep < self._sweep_interval_seconds:
+            return
+        self._last_sweep = now
+        for key, jump in self._latest.items():
+            self._publisher.publish_level(key, (jump,))
+
+
 def run_feed_jump_detector(
     detector: FeedJumpDetector, control_socket, read_closed_candles, publish_jump,
     health_interval_seconds: float, emit_health,
@@ -380,12 +414,14 @@ def run_feed_jump_detector(
         refresh_interval_seconds=restatement_interval_seconds,
         identity_of=continuity_of,
     )
+    levels = ContinuityLevels(continuity, sweep_interval_seconds=health_interval_seconds)
 
     def tick() -> None:
         for candle in read_closed_candles():
             jump = detector.observe_closed_candle(candle)
             if jump is not None:
-                continuity.publish_level((jump.venue_id, jump.symbol), (jump,))
+                levels.publish(jump)
+        levels.restate_what_is_due()
 
     return run_part(
         declaration=PART_DECLARATION,
@@ -431,6 +467,7 @@ def start_part(context) -> int:
         refresh_interval_seconds=context.number("feed_jump_restatement_interval_seconds"),
         identity_of=continuity_of,
     )
+    levels = ContinuityLevels(continuity, sweep_interval_seconds=context.health_interval_seconds)
 
     def tick() -> None:
         # Increments first, so a symbol whose tick and first bars arrive in one
@@ -454,7 +491,8 @@ def start_part(context) -> int:
                 )
             )
             if jump is not None:
-                continuity.publish_level((jump.venue_id, jump.symbol), (jump,))
+                levels.publish(jump)
+        levels.restate_what_is_due()
 
     return run_part(
         declaration=PART_DECLARATION,

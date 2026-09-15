@@ -791,3 +791,34 @@ def test_a_book_level_is_a_price_and_a_quantity():
     )
     resolver.observe_book(book.venue_id, book.symbol, book.bids, book.asks)
     assert resolver.resolve("binance-usdm", "BTCUSDT").increment == pytest.approx(0.01)
+
+
+def test_a_flag_is_restated_between_bars_so_a_restarted_fill_path_learns_it_again():
+    """Judging a bar once removed the only thing that kept a level current between bars."""
+    from parts.market_data_feed.feed_jump_detector import ContinuityLevels, continuity_of
+    from runtime.level_publishing import LevelPublisherByKey
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock, said = Clock(), []
+    publisher = LevelPublisherByKey(
+        publish=lambda items: said.extend(items), refresh_interval_seconds=60.0,
+        monotonic=clock, identity_of=continuity_of,
+    )
+    levels = ContinuityLevels(publisher, sweep_interval_seconds=1.0, monotonic=clock)
+    detector = FeedJumpDetector(jump_threshold_increments=2.0, warmup_floor_fraction=0.01)
+    detector.set_price_increment("binance-usdm", "BTCUSDT", 0.1)
+    detector.observe_closed_candle(candle("BTCUSDT", 100.0, 100.5, 1))
+    levels.publish(detector.observe_closed_candle(candle("BTCUSDT", 102.5, 102.6, 2)))
+    assert [j.is_continuous for j in said] == [False]
+
+    clock.now = 30.0
+    levels.restate_what_is_due()
+    assert len(said) == 1, "not due yet: nothing is said more often than the refresh interval"
+    clock.now = 61.0
+    levels.restate_what_is_due()
+    assert [j.is_continuous for j in said] == [False, False]

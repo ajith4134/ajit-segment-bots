@@ -235,6 +235,23 @@ INDEPENDENT_MARKER = "MARKET-INDEPENDENT 2026-09-12"
 INCONCLUSIVE_MARKER = "MEASURED BUT INCONCLUSIVE 2026-09-12"
 
 
+SETTING_STATE_MARKERS = (
+    CONVERTED_MARKER, INERT_MARKER, MECHANISM_MARKER, INDEPENDENT_MARKER, INCONCLUSIVE_MARKER,
+)
+
+
+def latest_state_marker_in(block: str) -> str | None:
+    """The state a setting is in now: the status label written LAST in its note.
+
+    Notes are appended to, never rewritten, so a setting that was marked inert or
+    inconclusive and later refitted carries both labels. Counted by presence, it
+    sat in two states at once -- on 2026-09-15 the guard read 5 still fitted and
+    6 of those "measured inconclusively", a subset larger than its set.
+    """
+    found = [(block.rfind(marker), marker) for marker in SETTING_STATE_MARKERS if marker in block]
+    return max(found)[1] if found else None
+
+
 def settings_converted_to_the_indian_market() -> int:
     """Settings carrying a conversion record, counted apart from live drift."""
     path = pathlib.Path.home() / ".config/ajit-segment-bots/settings/runtime.toml"
@@ -244,7 +261,7 @@ def settings_converted_to_the_indian_market() -> int:
         return 0
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
-        if re.match(r"\[([a-z0-9_]+)\]", block) and CONVERTED_MARKER in block
+        if re.match(r"\[([a-z0-9_]+)\]", block) and latest_state_marker_in(block) == CONVERTED_MARKER
     )
 
 
@@ -257,7 +274,7 @@ def settings_inert_with_the_crypto_path() -> int:
         return 0
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
-        if re.match(r"\[([a-z0-9_]+)\]", block) and INERT_MARKER in block
+        if re.match(r"\[([a-z0-9_]+)\]", block) and latest_state_marker_in(block) == INERT_MARKER
     )
 
 
@@ -273,7 +290,7 @@ def settings_measured_without_a_conclusion() -> int:
         return 0
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
-        if re.match(r"\[([a-z0-9_]+)\]", block) and INCONCLUSIVE_MARKER in block
+        if re.match(r"\[([a-z0-9_]+)\]", block) and latest_state_marker_in(block) == INCONCLUSIVE_MARKER
     )
 
 
@@ -286,7 +303,7 @@ def settings_that_do_not_depend_on_the_market() -> int:
         return 0
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
-        if re.match(r"\[([a-z0-9_]+)\]", block) and INDEPENDENT_MARKER in block
+        if re.match(r"\[([a-z0-9_]+)\]", block) and latest_state_marker_in(block) == INDEPENDENT_MARKER
     )
 
 
@@ -299,7 +316,7 @@ def settings_needing_an_indian_mechanism() -> int:
         return 0
     return sum(
         1 for block in re.split(r"\n(?=\[)", text)
-        if re.match(r"\[([a-z0-9_]+)\]", block) and MECHANISM_MARKER in block
+        if re.match(r"\[([a-z0-9_]+)\]", block) and latest_state_marker_in(block) == MECHANISM_MARKER
     )
 
 
@@ -323,17 +340,11 @@ def settings_whose_provenance_is_crypto() -> tuple[int, int, int]:
         if named is None:
             continue
         total += 1
-        if CONVERTED_MARKER in block:
-            # Already converted; its note names crypto only to say what it was.
-            continue
-        if INERT_MARKER in block:
-            # Still the crypto number, and nothing on this spine asks for it.
-            continue
-        if MECHANISM_MARKER in block:
-            # A concept, not a number. Its note names what replaces it.
-            continue
-        if INDEPENDENT_MARKER in block:
-            # The same quantity on any market; nothing to re-derive.
+        if latest_state_marker_in(block) in (
+            CONVERTED_MARKER, INERT_MARKER, MECHANISM_MARKER, INDEPENDENT_MARKER,
+        ):
+            # Converted, inert, a mechanism rather than a number, or the same on
+            # any market -- by the label written last. Inconclusive stays counted.
             continue
         if CRYPTO_PROVENANCE.search(block):
             fitted.append(named.group(1))
