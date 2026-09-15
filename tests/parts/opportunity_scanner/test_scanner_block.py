@@ -14,6 +14,7 @@ would bury every real signal.
 import importlib
 import json
 import math
+import pathlib
 import time
 
 import pytest
@@ -696,16 +697,28 @@ def test_a_retired_pair_produces_nothing_however_stretched():
 
 # ---- volatility-gap-detector -------------------------------------------------
 
+# NSE F&O trading seconds in 2026, from NSE's own holiday list
+# (measurements/2026-09-15-volatility-gap-units/).
+TRADING_SECONDS_PER_YEAR = 5_512_500.0
+GAP_HORIZON_SECONDS = 3600.0
+
+
+def over_the_horizon(annual_volatility):
+    """An annualised volatility as the forecasters state one: over their horizon."""
+    return annual_volatility * math.sqrt(GAP_HORIZON_SECONDS / TRADING_SECONDS_PER_YEAR)
+
+
 def gap_detector(minimum_gap=0.2):
     return VolatilityGapDetector(
-        minimum_gap_fraction=minimum_gap, horizon_seconds=3600.0, calibrator=calibrator()
+        minimum_gap_fraction=minimum_gap, horizon_seconds=GAP_HORIZON_SECONDS,
+        seconds_per_year=TRADING_SECONDS_PER_YEAR, calibrator=calibrator(),
     )
 
 
 def test_no_options_surface_produces_nothing_and_says_why():
     """Phase 1 captures no options data, and a realised-only fallback would be a different strategy."""
     subject = gap_detector()
-    subject.observe_forecast(VENUE, SYMBOL, 0.5)
+    subject.observe_forecast(VENUE, SYMBOL, over_the_horizon(0.5), GAP_HORIZON_SECONDS)
     candidate, outcome = subject.detect(VENUE, SYMBOL)
     assert candidate is None
     assert outcome == NO_SURFACE
@@ -713,7 +726,7 @@ def test_no_options_surface_produces_nothing_and_says_why():
 
 def test_rich_implied_volatility_is_sold_and_cheap_is_bought():
     subject = gap_detector(minimum_gap=0.2)
-    subject.observe_forecast(VENUE, SYMBOL, 0.5)
+    subject.observe_forecast(VENUE, SYMBOL, over_the_horizon(0.5), GAP_HORIZON_SECONDS)
     subject.observe_implied(VENUE, SYMBOL, 0.9)
     rich, _ = subject.detect(VENUE, SYMBOL)
     assert rich.direction == SHORT
@@ -725,10 +738,69 @@ def test_rich_implied_volatility_is_sold_and_cheap_is_bought():
 
 def test_a_small_gap_is_inside_the_noise():
     subject = gap_detector(minimum_gap=0.5)
-    subject.observe_forecast(VENUE, SYMBOL, 0.50)
+    subject.observe_forecast(VENUE, SYMBOL, over_the_horizon(0.50), GAP_HORIZON_SECONDS)
     subject.observe_implied(VENUE, SYMBOL, 0.52)
     candidate, outcome = subject.detect(VENUE, SYMBOL)
     assert outcome == GAP_TOO_SMALL
+
+
+def test_on_real_nifty_the_gap_compares_a_year_with_a_year():
+    """Upstox's implied volatility is annualised; the forecasters state theirs over a horizon.
+
+    Compared raw, every test on 2026-09-15 read implied hundreds of times the forecast:
+    17,242 of 17,242 candidates were "implied rich", largest gap 718. Here the forecast is
+    NIFTY's own realised volatility over 300 trading seconds on today's tape, and the
+    implied volatility is Upstox's, for today's near-the-money NIFTY contracts.
+    """
+    import json as _json
+    import statistics
+
+    from runtime.tape import read_payload, read_tape_index
+
+    tape = pathlib.Path.home() / ".local/share/ajit-segment-bots/tape/upstox"
+    day = "2026-09-15"
+    # Under its symbol once the listing named it, under its instrument key before.
+    index_paths = [
+        path for path in (tape / "NIFTY" / f"{day}.index", tape / "NSE_INDEX|Nifty 50" / f"{day}.index")
+        if path.exists()
+    ]
+    greeks_paths = sorted(tape.glob(f"NIFTY * 15 SEP 26/{day}.option_greeks.index"))
+    if not index_paths or not greeks_paths:
+        pytest.skip("today's NIFTY tape is not on this machine")
+
+    by_second = {}
+    for index_path in index_paths:
+        for record in read_tape_index(index_path):
+            payload = _json.loads(read_payload(index_path.with_name(f"{day}.blob"), record))
+            by_second[payload["last_traded_time_ms"] // 1000] = payload["last_traded_price"]
+    seconds = sorted(by_second)
+    horizon = 300
+    # Variance per elapsed second, from every interval: the index prints every
+    # few seconds, not every second. Intervals over a minute are feed holes.
+    squared, elapsed = 0.0, 0
+    for earlier, later in zip(seconds, seconds[1:]):
+        if later - earlier <= 60:
+            squared += math.log(by_second[later] / by_second[earlier]) ** 2
+            elapsed += later - earlier
+    if elapsed < 1800:
+        pytest.skip("less than half an hour of NIFTY on today's tape")
+    forecast = math.sqrt(squared / elapsed * horizon)
+
+    implied = []
+    for path in greeks_paths:
+        for record in read_tape_index(path)[-200:]:
+            value = _json.loads(read_payload(path.with_suffix(".blob"), record)).get("implied_volatility")
+            if value:
+                implied.append(value)
+    subject = VolatilityGapDetector(
+        minimum_gap_fraction=0.29, horizon_seconds=float(horizon),
+        seconds_per_year=TRADING_SECONDS_PER_YEAR, calibrator=calibrator(),
+    )
+    subject.observe_forecast(VENUE, "NIFTY", forecast, float(horizon))
+    subject.observe_implied(VENUE, "NIFTY", statistics.median(implied))
+    subject.detect(VENUE, "NIFTY")
+    measured_gap = max(subject.standing.largest_gap, 0.0)
+    assert measured_gap < 5.0, f"implied {statistics.median(implied):.3f} against a 300s forecast of {forecast:.6f}"
 
 
 # ---- watch-condition-compiler ------------------------------------------------

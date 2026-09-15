@@ -1,0 +1,7 @@
+{
+ "weekdays_2026": 261,
+ "fo_weekday_holidays_2026": 16,
+ "trading_days_2026": 245,
+ "session_seconds": 22500,
+ "trading_seconds_2026": 5512500
+}

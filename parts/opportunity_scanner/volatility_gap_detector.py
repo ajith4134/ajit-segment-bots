@@ -29,6 +29,7 @@ from runtime.market_signal import (
     make_candidate,
     settle_claims_from,
 )
+from runtime.forecast_types import annualise
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 from runtime.underlying_of_a_trading_symbol import underlying_of_a_trading_symbol
@@ -79,6 +80,7 @@ class VolatilityGapDetector:
         self,
         minimum_gap_fraction: float,
         horizon_seconds: float,
+        seconds_per_year: float,
         calibrator: SignalCalibrator,
         now_ns=time.time_ns,
     ) -> None:
@@ -86,14 +88,22 @@ class VolatilityGapDetector:
             raise ValueError("a gap threshold of zero fires on rounding differences")
         self._minimum_gap = minimum_gap_fraction
         self._horizon = horizon_seconds
+        if seconds_per_year <= 0:
+            raise ValueError("a year with no trading seconds cannot annualise anything")
+        self._seconds_per_year = seconds_per_year
         self._calibrator = calibrator
         self._now_ns = now_ns
         self._forecast: dict[tuple[str, str], float] = {}
         self._implied: dict[tuple[str, str], float] = {}
         self.standing = GapStanding()
 
-    def observe_forecast(self, venue_id: str, symbol: str, volatility: float) -> None:
-        self._forecast[(venue_id, symbol)] = volatility
+    def observe_forecast(
+        self, venue_id: str, symbol: str, volatility: float, horizon_seconds: float,
+    ) -> None:
+        """A volatility over `horizon_seconds`, held as a year's so it meets implied."""
+        if horizon_seconds <= 0:
+            return
+        self._forecast[(venue_id, symbol)] = annualise(volatility, horizon_seconds, self._seconds_per_year)
 
     def observe_implied(self, venue_id: str, symbol: str, implied_volatility: float) -> None:
         """From an options surface. Phase 1 captures none, so this is usually absent."""
@@ -119,6 +129,12 @@ class VolatilityGapDetector:
             self.standing.no_surface += 1
             return None, NO_SURFACE
 
+        # Both are a year's: the forecast was annualised as it arrived, over its own
+        # horizon, because Upstox's implied volatility is a year's. Compared raw on 2026-09-15, implied read hundreds of times the
+        # forecast on every test -- 17,242 of 17,242 candidates "implied rich",
+        # largest gap 718 -- so every candidate this part had ever raised was the
+        # unit mismatch. Annualised over trading seconds, because implied variance
+        # is realised while the market trades and the forecast is of trading time.
         gap = (implied - forecast) / forecast
         if abs(gap) < self._minimum_gap:
             self.standing.gap_too_small += 1
@@ -235,6 +251,7 @@ def start_part(context) -> int:
     detector = VolatilityGapDetector(
         minimum_gap_fraction=context.number("volatility_gap_minimum_fraction"),
         horizon_seconds=context.number("volatility_gap_horizon"),
+        seconds_per_year=context.number("implied_volatility_trading_seconds_per_year"),
         calibrator=SignalCalibrator(
             prior_hit_rate=context.number("signal_prior_hit_rate"),
             prior_weight=context.number("signal_prior_weight"),
@@ -257,7 +274,10 @@ def start_part(context) -> int:
         for forecast in forecasts.payloads():
             if forecast.expected_volatility is None:
                 continue
-            detector.observe_forecast(forecast.venue_id, forecast.symbol, forecast.expected_volatility)
+            detector.observe_forecast(
+                forecast.venue_id, forecast.symbol, forecast.expected_volatility,
+                forecast.horizon_seconds,
+            )
             touched.add((forecast.venue_id, forecast.symbol))
             # The underlying this forecast's symbol is a claim on, so the
             # implied-vol surface below -- which is keyed by the underlying --

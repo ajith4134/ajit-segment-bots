@@ -1,0 +1,6 @@
+NIFTY 2026-09-15, 3481s of index prints, 1600 greeks from the 8 subscribed 15-SEP contracts
+  realised over 300s        0.000525
+  implied (Upstox, median)  0.2942
+  gap compared raw          559.0
+  realised annualised       0.0712 (trading seconds 5,512,500)
+  gap, same units           3.131
