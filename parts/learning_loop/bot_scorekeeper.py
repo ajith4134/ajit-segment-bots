@@ -61,6 +61,9 @@ class ScorekeeperStanding:
     from_taken_trades: int = 0
     from_counterfactuals: int = 0
     clustered_entries_collapsed: int = 0
+    # Closed trades whose standardised outcome was exactly zero -- flat, or on a
+    # symbol whose move over the horizon measured zero. Not evidence either way.
+    outcomes_without_evidence: int = 0
     rewards_applied: int = 0
     rewards_uninterpretable: int = 0
     last_uninterpretable_reward: str | None = None
@@ -196,6 +199,21 @@ class BotScorekeeper:
         return estimator
 
 
+def evidence_weight_of(significance) -> float | None:
+    """How much one closed trade counts, from its outcome-significance.
+
+    luck-skill-separator standardises the *signed* return against the symbol's own
+    move, so a loss arrives negative. Whether the opinion was right already carries
+    the sign; the weight is the distance from noise. Unassessed or unmeasurable
+    counts as an ordinary observation, as it always has. Exactly zero -- a flat
+    trade, or no measured move -- is None: not an observation either way.
+    """
+    if significance is None or significance.standardised is None:
+        return 1.0
+    weight = abs(significance.standardised)
+    return weight if weight > 0 else None
+
+
 def describe_scorekeeping(scorekeeper: BotScorekeeper) -> dict:
     return {
         "part_id": PART_ID,
@@ -203,6 +221,7 @@ def describe_scorekeeping(scorekeeper: BotScorekeeper) -> dict:
         "from_taken_trades": scorekeeper.standing.from_taken_trades,
         "from_counterfactuals": scorekeeper.standing.from_counterfactuals,
         "clustered_entries_collapsed": scorekeeper.standing.clustered_entries_collapsed,
+        "outcomes_without_evidence": scorekeeper.standing.outcomes_without_evidence,
         "rewards_applied": scorekeeper.standing.rewards_applied,
         "rewards_uninterpretable": scorekeeper.standing.rewards_uninterpretable,
         "last_uninterpretable_reward": scorekeeper.standing.last_uninterpretable_reward,
@@ -297,18 +316,23 @@ def start_part(context) -> int:
         by_trade = significances.mapping()
         for episode in episodes.payloads():
             trade_id = episode.episode_id.split("-")[1] if "-" in episode.episode_id else episode.episode_id
-            significance = by_trade.get(trade_id)
+            weight = evidence_weight_of(by_trade.get(trade_id))
+            if weight is None:
+                scorekeeper.standing.outcomes_without_evidence += 1
             for (bot, venue_id, symbol), opinion in list(last_opinion.items()):
                 if (venue_id, symbol) != (episode.venue_id, episode.symbol):
+                    continue
+                if weight is None:
+                    # The opinion was settled by this trade, just not as evidence;
+                    # left in place it would be credited with the next trade's result.
+                    del last_opinion[(bot, venue_id, symbol)]
                     continue
                 scorekeeper.record_opinion_outcome(
                     bot=bot, detector=episode.detector, regime=episode.regime,
                     stated_probability=opinion.conviction.value,
                     the_opinion_was_right=episode.realised > 0,
                     realised=episode.realised,
-                    significance=(
-                        significance.standardised if significance is not None and significance.standardised is not None else 1.0
-                    ),
+                    significance=weight,
                     cluster_id=cluster_of.get(trade_id),
                 )
                 del last_opinion[(bot, venue_id, symbol)]

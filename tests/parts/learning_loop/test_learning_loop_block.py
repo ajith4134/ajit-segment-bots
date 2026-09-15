@@ -15,6 +15,7 @@ import pytest
 
 from parts.learning_loop.bot_scorekeeper import (
     CLUSTERED, FROM_A_COUNTERFACTUAL, FROM_A_TAKEN_TRADE, BotScorekeeper,
+    evidence_weight_of,
 )
 from parts.learning_loop.champion_challenger_gate import (
     DID_NOT_BEAT_IT, HAS_FORGOTTEN, KEEP, NOTHING_TO_COMPARE, PROMOTE,
@@ -425,6 +426,37 @@ def test_ten_correlated_entries_are_one_bet():
         )
     assert subject.scorecard_for(BULL).trades == 1
     assert subject.standing.clustered_entries_collapsed == 9
+
+
+def test_a_losing_trade_is_weighed_by_how_far_it_stood_from_noise_not_refused():
+    """luck-skill-separator standardises the signed return, so a loss arrives negative.
+
+    The scorekeeper refused any significance at or below zero, and on the first
+    live losses of 2026-09-15 the part crash-looped on every one -- so no bot
+    could learn that an opinion had been wrong. The sign is already carried by
+    whether the opinion was right; the weight is the distance from noise.
+    """
+    from runtime.trade_decoding_types import OutcomeSignificance
+
+    def assessed(standardised, measurable=True):
+        return OutcomeSignificance(
+            trade_id="t", realised=-1.0, expected_noise=0.02 if measurable else None,
+            standardised=standardised, is_significant=False, is_measurable=measurable,
+            sample_size=10, reason="", assessed_at_ns=1,
+        )
+
+    assert evidence_weight_of(assessed(-2.5)) == 2.5
+    assert evidence_weight_of(assessed(1.5)) == 1.5
+    assert evidence_weight_of(None) == 1.0
+    assert evidence_weight_of(assessed(None, measurable=False)) == 1.0
+    # A flat trade, or one on a symbol with no measured move, is not evidence either way.
+    assert evidence_weight_of(assessed(0.0)) is None
+
+    subject = a_scorekeeper(minimum=1)
+    subject.record_opinion_outcome(
+        BULL, "a-detector", "trending", 0.8, False, -0.02, significance=evidence_weight_of(assessed(-2.5))
+    )
+    assert subject.scorecard_for(BULL).trades == 1
 
 
 def test_a_weak_outcome_counts_less_than_a_strong_one():
