@@ -122,6 +122,10 @@ class BoundedOrder:
     # answered by what is held, not by what the operator allows a fresh trade
     # to commit.
     action: str = OPEN
+    # The lot this order was snapped to, carried so the splitter cuts slices in
+    # whole lots rather than equal fractions of the order (2026-09-15: 1,654 of
+    # 1,749 paper fills were part-lots). Zero where the gate snapped to nothing.
+    quantity_increment: float = 0.0
 
     @property
     def may_be_sent(self) -> bool:
@@ -625,6 +629,11 @@ class TradeCapitalBoundsGate:
             # matched against whichever segment published last (2026-09-05).
             segment=getattr(sized_order, "segment", ""),
             action=getattr(sized_order, "action", OPEN),
+            # Read directly rather than through `_increment_for`, which counts its
+            # fallback: the order was already counted once when it was snapped.
+            quantity_increment=float(
+                getattr(sized_order, "quantity_increment", 0.0) or self._increment
+            ),
         )
 
     def _refusal(self, sized_order, bounds, outcome, reason) -> BoundedOrder:

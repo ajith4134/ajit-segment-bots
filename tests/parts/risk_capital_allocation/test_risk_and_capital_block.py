@@ -2379,3 +2379,36 @@ def test_a_plan_naming_no_contract_is_registered_under_its_own_symbol():
 
     plan = placer().place(VENUE, SYMBOL, BUY, entry_price=100.0, volatility_forecast=0.02)
     assert plan_registration_of(plan)["symbol"] == SYMBOL
+
+
+def test_every_slice_is_a_whole_number_of_the_instruments_lots():
+    """An exchange rejects a part-lot, and the paper book filled them.
+
+    2026-09-15: ATHERENERG 1600 CE 29 SEP 26 was routed as 25 slices of 135.7085
+    units -- a contract NSE trades in lots -- and 1,654 of the day's 1,749 fills were
+    fractional. The gate had snapped the order to whole lots; this part divided it.
+    """
+    from tests.conftest import upstox_listings_by_key
+
+    listing = next(
+        (one for one in upstox_listings_by_key().values()
+         if one.trading_symbol == "ATHERENERG 1600 CE 29 SEP 26"),
+        None,
+    )
+    if listing is None or not listing.lot_size:
+        pytest.skip("that contract is not in the instrument master on this machine")
+    lot = float(listing.lot_size)
+
+    subject = splitter(cap=0.1, interval=10.0, horizon=3600.0)
+    subject.observe_traded_volume(VENUE, SYMBOL, quantity_traded=lot * 12.5, over_seconds=10.0)
+    schedule = subject.split(VENUE, SYMBOL, BUY, quantity=lot * 25, quantity_increment=lot)
+    assert schedule.outcome == SPLIT
+    assert all(one.quantity % lot == 0 and one.quantity >= lot for one in schedule.slices)
+    assert sum(one.quantity for one in schedule.slices) == lot * 25
+
+    # A participation share smaller than one lot still sends one lot, and says so.
+    thin = subject
+    thin.observe_traded_volume(VENUE, SYMBOL, quantity_traded=lot * 2, over_seconds=10.0)
+    small = thin.split(VENUE, SYMBOL, BUY, quantity=lot * 3, quantity_increment=lot)
+    assert [one.quantity for one in small.slices] == [lot, lot, lot]
+    assert thin.standing.slices_raised_to_one_lot >= 1

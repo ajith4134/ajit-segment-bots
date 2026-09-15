@@ -87,6 +87,9 @@ class SplitterStanding:
     refused_horizon: int = 0
     largest_slice_count: int = 0
     symbols_measured: int = 0
+    # Slices whose participation share was smaller than one lot, sent as one lot:
+    # an exchange accepts no part-lot, so the cap gives way to the lot here.
+    slices_raised_to_one_lot: int = 0
 
 
 class ParticipationCappedOrderSplitter:
@@ -129,7 +132,17 @@ class ParticipationCappedOrderSplitter:
         side: str,
         quantity: float,
         volatility_forecast: float | None = None,
+        quantity_increment: float | None = None,
     ) -> ExecutionSchedule:
+        """Slice an order against measured volume, each slice a whole number of lots.
+
+        `quantity_increment` is the instrument's own lot, carried from the capital
+        gate that snapped the order to it. Without one every slice was an equal
+        fraction of the order: on 2026-09-15 an option was routed as 25 slices of
+        135.7085 units, and 1,654 of the day's 1,749 paper fills were part-lots
+        no exchange would accept. None keeps the old behaviour for an instrument
+        that trades in single units and names no lot.
+        """
         self.standing.schedules += 1
         key = (venue_id, symbol)
         measured = self._volume_per_interval.get(key)
@@ -152,6 +165,12 @@ class ParticipationCappedOrderSplitter:
             cap = min(1.0, self._cap * (1.0 + volatility_forecast * self._urgency))
 
         per_slice = measured * cap
+        if quantity_increment and quantity_increment > 0:
+            lots_per_slice = math.floor(per_slice / quantity_increment)
+            if lots_per_slice < 1:
+                lots_per_slice = 1
+                self.standing.slices_raised_to_one_lot += 1
+            per_slice = lots_per_slice * quantity_increment
         if quantity <= per_slice:
             self.standing.single_slice += 1
             return self._schedule(
@@ -300,6 +319,7 @@ def start_part(context) -> int:
                 "venue_id": order.venue_id, "symbol": order.symbol, "side": order.side,
                 "quantity": order.quantity,
                 "volatility_forecast": None if forecast is None else forecast.expected_volatility,
+                "quantity_increment": getattr(order, "quantity_increment", 0.0) or None,
             })
         return volumes, requests
 
