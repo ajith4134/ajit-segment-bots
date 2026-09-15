@@ -30,7 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from runtime.external_research_types import ResearchFinding, WebIdea
+from runtime.external_research_types import ResearchFinding
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -132,15 +132,21 @@ class GithubStrategyMiner:
         """Testable means this system holds the data the rule needs, recorded."""
         return mechanism.is_specified and set(mechanism.needs_data).issubset(self._available)
 
-    def mine(self, idea: WebIdea, mechanisms, defects, stars=None) -> MinedRepository:
-        """`mechanisms` and `defects` come from structural analysis of the code.
+    def mine(self, repository: str, mechanisms, defects, stars=None) -> MinedRepository:
+        """`repository` is where the code was read; `mechanisms` and `defects` come
+        from structural analysis of it.
+
+        A URL rather than the idea itself (2026-09-15): the only producer of
+        `web-idea` is open-web-reader, whose idea names its `source_url`, and this
+        method read `origin_reference` off a different class of the same name --
+        so the part crashed on the first real idea it was ever given, while every
+        test, built on that other class, passed.
 
         They are passed in rather than parsed here because parsing arbitrary Python
         is a different job with a different failure mode, and mixing the two would
         make a parser bug look like a research finding.
         """
         self.standing.repositories_mined += 1
-        repository = idea.origin_reference
         mechanisms = tuple(mechanisms or ())
         defects = tuple(defect for defect in (defects or ()) if defect in KNOWN_DEFECTS)
         self.standing.mechanisms_found += len(mechanisms)
@@ -274,8 +280,8 @@ def run_github_strategy_miner(
     tick_floor_seconds: float = 0.0,
 ) -> int:
     def tick() -> None:
-        for idea, mechanisms, defects, stars in read_ideas():
-            mined = miner.mine(idea, mechanisms, defects, stars)
+        for repository, mechanisms, defects, stars in read_ideas():
+            mined = miner.mine(repository, mechanisms, defects, stars)
             for finding in mined.findings:
                 publish_findings(finding)
 
@@ -333,7 +339,7 @@ def start_part(context) -> int:
                 if conditions else ()
             )
             defects = tuple(name for name in defect_names if name.replace("-", " ") in lowered)
-            jobs.append((idea, mechanisms, defects, None))
+            jobs.append((str(idea.source_url), mechanisms, defects, None))
         return tuple(jobs)
 
     return run_github_strategy_miner(

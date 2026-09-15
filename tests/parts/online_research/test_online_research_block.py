@@ -920,11 +920,8 @@ def a_miner(available=("kline", "aggtrade"), minimum_conditions=1):
 
 
 def an_idea(reference="github.com/someone/strategy"):
-    return WebIdea(
-        idea_id="i-1", summary="a public backtest", origin_reference=reference,
-        origin_kind="repository", stars_or_reach=9_000, mentions_a_market=True,
-        observed_at_ns=0,
-    )
+    """The repository open-web-reader's idea names -- its `source_url`."""
+    return reference
 
 
 def a_mechanism(needs=("kline",), conditions=("the funding rate flips sign",)):
