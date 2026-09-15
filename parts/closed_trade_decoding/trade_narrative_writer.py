@@ -312,7 +312,7 @@ def start_part(context) -> int:
             if episode is not None:
                 jobs.append((trade_id, episode, None, output.text))
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             pending[trade_id] = episode
             jobs.append((trade_id, episode, None, None))
         return tuple(jobs)

@@ -279,7 +279,7 @@ def start_part(context) -> int:
         profiles.payloads()
         by_trade = attributions.mapping()
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             attribution = by_trade.get(trade_id)
             components = attribution.components if attribution is not None and isinstance(attribution.components, dict) else {}
             decomposer.observe_trade(

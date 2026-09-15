@@ -302,7 +302,7 @@ def start_part(context) -> int:
 
     def read_counterfactuals():
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             setup_of[trade_id] = episode.detector
         points = []
         for counterfactual in counterfactuals.payloads():

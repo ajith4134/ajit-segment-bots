@@ -382,7 +382,7 @@ def start_part(context) -> int:
             if signature is not None:
                 signature_of_regime[reading.regime] = signature
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             episode_by_trade[trade_id] = episode
             conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
             instruction_id = conditions.get("instruction_id")

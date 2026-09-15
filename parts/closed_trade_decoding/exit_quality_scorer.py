@@ -258,7 +258,7 @@ def start_part(context) -> int:
             exit_price = conditions.get("exit_price")
             if record is None or entry is None or exit_price is None:
                 continue
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             scorer.observe_excursion(
                 trade_id, float(entry), record.best_price, record.worst_price,
                 LONG if episode.action in ("open-long", "long") else episode.action, float(exit_price),

@@ -344,8 +344,7 @@ def start_part(context) -> int:
     pending_counterfactual: dict[str, list] = {}
 
     def trade_id_of(episode) -> str:
-        parts = episode.episode_id.split("-")
-        return parts[1] if len(parts) > 2 else episode.episode_id
+        return episode.trade_id
 
     def read_exits(_learner):
         touched = set()

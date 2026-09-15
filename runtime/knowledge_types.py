@@ -78,6 +78,18 @@ class SemanticFact:
         return self.source_reference is not None
 
 
+EPISODE_ID_PREFIX = "episode-"
+
+
+def trade_id_of_episode_id(episode_id: str) -> str:
+    """`episode-{trade_id}-{sequence}` back to its trade id; anything else unchanged."""
+    if not episode_id.startswith(EPISODE_ID_PREFIX):
+        return episode_id
+    body = episode_id[len(EPISODE_ID_PREFIX):]
+    trade_id, separator, sequence = body.rpartition("-")
+    return trade_id if separator and sequence.isdigit() else body
+
+
 @dataclass(frozen=True)
 class TradeEpisode:
     """What actually happened, appended and never revised.
@@ -102,6 +114,17 @@ class TradeEpisode:
     @property
     def seconds_held(self) -> float:
         return (self.closed_at_ns - self.opened_at_ns) / 1e9
+
+    @property
+    def trade_id(self) -> str:
+        """The closed trade this episode records, from `episode-{trade_id}-{sequence}`.
+
+        Parsed from both ends. Ten parts took `episode_id.split("-")[1]`, which is
+        right only while a trade id holds no hyphen -- and `upstox:BAJAJ-AUTO 9000
+        CE 29 SEP 26` came back as `upstox:BAJAJ`, so every join on it to a
+        significance, a cluster or a quality score missed (2026-09-15).
+        """
+        return trade_id_of_episode_id(self.episode_id)
 
     @property
     def was_profitable(self) -> bool:

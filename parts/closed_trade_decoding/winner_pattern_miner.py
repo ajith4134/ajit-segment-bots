@@ -282,7 +282,7 @@ def start_part(context) -> int:
         patterns.payloads()
         significances.payloads()
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             opened = datetime.datetime.fromtimestamp(episode.opened_at_ns / 1e9, datetime.UTC)
             session = "asia" if opened.hour < 8 else "europe" if opened.hour < 16 else "america"
             conditions = {"regime": episode.regime, "session": session, "detector": episode.detector}

@@ -1348,3 +1348,23 @@ def test_the_tracker_does_not_measure_hindsight_regret():
     assert importlib.import_module(
         BLOCK_PARTS["regret-tracker"]
     ).describe_regret(a_regret_tracker())["measures_hindsight_regret"] is False
+
+
+def test_an_episode_names_its_trade_when_the_contract_symbol_has_a_hyphen():
+    """`episode_id.split("-")[1]` turned BAJAJ-AUTO's trade into `upstox:BAJAJ`.
+
+    Ten parts joined an episode to its significance, cluster and quality by that
+    split, so for every hyphenated underlying on the live tape (BAJAJ-AUTO,
+    NAM-INDIA) each join missed and the trade counted as unassessed.
+    """
+    from runtime.knowledge_types import TradeEpisode, trade_id_of_episode_id
+
+    trade_id = "upstox:BAJAJ-AUTO 9000 CE 29 SEP 26"
+    episode = TradeEpisode(
+        episode_id=f"episode-{trade_id}-3", venue_id="upstox", symbol="BAJAJ-AUTO 9000 CE 29 SEP 26",
+        detector="d", regime="r", conditions={}, action="open", outcome="loss", realised=-1.0,
+        opened_at_ns=1, closed_at_ns=2, narrative="",
+    )
+    assert episode.trade_id == trade_id
+    assert trade_id_of_episode_id("episode-upstox:NIFTY 23300 CE 15 SEP 26-12") == "upstox:NIFTY 23300 CE 15 SEP 26"
+    assert trade_id_of_episode_id("not-an-episode") == "not-an-episode"

@@ -358,7 +358,7 @@ def start_part(context) -> int:
         for episode in episodes.payloads():
             if episode.realised >= 0:
                 continue
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             conditions = episode.conditions if isinstance(episode.conditions, dict) else {}
             closed_trade = ClosedTrade(
                 venue_id=episode.venue_id, symbol=episode.symbol, direction=str(episode.action),

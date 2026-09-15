@@ -315,7 +315,7 @@ def start_part(context) -> int:
         costs.payloads()
         by_trade = significances.mapping()
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if "-" in episode.episode_id else episode.episode_id
+            trade_id = episode.trade_id
             weight = evidence_weight_of(by_trade.get(trade_id))
             if weight is None:
                 scorekeeper.standing.outcomes_without_evidence += 1

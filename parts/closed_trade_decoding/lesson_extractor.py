@@ -322,7 +322,7 @@ def start_part(context) -> int:
         narratives.payloads()
         jobs = []
         for episode in episodes.payloads():
-            trade_id = episode.episode_id.split("-")[1] if episode.episode_id.count("-") >= 2 else episode.episode_id
+            trade_id = episode.trade_id
             significance = episode.conditions.get("significance") if isinstance(episode.conditions, dict) else None
             significant = bool(getattr(significance, "is_significant", False))
             jobs.append({
