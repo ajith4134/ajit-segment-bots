@@ -17,12 +17,68 @@ PART_ID = "broker-instrument-catalogue-reader"
 
 PART_DECLARATION = PartDeclaration(
     part_id="broker-instrument-catalogue-reader",
-    consumes=(),
+    consumes=("broker-subscription-state",),
     produces=("broker-instrument-listing", "part-health"),
     resource_class="io-bound",
     rate_risk="changes-the-answer",
     skipped_tick_effect="corrupts",
 )
+
+
+class SubscribedFirstCatalogue:
+    """The whole master at its own pace, and the subscribed rows of it faster.
+
+    Every part that joins a price to a name waits for the master row naming it.
+    Restated evenly, the ~2,000 rows the feed actually subscribes came round no
+    faster than the other 116,000: on 2026-09-15, eight minutes after a start,
+    `broker-market-tape-writer` had resolved 184 names and written 97% of its
+    records under raw instrument keys. Those rows now also ride a second conveyor
+    at `subscribed_listing_restatement_cycle_seconds`, so each is said within
+    that cycle of the subscription being stated. The whole master keeps turning
+    beside it, because parts that are not joined to the feed need all of it.
+
+    The subscription is what the feed reader states, never re-derived here.
+    """
+
+    def __init__(self, master_cycle_seconds: float, subscribed_cycle_seconds: float) -> None:
+        self._master = RestatementConveyor(master_cycle_seconds)
+        self._subscribed = RestatementConveyor(subscribed_cycle_seconds)
+        self._listings: tuple = ()
+        self._held_keys: frozenset = frozenset()
+
+    @property
+    def listings(self) -> tuple:
+        return self._listings
+
+    def hold_master(self, listings) -> None:
+        self._listings = tuple(listings)
+        self._master.hold(self._listings)
+        self._rebuild_subscribed()
+
+    def observe_subscriptions(self, states) -> None:
+        """Every broker's current subscribed set, replacing all that was held.
+
+        Replacing, never merging: a statement that has aged out is a connection
+        nobody is holding, and its instruments must stop being hurried.
+        """
+        keys = frozenset(key for state in states for key in state.instrument_keys)
+        if keys != self._held_keys:
+            self._held_keys = keys
+            self._rebuild_subscribed()
+
+    def _rebuild_subscribed(self) -> None:
+        self._subscribed.hold(tuple(
+            listing for listing in self._listings if listing.instrument_key in self._held_keys
+        ))
+
+    def due_slice(self, now: float) -> tuple:
+        return self._subscribed.due_slice(now) + self._master.due_slice(now)
+
+    def standing(self) -> dict:
+        return {
+            "master": self._master.standing(),
+            "subscribed": {**self._subscribed.standing(), "rows": len(self._subscribed.rows)},
+        }
 
 
 def describe_standing(
@@ -38,6 +94,8 @@ def describe_standing(
     conveyor that has stopped turning is visible rather than merely quiet.
     """
     restatement = restatement or {}
+    subscribed = restatement.get("subscribed", {})
+    restatement = restatement.get("master", restatement)
     return {
         "part_id": PART_ID,
         "listings_seen": len(listings),
@@ -46,6 +104,8 @@ def describe_standing(
         "cycle_position": restatement.get("position", 0),
         "cycles_completed": restatement.get("cycles", 0),
         "listings_per_second": restatement.get("rate", 0.0),
+        "subscribed_listings_held": subscribed.get("rows", 0),
+        "subscribed_listings_restated": subscribed.get("restated", 0),
     }
 
 
@@ -60,11 +120,21 @@ def start_part(context) -> int:
     publish_listings = context.bus.publisher_for("broker-instrument-listing")
     refresh_interval_seconds = context.number("broker_catalogue_refresh_interval")
 
-    conveyor = RestatementConveyor(
-        context.number("broker_catalogue_restatement_cycle_seconds")
+    from runtime.input_assembly import LatestByKey
+
+    catalogue = SubscribedFirstCatalogue(
+        master_cycle_seconds=context.number("broker_catalogue_restatement_cycle_seconds"),
+        subscribed_cycle_seconds=context.number("subscribed_listing_restatement_cycle_seconds"),
+    )
+    # Bounded like every other reader of this level: a subscription nobody has
+    # restated is a connection nobody holds.
+    subscriptions = LatestByKey(
+        read=context.bus.reader("broker-subscription-state"),
+        key_of=lambda subscription: subscription.broker_id,
+        maximum_age_seconds=context.number("broker_subscription_state_maximum_age"),
     )
 
-    state = {"listings": (), "last_failure": None, "last_read_at": None}
+    state = {"last_failure": None, "last_read_at": None}
 
     def read_if_due(now: float) -> None:
         due = (
@@ -85,8 +155,7 @@ def start_part(context) -> int:
         # a cycle. The conveyor keeps its position across the swap rather than
         # restarting -- see RestatementConveyor.hold for why restarting is the
         # trap, not the safeguard.
-        state["listings"] = fetched
-        conveyor.hold(fetched)
+        catalogue.hold_master(fetched)
 
     def restate_a_slice(now: float) -> None:
         """Say the next part of the master, at a rate a consumer can drain.
@@ -114,7 +183,9 @@ def start_part(context) -> int:
         `subscribed-instrument-listing-filter`, which restates the subscribed
         subset of this same master to the parts that can only use that.
         """
-        slice_ = conveyor.due_slice(now)
+        subscriptions.take_in_what_arrived()
+        catalogue.observe_subscriptions(subscriptions.mapping().values())
+        slice_ = catalogue.due_slice(now)
         if slice_:
             publish_listings(slice_)
 
@@ -134,7 +205,7 @@ def start_part(context) -> int:
         input_descriptors=context.input_descriptors,
         tick_floor_seconds=context.tick_floor_seconds,
         read_standing=lambda: describe_standing(
-            state["listings"], state["last_failure"], conveyor.standing()
+            catalogue.listings, state["last_failure"], catalogue.standing()
         ),
     )
 

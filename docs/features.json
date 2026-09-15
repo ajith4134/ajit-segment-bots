@@ -12696,7 +12696,9 @@
    "name": "Broker instrument catalogue reader",
    "role": "fetch a broker's daily instrument master, every tradable contract as the broker lists it",
    "category": "broker-adapter",
-   "consumes": [],
+   "consumes": [
+    "broker-subscription-state"
+   ],
    "produces": [
     "broker-instrument-listing",
     "part-health"

@@ -1,6 +1,8 @@
 import gzip
 import json
 
+import pytest
+
 from parts.broker_adapter.broker_instrument_catalogue_reader import fetch_and_parse_listings
 from runtime.brokers.upstox import UpstoxAdapter
 
@@ -51,6 +53,10 @@ class _Bus:
         def publish(items):
             self.published.extend(items)
         return publish
+
+    def reader(self, _data_type):
+        # No feed has stated a subscription in these tests: only the master turns.
+        return lambda: ()
 
 
 class _Context:
@@ -119,6 +125,8 @@ def _conveyor(monkeypatch, catalogue, cycle_seconds=1800.0):
             {
                 "broker_catalogue_refresh_interval": 3600.0,
                 "broker_catalogue_restatement_cycle_seconds": cycle_seconds,
+                "subscribed_listing_restatement_cycle_seconds": 300.0,
+                "broker_subscription_state_maximum_age": 120.0,
             },
             bus,
         )
@@ -197,3 +205,41 @@ def test_the_standing_shows_the_conveyor_turning(monkeypatch):
     assert reported["listings_seen"] == 2_000
     assert reported["listings_restated"] == len(bus.published) > 0
     assert reported["listings_per_second"] == 20.0
+
+
+def test_the_subscribed_rows_of_the_real_master_are_said_within_their_own_cycle():
+    """Every part that names an instrument waited half an hour after each start.
+
+    2026-09-15: the master's 118,388 rows were restated evenly over 1,800s, and the
+    ~2,000 the feed actually subscribes came round no faster than the rest -- eight
+    minutes after a start `broker-market-tape-writer` had resolved 184 names and
+    written 97% of its records under raw instrument keys, and the zero-to-hero
+    detector knew 186 instruments. The subscribed rows now ride a second conveyor
+    at the subscribed cycle, beside the whole master.
+    """
+    from parts.broker_adapter.broker_instrument_catalogue_reader import SubscribedFirstCatalogue
+    from runtime.brokers.broker_adapter import BrokerSubscriptionState
+    from tests.conftest import upstox_listings_by_key
+
+    listings = tuple(upstox_listings_by_key().values())
+    if not listings:
+        pytest.skip("Upstox's instrument master is not on this machine")
+    subscribed = tuple(
+        one.instrument_key for one in listings if one.segment == "NSE_FO"
+    )[:2000]
+
+    catalogue = SubscribedFirstCatalogue(master_cycle_seconds=1800.0, subscribed_cycle_seconds=300.0)
+    catalogue.hold_master(listings)
+    catalogue.observe_subscriptions([BrokerSubscriptionState("upstox", subscribed, 1)])
+
+    said = set()
+    catalogue.due_slice(0.0)
+    for second in range(1, 302):
+        said.update(one.instrument_key for one in catalogue.due_slice(float(second)))
+    assert set(subscribed) <= said
+    # The whole master still turns at its own rate beside it.
+    assert catalogue.standing()["master"]["restated"] >= len(listings) * 300 // 1800 - 1
+
+    # A subscription that has aged out is no longer hurried.
+    catalogue.observe_subscriptions([])
+    assert catalogue.standing()["subscribed"]["rows"] == 0
