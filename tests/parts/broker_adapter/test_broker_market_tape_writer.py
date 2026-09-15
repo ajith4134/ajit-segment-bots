@@ -101,3 +101,30 @@ def test_venue_time_ns_of_converts_broker_candle_bar_time_ms_to_ns():
         bar_time_ms=1740729552723, is_closed=None,
     )
     assert venue_time_ns_of(candle) == 1740729552723_000_000
+
+
+def test_a_key_named_tape_is_closed_once_its_listing_names_it(durable_tmp_path):
+    """The tick before its listing is still written; the writer it opened is not kept.
+
+    2026-09-15: every subscribed instrument opened a writer under its key and then a
+    second under its symbol, and the key-named one was held for the whole run --
+    ~20,000 writers at 13.7 KB each, and the part was OOM-killed 19 minutes after start.
+    """
+    from parts.broker_adapter.broker_market_tape_writer import TapeWritersByInstrument
+
+    key = "NSE_FO|56316"
+    tapes = TapeWritersByInstrument(durable_tmp_path, 8 * 1024 * 1024)
+    tapes.writer_for(key, StreamKind.TRADE).append(stream_kind=StreamKind.TRADE, payload=b"{}")
+    tapes.writer_for(key, StreamKind.CANDLE).append(stream_kind=StreamKind.CANDLE, payload=b"{}")
+    assert tapes.open_tapes == 2
+
+    tapes.learn_listing(a_listing(key, "AXISBANK 1260 CE 29 SEP 26"))
+    assert tapes.open_tapes == 0
+    assert tapes.key_named_tapes_closed == 2
+
+    tapes.writer_for(key, StreamKind.TRADE).append(stream_kind=StreamKind.TRADE, payload=b"{}")
+    tapes.learn_listing(a_listing(key, "AXISBANK 1260 CE 29 SEP 26"))  # restated, not new
+    assert tapes.open_tapes == 1
+    written = sorted(p.parent.name for p in durable_tmp_path.rglob("*.index"))
+    assert written == ["AXISBANK 1260 CE 29 SEP 26", key, key]
+    tapes.close_all()

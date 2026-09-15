@@ -138,6 +138,60 @@ def symbol_for(symbol_by_key: dict[str, str], instrument_key: str) -> str:
     return symbol_by_key.get(instrument_key, instrument_key)
 
 
+class TapeWritersByInstrument:
+    """One TapeWriter per (name, StreamKind), named by trading symbol once known.
+
+    A tick that arrives before its listing is written under its instrument key
+    (`symbol_for`). **When the key resolves, the writers opened under it are
+    closed** (2026-09-15). They were held for the rest of the run beside the
+    symbol-named writers that replaced them: the listing reaches every subscribed
+    instrument over half an hour after a start, so every instrument opened both,
+    about 20,000 writers at 13.7 KB each -- measured 263 MB of process memory
+    climbing 12 MB a minute, and the part was OOM-killed in its 512 MB scope 19
+    minutes after the market-hours start that morning.
+    """
+
+    def __init__(self, tape_root: pathlib.Path, writeback_interval_bytes: int, venue: str = "upstox") -> None:
+        self._tape_root = tape_root
+        self._writeback_interval_bytes = writeback_interval_bytes
+        self._venue = venue
+        self._writers: dict[tuple[str, StreamKind], TapeWriter] = {}
+        self.symbol_by_key: dict[str, str] = {}
+        self.key_named_tapes_closed = 0
+
+    @property
+    def open_tapes(self) -> int:
+        return len(self._writers)
+
+    def learn_listing(self, listing) -> None:
+        key = listing.instrument_key
+        already = self.symbol_by_key.get(key)
+        observe_subscribed_listing(self.symbol_by_key, listing)
+        if already is not None:
+            return
+        for kind in StreamKind:
+            writer = self._writers.pop((key, kind), None)
+            if writer is not None:
+                writer.close()
+                self.key_named_tapes_closed += 1
+
+    def writer_for(self, instrument_key: str, kind: StreamKind) -> TapeWriter:
+        name = symbol_for(self.symbol_by_key, instrument_key)
+        writer = self._writers.get((name, kind))
+        if writer is None:
+            writer = TapeWriter(
+                self._tape_root, self._venue, name, self._writeback_interval_bytes,
+                stream_kind=kind,
+            )
+            self._writers[(name, kind)] = writer
+        return writer
+
+    def close_all(self) -> None:
+        for writer in self._writers.values():
+            writer.close()
+        self._writers.clear()
+
+
 def start_part(context) -> int:
     """One TapeWriter per (symbol, StreamKind), opened lazily on
     first message -- same discipline as the crypto StreamTapeRecorder's own
@@ -151,11 +205,10 @@ def start_part(context) -> int:
     tape_root = pathlib.Path(str(settings.entries["tape_root"].value)).expanduser()
     writeback_interval_bytes = int(context.number("writeback_interval"))
 
-    writers: dict[tuple[str, StreamKind], TapeWriter] = {}
     # instrument_key -> trading_symbol, the shared name every reader of this
     # tape uses -- built the same way broker_history_reader.py's own
     # _symbol_by_key is, from the same narrowed, already-resolved listing.
-    symbol_by_key: dict[str, str] = {}
+    tapes = TapeWritersByInstrument(tape_root, writeback_interval_bytes)
     counts = {
         "records_written": 0, "last_failure": None,
         "symbols_resolved": 0, "unresolved_writes": 0,
@@ -171,26 +224,14 @@ def start_part(context) -> int:
         for message in listing_reader():
             payload = message.payload
             for listing in payload if isinstance(payload, tuple) else (payload,):
-                observe_subscribed_listing(symbol_by_key, listing)
-        counts["symbols_resolved"] = len(symbol_by_key)
-
-    def writer_for(symbol: str, kind: StreamKind) -> TapeWriter:
-        key = (symbol, kind)
-        writer = writers.get(key)
-        if writer is None:
-            writer = TapeWriter(
-                tape_root, "upstox", symbol, writeback_interval_bytes,
-                stream_kind=kind,
-            )
-            writers[key] = writer
-        return writer
+                tapes.learn_listing(listing)
+        counts["symbols_resolved"] = len(tapes.symbol_by_key)
 
     def write_one(record) -> None:
         kind = stream_kind_for(type(record))
-        if record.instrument_key not in symbol_by_key:
+        if record.instrument_key not in tapes.symbol_by_key:
             counts["unresolved_writes"] += 1
-        symbol = symbol_for(symbol_by_key, record.instrument_key)
-        writer_for(symbol, kind).append(
+        tapes.writer_for(record.instrument_key, kind).append(
             stream_kind=kind,
             payload=_payload_for(record),
             venue_time_ns=venue_time_ns_of(record),
@@ -216,7 +257,10 @@ def start_part(context) -> int:
             counts["last_failure"] = f"{type(failure).__name__}: {failure}"
 
     def describe_standing() -> dict:
-        return {"part_id": PART_ID, "open_tapes": len(writers), **counts}
+        return {
+            "part_id": PART_ID, "open_tapes": tapes.open_tapes,
+            "key_named_tapes_closed": tapes.key_named_tapes_closed, **counts,
+        }
 
     try:
         return run_part(
@@ -230,13 +274,13 @@ def start_part(context) -> int:
             read_standing=describe_standing,
         )
     finally:
-        for writer in writers.values():
-            writer.close()
+        tapes.close_all()
 
 
 __all__ = [
     "PART_DECLARATION",
     "PART_ID",
+    "TapeWritersByInstrument",
     "observe_subscribed_listing",
     "start_part",
     "stream_kind_for",
