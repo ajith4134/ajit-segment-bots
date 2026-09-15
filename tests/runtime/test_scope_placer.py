@@ -138,3 +138,31 @@ def test_placement_is_reliable_and_fast_enough_to_be_on_the_switch_on_path():
 
     latencies.sort()
     assert latencies[len(latencies) // 2] < 0.1, f"median placement {latencies[len(latencies)//2]:.4f}s"
+
+
+@pytest.mark.cgroup
+def test_a_scope_left_failed_by_an_oom_kill_does_not_block_the_restart(sleeping_process):
+    """The restart of an OOM-killed part must land in a bounded scope again.
+
+    2026-09-15: broker-market-tape-writer was OOM-killed in its 512 MB scope.
+    systemd keeps a scope that ended that way loaded as `failed`, StartTransientUnit
+    refuses a second unit of the same name, and the restarted part -- and every
+    later restart, including the spine's own -- ran in the service cgroup with no
+    memory bound at all, holding 29,940 files.
+    """
+    scope = f"placer-test-failed-{os.getpid()}-{sleeping_process.pid}"
+    subprocess.run(
+        ["systemd-run", "--user", "--scope", f"--unit={scope}", "-p", "MemoryMax=20M",
+         sys.executable, "-c", "bytearray(200 * 1024 * 1024)"],
+        capture_output=True,
+    )
+    state = subprocess.run(
+        ["systemctl", "--user", "is-failed", f"{scope}.scope"], capture_output=True, text=True,
+    )
+    assert state.stdout.strip() == "failed", "the precondition: a real failed scope of that name"
+
+    place_process_in_scope(
+        sleeping_process.pid, scope, ScopeLimits(memory_max_bytes=64 * MEGABYTE, cpu_weight=100),
+        confirmation_deadline_seconds=DEADLINE, poll_interval_seconds=POLL,
+    )
+    assert has_process_landed_in_scope(sleeping_process.pid, scope) is True

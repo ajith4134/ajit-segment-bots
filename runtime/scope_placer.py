@@ -107,6 +107,17 @@ def place_process_in_scope(
     Returns the cgroup directory. Raises PlacementNotConfirmed rather than
     returning a part the governor cannot bound.
     """
+    # A scope that ended badly -- an OOM kill above all -- stays loaded as
+    # `failed`, and StartTransientUnit refuses a second unit of that name. The
+    # restart of exactly the part that most needed its bound then ran unbounded
+    # (broker-market-tape-writer, 2026-09-15). Clearing the failed state first is
+    # a no-op for a name that is not failed, and its result is not trusted either:
+    # /proc below is still the only thing that decides.
+    subprocess.run(
+        ["busctl", "--user", "call", SYSTEMD_BUS_NAME, SYSTEMD_OBJECT_PATH,
+         SYSTEMD_MANAGER_INTERFACE, "ResetFailedUnit", "s", f"{scope_name}.scope"],
+        capture_output=True, text=True,
+    )
     call = _build_transient_unit_call(pid, scope_name, limits)
     completed = subprocess.run(call, capture_output=True, text=True)
 
