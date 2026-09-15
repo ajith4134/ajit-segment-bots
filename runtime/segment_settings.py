@@ -406,6 +406,48 @@ DERIVED_OPTION_UNIVERSE_SELECTIONS = (
 )
 
 
+# The exchange segments an option's underlying key names, in the broker's own
+# vocabulary. MCX is absent on purpose and excludes itself (docs/goal.md #6).
+OPTION_UNDERLYING_INDEX_SEGMENTS = ("NSE_INDEX", "BSE_INDEX")
+OPTION_UNDERLYING_STOCK_SEGMENTS = ("NSE_EQ",)
+
+
+class OptionUnderlyingsByRule:
+    """Which underlyings carry an option, split by the derived rule that claims them.
+
+    Read off every option listing the broker states: its `underlying_symbol` names
+    the underlying, and its `underlying_key`'s exchange segment says what kind of
+    thing that is -- an index or a share. Nothing is named by hand, so an index NSE
+    starts writing options on is claimed the day its first contract is listed.
+
+    Exists because two segments derive their universes from 2026-09-12, and the
+    selector resolved both against one set: every stock option in the retired cash
+    segment's shortlist was bought with index-options' capital (2026-09-15).
+    """
+
+    def __init__(self) -> None:
+        self.indices: set[str] = set()
+        self.stocks: set[str] = set()
+
+    def observe_listing(self, listing) -> None:
+        underlying_key = getattr(listing, "underlying_key", None)
+        underlying_symbol = getattr(listing, "underlying_symbol", None)
+        if not underlying_key or not underlying_symbol:
+            return
+        exchange_segment = str(underlying_key).split("|", 1)[0]
+        if exchange_segment in OPTION_UNDERLYING_INDEX_SEGMENTS:
+            self.indices.add(underlying_symbol)
+        elif exchange_segment in OPTION_UNDERLYING_STOCK_SEGMENTS:
+            self.stocks.add(underlying_symbol)
+
+    def underlyings_for(self, selection: str) -> frozenset:
+        if selection == UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION:
+            return frozenset(self.indices)
+        if selection == UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION:
+            return frozenset(self.stocks)
+        return frozenset()
+
+
 def _segments_whose_selection_is_in(
     wanted, context, root: pathlib.Path | None = None,
 ) -> tuple[str, ...]:
@@ -503,6 +545,7 @@ __all__ = [
     "SegmentSettingMissing",
     "SegmentsOverlap",
     "UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE",
+    "OptionUnderlyingsByRule",
     "UNIVERSE_IS_EVERY_INDEX_WITH_AN_OPTION",
     "UNIVERSE_IS_EVERY_STOCK_WITH_AN_OPTION",
     "DERIVED_OPTION_UNIVERSE_SELECTIONS",

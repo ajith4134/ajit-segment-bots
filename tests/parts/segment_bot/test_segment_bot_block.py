@@ -1077,3 +1077,75 @@ def test_a_share_cannot_be_sold_to_open_in_phase_a():
     choice = subject.select(Intent(venue_id=UPSTOX_VENUE_ID, symbol="IFCI", is_long=False))
 
     assert choice.state != CHOSEN
+
+
+def test_each_derived_option_segment_claims_only_its_own_underlyings_from_the_real_master(tmp_path):
+    """Two segments deriving their universes, which the resolver assumed could not happen.
+
+    From 2026-09-12 index-options takes every index with an option and stock-options
+    every stock with one. `segment_resolver_from_settings` asked one membership set --
+    the retired cash segment's shortlist -- of whichever derived segment came first.
+    Measured live on 2026-09-15: all 35 positions in the index-options account were
+    stock options (ADANIENT, CHOLAFIN, ...), a NIFTY option resolved to `unknown`, and
+    a stock option outside that shortlist resolved to `unknown` too.
+    """
+    import pathlib
+    import re
+
+    from parts.segment_bot.instrument_selector import (
+        derived_option_membership_by_segment, derived_selection_by_segment,
+        segment_resolver_from_settings,
+    )
+    from runtime.segment_settings import OptionUnderlyingsByRule
+    from tests.conftest import upstox_listings_by_key
+
+    listings = upstox_listings_by_key()
+    if not listings:
+        pytest.skip("Upstox's instrument master is not on this machine")
+
+    repository = pathlib.Path(__file__).resolve().parents[3]
+    (tmp_path / "segments").mkdir()
+    for segment, rule in (
+        ("index-options", "every-nse-index-with-an-option"),
+        ("stock-options", "every-nse-stock-with-an-option"),
+    ):
+        text = (repository / f"settings/segments-{segment}.example.toml").read_text()
+        text = re.sub(
+            r'(\[segment_universe_selection\]\nvalue = )"[^"]*"', rf'\1"{rule}"', text,
+        )
+        (tmp_path / "segments" / f"{segment}.toml").write_text(text)
+
+    class Setting:
+        def __init__(self, value):
+            self.value = value
+
+    class Context:
+        def setting(self, name):
+            if name == "built_segments":
+                return Setting(["index-options", "stock-options"])
+            raise KeyError(name)
+
+    underlyings = OptionUnderlyingsByRule()
+    for listing in listings.values():
+        underlyings.observe_listing(listing)
+
+    shortlist_of_the_retired_cash_segment = frozenset({"ADANIENT", "CHOLAFIN"})
+    selections = derived_selection_by_segment(Context(), tmp_path)
+    segment_of = segment_resolver_from_settings(
+        Context(), tmp_path,
+        derived_membership=lambda: derived_option_membership_by_segment(
+            selections, underlyings, shortlist_of_the_retired_cash_segment,
+        ),
+    )
+
+    def option_on(symbol):
+        return type("Instrument", (), {"instrument_kind": OPTION, "symbol": symbol})()
+
+    assert segment_of(option_on("NIFTY")) == "index-options"
+    assert segment_of(option_on("SENSEX")) == "index-options"
+    assert segment_of(option_on("ADANIENT")) == "stock-options"
+    assert segment_of(option_on("TCS")) == "stock-options"
+    # MCX excludes itself: its index is not NSE or BSE, and no name is blacklisted.
+    assert segment_of(option_on("MCXBULLDEX")) == UNKNOWN_SEGMENT
+    # Measured on the master 2026-09-12: exactly 10 indices and 210 shares carry options.
+    assert len(underlyings.indices) >= 10 and len(underlyings.stocks) >= 200

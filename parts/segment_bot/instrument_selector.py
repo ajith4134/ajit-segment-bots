@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from runtime.price_frames import levels_in
 from runtime.quote_frames import quote_levels_in
 from runtime.part_declaration import PartDeclaration
-from runtime.segment_settings import built_segments
+from runtime.segment_settings import OptionUnderlyingsByRule, built_segments
 from runtime.price_staleness import ObservedPrice, PriceStalenessEstimator
 from runtime.part_process import run_part
 from runtime.trading_types import (
@@ -98,6 +98,45 @@ SEGMENT_OF_KIND_ALONE = {
 }
 
 
+def derived_selection_by_segment(context, root) -> dict:
+    """Each built segment's universe rule, read once when the part starts."""
+    from runtime.segment_settings import (
+        UNIVERSE_IS_STATED, UNIVERSE_SELECTION_SETTING, SegmentSettingMissing,
+        read_segment_setting,
+    )
+    from runtime.segment_settings import built_segments as listed_segments
+
+    selections = {}
+    for segment in listed_segments(context):
+        try:
+            selection = str(read_segment_setting(segment, UNIVERSE_SELECTION_SETTING, root).value)
+        except SegmentSettingMissing:
+            continue
+        if selection != UNIVERSE_IS_STATED:
+            selections[segment] = selection
+    return selections
+
+
+def derived_option_membership_by_segment(selections, option_underlyings, cash_shortlist) -> dict:
+    """Each derived-selection segment's current underlyings, by its own rule.
+
+    `selections` is `derived_selection_by_segment`'s answer; `option_underlyings`
+    an `OptionUnderlyingsByRule` fed from the broker's listing; `cash_shortlist`
+    the day's `cash-equity-shortlist` membership, the only source for a
+    share-without-a-derivative segment.
+    """
+    from runtime.segment_settings import UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE
+
+    return {
+        segment: (
+            frozenset(cash_shortlist)
+            if selection == UNIVERSE_IS_EVERY_SHARE_WITHOUT_A_DERIVATIVE
+            else option_underlyings.underlyings_for(selection)
+        )
+        for segment, selection in selections.items()
+    }
+
+
 def segment_resolver_from_settings(context, root=None, derived_membership=None):
     """A callable naming the segment an instrument belongs to, from settings.
 
@@ -111,16 +150,18 @@ def segment_resolver_from_settings(context, root=None, derived_membership=None):
     symbols` for that segment is a 14-name legacy fallback, disconnected from
     the 2,444-share derived universe `broker-symbol-universe-bridge` actually
     publishes. Its claims are resolved live instead, against whatever
-    `derived_membership()` returns right now -- the day's `cash-equity-
-    shortlist`, threaded in by the caller that has bus access. `derived_
-    membership` is None for a caller with none (a unit test constructing
+    `derived_membership()` returns right now: `{segment: frozenset(underlyings)}`,
+    built by `derived_option_membership_by_segment` from each segment's own rule.
+    `derived_membership` is None for a caller with none (a unit test constructing
     instruments by hand), and then a derived-selection segment claims nothing,
     the same honest "not built" answer an unresolvable segment always got.
 
-    Only one derived-selection segment is assumed to exist at a time, because
-    only one such shortlist type is published (2026-09-05) -- a second one
-    would need its own membership source threaded in by name, not folded into
-    this one.
+    Each derived segment is asked about its own membership only. Until 2026-09-15
+    one set -- the cash shortlist -- was asked of whichever derived segment came
+    first, which was harmless while cash equity was the only derived segment and
+    wrong from the day both option segments became one: every shortlisted stock
+    option was bought with index-options' capital, and NIFTY resolved to nothing.
+    Two segments claiming one instrument refuse, as stated claims always did.
     """
     from runtime.segment_settings import built_segments as listed_segments
     from runtime.segment_settings import (
@@ -166,9 +207,18 @@ def segment_resolver_from_settings(context, root=None, derived_membership=None):
             return claims[key]
         if derived_membership is not None:
             current = derived_membership()
-            for segment, types in derived_types_by_segment.items():
-                if instrument.instrument_kind in types and instrument.symbol in current:
-                    return segment
+            claimants = [
+                segment for segment, types in derived_types_by_segment.items()
+                if instrument.instrument_kind in types
+                and instrument.symbol in current.get(segment, frozenset())
+            ]
+            if len(claimants) > 1:
+                raise SegmentsOverlap(
+                    f"{instrument.instrument_kind} on {instrument.symbol} is claimed by "
+                    f"{', '.join(claimants)}; whose capital buys it is undecidable"
+                )
+            if claimants:
+                return claimants[0]
         return UNKNOWN_SEGMENT
 
     return segment_of
@@ -209,6 +259,9 @@ class _ChainListing:
     instrument_type: str | None
     strike_price: float | None
     expiry_ms: int | None
+    # The underlying's own name, which with `underlying_key`'s exchange segment is
+    # what says which derived option segment claims this contract.
+    underlying_symbol: str | None = None
 
 
 @dataclass(frozen=True)
@@ -438,6 +491,7 @@ class InstrumentSelector:
         round_trip_cost_fraction: float | None = None,
         price_staleness: PriceStalenessEstimator | None = None,
         now_ns=time.time_ns,
+        option_underlyings: OptionUnderlyingsByRule | None = None,
     ) -> None:
         if not built_segments:
             raise ValueError(
@@ -499,6 +553,9 @@ class InstrumentSelector:
         from runtime.atm_strike_tracker import AtmStrikeTracker
 
         self._atm_tracker = AtmStrikeTracker()
+        # Shared with the segment resolver the spine builds, which asks it which
+        # derived option segment an underlying belongs to.
+        self.option_underlyings = option_underlyings or OptionUnderlyingsByRule()
         # The contract_symbol currently registered as the ATM call/put for
         # each underlying, so a strike that stops being ATM (the underlying
         # moved) can be evicted rather than accumulating forever --
@@ -535,6 +592,7 @@ class InstrumentSelector:
         12,165.44 units of NIFTY 23750 PE).
         """
         self._atm_tracker.observe_listing(listing)
+        self.option_underlyings.observe_listing(listing)
         lot = getattr(listing, "lot_size", None)
         if lot:
             self._lot_sizes[listing.instrument_key] = float(lot)
@@ -848,6 +906,7 @@ class InstrumentSelector:
                 instrument_type=listed.contract_type,
                 strike_price=listed.strike_price,
                 expiry_ms=listed.expiry_ms,
+                underlying_symbol=listed.underlying_symbol,
             )
         if listed.underlying_symbol is None and listed.instrument_kind is None:
             # An underlying: what every contract on it resolves through.
@@ -1637,15 +1696,20 @@ def start_part(context) -> int:
         timed.payloads()
         return intents.payloads()
 
+    option_underlyings = OptionUnderlyingsByRule()
+    derived_selections = derived_selection_by_segment(context, context.settings_root)
     return run_instrument_selector(
         selector=InstrumentSelector(
+            option_underlyings=option_underlyings,
             # Every segment this spine trades, and how an instrument names which
             # one it belongs to (2026-09-05). A one-segment spine states a
             # one-item list and behaves exactly as it did.
             built_segments=built_segments(context),
             segment_of=segment_resolver_from_settings(
                 context, context.settings_root,
-                derived_membership=lambda: derived_membership_cell[0],
+                derived_membership=lambda: derived_option_membership_by_segment(
+                    derived_selections, option_underlyings, derived_membership_cell[0],
+                ),
             ),
             maximum_cost_fraction=context.number("instrument_maximum_cost_fraction"),
             # What trading an instrument costs, round trip. The venue states what
