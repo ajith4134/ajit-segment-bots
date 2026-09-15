@@ -20,6 +20,7 @@ avoid market impact must not be reassembled into one order at the destination.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -30,6 +31,7 @@ from runtime.trading_types import (
     MARKET,
     PAPER_BOOK,
     REFUSED_NO_MODE,
+    REFUSED_NOTHING_TO_SEND,
     REFUSED_UNSTAMPED,
     ROUTED,
     OrderRequest,
@@ -64,6 +66,10 @@ class RouterStanding:
     refused_unstamped: int = 0
     slices_routed: int = 0
     orders_split: int = 0
+    # A stamped order with nothing to send -- a refusal the gate passed on.
+    refused_nothing_to_send: int = 0
+    # A schedule held for the symbol that was built for a different order.
+    schedules_that_did_not_match_the_order: int = 0
 
 
 class OrderDestinationRouter:
@@ -91,6 +97,18 @@ class OrderDestinationRouter:
                 self._refusal(
                     stamped_order, REFUSED_UNSTAMPED,
                     "this order carries no client id, so it could not be retried safely",
+                ),
+            )
+
+        if not getattr(stamped_order, "quantity", 0.0) > 0:
+            # A refusal upstream arrives here stamped, and routing it sent the
+            # symbol's previous schedule under the refusal's side (2026-09-15:
+            # 21 orders of 300 HINDUNILVR 1960 CE with side 'flat').
+            self.standing.refused_nothing_to_send += 1
+            return (
+                self._refusal(
+                    stamped_order, REFUSED_NOTHING_TO_SEND,
+                    "the order carries no quantity; there is nothing to send",
                 ),
             )
 
@@ -165,6 +183,16 @@ class OrderDestinationRouter:
         """
         if execution_schedule is None or not getattr(execution_schedule, "slices", ()):
             return ((stamped_order.quantity, 0.0),)
+        # The schedule is held as the latest per symbol, so it can belong to an
+        # earlier order on the same contract. It is this order's only if it was
+        # built for this side and this whole quantity; otherwise the order goes as
+        # one slice rather than as somebody else's.
+        if (
+            execution_schedule.side != stamped_order.side
+            or not math.isclose(execution_schedule.total_quantity, stamped_order.quantity)
+        ):
+            self.standing.schedules_that_did_not_match_the_order += 1
+            return ((stamped_order.quantity, 0.0),)
         return tuple(
             (one.quantity, one.at_second) for one in execution_schedule.slices
         )
@@ -198,6 +226,8 @@ def describe_routing(router: OrderDestinationRouter) -> dict:
         "refused_unstamped": router.standing.refused_unstamped,
         "slices_routed": router.standing.slices_routed,
         "orders_split": router.standing.orders_split,
+        "refused_nothing_to_send": router.standing.refused_nothing_to_send,
+        "schedules_that_did_not_match_the_order": router.standing.schedules_that_did_not_match_the_order,
     }
 
 

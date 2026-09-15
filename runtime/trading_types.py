@@ -140,6 +140,7 @@ LIVE_VENUE = "live-venue"
 ROUTED = "routed"
 REFUSED_NO_MODE = "refused-money-mode-unknown"
 REFUSED_UNSTAMPED = "refused-order-carries-no-client-id"
+REFUSED_NOTHING_TO_SEND = "refused-order-carries-no-quantity"
 
 # What kind of order this is, stated rather than inferred from which price fields
 # happen to be set. Inferring it was a live defect: an entry carries the stop

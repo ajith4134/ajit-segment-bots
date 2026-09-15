@@ -1934,3 +1934,37 @@ def test_a_trailed_stop_or_a_new_target_is_a_change_the_checkpoint_records():
     restarted = StopOrderManager()
     restarted.restore_from_checkpoint(manager.read_checkpoint_state())
     assert restarted.resting_stop(NIFTY_VENUE, NIFTY_SYMBOL) == 30.0
+
+
+def test_a_schedule_is_used_only_for_the_order_it_was_built_for():
+    """The latest schedule for a symbol is not the schedule for every later order on it.
+
+    2026-09-15: a 6,300-unit buy of HINDUNILVR 1960 CE was scheduled as 21 slices of 300.
+    A later zero-quantity refusal for the same contract, carrying side 'flat', was routed
+    through that schedule -- 21 orders of 300 with side 'flat' -- and paper-fill-simulator
+    crashed pricing them. Any later order on the same contract of a different size would
+    have been sent as the old order's slices too.
+    """
+    from parts.risk_capital_allocation.participation_capped_order_splitter import (
+        ExecutionSchedule, ExecutionSlice,
+    )
+
+    schedule = ExecutionSchedule(
+        VENUE, SYMBOL, BUY, 10.0,
+        (ExecutionSlice(1, 5.0, 0.0, False), ExecutionSlice(2, 5.0, 10.0, True)),
+        "split", 0.1, 100.0, 300.0, "", 1,
+    )
+    router = OrderDestinationRouter()
+
+    other_size = router.route(StampedStub(quantity=3.0), Mode("paper"), schedule)
+    assert [r.quantity for r in other_size] == [3.0]
+
+    selling = StampedStub(quantity=10.0)
+    selling.side = SELL
+    assert [r.quantity for r in router.route(selling, Mode("paper"), schedule)] == [10.0]
+
+    nothing = StampedStub(quantity=0.0)
+    nothing.side = "flat"
+    refused = router.route(nothing, Mode("paper"), schedule)
+    assert len(refused) == 1 and refused[0].may_be_sent is False
+    assert router.standing.refused_nothing_to_send == 1
