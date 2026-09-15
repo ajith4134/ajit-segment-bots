@@ -44,6 +44,7 @@ window, and the ones that had not are the contracts far from the money.
 
 from __future__ import annotations
 
+import statistics
 import time
 from dataclasses import dataclass, field
 
@@ -71,8 +72,8 @@ OPTION_INSTRUMENT_TYPES = (CALL, PUT)
 PART_DECLARATION = PartDeclaration(
     part_id="broker-symbol-universe-bridge",
     consumes=(
-        "broker-instrument-listing", "broker-price-frame", "cash-equity-shortlist",
-        "position",
+        "broker-instrument-listing", "broker-option-greeks", "broker-price-frame",
+        "cash-equity-shortlist", "position",
     ),
     produces=("symbol-universe", "part-health"),
     resource_class="bandwidth-bound",
@@ -188,6 +189,14 @@ class StockWithAnOption:
 
 @dataclass
 class BridgeStanding:
+    # Expiry-day far strikes (2026-09-15): what was added, what the connection's
+    # capacity cut, and how many expiring indices had no implied volatility to
+    # estimate a delta from yet -- a refusal, never a guessed strike.
+    expiry_day_underlyings: int = 0
+    expiry_day_far_strikes_published: int = 0
+    expiry_day_far_strikes_trimmed_by_capacity: int = 0
+    expiry_day_underlyings_waiting_for_implied_volatility: int = 0
+    spare_subscription_keys: int = 0
     listings_seen: int = 0
     underlyings_resolved: int = 0
     option_contracts_known: int = 0
@@ -261,6 +270,11 @@ class BrokerSymbolUniverseBridge:
         equity_selection=None,
         option_underlying_selections=(),
         derived_chain_width: int = 0,
+        expiry_day_far_strikes_per_side: int = 0,
+        expiry_day_far_strike_maximum_abs_delta: float | None = None,
+        subscription_capacity: int | None = None,
+        session_closes_at_ist: str | None = None,
+        option_delta_seconds_per_year: float | None = None,
     ) -> None:
         if not tracked_trading_symbols:
             raise ValueError(
@@ -388,6 +402,25 @@ class BrokerSymbolUniverseBridge:
         # flat, and universe() already skips flat positions by reading
         # is_flat itself.
         self._position_by_key: dict[tuple[str, str], object] = {}
+        # Expiry-day far strikes. Off (zero per side) unless every input to the
+        # choice is stated: a strike picked without a delta bound, a capacity or
+        # a close time would be a strike nobody chose.
+        self._far_strikes_per_side = int(expiry_day_far_strikes_per_side)
+        if self._far_strikes_per_side > 0 and None in (
+            expiry_day_far_strike_maximum_abs_delta, subscription_capacity,
+            session_closes_at_ist, option_delta_seconds_per_year,
+        ):
+            raise ValueError(
+                "expiry-day far strikes need a delta bound, the connection's capacity, the "
+                "session's close and the year a delta is stated over; one missing is a "
+                "strike nobody chose"
+            )
+        self._far_strike_maximum_abs_delta = expiry_day_far_strike_maximum_abs_delta
+        self._subscription_capacity = subscription_capacity
+        self._session_closes_at_ist = session_closes_at_ist
+        self._option_delta_seconds_per_year = option_delta_seconds_per_year
+        # The latest implied volatility Upstox states per contract key.
+        self._implied_volatility_by_key: dict[str, float] = {}
         self.standing = BridgeStanding()
 
     def observe_listing(self, listing) -> None:
@@ -451,6 +484,119 @@ class BrokerSymbolUniverseBridge:
         for level in price_frame.levels:
             if level.instrument_key in self._underlying_by_key:
                 self._price_by_underlying_key[level.instrument_key] = level.price
+
+    def observe_option_greeks(self, greeks) -> None:
+        """A contract's implied volatility, the one input to a far strike's estimated delta."""
+        implied = getattr(greeks, "implied_volatility", None)
+        if implied is not None and implied > 0:
+            self._implied_volatility_by_key[greeks.instrument_key] = float(implied)
+
+    def _seconds_to_todays_close(self, expiry_ms: int) -> float | None:
+        """Seconds from now to the close, if this expiry is today in IST; else None."""
+        import datetime
+        import zoneinfo
+
+        from runtime.market_conditions import EXCHANGE_TIMEZONE
+
+        exchange = zoneinfo.ZoneInfo(EXCHANGE_TIMEZONE)
+        now = datetime.datetime.fromtimestamp(self._now_ms() / 1000, tz=exchange)
+        expires_on = datetime.datetime.fromtimestamp(expiry_ms / 1000, tz=exchange).date()
+        if expires_on != now.date():
+            return None
+        hour, minute = (int(part) for part in str(self._session_closes_at_ist).split(":"))
+        close = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        left = (close - now).total_seconds()
+        return left if left > 0 else None
+
+    def _far_strikes_for(self, underlying_key: str, per_side: int) -> tuple:
+        """The far calls and puts an expiry-day zero-to-hero trade lives on.
+
+        Per side, the strikes nearest the money whose estimated |delta| is inside
+        `expiry_day_far_strike_maximum_abs_delta` -- the richest strikes still
+        inside the detector's own delta rule. The delta is estimated from this
+        index's own at-the-money implied volatility (the median over the chain
+        already published) with calendar seconds to the close, the basis that
+        reproduced Upstox's stated delta to 0.004 on 2026-09-15.
+        """
+        from runtime.option_delta import CALL, PUT, estimated_delta
+
+        price = self._price_by_underlying_key.get(underlying_key)
+        expiry = self.nearest_expiry_for(underlying_key)
+        if price is None or expiry is None:
+            return ()
+        seconds = self._seconds_to_todays_close(expiry)
+        if seconds is None:
+            return ()
+        implied = [
+            self._implied_volatility_by_key[contract.instrument_key]
+            for contract in self.contracts_for(underlying_key)
+            if contract.instrument_key in self._implied_volatility_by_key
+        ]
+        if not implied:
+            self.standing.expiry_day_underlyings_waiting_for_implied_volatility += 1
+            return ()
+        volatility = statistics.median(implied)
+        chosen = []
+        for option_type, is_out_of_the_money in (
+            (CALL, lambda strike: strike > price), (PUT, lambda strike: strike < price),
+        ):
+            side = []
+            for contract in self._contracts_by_underlying_key[underlying_key].values():
+                if (
+                    contract.expiry_ms != expiry or contract.strike_price is None
+                    or contract.instrument_type != option_type
+                    or not is_out_of_the_money(contract.strike_price)
+                ):
+                    continue
+                delta = estimated_delta(
+                    price, contract.strike_price, option_type, volatility, seconds,
+                    self._option_delta_seconds_per_year,
+                )
+                if delta is not None and abs(delta) <= self._far_strike_maximum_abs_delta:
+                    side.append(contract)
+            side.sort(key=lambda contract: (abs(contract.strike_price - price), contract.instrument_key))
+            chosen.extend(side[:per_side])
+        return tuple(chosen)
+
+    def _expiry_day_far_strike_entries(self, entries: list) -> list:
+        """Far strikes for every index expiring today, inside the connection's spare keys."""
+        self.standing.expiry_day_underlyings = 0
+        self.standing.expiry_day_far_strikes_published = 0
+        self.standing.expiry_day_far_strikes_trimmed_by_capacity = 0
+        self.standing.expiry_day_underlyings_waiting_for_implied_volatility = 0
+        if self._far_strikes_per_side <= 0:
+            return []
+        held_keys = {entry.venue_instrument_id for entry in entries if entry.venue_instrument_id}
+        spare = max(0, self._subscription_capacity - len(held_keys))
+        self.standing.spare_subscription_keys = spare
+        expiring = [
+            (key, listing) for key, listing in sorted(self._underlying_by_key.items())
+            if getattr(listing, "segment", None) in INDEX_SEGMENTS
+            and key in self._price_by_underlying_key
+            and (expiry := self.nearest_expiry_for(key)) is not None
+            and self._seconds_to_todays_close(expiry) is not None
+        ]
+        self.standing.expiry_day_underlyings = len(expiring)
+        if not expiring:
+            return []
+        # Shared evenly, a call and a put per strike: capacity is what the feed can
+        # hold, and the feed stops at it in universe order -- where index keys sort
+        # after every share -- so going past it would drop indices first.
+        per_side = min(self._far_strikes_per_side, spare // (2 * len(expiring)))
+        added = []
+        for key, listing in expiring:
+            self.standing.expiry_day_far_strikes_trimmed_by_capacity += 2 * (
+                self._far_strikes_per_side - per_side
+            )
+            if per_side <= 0:
+                continue
+            for contract in self._far_strikes_for(key, per_side):
+                if contract.instrument_key in held_keys:
+                    continue
+                held_keys.add(contract.instrument_key)
+                added.append(self._entry_for_contract(contract, listing.trading_symbol, key))
+        self.standing.expiry_day_far_strikes_published = len(added)
+        return added
 
     def observe_shortlist(self, shortlist) -> None:
         """The latest cash-equity-shortlist. Replaces the previous one whole --
@@ -684,6 +830,7 @@ class BrokerSymbolUniverseBridge:
         already_covered = {entry.symbol for entry in entries}
         held_entries, forced_in, without_a_listing = self._held_entries(already_covered)
         entries.extend(held_entries)
+        entries.extend(self._expiry_day_far_strike_entries(entries))
         self.standing.held_positions_forced_in = forced_in
         self.standing.held_positions_without_a_listing = without_a_listing
 
@@ -736,6 +883,11 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
     return {
         "part_id": PART_ID,
         "listings_seen": bridge.standing.listings_seen,
+        "expiry_day_underlyings": bridge.standing.expiry_day_underlyings,
+        "expiry_day_far_strikes_published": bridge.standing.expiry_day_far_strikes_published,
+        "expiry_day_far_strikes_trimmed_by_capacity": bridge.standing.expiry_day_far_strikes_trimmed_by_capacity,
+        "expiry_day_underlyings_waiting_for_implied_volatility": bridge.standing.expiry_day_underlyings_waiting_for_implied_volatility,
+        "spare_subscription_keys": bridge.standing.spare_subscription_keys,
         "underlyings_resolved": bridge.standing.underlyings_resolved,
         "option_contracts_known": bridge.standing.option_contracts_known,
         "price_frames_seen": bridge.standing.price_frames_seen,
@@ -816,6 +968,9 @@ def start_part(context) -> int:
     price_frames = Batch(read=context.bus.reader("broker-price-frame"))
     shortlists = Batch(read=context.bus.reader("cash-equity-shortlist"))
     positions = Batch(read=context.bus.reader("position"))
+    # Implied volatility only, for the far strikes an expiry-day index publishes.
+    greeks = Batch(read=context.bus.reader("broker-option-greeks"))
+    from runtime.brokers.upstox import UpstoxAdapter
     publish_universe = context.bus.publisher_for("symbol-universe")
 
     # The segment's own universe, not the machine's. `segment_id` already
@@ -864,6 +1019,15 @@ def start_part(context) -> int:
         # F&O list is picked up without an edit.
         option_underlying_selections=derived_option_underlying_rules(context),
         derived_chain_width=chain_width_for_derived_underlyings(context),
+        # The far strikes an expiry-day zero-to-hero trade lives on (2026-09-15).
+        # The delta bound is the detector's own, so what is subscribed is what it
+        # can fire on; the capacity is the feed's FULL-mode limit as the broker's
+        # adapter declares it, the mode broker-market-feed-reader subscribes in.
+        expiry_day_far_strikes_per_side=int(context.number("expiry_day_far_strikes_per_side")),
+        expiry_day_far_strike_maximum_abs_delta=context.number("zero_to_hero_maximum_abs_delta"),
+        subscription_capacity=int(UpstoxAdapter().declared_limits()["full_individual_limit"].value),
+        session_closes_at_ist=str(context.setting("market_session_closes_at_ist").value),
+        option_delta_seconds_per_year=context.number("option_delta_seconds_per_year"),
     )
     # Held positions cannot wait for the paced conveyor -- see
     # warm_start_from_the_masters_own_file's own docstring for why this is a
@@ -889,6 +1053,8 @@ def start_part(context) -> int:
             bridge.observe_shortlist(shortlist)
         for position in positions.payloads():
             bridge.observe_position(position)
+        for reading in greeks.payloads():
+            bridge.observe_option_greeks(reading)
         universe = bridge.universe()
         if universe:
             # An empty universe is never published: never read and lists nothing

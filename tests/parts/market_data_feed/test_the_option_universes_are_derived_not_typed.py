@@ -199,3 +199,101 @@ def test_a_bridge_given_no_rule_derives_nothing(real_listings):
     assert bridge.standing.derived_option_underlyings == 0
     assert bridge.standing.shares_held_pending_an_option == 0
     assert bridge._underlying_by_key == {}
+
+
+# ---- expiry-day far strikes (2026-09-15) --------------------------------------
+#
+# `expiry-day-zero-to-hero-detector` fired nothing on NIFTY's 2026-09-15 expiry: the
+# universe held the 8 contracts nearest the money, and 156,150 checks refused
+# `premium_too_high`. The strikes the pattern lives on were never subscribed.
+
+NIFTY_SPOT_AT_0650_UTC = 23_326.3            # this project's own tape, 2026-09-15
+NIFTY_ATM_IMPLIED_VOLATILITY = 0.30         # Upstox's, same moment, 0.289..0.317
+AT_0650_UTC_MS = 1789455000000   # 2026-09-15 06:50 UTC, 12:20 IST
+CLOSE_AT_IST = "15:30"
+
+
+def an_expiry_day_bridge(capacity=CONNECTION_KEY_LIMIT, per_side=5):
+    return BrokerSymbolUniverseBridge(
+        tracked_trading_symbols=("A-NAME-NO-SEGMENT-TRADES",),
+        option_contracts_per_underlying={"A-NAME-NO-SEGMENT-TRADES": CHAIN_WIDTH},
+        option_underlying_selections=(IndexWithAnOption(),),
+        derived_chain_width=CHAIN_WIDTH,
+        now_ms=lambda: AT_0650_UTC_MS,
+        expiry_day_far_strikes_per_side=per_side,
+        expiry_day_far_strike_maximum_abs_delta=0.10,
+        subscription_capacity=capacity,
+        session_closes_at_ist=CLOSE_AT_IST,
+        option_delta_seconds_per_year=31_536_000.0,
+    )
+
+
+def priced_with_implied_volatility(bridge, listings):
+    from parts.broker_adapter.broker_price_level_sampler import BrokerPriceFrame, BrokerPriceLevel
+    from runtime.brokers.broker_adapter import BrokerOptionGreeks
+
+    fed(bridge, listings)
+    nifty = next(one for one in listings if one.trading_symbol == "NIFTY" and one.underlying_key is None)
+    bridge.observe_price_frame(BrokerPriceFrame(
+        broker_id="upstox",
+        levels=(BrokerPriceLevel(instrument_key=nifty.instrument_key, price=NIFTY_SPOT_AT_0650_UTC, observed_at_ns=1),),
+        published_at_ns=1, part_number=1, of_parts=1,
+    ))
+    for contract in bridge.contracts_for(nifty.instrument_key):
+        bridge.observe_option_greeks(BrokerOptionGreeks(
+            instrument_key=contract.instrument_key, delta=0.5, theta=0.0, gamma=0.0, vega=0.0,
+            rho=0.0, implied_volatility=NIFTY_ATM_IMPLIED_VOLATILITY, broker_time_ns=1,
+        ))
+    return bridge, nifty
+
+
+def test_on_its_expiry_day_an_index_publishes_the_strikes_a_zero_to_hero_trade_lives_on(real_listings):
+    """The five strikes each side nearest the money whose estimated |delta| is inside 0.10.
+
+    Checked against NSE's own intraday chart for the same moment
+    (measurements/2026-09-15-zero-to-hero-strikes/): premium Rs5 or less began at
+    CE 23600 (3.65) and PE 23100 (2.90), so these reach three and four strikes into
+    that territory, and the nearest of them sit where skew makes the broker's delta
+    land just outside -- which the detector judges, not this part.
+    """
+    if not any(one.trading_symbol == "NIFTY 23500 CE 15 SEP 26" for one in real_listings):
+        pytest.skip("the master on this machine no longer lists NIFTY's 15 SEP 26 expiry")
+    bridge, _nifty = priced_with_implied_volatility(an_expiry_day_bridge(), real_listings)
+
+    symbols = {entry.symbol for entry in bridge.universe()}
+    far_calls = sorted(int(s.split()[1]) for s in symbols if s.startswith("NIFTY ") and s.endswith("15 SEP 26") and " CE " in s and int(s.split()[1]) > NIFTY_SPOT_AT_0650_UTC + 100)
+    far_puts = sorted((int(s.split()[1]) for s in symbols if s.startswith("NIFTY ") and s.endswith("15 SEP 26") and " PE " in s and int(s.split()[1]) < NIFTY_SPOT_AT_0650_UTC - 100), reverse=True)
+    assert far_calls == [23500, 23550, 23600, 23650, 23700]
+    assert far_puts == [23150, 23100, 23050, 23000, 22950]
+    assert bridge.standing.expiry_day_far_strikes_published == 10
+
+
+def test_far_strikes_never_push_the_universe_past_what_one_connection_carries(real_listings):
+    """The feed subscribes the universe in order and stops at the cap, and index keys sort last."""
+    if not any(one.trading_symbol == "NIFTY 23500 CE 15 SEP 26" for one in real_listings):
+        pytest.skip("the master on this machine no longer lists NIFTY's 15 SEP 26 expiry")
+    unconstrained, _ = priced_with_implied_volatility(an_expiry_day_bridge(per_side=0), real_listings)
+    without = len({entry.venue_instrument_id for entry in unconstrained.universe()})
+
+    bridge, _ = priced_with_implied_volatility(an_expiry_day_bridge(capacity=without + 4), real_listings)
+    keys = {entry.venue_instrument_id for entry in bridge.universe()}
+    assert len(keys) <= without + 4
+    assert bridge.standing.expiry_day_far_strikes_published == 4
+    assert bridge.standing.expiry_day_far_strikes_trimmed_by_capacity == 6
+
+
+def test_without_an_implied_volatility_no_far_strike_is_guessed(real_listings):
+    if not any(one.trading_symbol == "NIFTY 23500 CE 15 SEP 26" for one in real_listings):
+        pytest.skip("the master on this machine no longer lists NIFTY's 15 SEP 26 expiry")
+    from parts.broker_adapter.broker_price_level_sampler import BrokerPriceFrame, BrokerPriceLevel
+
+    bridge = fed(an_expiry_day_bridge(), real_listings)
+    nifty = next(one for one in real_listings if one.trading_symbol == "NIFTY" and one.underlying_key is None)
+    bridge.observe_price_frame(BrokerPriceFrame(
+        broker_id="upstox",
+        levels=(BrokerPriceLevel(instrument_key=nifty.instrument_key, price=NIFTY_SPOT_AT_0650_UTC, observed_at_ns=1),),
+        published_at_ns=1, part_number=1, of_parts=1,
+    ))
+    bridge.universe()
+    assert bridge.standing.expiry_day_far_strikes_published == 0
+    assert bridge.standing.expiry_day_underlyings_waiting_for_implied_volatility >= 1

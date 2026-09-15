@@ -1,0 +1,11 @@
+06:39:50 filter unlisted 206.0 of 220.0 | catalogue subscribed held 220.0 restated 14.0 | tape resolved 0.0 unresolved 14675.0 of 14675.0 | z2h known 0.0
+06:40:50 filter unlisted 1803.0 of 2000.0 | catalogue subscribed held 2000.0 restated 178.0 | tape resolved 6.0 unresolved 53330.0 of 53871.0 | z2h known 16.0
+06:41:50 filter unlisted 1426.0 of 2000.0 | catalogue subscribed held 2000.0 restated 578.0 | tape resolved 67.0 unresolved 196817.0 of 203785.0 | z2h known 67.0
+06:42:50 filter unlisted 1029.0 of 2000.0 | catalogue subscribed held 2000.0 restated 973.0 | tape resolved 140.0 unresolved 268169.0 of 280432.0 | z2h known 144.0
+06:43:50 filter unlisted 627.0 of 2000.0 | catalogue subscribed held 2000.0 restated 1377.0 | tape resolved 295.0 unresolved 344130.0 of 364431.0 | z2h known 292.0
+06:44:50 filter unlisted 216.0 of 2000.0 | catalogue subscribed held 2000.0 restated 1784.0 | tape resolved 367.0 unresolved 382136.0 of 408494.0 | z2h known 458.0
+06:45:50 filter unlisted 196.0 of 220.0 | catalogue subscribed held 220.0 restated 24.0 | tape resolved 1.0 unresolved 26966.0 of 27002.0 | z2h known 1.0
+06:46:50 filter unlisted 1731.0 of 2000.0 | catalogue subscribed held 2000.0 restated 262.0 | tape resolved 23.0 unresolved 94412.0 of 95119.0 | z2h known 24.0
+06:47:52 filter unlisted 1342.0 of 2000.0 | catalogue subscribed held 2000.0 restated 661.0 | tape resolved 67.0 unresolved 277991.0 of 286707.0 | z2h known 67.0
+06:48:52 filter unlisted 938.0 of 2000.0 | catalogue subscribed held 2000.0 restated 1069.0 | tape resolved 96.0 unresolved 319242.0 of 330666.0 | z2h known 157.0
+06:49:52 filter unlisted 532.0 of 2000.0 | catalogue subscribed held 2000.0 restated 1468.0 | tape resolved 307.0 unresolved 377282.0 of 394368.0 | z2h known 316.0
