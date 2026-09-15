@@ -2513,3 +2513,51 @@ rejected. A warm-up of 16 gaps (new setting `price_gap_warmup_gaps`) cut false c
 windows filled. Replayed through `RegimeClassifier`: history option sessions classified
 37.9% -> 51.8%. On the tape's two days only 0.4% -> 0.8% — those days' holes are real
 feed outages from the spine restarting, which the rule is right to clear on.
+
+
+### 2026-09-15 — the first live session after the scope change
+
+The VM was powered off cleanly from outside at 2026-09-13 18:53 UTC and started at
+05:28 UTC, so the session's first 1h43m were not captured. Not preemption and no
+schedule policy (`scheduling/preemptible FALSE`, no resource policy); every boot since
+2026-09-06 begins when someone connects. **Operator's to decide.**
+
+Tests that had waited for an open market, and what they read live:
+
+| waited since | live reading | outcome |
+|---|---|---|
+| tape names at the open (2026-09-12) | `unresolved_writes` 834,410 of 857,482 (97%) eight minutes after start | cause found: the master's 118,388 rows restate over 1,800s, so subscribed rows arrived no faster. Fixed, commit 783c682 |
+| `ground-truth-snapshot-builder` in session | 13,982 snapshots built | works; `context-assembler` still assembled 0 |
+| feed-jump warm-up floor (2026-09-13, uncommitted) | 10.8% of live candles flagged, 383 fills refused | cause: Upstox restates the closed I1 bar ~11x and the bridge marks each closed; 92.7% of comparisons were a bar against itself. Fixed 39bd1af; live after: 4 of 554 bars (0.7%) |
+| regime-classifier live | 98.9% unclassified 15 min after a start | not yet re-read after warm-up |
+| tape freshness in session | `probe-runner` silent 568s after start | reporting normally after restart |
+
+Found live and fixed the same day (each with a real-data test; review by an Opus
+subagent found four more, marked R):
+
+| defect | measured | commit |
+|---|---|---|
+| segment resolver asked one membership (the retired cash shortlist) of both derived option segments | all 35 index-options positions were stock options; NIFTY resolved `unknown` | 5abc2ae |
+| `bot-scorekeeper` refused negative significance | crash-looped on every losing trade | c0fa05c |
+| tape writer held key-named writers after the name resolved | ~20,000 writers x 13.7 KB, OOM-killed at 19 min | 7c0b553 |
+| an OOM-killed scope stays `failed` and blocks re-placement | the restarted tape writer ran with no memory bound, 29,940 files | 0839f8d |
+| `github-strategy-miner` read `origin_reference` off the wrong `WebIdea` class | crashed on the first real idea | 5659f9f |
+| R: `episode_id.split("-")[1]` in ten parts | BAJAJ-AUTO's trade became `upstox:BAJAJ` | 58831a7 |
+| R: judging a bar once removed the level restatement | a restarted fill path could fill a flagged symbol for up to 30 min | 5adf70e |
+| R: drift guard counted a setting under every label in its note | "5 fitted, 6 of them inconclusive" | 5adf70e |
+| `volatility-gap-detector` compared a 300s forecast with annualised IV | 17,242 of 17,242 candidates "implied rich", largest gap 718; on NIFTY raw 559, same units 3.13 | 28fb0d5 |
+| participation splitter cut whole-lot orders into equal fractions | 1,654 of 1,749 fills part-lots | ffe0a9f |
+
+**Open, needs a decision:**
+- `expiry-day-zero-to-hero-detector` fired 0 on a NIFTY expiry day: the subscription holds the
+  8 contracts nearest the money per underlying (1,980 of 2,000 keys), and 156,150 checks
+  refused `premium_too_high`. Far-OTM strikes are never subscribed, so the pattern is
+  unreachable as built.
+- `universal-symbol-sweeper` can never raise a candidate: no part publishes
+  `watch-condition` (it compiles proven instructions, and none exist).
+- 41 stock-option positions opened this morning sit in the index-options account,
+  with fractional quantities from before the splitter fix. Moving them is a book rewrite.
+- `bot-scorekeeper` weight is `abs(standardised)` uncapped: a -9.2 loss counts as 9 wrong
+  calls (review, not measured live).
+- `broker-candle-bridge` keys bars by trading symbol alone, so NSE_EQ and BSE_EQ bars for
+  one share collide (10 differing bars on 2026-09-08; no fills on shares since cash was retired).
