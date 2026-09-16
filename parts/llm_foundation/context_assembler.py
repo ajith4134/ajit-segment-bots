@@ -39,7 +39,7 @@ PART_ID = "context-assembler"
 
 PART_DECLARATION = PartDeclaration(
     part_id="context-assembler",
-    consumes=("retrieval-hit", "verified-snapshot", "llm-part-budget"),
+    consumes=("retrieval-hit", "retrieval-query", "verified-snapshot", "llm-part-budget"),
     produces=("prompt-context", "part-health"),
     resource_class="compute-bound",
     rate_risk="changes-the-answer",
@@ -92,6 +92,11 @@ class AssemblerStanding:
     contexts_refused_facts_too_large: int = 0
     contexts_refused_stale: int = 0
     passages_dropped: int = 0
+    # A context assembled from measured facts alone, because retrieval found
+    # nothing above its similarity floor. Counted rather than silent: it is the
+    # normal state of a thin corpus and it must be distinguishable from a
+    # retrieval that is broken.
+    contexts_with_no_retrieved_passage: int = 0
     characters_dropped: int = 0
     times_facts_were_dropped: int = 0
 
@@ -246,6 +251,9 @@ def describe_assembly(assembler: ContextAssembler) -> dict:
         ),
         "refused_stale_snapshot": assembler.standing.contexts_refused_stale,
         "passages_dropped": assembler.standing.passages_dropped,
+        "contexts_with_no_retrieved_passage": (
+            assembler.standing.contexts_with_no_retrieved_passage
+        ),
         "characters_dropped": assembler.standing.characters_dropped,
         "times_facts_were_dropped": assembler.standing.times_facts_were_dropped,
         "summarises_to_fit": False,
@@ -289,6 +297,14 @@ def start_part(context) -> int:
     from runtime.input_assembly import Batch, LatestByKey
 
     hits = Batch(read=context.bus.reader("retrieval-hit"))
+    # A query is the evidence that a request wants context at all. Without it the
+    # jobs below were built from hits alone, so a retrieval that correctly found
+    # nothing relevant cancelled the prompt: measured live 2026-09-16, 67 of 75
+    # queries had nothing above the 0.5 similarity floor against a corpus of 14
+    # arxiv chunks, 0 contexts were assembled, and prompt-renderer refused 901 of
+    # 904 requests for missing context -- while 84,217 verified snapshots sat
+    # here unused. See docs/proposals/a-prompt-can-be-assembled-with-no-retrieved-passage.md.
+    queries = Batch(read=context.bus.reader("retrieval-query"))
     snapshots = LatestByKey(read=context.bus.reader("verified-snapshot"), key_of=lambda s: (s.venue_id, s.symbol))
     budgets = LatestByKey(read=context.bus.reader("llm-part-budget"), key_of=lambda b: b.part_id)
     publish_contexts = context.bus.publisher_for("prompt-context")
@@ -297,6 +313,11 @@ def start_part(context) -> int:
 
     def read_jobs():
         by_query: dict[str, list] = {}
+        for query in queries.payloads():
+            # Every query asked for is a job, with or without passages. The
+            # passages are the compressible part of a context (this part's own
+            # priority, stated above), so none of them is still a context.
+            by_query.setdefault(query.query_id, [])
         for hit in hits.payloads():
             by_query.setdefault(hit.query_id, []).append(hit)
         by_context = snapshots.mapping()
@@ -308,6 +329,8 @@ def start_part(context) -> int:
             pieces = query_id.split(":")
             snapshot = by_context.get((pieces[1], pieces[2])) if len(pieces) >= 3 else None
             budget = by_part.get(pieces[0]) if pieces else None
+            if not group:
+                assembler.standing.contexts_with_no_retrieved_passage += 1
             jobs.append((query_id, snapshot or latest_snapshot[0], tuple(group), budget))
         return tuple(jobs)
 

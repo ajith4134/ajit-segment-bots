@@ -12153,6 +12153,7 @@
    "category": "llm-foundation",
    "consumes": [
     "retrieval-hit",
+    "retrieval-query",
     "verified-snapshot",
     "llm-part-budget"
    ],

@@ -1345,3 +1345,32 @@ def test_a_rewrite_still_needs_evidence():
 
     assert refused.state != WRITTEN and not refused.is_usable
     assert author.standing.rejected_no_evidence == 1
+
+
+def test_a_context_is_still_a_context_with_no_retrieved_passage():
+    """Retrieval finding nothing relevant must not cancel the prompt.
+
+    Measured live 2026-09-16, once an embedding model was installed and the index
+    began answering: 67 of 75 queries had nothing above the 0.5 similarity floor
+    against a corpus of 14 arxiv chunks, so 0 contexts were assembled and
+    prompt-renderer refused 901 of 904 requests -- while 84,217 verified
+    snapshots sat unused. This part's own priority says passages are the
+    compressible part and facts are what must never be dropped, so a context of
+    facts alone is the valid end state it already drops passages towards.
+    """
+    subject = an_assembler()
+    assembled = subject.assemble("r-1", a_snapshot(), (), a_budget())
+
+    assert assembled.state == ASSEMBLED
+    assert assembled.context.verified_facts
+    assert assembled.context.sections[0][0] == "verified-facts"
+    assert all(kind != "retrieved-passages" for kind, _ in assembled.context.sections[1:])
+
+
+def test_with_no_passage_and_no_facts_it_still_refuses():
+    """The case the docstring is about is unchanged: an answer with nothing
+    measured to check it against is the one a reader believes hardest."""
+    subject = an_assembler()
+    assembled = subject.assemble("r-1", None, (), a_budget())
+    assert assembled.state == NO_FACTS
+    assert assembled.context is None

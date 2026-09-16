@@ -2968,3 +2968,38 @@ facts and no passages is valid by that design. The part cannot know a request
 exists without a hit, because it consumes neither `llm-request` nor
 `retrieval-query`. Closing it is a blueprint edit (a consumed type added), which is
 a proposal rather than a quiet code change.
+
+
+### 2026-09-16 — a context no longer needs a passage, and the next blocker is an id
+
+Blueprint edit `apply_2026-09-16_context_assembler_reads_retrieval_queries.py`
+(proposal: `docs/proposals/a-prompt-can-be-assembled-with-no-retrieved-passage.md`).
+`context-assembler` built its jobs from retrieval hits alone, so a retrieval that
+correctly found nothing relevant cancelled the prompt. It consumes `retrieval-query`
+now: every query asked for is a job, with or without passages, which is what the
+part's own priority already said — facts are never dropped, passages are the
+compressible part.
+
+Live after restart:
+
+    context-assembler   contexts_with_no_retrieved_passage  85   (was 0 jobs, ever)
+                        refused_no_budget                   85
+
+So the jobs exist now and every one is refused for want of a budget. The cause is
+an identity mismatch, and three identities are involved:
+
+| | shape | written by |
+|---|---|---|
+| `RetrievalQuery.query_id` | `q-3` | `retrieval-querier` |
+| `RetrievalQuery.request_id` | `structure-a-news-item` — the request's **purpose** | `retrieval-querier`, from `LlmRequest.purpose` |
+| `LlmPartBudget.part_id` | `news-text-structurer` — a **part id** | `part-token-budgeter` |
+
+`context-assembler` reads the budget as `by_part.get(query_id.split(":")[0])`,
+expecting a `part:venue:symbol` id. The query id is `q-3`, so the lookup has never
+matched — and the same parse supplies the snapshot's venue and symbol, which
+survives only because that lookup falls back to the latest snapshot seen.
+
+`LlmRequest` carries `purpose`, `venue_id` and `symbol`, and **not** the part that
+issued it, so the information the budget lookup needs is not on the wire at all.
+Closing this is another blueprint-level decision — which identity travels with a
+request — rather than a lookup to patch, and it is where the LLM chain now stands.
