@@ -290,6 +290,57 @@ def run_realised_vol_regressor(
     )
 
 
+class RealisedVolTrainingPairer:
+    """Trains the regressor on each feature set once its horizon has passed.
+
+    Each feature set is forecast from; the realised volatility that follows it is
+    read off the next feature set for the same symbol a horizon later, which
+    carries the realised figure over the interval just ended. Held here rather
+    than inside `start_part` so the detector-edge measurement trains the regressor
+    exactly as the spine does.
+    """
+
+    def __init__(self, regressor: "RealisedVolRegressor", horizon_seconds: float) -> None:
+        self._regressor = regressor
+        self._horizon_ns = horizon_seconds * 1e9
+        self._pending: dict[tuple[str, str], object] = {}
+
+    def observe(self, feature_set) -> None:
+        key = (feature_set.venue_id, feature_set.symbol)
+        earlier = self._pending.get(key)
+        realised = feature_set.features.get("close_to_close_short")
+        # A flat window's stdev of log returns is exactly zero -- an absence of an
+        # observation, not an observation of zero volatility (RealisedVolRegressor.train
+        # refuses it for that reason) -- so it is skipped rather than trained on, and the
+        # anchor is kept so the next tick can still train against it once vol is measurable.
+        if (
+            earlier is not None and realised is not None and realised > 0
+            and feature_set.built_at_ns - earlier.built_at_ns >= self._horizon_ns
+        ):
+            self._regressor.train(earlier, float(realised))
+            self._pending[key] = feature_set
+        elif earlier is None:
+            self._pending[key] = feature_set
+
+
+def build_realised_vol_regressor_from_settings(settings, now_ns=time.time_ns) -> RealisedVolRegressor:
+    """The regressor as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return RealisedVolRegressor(
+        learning_rate=settings.number("bull_learning_rate"),
+        l2_regularisation=settings.number("bull_l2_regularisation"),
+        feature_half_life_observations=settings.number("bull_feature_half_life_observations"),
+        minimum_feature_observations=int(settings.number("bull_minimum_feature_observations")),
+        minimum_training_observations=int(settings.number("bull_minimum_training_observations")),
+        horizon_seconds=settings.number("forecast_horizon"),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -303,34 +354,13 @@ def start_part(context) -> int:
     feature_sets = Batch(read=context.bus.reader("vol-feature-set"))
     publish_forecasts = context.bus.publisher_for("volatility-forecast")
     horizon = context.number("forecast_horizon")
-    regressor = RealisedVolRegressor(
-        learning_rate=context.number("bull_learning_rate"),
-        l2_regularisation=context.number("bull_l2_regularisation"),
-        feature_half_life_observations=context.number("bull_feature_half_life_observations"),
-        minimum_feature_observations=int(context.number("bull_minimum_feature_observations")),
-        minimum_training_observations=int(context.number("bull_minimum_training_observations")),
-        horizon_seconds=horizon,
-    )
-    pending: dict[tuple[str, str], object] = {}
+    regressor = build_realised_vol_regressor_from_settings(context)
+    pairer = RealisedVolTrainingPairer(regressor, horizon)
 
     def read_feature_sets(_regressor):
         ready = []
         for feature_set in feature_sets.payloads():
-            key = (feature_set.venue_id, feature_set.symbol)
-            earlier = pending.get(key)
-            realised = feature_set.features.get("close_to_close_short")
-            # A flat window's stdev of log returns is exactly zero -- an absence of an
-            # observation, not an observation of zero volatility (RealisedVolRegressor.train
-            # refuses it for that reason) -- so it is skipped rather than trained on, and the
-            # anchor is kept so the next tick can still train against it once vol is measurable.
-            if (
-                earlier is not None and realised is not None and realised > 0
-                and feature_set.built_at_ns - earlier.built_at_ns >= horizon * 1e9
-            ):
-                regressor.train(earlier, float(realised))
-                pending[key] = feature_set
-            elif earlier is None:
-                pending[key] = feature_set
+            pairer.observe(feature_set)
             ready.append(feature_set)
         return tuple(ready)
 

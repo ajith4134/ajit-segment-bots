@@ -376,6 +376,29 @@ Rules:
 
 ### Task 4: Detectors built from settings in one place
 
+**Done 2026-09-16, wider than planned.** The volatility-gap detector hears its
+forecast from `realised-vol-regressor`, which trains on `vol-feature-set` from
+`volatility-feature-builder`, which reads `kline-window`, the one-minute candles
+history provides. So the harness drives that whole chain. Eight parts gained a
+`build_..._from_settings(settings, now_ns)`: the four detectors, `regime-classifier`,
+`kline-window-builder`, `volatility-feature-builder` and `realised-vol-regressor`.
+The regressor's train-on-the-next-window pairing moved out of `start_part` into
+`RealisedVolTrainingPairer`. `entropy-magnitude-forecaster`, the second live producer
+of `volatility-forecast`, is **not** reproduced: it needs order-flow entropy, which
+one-minute bars cannot give. The report must say so.
+
+**`fee_for_turnover` was not added.** `runtime/indian_options_fee_model.upstox_options_order_cost`
+is already a public function over the same settings, so the harness calls it directly
+and no live part changes for it.
+
+Verified: the 12 test files naming these parts plus `tests/operate` ran 539 passed,
+4 skipped, 1 failed. The failure is
+`test_scanner_block.py::test_on_real_nifty_the_gap_compares_a_year_with_a_year`
+(6.13 against a bound of 5.0), and it fails the same way with these changes stashed.
+It predates this work and is left open. Contract checkers pass. Spine restarted at
+16:08 IST (market shut): no traceback in the journal after three minutes, all eight
+parts reporting `on`, 333 reporting and 0 silent.
+
 Each detector's constructor arguments are written inline inside its `start_part`. A
 harness that re-typed them would drift the day a setting is renamed.
 
@@ -398,13 +421,13 @@ harness that re-typed them would drift the day a setting is renamed.
 
   Read `_upstox_fee_for` (line 378) first and build the minimal order shape it reads.
 
-- [ ] **Step 1:** refactor one detector, run
+- [x] **Step 1:** refactor one detector, run
   `python3 dashboard/check_contracts.py && python3 dashboard/check_part_calls.py` and
   that detector's existing tests; repeat per file.
-- [ ] **Step 2:** restart the spine (`systemctl --user restart ajit-spine`) and read
+- [x] **Step 2:** restart the spine (`systemctl --user restart ajit-spine`) and read
   `journalctl --user --since "-3min" | grep -B 30 Error` — a green suite does not prove
   a running part still starts (CLAUDE.md, 2026-08-26).
-- [ ] **Step 3: Commit**, `refactor: each detector is built from settings in one place`.
+- [x] **Step 3: Commit**, `refactor: each detector is built from settings in one place`.
 
 ### Task 5: Drive, score, walk forward
 

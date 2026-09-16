@@ -409,6 +409,21 @@ def run_kline_window_builder(
     )
 
 
+def build_kline_window_builder_from_settings(settings, now_ns=time.time_ns) -> KlineWindowBuilder:
+    """The window builder as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return KlineWindowBuilder(
+        interval=str(settings.setting("candle_interval").value),
+        maximum_window=int(settings.number("kline_maximum_window")),
+        include_open_candle=bool(settings.setting("kline_include_open_candle").value),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -449,11 +464,7 @@ def start_part(context) -> int:
     # action on every poll.
     actions = Batch(read=context.bus.reader("corporate-action"))
     publish_windows = context.bus.publisher_for("kline-window")
-    builder = KlineWindowBuilder(
-        interval=str(context.setting("candle_interval").value),
-        maximum_window=int(context.number("kline_maximum_window")),
-        include_open_candle=bool(context.setting("kline_include_open_candle").value),
-    )
+    builder = build_kline_window_builder_from_settings(context)
     length = int(context.number("kline_window_length"))
     tape_root = pathlib.Path(str(context.setting("tape_root").value)).expanduser()
     seeded: set[tuple[str, str]] = set()

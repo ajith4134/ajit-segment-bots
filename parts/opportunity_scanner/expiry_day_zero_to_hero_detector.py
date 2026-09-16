@@ -342,6 +342,27 @@ def describe_detector(detector: ZeroToHeroDetector) -> dict:
     }
 
 
+def build_zero_to_hero_detector_from_settings(settings, now_ns=time.time_ns) -> ZeroToHeroDetector:
+    """The detector as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return ZeroToHeroDetector(
+        maximum_premium=settings.number("zero_to_hero_maximum_premium"),
+        maximum_abs_delta=settings.number("zero_to_hero_maximum_abs_delta"),
+        horizon_seconds=settings.number("zero_to_hero_horizon_seconds"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=settings.number("signal_prior_hit_rate"),
+            prior_weight=settings.number("signal_prior_weight"),
+            half_life_observations=settings.number("signal_half_life_observations"),
+            minimum_observations=int(settings.number("signal_minimum_observations")),
+        ),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -361,17 +382,7 @@ def start_part(context) -> int:
     labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
 
-    detector = ZeroToHeroDetector(
-        maximum_premium=context.number("zero_to_hero_maximum_premium"),
-        maximum_abs_delta=context.number("zero_to_hero_maximum_abs_delta"),
-        horizon_seconds=context.number("zero_to_hero_horizon_seconds"),
-        calibrator=SignalCalibrator(
-            prior_hit_rate=context.number("signal_prior_hit_rate"),
-            prior_weight=context.number("signal_prior_weight"),
-            half_life_observations=context.number("signal_half_life_observations"),
-            minimum_observations=int(context.number("signal_minimum_observations")),
-        ),
-    )
+    detector = build_zero_to_hero_detector_from_settings(context)
     def tick() -> None:
         for payload in listings.payloads():
             for listing in payload if isinstance(payload, tuple) else (payload,):

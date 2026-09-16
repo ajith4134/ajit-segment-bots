@@ -232,6 +232,27 @@ def run_volatility_gap_detector(
     )
 
 
+def build_volatility_gap_detector_from_settings(settings, now_ns=time.time_ns) -> VolatilityGapDetector:
+    """The detector as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return VolatilityGapDetector(
+        minimum_gap_fraction=settings.number("volatility_gap_minimum_fraction"),
+        horizon_seconds=settings.number("volatility_gap_horizon"),
+        seconds_per_year=settings.number("implied_volatility_trading_seconds_per_year"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=settings.number("signal_prior_hit_rate"),
+            prior_weight=settings.number("signal_prior_weight"),
+            half_life_observations=settings.number("signal_half_life_observations"),
+            minimum_observations=int(settings.number("signal_minimum_observations")),
+        ),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -251,17 +272,7 @@ def start_part(context) -> int:
     # `observe_outcome` had never been called by anything that runs.
     labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
-    detector = VolatilityGapDetector(
-        minimum_gap_fraction=context.number("volatility_gap_minimum_fraction"),
-        horizon_seconds=context.number("volatility_gap_horizon"),
-        seconds_per_year=context.number("implied_volatility_trading_seconds_per_year"),
-        calibrator=SignalCalibrator(
-            prior_hit_rate=context.number("signal_prior_hit_rate"),
-            prior_weight=context.number("signal_prior_weight"),
-            half_life_observations=context.number("signal_half_life_observations"),
-            minimum_observations=int(context.number("signal_minimum_observations")),
-        ),
-    )
+    detector = build_volatility_gap_detector_from_settings(context)
     symbols_of: dict[tuple[str, str], set[str]] = {}
 
     def read_volatility(_detector):

@@ -399,6 +399,22 @@ def run_volatility_feature_builder(
     )
 
 
+def build_volatility_feature_builder_from_settings(settings, now_ns=time.time_ns) -> VolatilityFeatureBuilder:
+    """The feature builder as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return VolatilityFeatureBuilder(
+        short_window=int(settings.number("vol_feature_short_window")),
+        medium_window=int(settings.number("vol_feature_medium_window")),
+        long_window=int(settings.number("vol_feature_long_window")),
+        minimum_observations=int(settings.number("vol_feature_minimum_observations")),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch
@@ -406,12 +422,7 @@ def start_part(context) -> int:
     windows = Batch(read=context.bus.reader("kline-window"))
     surfaces = Batch(read=context.bus.reader("implied-vol-surface"))
     publish_feature_sets = context.bus.publisher_for("vol-feature-set")
-    builder = VolatilityFeatureBuilder(
-        short_window=int(context.number("vol_feature_short_window")),
-        medium_window=int(context.number("vol_feature_medium_window")),
-        long_window=int(context.number("vol_feature_long_window")),
-        minimum_observations=int(context.number("vol_feature_minimum_observations")),
-    )
+    builder = build_volatility_feature_builder_from_settings(context)
     horizon = context.number("forecast_horizon")
 
     def read_windows_and_surfaces(_builder):

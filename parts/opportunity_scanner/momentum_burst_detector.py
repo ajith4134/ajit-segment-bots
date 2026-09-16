@@ -290,6 +290,31 @@ def run_momentum_burst_detector(
     )
 
 
+def build_momentum_burst_detector_from_settings(settings, now_ns=time.time_ns) -> MomentumBurstDetector:
+    """The detector as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return MomentumBurstDetector(
+        window_length=int(settings.number("detector_window_length")),
+        minimum_observations=int(settings.number("detector_minimum_observations")),
+        burst_z_threshold=settings.number("detector_z_threshold"),
+        horizon_seconds=settings.number("momentum_burst_horizon"),
+        calibrator=SignalCalibrator(
+            prior_hit_rate=settings.number("signal_prior_hit_rate"),
+            prior_weight=settings.number("signal_prior_weight"),
+            half_life_observations=settings.number("signal_half_life_observations"),
+            minimum_observations=int(settings.number("signal_minimum_observations")),
+        ),
+        maximum_gap_seconds=settings.number("price_series_maximum_gap_seconds"),
+        gap_patience_multiple=settings.number("price_gap_patience_multiple"),
+        gap_warmup_gaps=int(settings.number("price_gap_warmup_gaps")),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1)."""
     from runtime.input_assembly import Batch, LatestByKey
@@ -304,21 +329,7 @@ def start_part(context) -> int:
     # `observe_outcome` had never been called by anything that runs.
     labels = Batch(read=context.bus.reader("training-label"))
     publish_candidates = context.bus.publisher_for("entry-candidate")
-    detector = MomentumBurstDetector(
-        window_length=int(context.number("detector_window_length")),
-        minimum_observations=int(context.number("detector_minimum_observations")),
-        burst_z_threshold=context.number("detector_z_threshold"),
-        horizon_seconds=context.number("momentum_burst_horizon"),
-        calibrator=SignalCalibrator(
-            prior_hit_rate=context.number("signal_prior_hit_rate"),
-            prior_weight=context.number("signal_prior_weight"),
-            half_life_observations=context.number("signal_half_life_observations"),
-            minimum_observations=int(context.number("signal_minimum_observations")),
-        ),
-            maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
-            gap_patience_multiple=context.number("price_gap_patience_multiple"),
-            gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
-    )
+    detector = build_momentum_burst_detector_from_settings(context)
 
     class _Regime:
         __slots__ = ("venue_id", "symbol", "regime", "is_classified")

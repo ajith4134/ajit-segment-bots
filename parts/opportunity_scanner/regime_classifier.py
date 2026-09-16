@@ -393,6 +393,25 @@ def run_regime_classifier(
     )
 
 
+def build_regime_classifier_from_settings(settings, now_ns=time.time_ns) -> RegimeClassifier:
+    """The classifier as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/detectors_for_measurement.py) so an
+    offline run builds exactly what the spine builds: a second copy of these arguments
+    would drift the first time a setting is renamed.
+    """
+    return RegimeClassifier(
+        window_length=int(settings.number("regime_window_length")),
+        minimum_observations=int(settings.number("regime_minimum_observations")),
+        trending_above=settings.number("regime_trending_hurst_above"),
+        reverting_below=settings.number("regime_reverting_hurst_below"),
+        maximum_gap_seconds=settings.number("price_series_maximum_gap_seconds"),
+        gap_patience_multiple=settings.number("price_gap_patience_multiple"),
+        gap_warmup_gaps=int(settings.number("price_gap_warmup_gaps")),
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -436,15 +455,7 @@ def start_part(context) -> int:
         refresh_interval_seconds=context.number("regime_refresh_interval_seconds"),
         identity_of=without_observation_time,
     )
-    classifier = RegimeClassifier(
-        window_length=int(context.number("regime_window_length")),
-        minimum_observations=int(context.number("regime_minimum_observations")),
-        trending_above=context.number("regime_trending_hurst_above"),
-        reverting_below=context.number("regime_reverting_hurst_below"),
-        maximum_gap_seconds=context.number("price_series_maximum_gap_seconds"),
-        gap_patience_multiple=context.number("price_gap_patience_multiple"),
-        gap_warmup_gaps=int(context.number("price_gap_warmup_gaps")),
-    )
+    classifier = build_regime_classifier_from_settings(context)
     store = DurableStateStore(
         pathlib.Path(str(context.setting("position_state_root").value)).expanduser()
     )
