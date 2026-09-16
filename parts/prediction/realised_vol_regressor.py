@@ -142,7 +142,18 @@ class RealisedVolRegressor:
             self._weights.get(name, 0.0) * value for name, value in standardised.items()
         )
         error = target - predicted
-        step = self._learning_rate * error
+        # Normalised by the inputs' mean square once it exceeds one. Plain gradient
+        # descent at a fixed rate is stable only while rate x (sum of squared inputs)
+        # stays under 2, and a standardised input is ~1 in ordinary conditions but
+        # not on an expiry day: a contract's one-minute window carried a 100% gap
+        # (z = 20.7) on 2025-09-16, the sum of squares reached ~800, and the weights
+        # ran to the hundreds within 3,808 updates until `math.exp` overflowed
+        # (tests/parts/prediction/test_realised_vol_regressor_stays_stable.py). At a
+        # mean square of one or less the step is exactly the stated learning rate, so
+        # ordinary learning is unchanged; above it, rate x features is the bound.
+        energy = sum(value * value for value in standardised.values())
+        scale = max(1.0, energy / len(standardised)) if standardised else 1.0
+        step = self._learning_rate * error / scale
 
         if self._l2:
             decay = 1.0 - self._learning_rate * self._l2

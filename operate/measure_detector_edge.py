@@ -31,7 +31,9 @@ another, and scores every candidate as the trade the option segments would have 
   builder names as missing rather than filling.
 - **Delta for zero-to-hero is estimated** (runtime/option_delta.py) from that volatility.
 - **`entropy-magnitude-forecaster` is not run.** It needs order-flow entropy that
-  one-minute bars cannot give, so only one of the two live forecast producers is heard.
+  one-minute bars cannot give, so only one of the two live forecast producers is heard --
+  and on 2026-09-16 the live regressor had never trained, so live the detector hears the
+  other one. The volatility-gap row is the rule on a different forecast than live.
 - **What is bought** follows `instrument-selector`: a long on a contract buys it; a
   short on a contract buys the at-the-money contract of the opposite type; a view on
   an underlying buys its at-the-money call or put.
@@ -550,7 +552,10 @@ def write_report(rows, result, run: DetectorEdgeRun, underlyings, args, path: pa
         "- A bar's close is acted on when the bar ends, one interval after its stamp.",
         "- Implied volatility is inverted from the premium; the surface carries at-the-money only, no skew.",
         "- Zero-to-hero's delta is estimated from that volatility, not stated by Upstox.",
-        "- `entropy-magnitude-forecaster` is not run: one-minute bars carry no order-flow entropy.",
+        "- `entropy-magnitude-forecaster` is not run: one-minute bars carry no order-flow entropy. "
+        "**Live, it is the forecast volatility-gap actually hears**: on 2026-09-16 the live realised-vol "
+        "regressor had 0 training observations and refused 1,039 of 1,181 forecasts for missing features. "
+        "So the volatility-gap row here is the detector's rule on the regressor's forecast, not the live pairing.",
         "- The exit is the candidate's own horizon, capped at the session's last close; no stop, no target.",
         "- Contracts are each segment's chain width nearest the session's open, on the nearest unexpired expiry; strikes further out are not held.",
         "- **mean-reversion and momentum-burst run live on every print, several a second; here on one close a minute.** "
