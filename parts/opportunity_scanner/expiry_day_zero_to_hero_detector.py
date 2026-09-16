@@ -27,7 +27,7 @@ import datetime
 import time
 from dataclasses import dataclass, field
 
-from runtime.market_signal import LONG, SHORT, SignalCalibrator, make_candidate, settle_claims_from
+from runtime.market_signal import LONG, SignalCalibrator, make_candidate, settle_claims_from
 from runtime.part_declaration import PartDeclaration
 from runtime.part_process import run_part
 
@@ -265,7 +265,16 @@ class ZeroToHeroDetector:
             self.standing.no_trading_symbol += 1
             return None, NO_TRADING_SYMBOL
 
-        direction = LONG if listing.instrument_type == _CALL else SHORT
+        # Long on both sides: the trade is BUYING this cheap contract, call or put.
+        # A direction on a contract is the side taken on that contract -- the
+        # vocabulary instrument-selector reads ("buying a call and selling a put are
+        # bullish; selling a call and buying a put are bearish"). This was SHORT for
+        # a put until 2026-09-16, which the selector correctly read as "sell the
+        # put", a bullish view, and carried by buying an at-the-money CALL: on the
+        # detector-edge pilot all 1,086 zero-to-hero trades in the first eleven
+        # sessions were a far put named and a near call bought. A put bought here is
+        # still a bearish view on the underlying; the selector derives that itself.
+        direction = LONG
         # Cheaper and further OTM both read as "more room to multiply" --
         # blended as the average of how far under each cutoff this
         # candidate sits, each expressed as a fraction of its own ceiling.

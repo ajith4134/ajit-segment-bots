@@ -43,8 +43,9 @@ another, and scores every candidate as the trade the option segments would have 
 
 **Walk-forward.** Sessions are ordered; the earlier `edge_walk_forward_train_fraction`
 choose the buckets (detector, state or direction, regime) whose mean net return has a
-lower confidence bound above zero with at least `edge_minimum_trades_per_bucket`
-trades. Only the later sessions score them. A number from the sessions a bucket was
+lower confidence bound on its per-session means above zero, over at least
+`edge_minimum_sessions_per_bucket` sessions -- the session, not the trade, is the
+independent unit. Only the later sessions score them. A number from the sessions a bucket was
 chosen on is never reported as its edge.
 
 This is a measurement (RL-071): it publishes nothing and writes only under
@@ -459,7 +460,18 @@ def bucket_statistics(rows) -> dict:
     }
 
 
-def walk_forward(rows: list[dict], train_fraction: float, minimum_trades: int,
+def session_means(rows) -> list[float]:
+    """One mean net return per session. Trades inside a session overlap -- the same
+    underlying, minutes apart, riding one move -- so they are not independent draws,
+    and a bound over them would be as confident as the trade count is large. The
+    session is the unit that is."""
+    by_session = collections.defaultdict(list)
+    for row in rows:
+        by_session[row["session"]].append(row["net_return"])
+    return [statistics.fmean(values) for _, values in sorted(by_session.items())]
+
+
+def walk_forward(rows: list[dict], train_fraction: float, minimum_sessions: int,
                  confidence_level: float) -> dict:
     sessions = sorted({row["session"] for row in rows})
     cut = int(len(sessions) * train_fraction)
@@ -472,13 +484,20 @@ def walk_forward(rows: list[dict], train_fraction: float, minimum_trades: int,
         (by_bucket_train if row["session"] in train_sessions else by_bucket_test)[row["bucket"]].append(row)
     kept = {}
     for bucket, bucket_rows in by_bucket_train.items():
-        stats = bucket_statistics(bucket_rows)
-        if stats["trades"] < minimum_trades or math.isnan(stats["stdev"]):
+        means = session_means(bucket_rows)
+        if len(means) < max(minimum_sessions, 2):
             continue
-        lower = stats["mean_net"] - z * stats["stdev"] / math.sqrt(stats["trades"])
+        lower = statistics.fmean(means) - z * statistics.stdev(means) / math.sqrt(len(means))
         if lower > 0:
-            kept[bucket] = {"train": stats, "train_lower_bound": lower,
-                            "test": bucket_statistics(by_bucket_test.get(bucket, []))}
+            test_means = session_means(by_bucket_test.get(bucket, []))
+            kept[bucket] = {
+                "train": bucket_statistics(bucket_rows),
+                "train_session_mean": statistics.fmean(means),
+                "train_lower_bound": lower,
+                "test": bucket_statistics(by_bucket_test.get(bucket, [])),
+                "test_session_mean": statistics.fmean(test_means) if test_means else float("nan"),
+                "test_sessions_positive": sum(1 for m in test_means if m > 0),
+            }
     all_test = {bucket: bucket_statistics(r) for bucket, r in by_bucket_test.items()}
     return {
         "train_sessions": sorted(train_sessions),
@@ -527,18 +546,20 @@ def write_report(rows, result, run: DetectorEdgeRun, underlyings, args, path: pa
         "",
         "## Buckets chosen on the earlier sessions, scored on the later",
         "",
-        f"A bucket is kept when its mean net return on the earlier sessions has a lower "
-        f"{args.confidence_level:.0%} bound above zero over at least {args.minimum_trades} trades. "
+        f"A bucket is kept when the mean of its per-session net returns on the earlier sessions has a "
+        f"lower {args.confidence_level:.0%} bound above zero over at least {args.minimum_sessions} sessions. "
+        f"The session is the unit: trades inside one overlap and are not independent. "
         f"{len(result['kept'])} of {result['buckets_considered']} buckets were kept.",
         "",
-        "| bucket | earlier: trades / mean / lower bound | later: trades / sessions / win rate / mean net |",
+        "| bucket | earlier: trades / session mean / lower bound | later: trades / sessions (positive) / win rate / session mean |",
         "|---|---|---|",
     ]
     for bucket, entry in sorted(result["kept"].items(), key=lambda kv: -kv[1]["train_lower_bound"]):
         train, test = entry["train"], entry["test"]
         lines.append(
-            f"| `{bucket}` | {train['trades']:,} / {pct(train['mean_net'])} / {pct(entry['train_lower_bound'])} | "
-            + (f"{test['trades']:,} / {test['sessions']} / {test['win_rate']:.1%} / {pct(test['mean_net'])} |"
+            f"| `{bucket}` | {train['trades']:,} / {pct(entry['train_session_mean'])} / {pct(entry['train_lower_bound'])} | "
+            + (f"{test['trades']:,} / {test['sessions']} ({entry['test_sessions_positive']}) / "
+               f"{test['win_rate']:.1%} / {pct(entry['test_session_mean'])} |"
                if test["trades"] else "0 — never fired on the later sessions |")
         )
     lines += [
@@ -572,6 +593,8 @@ def main() -> int:
     parser.add_argument("--to", dest="to_day", required=True)
     parser.add_argument("--underlyings", default="", help="comma list; default is the pilot rule")
     parser.add_argument("--output", default=str(OUTPUT))
+    parser.add_argument("--report-only", action="store_true",
+                        help="walk forward and write the report from the trades already scored")
     args = parser.parse_args()
 
     from operate.detectors_for_measurement import MeasurementSettings
@@ -579,7 +602,7 @@ def main() -> int:
 
     settings = MeasurementSettings()
     args.train_fraction = settings.number("edge_walk_forward_train_fraction")
-    args.minimum_trades = int(settings.number("edge_minimum_trades_per_bucket"))
+    args.minimum_sessions = int(settings.number("edge_minimum_sessions_per_bucket"))
     args.confidence_level = settings.number("edge_confidence_level")
     stocks_wanted = int(settings.number("edge_pilot_stock_underlyings"))
     # The live feed subscribes to each segment's own chain width, whatever a strike's
@@ -616,7 +639,7 @@ def main() -> int:
     run = DetectorEdgeRun()
     started = time.monotonic()
     with scored_path.open("a") as sink:
-        for day in weekdays(args.from_day, args.to_day):
+        for day in ([] if args.report_only else weekdays(args.from_day, args.to_day)):
             if day in done:
                 continue
             try:
@@ -649,7 +672,7 @@ def main() -> int:
     if not rows:
         print("no trades scored")
         return 1
-    result = walk_forward(rows, args.train_fraction, args.minimum_trades, args.confidence_level)
+    result = walk_forward(rows, args.train_fraction, args.minimum_sessions, args.confidence_level)
     (output / "buckets.json").write_text(json.dumps(result, indent=1, default=str))
     write_report(rows, result, run, underlyings, args, output / "report.md")
     print((output / "report.md").read_text())

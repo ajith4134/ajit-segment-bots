@@ -17,7 +17,7 @@ from parts.opportunity_scanner.expiry_day_zero_to_hero_detector import (
 from runtime.brokers.broker_adapter import (
     BrokerOptionGreeks, InstrumentListing, LtpUpdate,
 )
-from runtime.market_signal import LONG, SHORT, SignalCalibrator
+from runtime.market_signal import LONG, SignalCalibrator
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 TODAY = datetime.datetime(2026, 9, 1, 10, 0, tzinfo=IST)
@@ -197,7 +197,9 @@ def test_a_cheap_far_otm_call_expiring_today_fires_long():
     assert candidate.evidence["instrument_key"] == CALL_KEY
 
 
-def test_a_cheap_far_otm_put_expiring_today_fires_short():
+def test_a_cheap_far_otm_put_expiring_today_fires_long_on_the_put():
+    """The trade is buying the put. A SHORT here was read downstream as selling it --
+    a bullish view -- and bought as a call (2026-09-16)."""
     subject = a_detector()
     subject.observe_listing(a_listing(PUT_KEY, TODAY_EXPIRY_MS, "PE"))
     subject.observe_ltp(LtpUpdate(
@@ -210,7 +212,8 @@ def test_a_cheap_far_otm_put_expiring_today_fires_short():
     ))
     candidate, reason = subject.detect(PUT_KEY)
     assert candidate is not None
-    assert candidate.direction == SHORT
+    assert candidate.direction == LONG
+    assert candidate.symbol == trading_symbol_for(PUT_KEY, "PE", 25000.0)
 
 
 def test_not_expiring_today_refuses():

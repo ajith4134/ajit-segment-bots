@@ -73,7 +73,7 @@ def test_the_walk_forward_never_scores_a_session_it_chose_on(session_result):
     earlier = run.run_session(earlier_day, past_session_instruments(earlier_day, ("NIFTY",), 8, 1))
     rows = [dataclasses.asdict(trade) for trade in (*earlier, *first)]
     assert {row["session"] for row in rows} == {earlier_day, DAY}
-    result = walk_forward(rows, train_fraction=0.5, minimum_trades=1, confidence_level=0.95)
+    result = walk_forward(rows, train_fraction=0.5, minimum_sessions=1, confidence_level=0.95)
     assert result["train_sessions"] == [earlier_day]
     assert result["test_sessions"] == [DAY]
     for entry in result["kept"].values():

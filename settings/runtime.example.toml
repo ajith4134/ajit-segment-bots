@@ -4881,10 +4881,10 @@ value = 0.7
 unit  = "fraction of sessions"
 note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py (the operator's fourth goal: a pattern counts only if fitted on earlier sessions and scored on later ones). The earlier 70% of sessions choose which buckets are kept; only the later 30% score them. The same split the 2026-09-16 conviction-signal measurement used, so the two are comparable. Over the ~250-session pilot year that leaves ~75 sessions to score on, several months of market, which is what keeps one quarter's trend from passing as an edge. A measurement setting; no running part reads it."
 
-[edge_minimum_trades_per_bucket]
+[edge_minimum_sessions_per_bucket]
 value = 30
-unit  = "trades"
-note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py: the fewest trades on the earlier sessions a bucket needs before its mean can be judged. Thirty is where a sample mean's normal approximation is conventionally taken to hold, which is what the lower confidence bound in edge_confidence_level assumes. Fewer, and a lucky handful of trades would clear the bound on noise. A measurement setting; no running part reads it."
+unit  = "sessions"
+note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py: the fewest earlier sessions a bucket must have traded in before its per-session mean can be judged. Sessions, not trades: the first pilot scored ~5,000 trades a session that overlap (one underlying, minutes apart, one move), so a bound over trades was as confident as the count was large. Thirty is where a sample mean's normal approximation is conventionally taken to hold, which the lower bound in edge_confidence_level assumes. Replaced edge_minimum_trades_per_bucket the same day. A measurement setting; no running part reads it."
 
 [edge_confidence_level]
 value = 0.95
