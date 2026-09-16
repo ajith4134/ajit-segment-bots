@@ -3063,3 +3063,46 @@ The fix is a design decision rather than a patch: which evidence fields enter th
 feature vector, given that each detector publishes its own keys and the builder's
 rule is that a feature which cannot be measured is *named as missing, never
 defaulted*. Recorded here for that decision rather than bolted on.
+
+
+### 2026-09-16 — a short volatility view turned into a bought option is not shown to lose
+
+The previous entry left a suspicion: `volatility-gap-detector` raises a SHORT on a
+contract when its implied volatility is above the forecast — a view on
+*volatility*, marked `trades_volatility_not_direction` in its evidence — and
+both option segments only buy, so `instrument-selector` turns a short call into a
+bought put and a short put into a bought call. For a volatility view that buys the
+same rich implied volatility the detector called overpriced. **Nothing downstream
+reads `trades_volatility_not_direction`**; the flag is carried and dropped.
+
+It is not hypothetical traffic. Live standing at 09:32 UTC: `views_converted_to_a_buy`
+**128,691** of **206,858** instruments chosen (62%), and the journal holds 3,992
+`bounded-order` records whose intent was a short on one contract and whose order is
+a buy of the opposite type (e.g. short `BANKNIFTY 56100 PE` became a ₹158,550 buy
+of `BANKNIFTY 56200 CE`). Only 3 carried capital — `drawdown-breaker` refused the rest.
+
+**Measured rather than argued**
+(`measurements/2026-09-16-what-a-converted-short-volatility-view-earns/`): the
+return of buying the named contract and its counterpart (opposite type, same
+underlying and expiry, nearest captured strike), from the tape, one observation per
+contract per minute, net of the 0.853% round trip.
+
+| state | horizon | bought | n | mean gross | mean net | wins net |
+|---|---|---|---|---|---|---|
+| implied-rich (SHORT) | 300s | counterpart | 2,436 | +0.216% | −0.637% | 23.6% |
+| implied-rich (SHORT) | 300s | named | 2,256 | −0.123% | −0.976% | 9.1% |
+| implied-rich (SHORT) | 900s | **counterpart** | 1,962 | **+0.866%** | **+0.013%** | 38.5% |
+| implied-rich (SHORT) | 900s | named | 1,919 | −0.237% | −1.090% | 21.7% |
+| implied-cheap (LONG) | 300s | named | 681 | +0.158% | −0.695% | 10.4% |
+| implied-cheap (LONG) | 900s | named | 474 | +0.147% | −0.706% | 23.2% |
+
+The suspicion is **not supported**. The named rich contract does fall, as the
+detector said, and the converted buy is the one cell that is not net-negative.
+The implied-cheap longs, which the selector buys as named, lose after costs.
+
+**Why this settles nothing yet:** all 165,341 volatility-gap candidates are from a
+single session, 2026-09-16. The counterpart winning is what a one-directional day
+produces whatever the volatility view was, so this is one draw of the market's
+direction, not evidence the conversion carries an edge. Medians are 0.000%
+everywhere because an option prints sparsely. Re-run across several sessions
+before changing the selector either way.
