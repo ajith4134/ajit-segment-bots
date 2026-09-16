@@ -3003,3 +3003,63 @@ survives only because that lookup falls back to the latest snapshot seen.
 issued it, so the information the budget lookup needs is not on the wire at all.
 Closing this is another blueprint-level decision — which identity travels with a
 request — rather than a lookup to patch, and it is where the LLM chain now stands.
+
+
+### 2026-09-16 — the conviction model scores chance because it is not shown the evidence
+
+`bull-conviction-model` reports a mean absolute error of **0.494** over 57,765
+labelled observations against a 48.5% base rate — which is what always answering
+the base rate scores. Its largest standardised weight is **0.096**, so its
+predictions never leave that rate. Both of the operator's own settings notes said
+what would settle the question: *"the model's out-of-sample error against a sweep,
+which needs closed trades that do not exist yet"* (`bull_learning_rate`) and
+*"a value chosen on held-out data once there is held-out data"*
+(`bull_l2_regularisation`). There is data now.
+
+First, what it is **not**. L2 is 0.0001 at a learning rate of 0.01, so the decay
+over 57,765 steps is about 6% — the regulariser is not holding the weights down.
+
+**The measurement** (`measurements/2026-09-16-does-the-conviction-model-have-signal/`):
+131,417 real `entry-candidate` messages from `trade-lifecycle-recorder`'s journal,
+labelled from this project's own captured tape — the symbol's price at detection
+and one horizon later — then a logistic fit on the earlier 70% scored on the
+later 30%, so no outcome leaks backwards.
+
+| horizon | examples | held-out AUC | accuracy | base rate |
+|---|---|---|---|---|
+| 300s | 91,474 | **0.833** | 0.872 | 0.763 |
+| 900s | 55,776 | 0.659 | 0.708 | 0.696 |
+| 1800s | 3,590 | 0.606 | 0.620 | 0.621 |
+
+Nearly every candidate is a short, so a model handed the direction can score well
+by learning "shorts won" — a base rate, not a discrimination. Measured again with
+the direction dropped, the separation survives: **AUC 0.817 / 0.649 / 0.630**.
+What carries it is `forecast_volatility`, `gap_fraction`, `implied_volatility`
+and `signal_strength` — the detector's own evidence.
+
+**The model is never shown any of them.** `bull-feature-builder`'s twelve features
+are `price_z_score`, `return_over_window`, `realised_volatility_fraction`,
+`volatility_ratio_short_to_long`, `book_imbalance`, `spread_fraction`,
+`depth_to_size_ratio`, `open_interest_change`, `order_flow_imbalance`,
+`detector_strength`, `detector_hit_rate`, `setup_weight` — market microstructure
+and detector *metadata*, and not one field of the evidence the detector published
+about why it fired. The part's own docstring states the stake exactly: *"The
+features are the bot... which evidence it is given decides what it can possibly
+learn."*
+
+**Two caveats, and they matter before anyone trades on this.**
+
+1. The label is *"the price moved the way the candidate expected"*, not *"the trade
+   made money"*. The round trip is 0.853% of premium, and a 300-second move need
+   not clear it. A separation of outcomes is not yet an edge.
+2. **115,730 of 144,466 candidates are `short`, and both option segments only
+   buy.** A short candidate on a contract is not something this system can
+   express, so most of the sample above is not directly tradeable by the bots as
+   they stand. That is its own finding: the detector that produces essentially all
+   candidates (`volatility-gap-detector`, 131,399 of 131,417) is mostly producing
+   candidates the segments cannot act on.
+
+The fix is a design decision rather than a patch: which evidence fields enter the
+feature vector, given that each detector publishes its own keys and the builder's
+rule is that a feature which cannot be measured is *named as missing, never
+defaulted*. Recorded here for that decision rather than bolted on.
