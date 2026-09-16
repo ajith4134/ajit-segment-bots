@@ -922,3 +922,30 @@ detector already had an open claim on that symbol and 34,204 for a stale price.
 `exchange-announcement-reader`'s module docstring still explains itself in terms of
 Binance delistings and funding intervals. Crypto drift the guard counts as a comment
 rather than code, in a part that publishes nothing.
+
+
+## 2026-09-16 — momentum-burst-detector cannot fire, because its playbook has never been written
+
+Found while building the detector-edge measurement (docs/superpowers/plans/2026-09-16-detector-edge-across-sessions.md).
+
+| part | verdict | fed | produced |
+|---|---|---|---|
+| `momentum-burst-detector` | **SKELETON (by its input)** | live 2026-09-16 11:09 UTC: symbol-price-frame 644, symbol-profile 149; offline, NIFTY and RELIANCE with their chains on 2025-09-16/17, 13,500 closes | nothing. Offline: `not_a_burst` 3,856, `no_playbook` 438, `candidates` 0 |
+| `procedural-playbook` | **SKELETON** | nothing has reached it | `rules_written` 0, `rules_active` 0, `applications` 0 |
+
+`momentum-burst-detector` raises a candidate only when a `playbook-rule` says what a
+burst means in the current regime: `set_playbook_expectation` is its only source of
+an expectation, and `detect` refuses `no-playbook-rule-for-this-regime` without one.
+The only producer of `playbook-rule` that states such a rule is `procedural-playbook`,
+which has written **zero** rules. Every burst the detector recognises is therefore
+refused. Offline, 438 recognised bursts in two sessions were all refused for this.
+The earlier row above (`no_playbook_rule 5,745`) is the same refusal, live.
+
+This is not a threshold to retune. The detector is waiting on a knowledge part that
+has never produced anything. The measurement reports this detector as "fired 0"
+rather than as a detector with no edge.
+
+`mean-reversion-detector` is **not** in the same state. Offline it crossed its
+z-score threshold 615 times in the same two sessions, and every one was refused
+because `regime-classifier` read the series as random-walk. That is its rule
+working as written: a reversion setup is not believed outside a reverting regime.
