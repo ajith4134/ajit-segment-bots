@@ -20,6 +20,10 @@ from runtime.brokers.broker_adapter import (
     SubscriptionMode, SubscriptionRequest,
 )
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import (
+    OPTION_UNDERLYING_INDEX_SEGMENTS,
+    OPTION_UNDERLYING_STOCK_SEGMENTS,
+)
 from runtime.part_process import run_part
 
 PART_ID = "broker-market-feed-reader"
@@ -98,6 +102,28 @@ def listing_key_of(listing: InstrumentListing) -> str:
 # underlying, and treating one as an underlying would subscribe a chain on a
 # contract instead of on the thing it settles against.
 UNDERLYING_INSTRUMENT_TYPES = ("INDEX", "EQ")
+
+# And which exchange's listing of it, because the same share is listed on both
+# and only one of them is what an option settles against. Measured on the real
+# master 2026-09-16: all 27,012 NSE_FO stock-option contracts name an `NSE_EQ`
+# underlying key and **none** names a `BSE_EQ` one, so a BSE line of a tracked
+# share resolves no chain at all.
+#
+# Stated rather than relied upon by accident. Today the instrument-type filter
+# above already excludes those rows -- Upstox types a BSE equity `A`, not `EQ`
+# -- so this changes nothing about what is selected right now, measured against
+# the whole master. That is a coincidence of the broker's vocabulary and not the
+# rule anyone meant: the rule is that an underlying is on a segment an option
+# settles against. The BSE lines that did reach the connection on 2026-09-16
+# came in by the other door, `broker-symbol-universe-bridge`'s lookup of a held
+# position by trading symbol, and they are refused there now.
+#
+# Taken from `runtime/segment_settings` rather than restated here: it is the
+# same fact `OptionUnderlyingsByRule` reads an underlying's kind from, and two
+# copies of it would be free to disagree.
+UNDERLYING_EXCHANGE_SEGMENTS = (
+    OPTION_UNDERLYING_INDEX_SEGMENTS + OPTION_UNDERLYING_STOCK_SEGMENTS
+)
 
 
 def only_what_the_segments_trade(
@@ -189,14 +215,17 @@ def only_what_the_segments_trade(
     subscribed, so `broker-option-greeks` never carried a delta.
     """
     tracked = set(tracked_trading_symbols)
-    # A set of keys rather than a symbol-keyed dict: the same name is listed on
-    # more than one exchange (NSE_EQ and BSE_EQ both list RELIANCE), and a dict
-    # would keep whichever came last and silently drop the other's chain.
+    # A set of keys rather than a symbol-keyed dict: one name can still be
+    # listed more than once inside the admitted segments (an index and a share
+    # have shared a name before), and a dict would keep whichever came last and
+    # silently drop the other's chain. What it no longer admits is the same
+    # share's second exchange -- see UNDERLYING_EXCHANGE_SEGMENTS.
     tracked_underlying_keys = {
         listing.instrument_key
         for listing in listings
         if listing.trading_symbol in tracked
         and listing.instrument_type in UNDERLYING_INSTRUMENT_TYPES
+        and listing.segment in UNDERLYING_EXCHANGE_SEGMENTS
     }
 
     nearest_expiry_by_underlying: dict[str, int] = {}

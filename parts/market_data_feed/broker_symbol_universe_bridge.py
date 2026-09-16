@@ -49,6 +49,10 @@ import time
 from dataclasses import dataclass, field
 
 from runtime.part_declaration import PartDeclaration
+from runtime.segment_settings import (
+    OPTION_UNDERLYING_INDEX_SEGMENTS,
+    OPTION_UNDERLYING_STOCK_SEGMENTS,
+)
 from runtime.part_process import run_part
 from runtime.symbol_universe import CapturableSymbol
 from runtime.trading_types import OPTION, SPOT
@@ -92,6 +96,51 @@ PART_DECLARATION = PartDeclaration(
 NSE_EQUITY_SEGMENT = "NSE_EQ"
 ORDINARY_SHARE = "EQ"
 ORDINARY_SECURITY = "NORMAL"
+
+
+# The segments this project can actually hold something on: the two option
+# segments' contracts, and the underlyings those settle against. A listing
+# outside them may share a trading symbol with one inside them, and then it is
+# never the one a held position means.
+#
+# Measured on the real master 2026-09-16: 14 shares are listed on both NSE and
+# BSE under one trading symbol, and taking the last row to arrive resolved 10 of
+# the 14 -- TCS, INFY, MARUTI, SBIN, LT, ITC, KOTAKBANK, TATASTEEL, HINDUNILVR,
+# BHARTIARTL -- to the BSE line, which is decided by nothing but the order rows
+# appear in a file. All 27,012 NSE_FO stock-option contracts settle against the
+# NSE line, so the BSE one carries no chain; forced into the universe as a held
+# position's listing it spent a key on the connection that never evicts, and
+# every bridge names an instrument by its trading symbol, so its prints were
+# published as the same symbol as the NSE line's. The two disagree by
+# 0.02%-0.09% at the median and up to 0.33%, and for MARUTI, AXISBANK and TCS
+# the BSE line carried more of 2026-09-16's prints than the NSE line did.
+SEGMENTS_A_POSITION_CAN_BE_HELD_ON = (
+    "NSE_FO", "BSE_FO", "NSE_INDEX", "BSE_INDEX", NSE_EQUITY_SEGMENT,
+)
+
+
+# Which of those an *underlying* can be listed on: the exchange segments an
+# option's own `underlying_key` names. Taken from `runtime/segment_settings`,
+# the one place that fact is stated.
+UNDERLYING_EXCHANGE_SEGMENTS = (
+    OPTION_UNDERLYING_INDEX_SEGMENTS + OPTION_UNDERLYING_STOCK_SEGMENTS
+)
+
+
+def _is_an_underlying_of_its_segment(listing) -> bool:
+    """Is this listing the thing its segment's options settle against?
+
+    An index segment settles against an INDEX and a stock segment against an
+    ordinary share -- never a debenture, a bond or a treasury bill that happens
+    to be listed on the same segment under the same trading symbol.
+    """
+    segment = getattr(listing, "segment", None)
+    instrument_type = getattr(listing, "instrument_type", None)
+    if segment in OPTION_UNDERLYING_INDEX_SEGMENTS:
+        return instrument_type == INDEX_INSTRUMENT_TYPE
+    if segment in OPTION_UNDERLYING_STOCK_SEGMENTS:
+        return instrument_type == ORDINARY_SHARE
+    return False
 
 
 class EquityWithoutADerivative:
@@ -244,6 +293,14 @@ class BridgeStanding:
     # an error -- the same "absence is its own state" the rest of this file
     # already applies to underlyings_without_a_price.
     held_positions_without_a_listing: int = 0
+    # A listing whose trading symbol is already claimed by one on a segment
+    # something can be held on, and which therefore did not replace it. Counted
+    # because the alternative -- letting file order decide which exchange a held
+    # RELIANCE means -- is invisible when it goes wrong.
+    listings_not_displacing_a_tradeable_namesake: int = 0
+    # A listing whose trading symbol is tracked but whose exchange segment is
+    # not one an option settles against -- a tracked share's second listing.
+    underlyings_refused_for_their_exchange: int = 0
     # Whether start_part's own direct read of the master (see
     # warm_start_from_the_masters_own_file) succeeded, and how many listings it
     # loaded -- 0 while it has not run yet or failed, which reads identically to
@@ -391,9 +448,12 @@ class BrokerSymbolUniverseBridge:
         self._price_by_underlying_key: dict[str, float] = {}
         # Every listing seen, by its trading_symbol -- the same name a Position
         # carries, so a held position can be looked up without knowing its
-        # instrument_key up front. Last listing wins, matching the whole file's
-        # instrument_key-keyed dicts; two exchanges listing the same trading
-        # symbol is the same rare case those already accept.
+        # instrument_key up front. Last listing wins among equals, matching the
+        # whole file's instrument_key-keyed dicts -- but a listing on a segment
+        # nothing can be held on never displaces one on a segment that can
+        # (SEGMENTS_A_POSITION_CAN_BE_HELD_ON), because "last" is decided by the
+        # order of rows in the broker's file and that is not a fact about which
+        # exchange a position is on.
         self._listing_by_trading_symbol: dict[str, object] = {}
         # The latest Position per (venue_id, symbol), replaced whole on every
         # message -- a level, not an event, matching how fill-reconciler and
@@ -431,7 +491,16 @@ class BrokerSymbolUniverseBridge:
         # below -- a held position's listing may be an equity, an option whose
         # underlying is not tracked, or a contract whose expiry has already
         # rolled past nearest, and universe() must still be able to find it.
-        self._listing_by_trading_symbol[listing.trading_symbol] = listing
+        held_on = getattr(listing, "segment", None) in SEGMENTS_A_POSITION_CAN_BE_HELD_ON
+        previous = self._listing_by_trading_symbol.get(listing.trading_symbol)
+        previously_held_on = (
+            previous is not None
+            and getattr(previous, "segment", None) in SEGMENTS_A_POSITION_CAN_BE_HELD_ON
+        )
+        if held_on or not previously_held_on:
+            self._listing_by_trading_symbol[listing.trading_symbol] = listing
+        else:
+            self.standing.listings_not_displacing_a_tradeable_namesake += 1
 
         if self._first_listing_key is None:
             self._first_listing_key = listing.instrument_key
@@ -462,6 +531,31 @@ class BrokerSymbolUniverseBridge:
             self._share_by_key[listing.instrument_key] = listing
 
         if listing.trading_symbol in self._tracked and listing.underlying_key is None:
+            # On a segment an option actually settles against, and not merely
+            # under a name that is tracked. Keyed by instrument_key, this branch
+            # admitted BOTH exchanges' listings of a tracked share: measured on
+            # the real master 2026-09-16, the 220-underlying universe published
+            # 430 entries, 208 of them the BSE line of a share whose options are
+            # all NSE (27,012 of 27,012 NSE_FO stock contracts settle against
+            # the NSE line, none against the BSE one).
+            #
+            # It cost twice. Each is a key on a connection that caps at 2,000
+            # and evicts nothing, and every bridge downstream names an
+            # instrument by its trading_symbol -- so both lines' prints publish
+            # under one symbol. On 2026-09-16, 14 of them reached the tape that
+            # way and their prices disagree by 0.02%-0.09% at the median, up to
+            # 0.33%, with the BSE line carrying more prints than the NSE one for
+            # MARUTI, AXISBANK and TCS. Every switch between the two was a price
+            # move that never happened.
+            #
+            # And the right KIND of thing on that segment. NSE_EQ carries far
+            # more than shares: CHOLAFIN and MOTHERSON each name a debenture
+            # (instrument_type D1, ISIN ...08...) alongside their share, and
+            # both reached the universe under the share's own symbol -- the last
+            # two duplicate symbols left once the exchange rule was applied.
+            if not _is_an_underlying_of_its_segment(listing):
+                self.standing.underlyings_refused_for_their_exchange += 1
+                return
             if listing.instrument_key not in self._underlying_by_key:
                 self.standing.underlyings_resolved += 1
             self._underlying_by_key[listing.instrument_key] = listing
@@ -963,6 +1057,12 @@ def describe_bridge(bridge: BrokerSymbolUniverseBridge) -> dict:
         ),
         "held_positions_forced_in": bridge.standing.held_positions_forced_in,
         "held_positions_without_a_listing": bridge.standing.held_positions_without_a_listing,
+        "listings_not_displacing_a_tradeable_namesake": (
+            bridge.standing.listings_not_displacing_a_tradeable_namesake
+        ),
+        "underlyings_refused_for_their_exchange": (
+            bridge.standing.underlyings_refused_for_their_exchange
+        ),
         "warm_start_listings_loaded": bridge.standing.warm_start_listings_loaded,
         "warm_start_failure": bridge.standing.warm_start_failure,
         "derived_option_underlyings": bridge.standing.derived_option_underlyings,

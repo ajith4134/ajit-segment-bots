@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from parts.broker_adapter.broker_market_feed_reader import (
     fetch_authorized_stream_url, listing_key_of, plan_additional_subscriptions,
     only_what_the_segments_trade, plan_subscriptions,
@@ -12,6 +14,8 @@ from runtime.brokers.upstox import UpstoxAdapter
 from runtime.bus import Message
 from runtime.input_assembly import LatestByKey
 from runtime.symbol_universe import CapturableSymbol
+
+from tests.conftest import upstox_listings_by_key
 
 
 def _listing(key: str) -> InstrumentListing:
@@ -122,33 +126,68 @@ def test_a_tracked_ordinary_share_gets_its_chain_too_not_only_an_index():
     assert left_to_the_universe == 1
 
 
-def test_the_same_name_listed_on_two_exchanges_keeps_both_chains():
+def test_the_same_name_on_two_admitted_segments_keeps_both_listings():
     """A symbol-keyed dict kept whichever row came last and silently dropped the
-    other exchange's chain."""
-    nse = InstrumentListing(
-        instrument_key="NSE_EQ|RELIANCE", exchange="NSE", segment="NSE_EQ",
-        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+    other listing's chain.
+
+    Real names, read off the master 2026-09-16: MID150, ENERGY, INFRA and METAL
+    are each a BSE index *and* an NSE share. Both are things an option can
+    settle against, so both have to survive the lookup -- this is what a set of
+    keys buys that a dict keyed by trading symbol does not. It is a different
+    case from one share listed on two exchanges, which
+    `test_a_shares_second_exchange_is_not_subscribed_as_an_underlying` covers:
+    there the two rows are the same asset and only one carries a chain.
+    """
+    share = InstrumentListing(
+        instrument_key="NSE_EQ|INE00WC01019", exchange="NSE", segment="NSE_EQ",
+        instrument_type="EQ", trading_symbol="ENERGY", lot_size=1, tick_size=0.05,
         freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
         intraday_margin_percent=None, intraday_leverage=None,
     )
-    bse = InstrumentListing(
-        instrument_key="BSE_EQ|RELIANCE", exchange="BSE", segment="BSE_EQ",
-        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+    index = InstrumentListing(
+        instrument_key="BSE_INDEX|ENERGY", exchange="BSE", segment="BSE_INDEX",
+        instrument_type="INDEX", trading_symbol="ENERGY", lot_size=None, tick_size=None,
         freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
         intraday_margin_percent=None, intraday_leverage=None,
     )
-    nse_call = _option_listing("NSE_FO|R|CE", "NSE_EQ|RELIANCE", expiry_ms=2000)
-    bse_call = _option_listing("BSE_FO|R|CE", "BSE_EQ|RELIANCE", expiry_ms=2000)
+    share_call = _option_listing("NSE_FO|E|CE", "NSE_EQ|INE00WC01019", expiry_ms=2000)
+    index_call = _option_listing("BSE_FO|E|CE", "BSE_INDEX|ENERGY", expiry_ms=2000)
 
     wanted, left_to_the_universe = only_what_the_segments_trade(
-        (nse, bse, nse_call, bse_call), tracked_trading_symbols=("RELIANCE",), now_ms=1000,
+        (share, index, share_call, index_call),
+        tracked_trading_symbols=("ENERGY",), now_ms=1000,
     )
-    # Both exchanges' listings of the name, which is what a symbol-keyed dict
-    # used to lose. Their chains come from the universe.
     assert {listing.instrument_key for listing in wanted} == {
-        nse.instrument_key, bse.instrument_key,
+        share.instrument_key, index.instrument_key,
     }
     assert left_to_the_universe == 2
+
+
+def test_no_option_the_broker_lists_settles_against_a_shares_second_exchange():
+    """The measurement the exchange filter rests on, re-read from the master.
+
+    `UNDERLYING_EXCHANGE_SEGMENTS` drops a share's BSE line because no option
+    settles against it. That is a fact about the broker's master, not about this
+    code, so it is asserted against the master itself: if NSE or BSE ever lists
+    a stock option settling against a `BSE_EQ` key, this fails and the filter is
+    what has to change (RL-063 -- a fixture here would only restate the belief).
+    """
+    listings = upstox_listings_by_key()
+    if not listings:
+        pytest.skip("no instrument master on this machine to read")
+    options = [
+        listing for listing in listings.values()
+        if listing.instrument_type in ("CE", "PE") and listing.underlying_key
+    ]
+    assert options, "the master carries no option listings at all"
+    settling_against_a_second_exchange = [
+        listing for listing in options
+        if listing.underlying_key.startswith("BSE_EQ|")
+    ]
+    assert settling_against_a_second_exchange == []
+    assert any(
+        listing.underlying_key.startswith("NSE_EQ|") for listing in options
+    ), "no stock option settles against NSE_EQ either -- the master is not what this assumes"
 
 
 def test_an_expired_contract_is_excluded_not_merely_deprioritized():
@@ -393,3 +432,60 @@ def test_a_full_connection_gives_up_what_left_the_universe_for_what_joined_it():
     assert plan_evictions(subscribed, universe, capacity=13) == ()
     everything = [one.instrument_key for one in subscribed] + ["NSE_FO|far-1"]
     assert plan_evictions(subscribed, everything, capacity=10) == ()
+
+
+def test_a_shares_second_exchange_is_not_subscribed_as_an_underlying():
+    """One share, two listings, and only one of them is what an option settles
+    against.
+
+    Real, measured on the instrument master 2026-09-16: all 27,012 NSE_FO
+    stock-option contracts name an `NSE_EQ` underlying key and none names a
+    `BSE_EQ` one. Both lines were subscribed anyway, and every bridge names an
+    instrument by its `trading_symbol`, so the two exchanges' prints for one
+    share were published as one symbol -- 14 shares that day, disagreeing by
+    0.02%-0.09% at the median and up to 0.33%, with the BSE line carrying more
+    of the prints than the NSE line for three of them.
+    """
+    nse = InstrumentListing(
+        instrument_key="NSE_EQ|INE002A01018", exchange="NSE", segment="NSE_EQ",
+        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    bse = InstrumentListing(
+        instrument_key="BSE_EQ|INE002A01018", exchange="BSE", segment="BSE_EQ",
+        instrument_type="EQ", trading_symbol="RELIANCE", lot_size=1, tick_size=0.05,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    chain = _option_listing(
+        "NSE_FO|RELIANCE|near|CE", "NSE_EQ|INE002A01018", expiry_ms=2000, strike=1400.0,
+    )
+
+    wanted, _left_to_the_universe = only_what_the_segments_trade(
+        (bse, nse, chain), tracked_trading_symbols=("RELIANCE",), now_ms=1000,
+    )
+
+    assert [listing.instrument_key for listing in wanted] == ["NSE_EQ|INE002A01018"]
+
+
+def test_an_index_listed_on_either_exchange_is_still_an_underlying():
+    """The filter is about a share's second exchange, not about BSE.
+
+    BSE writes options on its own indices (4,170 contracts on the 2026-09-16
+    master, every one naming a `BSE_INDEX` underlying), and `index-options`
+    derives its universe from every index with an option. Dropping BSE outright
+    would have taken those chains' underlyings with it.
+    """
+    sensex = InstrumentListing(
+        instrument_key="BSE_INDEX|SENSEX", exchange="BSE", segment="BSE_INDEX",
+        instrument_type="INDEX", trading_symbol="SENSEX", lot_size=None, tick_size=None,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+
+    wanted, _left = only_what_the_segments_trade(
+        (sensex,), tracked_trading_symbols=("SENSEX",), now_ms=1000,
+    )
+
+    assert [listing.instrument_key for listing in wanted] == ["BSE_INDEX|SENSEX"]

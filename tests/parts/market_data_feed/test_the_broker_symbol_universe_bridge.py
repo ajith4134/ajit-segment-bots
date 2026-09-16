@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import time
 
 import pytest
 
@@ -296,3 +297,154 @@ def test_an_empty_tracked_list_is_refused():
             tracked_trading_symbols=(),
             option_contracts_per_underlying=8,
         )
+
+
+def test_a_held_share_resolves_to_the_exchange_its_options_settle_against():
+    """One share, two exchanges, and file order deciding which one a position means.
+
+    A held position carries a trading symbol, not an instrument key, so this
+    bridge looks the listing up by name. Taking the last row to arrive resolved
+    10 of the 14 dual-listed shares on the real 2026-09-16 master -- TCS, INFY,
+    MARUTI, SBIN, LT, ITC, KOTAKBANK, TATASTEEL, HINDUNILVR, BHARTIARTL -- to
+    their BSE line, which no NSE_FO contract settles against (measured: 27,012
+    of 27,012 name the NSE line). Forced into the universe it spent a key on a
+    connection that evicts nothing, and since every bridge names an instrument
+    by its trading symbol its prints published under the same name as the NSE
+    line's -- two prices for one symbol, 0.02%-0.09% apart at the median.
+
+    Both orders are asserted, because the defect was order-dependent and a test
+    that fed them one way round would have passed before the fix.
+    """
+    from runtime.brokers.broker_adapter import InstrumentListing
+
+    def share(segment: str, instrument_type: str) -> InstrumentListing:
+        return InstrumentListing(
+            instrument_key=f"{segment}|INE467B01029", exchange=segment.split("_")[0],
+            segment=segment, instrument_type=instrument_type, trading_symbol="TCS",
+            lot_size=1, tick_size=0.05, freeze_quantity=None, expiry_ms=None,
+            strike_price=None, underlying_key=None,
+            intraday_margin_percent=None, intraday_leverage=None,
+        )
+
+    nse, bse = share("NSE_EQ", "EQ"), share("BSE_EQ", "A")
+    for order in ((nse, bse), (bse, nse)):
+        bridge = a_bridge()
+        for listing in order:
+            bridge.observe_listing(listing)
+        resolved = bridge._listing_by_trading_symbol["TCS"]
+        assert resolved.instrument_key == "NSE_EQ|INE467B01029", (
+            f"fed {[l.segment for l in order]}, resolved to {resolved.segment}"
+        )
+
+    # And the refusal is counted rather than silent.
+    bridge = a_bridge()
+    bridge.observe_listing(nse)
+    bridge.observe_listing(bse)
+    assert bridge.standing.listings_not_displacing_a_tradeable_namesake == 1
+
+
+def test_a_name_claimed_only_by_an_untradeable_listing_still_resolves():
+    """The rule is a preference, not a filter.
+
+    A trading symbol nothing tradeable claims -- a currency derivative, a
+    sovereign gold bond -- still has to resolve to something, or a held position
+    on it reads as a position with no listing at all.
+    """
+    from runtime.brokers.broker_adapter import InstrumentListing
+
+    bond = InstrumentListing(
+        instrument_key="NSE_EQ_BOND|SGBX", exchange="NSE", segment="NSE_EQ_BOND",
+        instrument_type="SG", trading_symbol="SGBJUN31", lot_size=1, tick_size=0.01,
+        freeze_quantity=None, expiry_ms=None, strike_price=None, underlying_key=None,
+        intraday_margin_percent=None, intraday_leverage=None,
+    )
+    bridge = a_bridge()
+    bridge.observe_listing(bond)
+    assert bridge._listing_by_trading_symbol["SGBJUN31"].instrument_key == "NSE_EQ_BOND|SGBX"
+
+
+@pytest.fixture(scope="module")
+def the_whole_instrument_master():
+    """Upstox's own master as the live part reads it, or a skip."""
+    from runtime.brokers.instrument_master import fetch_and_parse_listings
+
+    try:
+        listings = fetch_and_parse_listings(UpstoxAdapter())
+    except Exception as failure:  # no cached master on this machine, no network
+        pytest.skip(f"no instrument master to read: {type(failure).__name__}: {failure}")
+    if not listings:
+        pytest.skip("the instrument master parsed to nothing")
+    return listings
+
+
+def test_each_tracked_underlying_enters_the_universe_once_whatever_else_shares_its_name(
+    the_whole_instrument_master,
+):
+    """The universe is one entry per underlying, not one per listing of its name.
+
+    Measured on the real master 2026-09-16, before this rule: the operator's
+    220-underlying universe published **430** entries. 208 were the BSE line of
+    a share whose options are all NSE -- every one of the 27,012 NSE_FO stock
+    contracts settles against the NSE line -- and 2 were debentures listed on
+    NSE_EQ under their issuer's own trading symbol (CHOLAFIN, MOTHERSON).
+
+    Both cost the same two ways. A key on a connection that caps at 2,000 and
+    evicts nothing, taken from the option contracts that had to fit beside 220
+    underlyings at 8 contracts each; and a second price stream published under a
+    symbol that already had one, because every bridge downstream names an
+    instrument by its trading_symbol.
+    """
+    from runtime.segment_settings import OptionUnderlyingsByRule
+
+    rule = OptionUnderlyingsByRule()
+    for listing in the_whole_instrument_master:
+        rule.observe_listing(listing)
+    tracked = tuple(sorted(rule.indices | rule.stocks))
+    assert tracked, "no underlying carries an option on this master"
+
+    bridge = BrokerSymbolUniverseBridge(
+        tracked_trading_symbols=tracked, option_contracts_per_underlying=8,
+        now_ms=lambda: time.time_ns() // 1_000_000,
+    )
+    for listing in the_whole_instrument_master:
+        bridge.observe_listing(listing)
+
+    underlyings = [
+        entry for entry in bridge.universe()
+        if getattr(entry, "underlying_venue_instrument_id", None) is None
+    ]
+    names = [entry.symbol for entry in underlyings]
+    assert sorted(names) == sorted(set(names)), (
+        "a name reached the universe twice: "
+        + ", ".join(sorted({name for name in names if names.count(name) > 1}))
+    )
+    assert len(underlyings) == len(tracked)
+
+
+def test_a_debenture_listed_under_its_issuers_symbol_is_not_that_issuers_underlying():
+    """NSE_EQ carries far more than shares.
+
+    Real rows, 2026-09-16: `NSE_EQ|INE121A01024` is the CHOLAFIN share and
+    `NSE_EQ|INE121A08PJ0` is a CHOLAFIN debenture (`instrument_type` D1). Both
+    are on a segment options settle against and both carry the tracked name, so
+    the exchange rule alone does not separate them.
+    """
+    from runtime.brokers.broker_adapter import InstrumentListing
+
+    def row(key: str, instrument_type: str) -> InstrumentListing:
+        return InstrumentListing(
+            instrument_key=key, exchange="NSE", segment="NSE_EQ",
+            instrument_type=instrument_type, trading_symbol="CHOLAFIN", lot_size=1,
+            tick_size=0.05, freeze_quantity=None, expiry_ms=None, strike_price=None,
+            underlying_key=None, intraday_margin_percent=None, intraday_leverage=None,
+        )
+
+    bridge = BrokerSymbolUniverseBridge(
+        tracked_trading_symbols=("CHOLAFIN",), option_contracts_per_underlying=8,
+        now_ms=lambda: 1_788_800_000_000,
+    )
+    bridge.observe_listing(row("NSE_EQ|INE121A08PJ0", "D1"))
+    bridge.observe_listing(row("NSE_EQ|INE121A01024", "EQ"))
+
+    assert list(bridge._underlying_by_key) == ["NSE_EQ|INE121A01024"]
+    assert bridge.standing.underlyings_refused_for_their_exchange == 1

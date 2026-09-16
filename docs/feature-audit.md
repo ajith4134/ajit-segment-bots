@@ -2612,3 +2612,49 @@ a put, which is by definition the contract the intent did not name.
 
 Spine restarted and read: `instrument-selector` started, reporting, 30,758
 `broker-option-greeks` received in the first two minutes.
+
+
+### 2026-09-16 — one share, two exchanges, one symbol
+
+`broker-candle-bridge` keying bars by trading symbol alone was carried as an open
+item from 2026-09-15 ("10 differing bars on 2026-09-08"). All four broker bridges
+key that way, so the question was where two keys for one name come from.
+
+**Measured on the live 2026-09-16 tape**: 14 trading symbols were captured under
+two instrument keys each -- the NSE and BSE lines of one share, every one of them
+a stock-option underlying. Their prices disagree by 0.02%-0.09% at the median and
+up to 0.33%, and for MARUTI, AXISBANK and TCS the BSE line carried *more* of the
+day's prints than the NSE line. Published under one symbol, every switch between
+the two lines was a price move that never happened.
+
+`broker-symbol-universe-bridge` was the door. Two separate ways in:
+
+| | measured on the real master |
+|---|---|
+| `_underlying_by_key` admitted any listing whose trading symbol is tracked | the 220-underlying universe published **430** entries, 208 of them a share's BSE line |
+| NSE_EQ carries more than shares | CHOLAFIN and MOTHERSON each published twice -- the share and a **debenture** (`instrument_type` D1) under the issuer's own symbol |
+| `_listing_by_trading_symbol`, which a held position is looked up through, took the last row to arrive | 10 of the 14 dual-listed shares resolved to their BSE line, decided by nothing but the order of rows in a file |
+
+An underlying is now admitted only on a segment an option settles against
+(`NSE_INDEX`, `BSE_INDEX`, `NSE_EQ` -- from `runtime/segment_settings`, not
+restated) and only as the kind of thing that segment's options settle against: an
+INDEX or an ordinary share, never a debenture. A listing on a segment nothing can
+be held on never displaces a namesake on one that can.
+
+    before   430 universe entries, 14 symbols carrying two price lines
+    after    220 entries -- 10 indices + 210 shares -- and no duplicate symbol
+    live     underlyings_published 220, underlyings_resolved 220
+
+It was never only a naming problem. 220 underlyings at 8 contracts each is 1,980
+of the connection's 2,000 keys, and the connection evicts nothing: the 210
+surplus underlyings were taking keys the option contracts were supposed to have.
+
+All 27,012 NSE_FO stock-option contracts settle against the NSE line and none
+against the BSE one, which is the fact the rule rests on and is asserted against
+the master itself rather than a fixture, so a change at the exchange fails the
+test rather than passing silently.
+
+`broker-market-feed-reader` states the same rule for the listings path. It is
+redundant there today -- Upstox types a BSE equity `A`, not `EQ`, so the existing
+instrument-type filter already excluded those rows -- and the comment says so
+rather than claiming a fix it did not make.
