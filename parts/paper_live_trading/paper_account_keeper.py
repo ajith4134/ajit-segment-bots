@@ -518,6 +518,21 @@ def describe_segment_paper_accounts(accounts: SegmentPaperAccounts) -> dict:
             segment: keeper.standing.fills_applied_beyond_cash
             for segment, keeper in sorted(accounts.keepers.items())
         },
+        # What was dropped as a holding no order could sell, and the margin that
+        # came back with it. On the board because a residue quietly deleted and a
+        # position genuinely closed are otherwise the same absence.
+        "residues_closed_by_segment": {
+            segment: keeper.standing.residues_closed
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
+        "residue_margin_returned_by_segment": {
+            segment: keeper.standing.residue_margin_returned
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
+        "open_positions_by_segment": {
+            segment: keeper.read_balance().open_positions
+            for segment, keeper in sorted(accounts.keepers.items())
+        },
         "cash_shortfall_total_by_segment": {
             segment: keeper.standing.cash_shortfall_total
             for segment, keeper in sorted(accounts.keepers.items())

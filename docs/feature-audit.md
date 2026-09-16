@@ -2768,3 +2768,40 @@ like a position that really closed.
 The two misplaced shorts are being traced from the fill journals before anything
 is moved — the operator's call, taken 2026-09-16: a book rewrite on top of an
 unexplained position would hide the cause.
+
+
+#### The two "short" positions in the index-options book — the trail, 2026-09-16
+
+The operator asked for the trail before any book edit. It is not a short:
+
+| book | BDL 1180 PE 29 SEP 26 | HINDUNILVR 1960 PE 29 SEP 26 |
+|---|---|---|
+| index-options | **−5,525** | **−5,700** |
+| stock-options | **+5,525** | **+5,700** |
+
+Exact mirrors. One position in each contract is split across two accounts — the
+buys in the book that should hold them, the sells in the book that should not —
+and the index-options account posts **₹496,740** of margin against its half.
+`position-recorder` saw both open `direction: long`, so nothing ever went short;
+the two halves net to flat across the books.
+
+Not historical residue: both carry `position-opened` records from **2026-09-16
+06:01 UTC**, minutes before this was read.
+
+`segment_that_trades` cannot be the cause — it raises `SegmentsOverlap` when two
+segments claim one instrument and returns None when neither does, so double
+ownership is refused by construction. `fills_without_a_segment` and
+`fills_for_an_unknown_segment` both read 0 live. So the split is in which
+account a fill is *charged to*, downstream of ownership, and the next step is a
+live measurement of the `segment` on the next fills for these two symbols rather
+than a guess. **Nothing has been moved or closed.**
+
+`operate/stamp_lot_sizes_onto_the_paper_book.py` reports (and with `--write`,
+stamps) each open position's own lot from the broker's master, so the keeper's
+sub-lot rule can act on positions restored from a checkpoint written before the
+step was carried. **Run as a report only so far.** It would make 8 stock-options
+positions flat at the next start — but those are not dust: they are 84-90% of a
+lot in several cases (`ABCAPITAL` 2,783 of a 3,100 lot, `TATACONSUM` 462 of 550),
+holding ₹70,695 of margin between them. Discarding them would write off real
+value rather than sweep rounding noise, which is a different decision from the
+one the operator took, and it has not been taken.
