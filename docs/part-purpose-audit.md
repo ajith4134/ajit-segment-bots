@@ -949,3 +949,25 @@ rather than as a detector with no edge.
 z-score threshold 615 times in the same two sessions, and every one was refused
 because `regime-classifier` read the series as random-walk. That is its rule
 working as written: a reversion setup is not believed outside a reverting regime.
+
+
+## 2026-09-16 — expiry-day-zero-to-hero-detector fires, and none of its candidates can be sized
+
+| part | verdict | fed | produced |
+|---|---|---|---|
+| `expiry-day-zero-to-hero-detector` | **SERVING ITS PURPOSE as a detector; its trades are unreachable** | offline, NIFTY and its 8 contracts on the 2025-09-16 expiry | 622 candidates. **0 sizeable**: every one refused as "24 whole lot(s) commit ... below this segment's minimum_capital_per_trade" |
+
+The detector does what it says: it finds cheap far options on expiry day. Its
+`zero_to_hero_maximum_premium` is ₹5. At that premium, NIFTY's lot and NSE's
+freeze quantity allow at most 24 lots in one order, which commits at most about
+₹9,000 against `index-options`' `minimum_capital_per_trade` of ₹100,000. So no
+candidate this detector can raise can become an order. This is the operator's open
+question in CLAUDE.md (a ~₹57 premium floor from the minimum capital and the freeze
+quantity), met from the other side: the detector's whole premium band sits under
+that floor.
+
+Until 2026-09-16 this was hidden by a second defect: put candidates were named
+`short` and bought as at-the-money calls near ₹56, which the sizer could fill (see
+`docs/feature-audit.md`, same date). With that fixed, the conflict is plain. Which
+number gives way (the minimum capital, the premium band, or splitting across
+orders) is a decision for the operator, not a setting to retune here.
