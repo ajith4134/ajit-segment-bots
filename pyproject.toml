@@ -51,6 +51,24 @@ dependencies = [
     # needs are stored.
     "upstox-totp==1.0.8",
     "ddgs>=9.16.0",
+    # Turns text into vectors, which is the one thing knowledge-embedder needs and
+    # the whole LLM block was stopped on: until 2026-09-16 no embedding model was
+    # installed here, so retrieval-index served 5,467 queries against an empty
+    # index, context-assembler published no context, prompt-renderer refused
+    # 84,228 requests for missing context, and none of the 26 LLM parts had ever
+    # called a model.
+    #
+    # Cheap to admit because torch was already installed on this box for the
+    # Kronos forecaster: these two are about 20 MB, and the model itself
+    # (all-MiniLM-L6-v2, named by the `embedding_model_id` setting) is 90 MB of
+    # weights fetched at first use and cached. Measured here at one thread:
+    # 25.1 ms for a single text, 6.1 ms each in a batch of 32.
+    #
+    # tokenizers is a Rust extension; it resolved to a cp314 binary wheel, which
+    # matters because this box has no compiler and a source build would have
+    # failed rather than silently succeeded.
+    "transformers==5.17.0",
+    "tokenizers==0.23.2",
 ]
 
 [project.optional-dependencies]
