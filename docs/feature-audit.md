@@ -3106,3 +3106,34 @@ produces whatever the volatility view was, so this is one draw of the market's
 direction, not evidence the conversion carries an edge. Medians are 0.000%
 everywhere because an option prints sparsely. Re-run across several sessions
 before changing the selector either way.
+
+
+### 2026-09-16 — two live defects the detector-edge pilot surfaced
+
+Found while building `operate/measure_detector_edge.py`
+(docs/superpowers/plans/2026-09-16-detector-edge-across-sessions.md). It drives the
+detectors' own classes over past sessions, so it reaches states the live spine had
+not reached yet.
+
+**`realised-vol-regressor` could diverge on an expiry day** (`0911fbb`). Plain
+gradient descent at a fixed rate is stable only while rate × (sum of squared
+standardised inputs) stays under 2. On NIFTY's 2025-09-16 expiry, a put's one-minute
+window carried a 100% gap (z = 20.7), the sum of squares reached ~800 against a rate
+of 0.01, the weights reached the hundreds within 3,808 updates, and the next forecast
+overflowed `math.exp`. Live had not hit this only because the live regressor had
+**0 training observations** (1,039 of 1,181 forecasts refused for missing features).
+The step is now normalised by the inputs' mean square once that exceeds one.
+Regression test: `tests/parts/prediction/test_realised_vol_regressor_stays_stable.py`.
+
+A consequence worth keeping: with the regressor untrained, **live volatility-gap hears
+`entropy-magnitude-forecaster`**, the other producer of `volatility-forecast`.
+
+**`expiry-day-zero-to-hero-detector` bought calls for its put setups** (`d370aab`).
+It named a cheap far put `short`. A direction on a contract is the side taken on it,
+and `instrument-selector`'s own tests say a short put is a bullish view, carried by
+buying the call. The pilot's first eleven sessions held 1,086 zero-to-hero trades,
+**every one a far put named and a near call bought** (NIFTY 25000 PE became a
+₹56.45 NIFTY 25150 CE). The detector is `long` on both sides now. A bought put's
+bearish view is derived by the selector, and put candidates now reach
+`bull-setup-filter`. Spine restarted after each change with the market shut: no
+traceback, 333 reporting, 0 silent.
