@@ -1,0 +1,14 @@
+near-the-money contracts, 2026-09-07, 2026-09-08; round trip for scale 0.008532
+
+-- horizon 300s, 65,376 greeks samples --
+  code    p20 0.000001  p50 0.000001  p80 0.000002
+  model   p20 0.000077  p50 0.000078  p80 0.000202
+  stated  p20 0.000068  p50 0.000087  p80 0.000154
+  median stated / code: 80.6x; stated carry above the round trip on 1.4% of samples, code carry on 0.0%
+
+-- horizon 3600s, 65,376 greeks samples --
+  code    p20 0.000011  p50 0.000014  p80 0.000020
+  model   p20 0.000925  p50 0.000931  p80 0.002425
+  stated  p20 0.000817  p50 0.001046  p80 0.001848
+  median stated / code: 80.5x; stated carry above the round trip on 7.8% of samples, code carry on 0.0%
+

@@ -164,12 +164,19 @@ def test_the_best_instrument_being_in_an_unbuilt_segment_is_reported_not_skipped
 
 
 def test_an_options_carry_is_its_time_value_and_decays_with_the_square_root_of_time():
-    """A week out of a month costs far less than a quarter of the premium."""
+    """A week out of a month costs far less than a quarter of the premium.
+
+    In fractions of the PREMIUM, which is what `round_trip_cost_fraction` is a
+    fraction of and what this is added to. Asserted against `premium=0.02` --
+    the option's price over the underlying's -- to hold the distinction the
+    2026-09-16 fix turned on: held to expiry an option loses all of its time
+    value, which is 1.0 of the premium and never 0.02 of it.
+    """
     subject = a_selector(built=("futures", "index-options"))
     option = an_option(premium=0.02, seconds_to_expiry=30 * 86400.0)
     week = subject.carry_over(option, horizon_seconds=7 * 86400.0)
-    assert 0 < week < 0.02 * 0.25
-    assert subject.carry_over(option, horizon_seconds=30 * 86400.0) == pytest.approx(0.02)
+    assert 0 < week < 0.25
+    assert subject.carry_over(option, horizon_seconds=30 * 86400.0) == pytest.approx(1.0)
 
 
 def test_an_option_with_no_premium_from_the_surface_cannot_be_priced():

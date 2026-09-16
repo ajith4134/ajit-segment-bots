@@ -2561,3 +2561,54 @@ subagent found four more, marked R):
   calls (review, not measured live).
 - `broker-candle-bridge` keys bars by trading symbol alone, so NSE_EQ and BSE_EQ bars for
   one share collide (10 differing bars on 2026-09-08; no fills on shares since cash was retired).
+
+
+### 2026-09-16 — the option carry was a fraction of the wrong thing
+
+The measurement was taken on 2026-09-13 and left uncommitted; this session ran it
+against the live tape and applied what it found.
+
+`instrument-selector.carry_over` priced an option's carry as
+`premium_fraction x (1 - sqrt(1 - held))`, where `premium_fraction` is the option's
+price over the underlying's. `select` then adds that to `round_trip_cost_fraction`
+and weighs the sum against `instrument_maximum_cost_fraction`. The round trip is a
+fraction of the **premium**; the carry was a fraction of the **underlying**, so the
+two were added across a factor of about eighty.
+
+Measured against the theta Upstox states on every greeks update
+(`|theta| x horizon/86400 / premium`), near the money (0.4 <= |delta| <= 0.6), one-hour
+horizon:
+
+| | median carry | against stated theta |
+|---|---|---|
+| as the part priced it | 0.000032 | **47.1x low** |
+| priced in premium | 0.001535 | **1.02x** — stated 0.001565 |
+
+11,963 samples off the live 2026-09-16 tape, read at 05:0x UTC with the session still
+running, so the count grows with the day; the ratios held across two readings an hour
+apart (10,865 samples, same 1.02x).
+
+On the 2026-09-07/08 tape the same comparison read 80.6x. Either way the gate could
+not act: scaled to the underlying, carry reaches the round trip only in the last hour
+of a contract's life, by which point a one-hour horizon outlives the contract. Priced
+in premium it reaches it **58.9 hours** before expiry — every weekly expiry passes
+through that, and the carry starts refusing contracts it never refused before.
+
+Real-data test:
+`tests/parts/segment_bot/test_instrument_selector_option_carry_matches_stated_theta.py`
+(RL-063 — reads the newest captured day that carries enough near-the-money greeks,
+never a fixture; a fixture would agree with whatever the code does).
+
+**It hid a second defect.** `test_an_intent_naming_a_far_otm_contract_is_carried_by
+_that_contract_not_the_atm_pair` passed only because the scaling made the cheap far
+strike look cheapest to hold. With carry priced in premium, two contracts sharing an
+expiry carry the same and the tie fell to whichever was registered first — so a strike
+named by `expiry-day-zero-to-hero-detector` could again be swapped for the ~0.5-delta
+ATM contract, which is a different bet and not a dearer version of the same one. A
+named contract now carries its intent outright wherever it can, counted as
+`intents_carried_by_the_contract_they_named`. Where it cannot, nothing changes: a
+contract with no greeks was never registered, and a SHORT of a named call is bought as
+a put, which is by definition the contract the intent did not name.
+
+Spine restarted and read: `instrument-selector` started, reporting, 30,758
+`broker-option-greeks` received in the first two minutes.

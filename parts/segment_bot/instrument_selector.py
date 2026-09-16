@@ -454,6 +454,12 @@ class SelectorStanding:
     # that has to be readable rather than inferred.
     views_converted_to_a_buy: int = 0
     largest_carry_avoided: float = 0.0
+    # How many intents named an exact contract that this part then carried with
+    # that contract. Counted against intents_seen because the alternative --
+    # pricing the named strike against the ATM pair and letting the cheaper one
+    # win -- is a substitution nobody asked for, and it was invisible for as long
+    # as it happened to pick the named one anyway.
+    intents_carried_by_the_contract_they_named: int = 0
     # How many listings from the venue's own universe became instruments this part
     # can price, and why each of the rest did not. Counted because a selector that
     # priced nothing looks identical to one nobody asked anything of, and the
@@ -785,10 +791,26 @@ class InstrumentSelector:
             # value decays with the square root of remaining time, not linearly,
             # which is why a week held out of a month costs far less than a
             # quarter of the premium and a week held out of two costs most of it.
+            #
+            # That decay is a fraction of the PREMIUM, and so is the
+            # `round_trip_cost_fraction` it is added to in `select`. Until
+            # 2026-09-16 it was multiplied by `premium_fraction` -- the option's
+            # price over the underlying's -- which restated it as a fraction of
+            # the UNDERLYING and made it 80.6x too small on the 2026-09-07/08
+            # tape, measured against the theta Upstox itself states: at the 3600s
+            # horizon a near-the-money contract's real carry exceeds the round
+            # trip on 7.8% of samples and the scaled-down one on 0.0%, so theta
+            # never once refused a contract.
+            # measurements/2026-09-13-instrument-selector-option-carry/
+            #
+            # The premium is still required, because an option the implied-vol
+            # surface has not priced is one nothing here can price. Against
+            # Upstox's stated theta the square root leaves an 11% residual at the
+            # median -- the model is that much low, not that much arbitrary.
             if instrument.premium_fraction is None or not instrument.seconds_to_expiry:
                 return None
             held = min(1.0, horizon_seconds / instrument.seconds_to_expiry)
-            return instrument.premium_fraction * (1.0 - math.sqrt(1.0 - held))
+            return 1.0 - math.sqrt(1.0 - held)
         return None
 
     def observe_liquidity_grade(self, grade) -> None:
@@ -1092,6 +1114,33 @@ class InstrumentSelector:
                 self._deciding_about = key
                 self._deciding_view = wants_bullish
                 self._deciding_underlying = underlying
+
+                # The named contract carries the intent on its own, where it
+                # can. A detector names a strike *because* the candidate was
+                # built on that strike -- zero-to-hero on a far wing is a
+                # different claim from the ~0.5-delta ATM contract, not a dearer
+                # version of it -- so the cheapest-cost comparison below is not
+                # entitled to substitute one for the other. It appeared to
+                # honour the name until 2026-09-16 only because the option carry
+                # was scaled by premium/spot, which made the cheap far strike
+                # look cheapest to hold; priced in premium, two contracts
+                # sharing an expiry carry the same and the tie fell to whichever
+                # was registered first.
+                #
+                # Two ways it cannot, and both keep the whole chain listed:
+                # a contract the tracker has no greeks for was never registered,
+                # and a SHORT of the named contract is a view the contract
+                # itself cannot express -- selling a call is bought as a put, so
+                # the contract that carries it is the one the intent did not
+                # name.
+                named = [
+                    instrument for instrument in listed
+                    if instrument.contract_symbol == intent.symbol
+                    and self._cannot_carry(instrument, intent, wants_bullish) is None
+                ]
+                if named:
+                    listed = named
+                    self.standing.intents_carried_by_the_contract_they_named += 1
                 self._deciding_converted = converted
 
         if not listed:
@@ -1550,6 +1599,9 @@ def describe_instrument_selection(selector: InstrumentSelector) -> dict:
         "implied_vol_surfaces_seen": selector.standing.implied_vol_surfaces_seen,
         "chosen": selector.standing.chosen,
         "views_converted_to_a_buy": selector.standing.views_converted_to_a_buy,
+        "intents_carried_by_the_contract_they_named": (
+            selector.standing.intents_carried_by_the_contract_they_named
+        ),
         "chosen_by_kind": dict(sorted(selector.standing.by_kind.items())),
         "refused_by_reason": dict(sorted(selector.standing.by_refusal.items())),
         "times_an_unbuilt_segment_held_the_best_instrument": dict(
