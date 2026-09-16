@@ -325,7 +325,10 @@ class DetectorEdgeRun:
             quantity, why = size_for(segment_documents[bought.segment], entry,
                                      bought.lot_size, bought.freeze_quantity)
             if quantity <= 0:
-                self.refused[f"not sizeable: {why.split(',')[0][:60]}"] += 1
+                # The reason names rupee amounts; counted by its words alone so one
+                # cause is one row, and by detector so a structural refusal is visible.
+                words = " ".join(word for word in why.split() if not any(ch.isdigit() for ch in word))
+                self.refused[f"{candidate.detector}: not sizeable -- {words[:90]}"] += 1
                 return
             times, prices = series[bought.trading_symbol]
             target = at_ns + candidate.horizon_seconds * 1e9
