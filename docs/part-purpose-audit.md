@@ -835,3 +835,90 @@ independent failures.
 
 
 | `universal-symbol-sweeper` | SERVING ITS PURPOSE, UNREACHABLE INPUT | live `symbol-universe` (25,250), `position` (13,680), `symbol-price-frame`, `liquidity-grade` on the real NSE universe | 6,369 sweeps, 1,707 skipped already-held, 61,236 skipped unmeasurable, **0 candidates** — and it could not have raised one: it evaluates `watch-condition`s and none exists. Traced to the head on 2026-09-16: `symbolic-hypothesis-miner` needs 100 labelled examples and has zero, because `trade-episode-encoder` has published no episode (its one closed trade was refused for three missing pieces) and `label-builder` has built no label ever. The part's own logic is sound and measured; what it reads is empty. See `docs/feature-audit.md`, 2026-09-16 |
+
+
+## 2026-09-16 — news, online research, learning and the LLM stack, against the trade path
+
+The operator's question: are these parts working, carrying real data, and is any of
+it used to open or select a trade? Measured on the live spine, and the last half of
+the question is answered first because it changes what the rest means.
+
+**Nothing from news, online research or the LLM blocks reaches any deciding part.**
+Checked against every part on the path from a feature to an order —
+`bull-feature-builder`, `bear-feature-builder`, `bull-setup-filter`, both conviction
+models, `opinion-arbiter`, both opinion composers, `instrument-selector`,
+`position-sizer`, `intent-timing-gate`. Only the learning loop's own types
+(`training-label`, `sample-weight`, `learning-reward`, `retrain-request`) arrive.
+
+| block | verdict | evidence |
+|---|---|---|
+| news | REAL DATA IN, NOTHING OUT | 10,568 captured items, genuine Indian headlines; **0 reach a decider** |
+| online research | SKELETON in practice | 10 of 11 parts publish nothing; `arxiv-feed-reader` 8 documents, into a dead end |
+| LLM (both blocks) | RUNNING, NEVER CALLED A MODEL | `local-model-caller`, `metered-api-caller`, `subscription-session-caller` all 0 in |
+| learning loop | SERVING ITS PURPOSE | champion model 35,834 labelled observations, calibrator correcting live convictions |
+
+### The LLM stack is blocked at one part, and it says so itself
+
+    knowledge-embedder    22 documents seen, 0 embeddings published
+    retrieval-index       5,467 queries served against an empty index, 0 hits
+    context-assembler     84,217 snapshots in, 0 prompt-context out
+    prompt-renderer       84,241 requests seen, 84,228 refused missing-context
+    llm-request-router    0 rendered requests ever received
+    the three callers     0 in, 0 out
+
+`knowledge-embedder`'s own `start_part` docstring states it: *"No embedding model is
+installed on this box, so every text is answered NO_MODEL by name and no vector is
+published."* That is honest rather than decorative — the part is not pretending —
+but it means every LLM part downstream of it has never done its job. Rule 3 says
+install rather than skip; this is one install, and it is the difference between
+sixteen parts running and sixteen parts working.
+
+### News: the one reliable symbol link is thrown away
+
+The data is real and complete: **10,568 items across 179 instruments**, headlines
+like *"Vedanta, National Aluminium, Hindustan Zinc, others drag Nifty Metal down 3%"*,
+and **100% of them carry `returned_under_instrument_key`** — the broker returned each
+story under the instrument it is about.
+
+That key is read by `news-item-deduplicator` and then dropped. The chain instead asks
+an LLM to extract company names from the text:
+
+    news-text-structurer   requests_made 165, gave_up_waiting 165,
+                           structured_from_the_source_only 165
+    news-symbol-resolver   items_read 162, items_naming_nothing_tradable 162
+
+Every LLM request timed out (nothing calls a model), so the structurer fell back to
+the source alone, which leaves `names_mentioned` empty — and the resolver matches
+only `names_mentioned`. 162 of 162 stories resolved to nothing tradable, so no news
+tagging has ever reached a trade decision.
+
+**The fix needs no LLM**: tag each story with the instrument key the broker already
+returned it under, and let name extraction enrich that rather than be the only path.
+
+### Learning: real, thin, and about as accurate as a coin flip
+
+This is the one block that is genuinely feeding decisions.
+
+    bull-conviction-model     champion 35,834 observations, 17,398 positives,
+                              11 features, 8,147 convictions formed,
+                              mean absolute training error 0.491
+    bull-conviction-calibrator 1,429 fitted calibrations, largest correction 0.497
+    bull-setup-weight-learner  485 trades learned from; spread-reversion 3.0,
+                              volatility-gap 0.25 -- detectors weighted differently
+    signal-outcome-labeller    345 claims opened, 77 labels, 39 right / 38 wrong,
+                              measured hit rate 0.506
+
+Two findings inside a working block. **The error is 0.491 on a binary label**, which
+is what a coin flip scores, and the labeller's own measured hit rate is 0.506 — so
+the thing being learned is, so far, indistinguishable from noise. And the stream is
+thin by refusal: 146,065 of 146,410 candidates refused, 111,861 of them because the
+detector already had an open claim on that symbol and 34,204 for a stale price.
+
+`label-builder` now builds (11 labels, against zero ever before), but all 11 are
+`labels_whose_size_could_not_be_judged` — the component CLAUDE.md already flags.
+
+### Also found
+
+`exchange-announcement-reader`'s module docstring still explains itself in terms of
+Binance delistings and funding intervals. Crypto drift the guard counts as a comment
+rather than code, in a part that publishes nothing.
