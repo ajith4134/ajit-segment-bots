@@ -133,6 +133,11 @@ class ResolverStanding:
     items_naming_an_index: int = 0
     items_naming_nothing_tradable: int = 0
     resolved_exactly: int = 0
+    # Instruments taken from the source's own statement of what a story is
+    # about, rather than from reading the text, and keys the instrument master
+    # has no listing for.
+    resolved_from_the_source: int = 0
+    source_keys_not_in_the_master: int = 0
 
 
 @dataclass
@@ -197,12 +202,41 @@ class NewsSymbolResolver:
         return self._by_instrument_key[next(iter(keys))], "exactly"
 
     def tag(self, item) -> NewsSymbolTagging:
-        """Every instrument one structured item names."""
+        """Every instrument one structured item is about.
+
+        Two sources, and they are not the same kind of statement. The source's
+        own `source_instrument_keys` is the broker answering "stories about this
+        instrument" -- it is what the story was returned under, not a reading of
+        the text. `names_mentioned` is what a reader found in the words, which is
+        richer (one story names several companies) and less certain.
+
+        The source's keys are taken first and unconditionally. Before
+        2026-09-16 only the names were read, and on this box nothing calls a
+        model, so `names_mentioned` arrives empty and 162 of 162 stories tagged
+        nothing tradable -- while every one of 10,568 captured items carried a
+        key from the broker. A resolver that reads only the uncertain half
+        answers nothing whenever the uncertain half is missing.
+        """
         self.standing.items_read += 1
         symbols: list[str] = []
         keys: list[str] = []
         unresolved: list[str] = []
         names_an_index = False
+
+        for stated_key in getattr(item, "source_instrument_keys", ()) or ():
+            instrument = self._by_instrument_key.get(str(stated_key))
+            if instrument is None:
+                # A key the master has no listing for. Counted rather than
+                # dropped: it means the two halves of the broker disagree about
+                # what exists, which is worth knowing and is not this part's to
+                # resolve.
+                self.standing.source_keys_not_in_the_master += 1
+                continue
+            self.standing.resolved_from_the_source += 1
+            if instrument.trading_symbol not in symbols:
+                symbols.append(instrument.trading_symbol)
+                keys.append(instrument.instrument_key)
+            names_an_index = names_an_index or instrument.is_an_index
 
         for mention in getattr(item, "names_mentioned", ()) or ():
             instrument, how = self.resolve(str(mention))
@@ -252,6 +286,8 @@ def describe_resolving(resolver: NewsSymbolResolver) -> dict:
         "resolved_exactly": standing.resolved_exactly,
         "items_naming_an_index": standing.items_naming_an_index,
         "items_naming_nothing_tradable": standing.items_naming_nothing_tradable,
+        "resolved_from_the_source": standing.resolved_from_the_source,
+        "source_keys_not_in_the_master": standing.source_keys_not_in_the_master,
     }
 
 

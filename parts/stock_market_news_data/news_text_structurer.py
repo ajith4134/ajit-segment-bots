@@ -307,6 +307,9 @@ class NewsTextStructurer:
             body=story.body,
             event_phrase=event_phrase,
             names_mentioned=names_mentioned,
+            # What the source itself said this story is about, carried straight
+            # through. Independent of whether a model ever read the text.
+            source_instrument_keys=tuple(getattr(story, "instrument_keys", ()) or ()),
             figures_cited=figures_cited,
             tense=tense,
             read_by=read_by,

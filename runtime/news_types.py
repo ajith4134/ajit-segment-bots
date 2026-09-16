@@ -277,6 +277,20 @@ class StructuredNewsItem:
     published_at_ns: int
     first_observed_at_ns: int
     structured_at_ns: int
+    # The instrument keys the SOURCE returned this story under, carried through
+    # from the raw item. Not a reading of the text and not a guess: the broker's
+    # news API is asked for one instrument at a time and answers with that
+    # instrument's stories, so this is the source stating what the story is
+    # about.
+    #
+    # Carried because the reading half cannot be relied on to produce one.
+    # Measured 2026-09-16: 10,568 captured items, 100% of them carrying such a
+    # key across 179 instruments -- and 162 of 162 structured items resolved to
+    # nothing tradable, because every LLM request timed out (nothing on this box
+    # calls a model), `names_mentioned` came back empty, and the resolver had
+    # only names to match. The link existed the whole time and was dropped one
+    # part before the part that needed it.
+    source_instrument_keys: tuple[str, ...] = ()
 
     @property
     def was_read_by_a_model(self) -> bool:

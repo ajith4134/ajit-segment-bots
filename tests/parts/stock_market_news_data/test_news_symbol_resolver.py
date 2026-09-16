@@ -153,3 +153,65 @@ def test_a_listing_that_is_not_a_company_or_index_is_not_in_the_table():
     )
     assert resolver.instruments_known == 0
     assert resolver.resolve("NIFTY") == (None, "unmatched")
+
+
+def an_item_from_the_source(story_key, source_keys, names=()):
+    return SimpleNamespace(
+        story_key=story_key, names_mentioned=names, source_instrument_keys=source_keys,
+    )
+
+
+def test_a_story_the_source_returned_under_an_instrument_is_tagged_with_it(resolver):
+    """The broker's news API is asked one instrument at a time and answers with
+    that instrument's stories, so the key it returned a story under is the source
+    saying what the story is about -- not a reading of the text.
+
+    Measured on the captured news tape 2026-09-16: 10,568 items, **100%** of them
+    carrying such a key across 179 instruments. And 162 of 162 structured items
+    had tagged nothing tradable, because nothing on this box calls a model, so
+    `names_mentioned` arrived empty and the resolver read only names.
+    """
+    tagging = resolver.tag(
+        an_item_from_the_source("story-1", ("NSE_EQ|INE002A01018",))
+    )
+    assert tagging.underlying_symbols == ("RELIANCE",)
+    assert tagging.instrument_keys == ("NSE_EQ|INE002A01018",)
+
+
+def test_the_source_and_the_text_are_added_together_without_repeating_an_instrument(
+    resolver, names_the_model_wrote,
+):
+    """One story names several companies; the source names the one it was filed
+    under. Both are wanted, and the one they agree on is not two mentions.
+    """
+    key = next(key for key in names_the_model_wrote if "article-200159" in key)
+    tagging = resolver.tag(
+        an_item_from_the_source(
+            key, ("NSE_EQ|INE002A01018",), names_the_model_wrote[key],
+        )
+    )
+    # RELIANCE comes from the source and is also named in the text; INDIGO and
+    # BPCL only from the text.
+    assert tagging.underlying_symbols == ("RELIANCE", "INDIGO", "BPCL")
+    assert len(set(tagging.instrument_keys)) == len(tagging.instrument_keys)
+    assert resolver.standing.resolved_from_the_source == 1
+
+
+def test_a_source_key_the_master_does_not_list_is_counted_not_guessed(resolver):
+    """The two halves of the broker disagreeing about what exists is worth
+    knowing, and is not this part's to resolve."""
+    tagging = resolver.tag(
+        an_item_from_the_source("story-2", ("NSE_EQ|NOT-A-REAL-ISIN",))
+    )
+    assert tagging.underlying_symbols == ()
+    assert resolver.standing.source_keys_not_in_the_master == 1
+    assert resolver.standing.items_naming_nothing_tradable == 1
+
+
+def test_an_item_with_no_source_keys_still_resolves_by_name(resolver, names_the_model_wrote):
+    """The old path is unchanged: a source that names no instrument leaves the
+    text as the only evidence, which is what every non-broker feed will be."""
+    key = next(key for key in names_the_model_wrote if "article-200159" in key)
+    tagging = resolver.tag(an_item(key, names_the_model_wrote[key]))
+    assert tagging.underlying_symbols == ("RELIANCE", "INDIGO", "BPCL")
+    assert resolver.standing.resolved_from_the_source == 0

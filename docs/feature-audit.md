@@ -2876,3 +2876,43 @@ fill on either side withdraws the other.
 
 One double-exit still landed at 06:45:07, seconds into the restart, from exits
 that had been resting since before the link existed. None since.
+
+
+### 2026-09-16 — news reaches a symbol, and stops at four parts that were never written
+
+`news-symbol-resolver` matched only `names_mentioned`, the company names a model
+reads out of the article. Nothing on this box calls a model, so that field arrives
+empty and **162 of 162** structured items tagged nothing tradable — while every
+raw item already carried the answer.
+
+The broker's news API is asked one instrument at a time and answers with that
+instrument's stories, so `returned_under_instrument_key` is the source saying what
+a story is about. `news-item-deduplicator` reads it into `DistinctNewsItem.instrument_keys`
+and `news-text-structurer` then dropped it. It now travels on
+`StructuredNewsItem.source_instrument_keys`, and the resolver takes it first and
+unconditionally — a statement from the source, kept apart from a reading of the
+text, and counted separately (`resolved_from_the_source`).
+
+Replayed over the real captured news tape through the real instrument master
+(`measurements/2026-09-16-news-that-names-an-instrument/`):
+
+    captured stories read            28,489
+    carrying the source's own key    28,489 (100.0%)
+    tagged with a tradable symbol    28,489 (100.0%)   -- was 0
+    distinct symbols covered         209
+    source keys the master does not list  0
+
+Live after restart: `items_read` 2, `resolved_from_the_source` 2,
+`items_naming_nothing_tradable` **0**.
+
+**Where it still stops.** The designed path from a story to a trade is
+`news-symbol-tagging` -> `news-segment-classifier` -> `news-item` ->
+`news-catalyst-detector` -> **`entry-candidate`**, and an entry candidate is
+exactly what `bull-setup-filter` and `bear-setup-filter` consume. Both middle
+parts — and `news-sentiment-model` and `news-impact-forecaster` with them — are
+**declared in the blueprint and have no source file at all**. Tagging was the
+necessary half that existed; the half that turns a tagged story into a candidate
+has never been built, which is why 19 of the news block's 29 parts do not run.
+
+So news still reaches no trade decision. What changed is that the evidence now
+exists and is correct at the point where those parts would read it.
