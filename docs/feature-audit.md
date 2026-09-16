@@ -2694,3 +2694,44 @@ in disguise") applied to the other side of the ledger.
 
 The alternative measured and not taken was 20 (`learning_minimum_observations`):
 1.0% of trades truncated, heaviest ten still 15.3%.
+
+
+### 2026-09-16 — why `universal-symbol-sweeper` raises nothing, traced to its head
+
+Carried open from 2026-09-15 as "no part publishes `watch-condition`". Measured
+on the live spine, that is true but it is the third link, not the first.
+
+The sweeper itself is working: **6,369 sweeps**, 1,707 symbols skipped as already
+held, 61,236 skipped as unmeasurable, 0 candidates. Even fully measured it would
+raise nothing, because it evaluates `watch-condition`s and there are none. Walking
+back:
+
+| link | measured live |
+|---|---|
+| `watch-condition-compiler` | received nothing, published nothing |
+| `instruction-promotion-gate` | received nothing, published nothing |
+| `instruction-writer` | receives `horizon-profile` and `regime-memory` only; **every one of its nine hypothesis inputs has no publisher at all** — `hypothesis-priority`, `candidate-formula`, `mutated-hypothesis`, `falsification-criterion`, `novel-idea`, `required-sample-size`, `novelty-score`, `inverted-hypothesis`, `hypothesis-regime-tag` |
+| `symbolic-hypothesis-miner` | receives `kline-window` only; needs **100 labelled examples** (`miner_minimum_examples`) from `training-label` or `trade-episode` before it searches at all, and has seen zero of either |
+| `trade-episode-encoder` | received 1 closed trade, **refused it incomplete** — `attribution`, `entry_quality` and `significance` all absent |
+| the three producers of those pieces | `pnl-attributor` `trades_without_fills` 1; `entry-quality-scorer` `unmeasurable_no_signal_time` 1; `luck-skill-separator` `unmeasurable` 1 |
+
+So the hypothesis engine is starved at its source: no closed trade has ever been
+decoded into an episode, so the miner has no examples, so no formula, no
+instruction, no proven instruction, no watch-condition, and the sweeper evaluates
+an empty rule set. `label-builder`'s zero labels (already recorded in CLAUDE.md)
+is the other half of the same starvation — both of the miner's two example
+sources are empty.
+
+**A second finding, on the wire this all hangs from.** `position-close-detector`
+published 14 `closed-trade` messages this session and reports
+`messages_not_delivered: {closed-trade: 7}`, while each of its three readers
+received 1. Half of everything on the most consequential wire in the system was
+not delivered. Every undelivered closed trade is a trade that is never attributed,
+never scored, never learned from, and nothing reports it as a fault. Not yet
+diagnosed: the likely shape is a publish during start-up, before the readers had
+subscribed, but that is a hypothesis and not a measurement.
+
+The one closed trade that was delivered is itself not evidence of a broken join —
+`residues_closed_at_restore: 1` says it was a restore residue, which genuinely has
+no fills, no signal time and no measurable move. The starvation is real; this
+particular trade is not the proof of it.
