@@ -80,7 +80,7 @@ three months before expiry, so the depth for options may be weeks, not years.
 **Files:**
 - Create: `measurements/2026-09-16-how-deep-option-history-goes/measure_option_history_depth.py`
 
-- [ ] **Step 1: Write the probe.** For NIFTY, BANKNIFTY and five of the stock
+- [x] **Step 1: Write the probe.** For NIFTY, BANKNIFTY and five of the stock
   underlyings in `segment_underlying_trading_symbols`, take every currently listed
   expiry's nearest-the-money CE and PE from `instruments_by_key()`, fetch
   `historical_candles(key, from_date=<today − 120 days>, to_date=<yesterday>)`, and
@@ -88,13 +88,41 @@ three months before expiry, so the depth for options may be weeks, not years.
   Also try Upstox's expired-instrument history endpoint once for one expired NIFTY
   contract and print the HTTP status verbatim (a refusal is a fact, not an empty
   market).
-- [ ] **Step 2: Run it.**
+- [x] **Step 2: Run it.**
   `.venv/bin/python measurements/2026-09-16-how-deep-option-history-goes/measure_option_history_depth.py | tee measurements/2026-09-16-how-deep-option-history-goes/result.txt`
-- [ ] **Step 3: Decide the session range from the result, write it into this plan's
+- [x] **Step 3: Decide the session range from the result, write it into this plan's
   Task 5 as `SESSIONS_FROM`, and stop to tell the user if fewer than 20 sessions are
   available** — the walk-forward is meaningless below that.
 - [ ] **Step 4: Commit** `measurements/2026-09-16-how-deep-option-history-goes/`
   with message `docs: how many past sessions of intraday option history exist`.
+
+**Result, 2026-09-16** (`measurements/2026-09-16-how-deep-option-history-goes/result.txt`):
+
+- Listed contracts, ordinary history endpoint: **at most 33 sessions**, median 7
+  across 18 contracts. Too shallow on its own. A contract that has already expired
+  answers HTTP 400 there.
+- **Expired contracts, `/v2/expired-instruments/...`: HTTP 200 on this account.**
+  NIFTY 102 expiries from 2024-10-03, BANKNIFTY 29 from 2024-10-01, RELIANCE /
+  HDFCBANK / SBIN 23 monthly from 2024-10-31. One expired NIFTY contract returned
+  7,180 one-minute bars across 20 sessions. **`SESSIONS_FROM = 2024-10-03`**,
+  roughly 480 sessions.
+- The local instrument master was from 2026-09-05 and still listed contracts that
+  expired on 08 and 15 SEP. Refreshed 2026-09-16; the old copy is kept as
+  `complete.2026-09-05.json.gz`. Only `operate/` reads that file.
+- A summariser (context7) gave the expired-candle path as
+  `/api/v1/historical-candle/expired/...`. Upstox's raw page says
+  `/v2/expired-instruments/historical-candle/{key}/{interval}/{to}/{from}`, and
+  that is the one that answered.
+
+**What this changes in Task 3:** a past session's contracts come from the expired
+route, not the current master. **Fetch budget:** one request covers one contract for
+up to a month, but the strikes nearest the money move through a month, so each
+underlying-expiry needs about 20 to 30 strikes. At that rate, all 220 underlyings
+over two years is on the order of 100,000 requests, far past a daily quota. **The
+first run is a pilot: every index underlying plus the ten stock underlyings with the
+most contracts traded, over the most recent twelve months.** The universe widens
+only if the pilot shows an edge worth confirming. The cache makes every widening
+incremental.
 
 ### Task 2: Implied volatility from a premium
 
@@ -256,15 +284,27 @@ __all__ = ["implied_volatility", "option_price"]
 ### Task 3: One past session's prints, as the segments would have held them
 
 **Files:**
+- Modify: `operate/historical_prints.py` — add the expired-contract routes
 - Create: `operate/past_session_prints.py`
-- Test: `tests/operate/test_past_session_prints.py`
+- Test: `tests/operate/test_historical_prints.py` (extend), `tests/operate/test_past_session_prints.py`
 
 **Interfaces:**
-- Consumes: `operate.replay_a_captured_session.instruments_by_key`,
-  `contracts_nearest_the_money`, `SettingsContext`;
-  `operate.historical_prints.prints_for_instrument`;
-  `runtime.segment_settings.built_segments`, `read_segment_symbols`.
-- Produces:
+- Produces, in `operate/historical_prints.py` (cached exactly as `historical_candles`
+  is, under the same cache root, through `_wait_our_turn` and the same 429 backoff):
+
+```python
+def expired_expiries(underlying_key: str, access_token: str) -> tuple[str, ...]
+    # GET /v2/expired-instruments/expiries?instrument_key=...  -> "YYYY-MM-DD", oldest first
+def expired_option_contracts(underlying_key: str, expiry: str, access_token: str) -> tuple[dict, ...]
+    # GET /v2/expired-instruments/option/contract?instrument_key=...&expiry_date=...
+def expired_candles(expired_instrument_key: str, from_date: str, to_date: str,
+                    access_token: str) -> tuple
+    # GET /v2/expired-instruments/historical-candle/{quoted key}/1minute/{to}/{from}
+    # parsed by UpstoxAdapter.read_historical_candles, so IST stamps and ordering
+    # are handled in the one place that already does it
+```
+
+- Produces, in `operate/past_session_prints.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -274,29 +314,46 @@ class SessionInstrument:
     underlying: str
     option_type: str | None        # "CE", "PE", or None for the underlying
     strike: float | None
-    expiry_ms: int | None
+    expiry: str | None             # "YYYY-MM-DD"
     lot_size: float
-    prints: tuple[tuple[int, float], ...]   # (at_ns, price), oldest first
-    source: str                    # which free or paid source served it
+    prints: tuple[tuple[int, float], ...]   # (at_ns, close), oldest first
+    source: str
 
-def past_session_instruments(day: str, contracts_per_underlying: int,
+def past_session_instruments(day: str, underlyings: tuple[str, ...],
+                             contracts_per_underlying: int,
                              minimum_prints: int) -> tuple[SessionInstrument, ...]
 ```
 
-- [ ] **Step 1: Write the failing test** on the most recent weekday that is not today
-  (`the_most_recent_weekday_before_today()`): every contract returned has
-  `expiry_ms` after that day's close, every one has ≥ `minimum_prints` prints, all
-  prints fall inside that day, and each underlying appears once with
-  `option_type is None`.
+Rules:
+
+1. The underlying's prints come from `prints_for_instrument` (Yahoo first, Upstox
+   only if Yahoo cannot serve).
+2. The expiry is the nearest one on or after `day` from `expired_expiries`. If that
+   expiry has not passed yet, use the current master and `historical_candles`.
+3. Strikes: the `contracts_per_underlying` contracts at that expiry whose strikes are
+   nearest the underlying's **open** that day, calls and puts alike. Use the open,
+   not the close: choosing by the close would pick contracts by where the day ended,
+   which is look-ahead.
+4. A contract's bars come from `expired_candles` for the month ending at its expiry.
+   Keep only the bars inside `day`.
+5. `lot_size` is read from the contract row the expired route returns. Before
+   writing the code, print one row to confirm the field name.
+6. `contracts_per_underlying` is the setting the live feed reads for "8 contracts
+   each". Find its name with
+   `grep -rn "per_underlying" ~/.config/ajit-segment-bots/settings`.
+
+- [ ] **Step 1: Write the failing tests** on real data. `expired_expiries` for NIFTY
+  includes `2026-09-08`. `expired_candles` for `NSE_FO|42650|08-09-2026` returns at
+  least 5,000 bars. `past_session_instruments("2026-09-04", ("NIFTY",), 8, 60)`
+  returns NIFTY itself plus 8 contracts expiring 2026-09-08. Every print falls inside
+  2026-09-04 IST, and every chosen strike sits among the 8 nearest that day's first
+  NIFTY print.
 - [ ] **Step 2: Run, expect ImportError.**
-- [ ] **Step 3: Implement** by lifting the loop in
-  `contracts_from_history` (`operate/replay_a_captured_session.py:405-500`) into
-  `past_session_instruments`, taking `contracts_per_underlying` from the settings
-  name the live feed uses for "8 contracts each" (find it with
-  `grep -rn "contracts_per_underlying\|per_underlying" ~/.config/ajit-segment-bots/settings`).
-  Then make `contracts_from_history` call it, so there is one path, not two.
-- [ ] **Step 4: Run the new test and `tests/operate/test_the_replay_runs_the_learning_half.py`, expect PASS.**
-- [ ] **Step 5: Commit**, `feat: a past session's instruments are read the way the segments hold them`.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the new tests, expect PASS.** Also run
+  `tests/operate/test_historical_prints.py` and
+  `tests/operate/test_the_replay_runs_the_learning_half.py`.
+- [ ] **Step 5: Commit**, `feat: a past session's option contracts are read from the expired-instruments route`.
 
 ### Task 4: Detectors built from settings in one place
 
@@ -398,7 +455,7 @@ Rules the implementation must follow:
 
 ### Task 6: Run it across every available session and record the finding
 
-- [ ] **Step 1:** `.venv/bin/python operate/measure_detector_edge.py --from <SESSIONS_FROM> --to <yesterday>`
+- [ ] **Step 1:** `.venv/bin/python operate/measure_detector_edge.py --from 2025-09-16 --to <yesterday>` (the pilot universe from Task 1's result; widen to `--from 2024-10-03` only if the pilot shows an edge)
   (run in the background; it spends Upstox quota only on what the free sources could
   not serve, and the cache makes a rerun free).
 - [ ] **Step 2:** dispatch `review-adversarial` (opus) on the report and the harness:

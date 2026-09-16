@@ -193,6 +193,9 @@ Upstox", then "find the options price source"):
 | `operate/yahoo_finance_prints.py` | equities, indices — **no options** | 1m / 5m / 1d | 1m ~1 month, 1d 10 years | none |
 | `operate/nse_fo_bhavcopy.py` (NSE's own) | **every option and future** | daily OHLC + volume + OI | ~2 years | none |
 | `operate/nse_intraday_option_prices.py` (NSE's own) | **every option, index and stock** | intraday ticks | **most recent session only** | none |
+| Upstox `/v2/expired-instruments/...` (measured 2026-09-16) | **expired** index and stock options | 1 minute | NIFTY from 2024-10-03, stocks from 2024-10-31 | broker token; answered 200 on this account |
+
+The ordinary history endpoint serves a *listed* option only since it listed -- at most 33 sessions, median 7, measured 2026-09-16 -- and answers HTTP 400 once it expires. Past option sessions come from the expired-instruments route (`measurements/2026-09-16-how-deep-option-history-goes/`).
 
 `operate/historical_prints.prints_for_instrument` picks between them and says
 which one served: equities and indices from Yahoo, options from NSE's intraday

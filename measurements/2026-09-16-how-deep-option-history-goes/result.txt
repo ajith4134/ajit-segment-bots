@@ -1,0 +1,40 @@
+LISTED CONTRACTS (history endpoint, one month per request), measured 2026-09-16
+  a session = a day with at least 60 one-minute bars
+
+      2026-09-01..2026-09-15: Upstox refused history for NSE_FO|42599 2026-09-01..2026-09-15: HTTP 400
+  NIFTY 23200 CE 08 SEP 26         expires 2026-09-08  sessions   0  first None  (days with any bar 0)
+      2026-09-01..2026-09-15: Upstox refused history for NSE_FO|47285 2026-09-01..2026-09-15: HTTP 400
+  NIFTY 23200 CE 15 SEP 26         expires 2026-09-15  sessions   0  first None  (days with any bar 0)
+  NIFTY 23200 CE 22 SEP 26         expires 2026-09-22  sessions   6  first 2026-09-07  (days with any bar 6)
+  BANKNIFTY 56200 CE 29 SEP 26     expires 2026-09-29  sessions  22  first 2026-08-11  (days with any bar 22)
+  BANKNIFTY 56200 CE 27 OCT 26     expires 2026-10-27  sessions   5  first 2026-09-08  (days with any bar 5)
+  BANKNIFTY 56200 CE 23 NOV 26     expires 2026-11-23  sessions   2  first 2026-09-11  (days with any bar 2)
+  RELIANCE 1250 CE 29 SEP 26       expires 2026-09-29  sessions  30  first 2026-08-03  (days with any bar 31)
+  RELIANCE 1250 CE 27 OCT 26       expires 2026-10-27  sessions  10  first 2026-08-27  (days with any bar 10)
+  RELIANCE 1240 CE 23 NOV 26       expires 2026-11-23  sessions   0  first None  (days with any bar 0)
+  HDFCBANK 720 CE 29 SEP 26        expires 2026-09-29  sessions  33  first 2026-07-29  (days with any bar 34)
+  HDFCBANK 720 CE 27 OCT 26        expires 2026-10-27  sessions  27  first 2026-08-06  (days with any bar 28)
+  HDFCBANK 720 CE 23 NOV 26        expires 2026-11-23  sessions  13  first 2026-08-27  (days with any bar 13)
+  INFY 1060 CE 29 SEP 26           expires 2026-09-29  sessions  22  first 2026-07-31  (days with any bar 22)
+  INFY 1060 CE 27 OCT 26           expires 2026-10-27  sessions   7  first 2026-09-02  (days with any bar 7)
+  INFY 1040 CE 23 NOV 26           expires 2026-11-23  sessions   0  first None  (days with any bar 0)
+  TATAMOTORS: no listed calls in the master
+  SBIN 990 CE 29 SEP 26            expires 2026-09-29  sessions  18  first 2026-08-18  (days with any bar 18)
+  SBIN 990 CE 27 OCT 26            expires 2026-10-27  sessions   6  first 2026-09-02  (days with any bar 7)
+  SBIN 980 CE 23 NOV 26            expires 2026-11-23  sessions   0  first None  (days with any bar 0)
+
+  deepest listed contract: 33 sessions; median across 18: 7
+
+EXPIRED CONTRACTS (Upstox expired-instruments API)
+  expiries for NSE_INDEX|Nifty 50: HTTP 200
+    102 expiries, earliest ['2024-10-03'], latest ['2026-09-08']
+  contracts for 2026-09-08: HTTP 200
+    176 contracts; asking one: NIFTY 24250 PE 08 SEP 26 NSE_FO|42650|08-09-2026
+  one-minute candles: HTTP 200
+    7180 bars across 20 sessions
+
+EXPIRED ROUTE FOR OTHER UNDERLYINGS
+  BANKNIFTY  NSE_INDEX|Nifty Bank     HTTP 200  expiries 29  earliest ['2024-10-01']
+  RELIANCE   NSE_EQ|INE002A01018      HTTP 200  expiries 23  earliest ['2024-10-31']
+  HDFCBANK   NSE_EQ|INE040A01034      HTTP 200  expiries 23  earliest ['2024-10-31']
+  SBIN       NSE_EQ|INE062A01020      HTTP 200  expiries 23  earliest ['2024-10-31']
