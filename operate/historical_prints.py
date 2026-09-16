@@ -39,6 +39,7 @@ import pathlib
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -131,29 +132,17 @@ def remember_document(path: pathlib.Path, document: dict) -> None:
         pass
 
 
-def historical_candles(
-    instrument_key: str, from_date: str, to_date: str, access_token: str,
-    timeout_seconds: float = 30.0, use_cache: bool = True,
-) -> tuple:
-    """One instrument's one-minute bars for a date range, oldest first.
+def fetch_upstox_document(url: str, access_token: str, cache_path: pathlib.Path | None,
+                          describing: str, timeout_seconds: float = 30.0) -> dict:
+    """One Upstox REST answer, paced, retried on 429, and cached when a path is given.
 
-    Parsed by `UpstoxAdapter.read_historical_candles`, which is where the rows
-    are reversed into time order and the +05:30 stamps are read as IST rather
-    than as UTC -- both of which a caller doing its own parsing would get wrong
-    in a way that looks like data rather than like a bug.
+    Every history route here shares this, so the pacing and the backoff ladder are
+    one fact rather than a copy per endpoint that could drift apart.
     """
-    adapter = UpstoxAdapter()
-    path = cache_path_for(instrument_key, from_date, to_date)
-    if use_cache:
-        remembered = cached_document(path)
+    if cache_path is not None:
+        remembered = cached_document(cache_path)
         if remembered is not None:
-            return adapter.read_historical_candles(
-                instrument_key, HISTORICAL_UNIT, HISTORICAL_INTERVAL, remembered,
-            )
-    url = adapter.historical_candle_url(
-        instrument_key, HISTORICAL_UNIT, HISTORICAL_INTERVAL,
-        from_date=from_date, to_date=to_date,
-    )
+            return remembered
     request = build_broker_request(url, access_token=access_token)
     backoff = FIRST_BACKOFF_SECONDS
     for attempt in range(RETRIES_ON_A_RATE_LIMIT + 1):
@@ -171,17 +160,107 @@ def historical_candles(
             # Returning () for both would make a rate limit read as a quiet
             # session -- which is the shape this project keeps finding.
             raise RuntimeError(
-                f"Upstox refused history for {instrument_key} "
-                f"{from_date}..{to_date}: HTTP {refusal.code}"
+                f"Upstox refused {describing}: HTTP {refusal.code}"
                 + (
                     f", still refusing after {RETRIES_ON_A_RATE_LIMIT} waits"
                     if refusal.code == TOO_MANY_REQUESTS else ""
                 )
             ) from refusal
-    if use_cache:
-        remember_document(path, document)
+    if cache_path is not None:
+        remember_document(cache_path, document)
+    return document
+
+
+def historical_candles(
+    instrument_key: str, from_date: str, to_date: str, access_token: str,
+    timeout_seconds: float = 30.0, use_cache: bool = True,
+) -> tuple:
+    """One instrument's one-minute bars for a date range, oldest first.
+
+    Parsed by `UpstoxAdapter.read_historical_candles`, which is where the rows
+    are reversed into time order and the +05:30 stamps are read as IST rather
+    than as UTC -- both of which a caller doing its own parsing would get wrong
+    in a way that looks like data rather than like a bug.
+    """
+    adapter = UpstoxAdapter()
+    url = adapter.historical_candle_url(
+        instrument_key, HISTORICAL_UNIT, HISTORICAL_INTERVAL,
+        from_date=from_date, to_date=to_date,
+    )
+    document = fetch_upstox_document(
+        url, access_token,
+        cache_path_for(instrument_key, from_date, to_date) if use_cache else None,
+        f"history for {instrument_key} {from_date}..{to_date}",
+        timeout_seconds,
+    )
     return adapter.read_historical_candles(
         instrument_key, HISTORICAL_UNIT, HISTORICAL_INTERVAL, document,
+    )
+
+
+# Upstox's expired-instruments routes, read from its raw documentation page on
+# 2026-09-16 (a summariser gave a different, wrong path). They answer for
+# contracts the ordinary history endpoint refuses with HTTP 400 once expired.
+# The account needs Upstox's Plus plan; this one answered 200
+# (measurements/2026-09-16-how-deep-option-history-goes/).
+UPSTOX_API_ROOT = "https://api.upstox.com/v2"
+EXPIRED_CANDLE_INTERVAL = "1minute"
+
+
+def _quoted(text: str) -> str:
+    return urllib.parse.quote(text, safe="")
+
+
+def expired_expiries(underlying_key: str, access_token: str) -> tuple[str, ...]:
+    """Every expiry Upstox holds expired contracts for, "YYYY-MM-DD", oldest first.
+
+    Cached per calendar day: the list grows as contracts expire, so yesterday's
+    answer is not today's.
+    """
+    today = time.strftime("%Y-%m-%d")
+    document = fetch_upstox_document(
+        f"{UPSTOX_API_ROOT}/expired-instruments/expiries?instrument_key={_quoted(underlying_key)}",
+        access_token,
+        HISTORY_CACHE / underlying_key / f"expired-expiries-as-of-{today}.json",
+        f"expired expiries for {underlying_key}",
+    )
+    return tuple(sorted(document.get("data") or ()))
+
+
+def expired_option_contracts(underlying_key: str, expiry: str,
+                             access_token: str) -> tuple[dict, ...]:
+    """Every option contract of one expired expiry, as Upstox lists it.
+
+    Rows carry `trading_symbol`, `instrument_type`, `strike_price`, `lot_size`,
+    `freeze_quantity` and an `instrument_key` of the form `NSE_FO|42650|08-09-2026`.
+    A past expiry's list never changes, so it is cached for good.
+    """
+    document = fetch_upstox_document(
+        f"{UPSTOX_API_ROOT}/expired-instruments/option/contract"
+        f"?instrument_key={_quoted(underlying_key)}&expiry_date={expiry}",
+        access_token,
+        HISTORY_CACHE / underlying_key / f"expired-option-contracts-{expiry}.json",
+        f"expired option contracts for {underlying_key} {expiry}",
+    )
+    return tuple(document.get("data") or ())
+
+
+def expired_candles(expired_instrument_key: str, from_date: str, to_date: str,
+                    access_token: str) -> tuple:
+    """One expired contract's one-minute bars for a date range, oldest first.
+
+    The route takes the dates as `/{to}/{from}`, newest first, as Upstox documents
+    it. The answer has the ordinary history shape, so the same adapter parses it.
+    """
+    document = fetch_upstox_document(
+        f"{UPSTOX_API_ROOT}/expired-instruments/historical-candle/"
+        f"{_quoted(expired_instrument_key)}/{EXPIRED_CANDLE_INTERVAL}/{to_date}/{from_date}",
+        access_token,
+        cache_path_for(expired_instrument_key, from_date, to_date),
+        f"expired history for {expired_instrument_key} {from_date}..{to_date}",
+    )
+    return UpstoxAdapter().read_historical_candles(
+        expired_instrument_key, HISTORICAL_UNIT, HISTORICAL_INTERVAL, document,
     )
 
 

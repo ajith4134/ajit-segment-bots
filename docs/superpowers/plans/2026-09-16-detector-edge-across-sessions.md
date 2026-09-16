@@ -291,6 +291,17 @@ __all__ = ["implied_volatility", "option_price"]
 
 ### Task 3: One past session's prints, as the segments would have held them
 
+**Done 2026-09-16.** `fetch_upstox_document` now holds the pacing, the 429 ladder and
+the cache for every history route. Tests: `tests/operate/test_expired_option_history.py`
+and `tests/operate/test_past_session_prints.py`, all against the live API and cached.
+The operate suite passes, 75 of 75.
+
+**One deviation:** `contracts_from_history` in the replay was **not** changed to call
+`past_session_instruments`. It chooses strikes by the day's *close*, takes Yahoo
+first, and reads only the current master. Rerouting it would change what the
+replay reports. Choosing by the close is look-ahead, so this is recorded as a
+finding for the replay rather than fixed in passing.
+
 **Files:**
 - Modify: `operate/historical_prints.py` — add the expired-contract routes
 - Create: `operate/past_session_prints.py`
@@ -350,18 +361,18 @@ Rules:
    each". Find its name with
    `grep -rn "per_underlying" ~/.config/ajit-segment-bots/settings`.
 
-- [ ] **Step 1: Write the failing tests** on real data. `expired_expiries` for NIFTY
+- [x] **Step 1: Write the failing tests** on real data. `expired_expiries` for NIFTY
   includes `2026-09-08`. `expired_candles` for `NSE_FO|42650|08-09-2026` returns at
   least 5,000 bars. `past_session_instruments("2026-09-04", ("NIFTY",), 8, 60)`
   returns NIFTY itself plus 8 contracts expiring 2026-09-08. Every print falls inside
   2026-09-04 IST, and every chosen strike sits among the 8 nearest that day's first
   NIFTY print.
-- [ ] **Step 2: Run, expect ImportError.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run the new tests, expect PASS.** Also run
+- [x] **Step 2: Run, expect ImportError.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run the new tests, expect PASS.** Also run
   `tests/operate/test_historical_prints.py` and
   `tests/operate/test_the_replay_runs_the_learning_half.py`.
-- [ ] **Step 5: Commit**, `feat: a past session's option contracts are read from the expired-instruments route`.
+- [x] **Step 5: Commit**, `feat: a past session's option contracts are read from the expired-instruments route`.
 
 ### Task 4: Detectors built from settings in one place
 
