@@ -422,6 +422,24 @@ def run_signal_outcome_labeller(
     )
 
 
+def build_signal_outcome_labeller_from_settings(
+    settings, price_staleness=None, now_ns=time.time_ns,
+) -> SignalOutcomeLabeller:
+    """The labeller as the live part builds it, from the settings the part reads.
+
+    Shared with the detector-edge measurement (operate/measure_detector_edge.py), which
+    settles each detector's claims the way the spine does rather than by a second rule.
+    `price_staleness` is the estimator `start_part` builds; the measurement builds its
+    own with `price_staleness_from` and the same materiality.
+    """
+    return SignalOutcomeLabeller(
+        move_fraction=settings.number("signal_label_move_fraction"),
+        maximum_open_claims=int(settings.number("signal_label_maximum_open_claims")),
+        price_staleness=price_staleness,
+        now_ns=now_ns,
+    )
+
+
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
@@ -519,11 +537,7 @@ def start_part(context) -> int:
             )
 
     return run_signal_outcome_labeller(
-        labeller=SignalOutcomeLabeller(
-            move_fraction=context.number("signal_label_move_fraction"),
-            maximum_open_claims=int(context.number("signal_label_maximum_open_claims")),
-            price_staleness=price_staleness,
-        ),
+        labeller=build_signal_outcome_labeller_from_settings(context, price_staleness=price_staleness),
         control_socket=context.control_socket,
         read_prices_and_candidates=read_prices_and_candidates,
         publish_labels=publish_labels,

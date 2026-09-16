@@ -4875,3 +4875,23 @@ note  = "Claude, 2026-09-16: where the bisection in runtime/implied_volatility_f
 value = 10.0
 unit  = "annual volatility"
 note  = "Claude, 2026-09-16: the highest volatility the inversion will search. A premium this volatility cannot reach is refused, not clamped. MEASURED: Upstox's highest stated figure was 1.5601 on 2026-09-15 and 7.0312 on 2026-09-08 (far strikes close to expiry), so a first ceiling of 5.0 was below what the broker itself states. At 10.0, 2026-09-08 refused 1,161 of 28,693 sampled records: 1,157 at or below the discounted intrinsic floor (a stale in-the-money premium) and 4 above the ceiling (measurements/2026-09-16-implied-volatility-from-premium/result-*-with-carry-rate.txt). Each doubling of the ceiling adds one halving to every search."
+
+[edge_walk_forward_train_fraction]
+value = 0.7
+unit  = "fraction of sessions"
+note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py (the operator's fourth goal: a pattern counts only if fitted on earlier sessions and scored on later ones). The earlier 70% of sessions choose which buckets are kept; only the later 30% score them. The same split the 2026-09-16 conviction-signal measurement used, so the two are comparable. Over the ~250-session pilot year that leaves ~75 sessions to score on, several months of market, which is what keeps one quarter's trend from passing as an edge. A measurement setting; no running part reads it."
+
+[edge_minimum_trades_per_bucket]
+value = 30
+unit  = "trades"
+note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py: the fewest trades on the earlier sessions a bucket needs before its mean can be judged. Thirty is where a sample mean's normal approximation is conventionally taken to hold, which is what the lower confidence bound in edge_confidence_level assumes. Fewer, and a lucky handful of trades would clear the bound on noise. A measurement setting; no running part reads it."
+
+[edge_confidence_level]
+value = 0.95
+unit  = "one-sided confidence"
+note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py: a bucket is kept only when its mean net return on the earlier sessions has a one-sided lower bound at this confidence above zero. 95% is the operator's 'profit first' made strict (docs/goal.md, fourth goal): with dozens of buckets considered, a looser bound keeps several by chance alone, which is why the later sessions, not this bound, are what the report calls an edge. A measurement setting; no running part reads it."
+
+[edge_pilot_stock_underlyings]
+value = 10
+unit  = "stock underlyings"
+note  = "Claude, 2026-09-16, for operate/measure_detector_edge.py: how many stock underlyings the first detector-edge run covers beside every index the index segment derives -- the most option volume on NSE's own bhavcopy for the session before the run starts. Bounded by Upstox's daily history quota, not by preference: all 220 underlyings over two years is on the order of 100,000 requests (measurements/2026-09-16-how-deep-option-history-goes/). Widened only if the pilot shows an edge worth confirming. A measurement setting; no running part reads it."

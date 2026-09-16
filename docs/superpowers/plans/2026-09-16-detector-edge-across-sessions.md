@@ -431,6 +431,27 @@ harness that re-typed them would drift the day a setting is renamed.
 
 ### Task 5: Drive, score, walk forward
 
+**Done 2026-09-16.** `operate/measure_detector_edge.py`, tested by
+`tests/operate/test_measure_detector_edge.py` on two real sessions (5 passed). How it
+differs from the draft below:
+
+- `signal-outcome-labeller` gained `build_signal_outcome_labeller_from_settings`, so
+  confidence learns from the live labeller rather than a second rule.
+- Bars are acted on at their **end**. `SessionInstrument` now carries whole candles.
+- The implied-vol surface is built directly, at-the-money only. `implied-vol-reader`
+  needs two-sided quotes, and history has none.
+- Chain width is read from each segment's own `segment_option_contracts_per_underlying`
+  (8), not the runtime fallback (50). A contract is held if it traded at all, as the
+  live feed holds it.
+- **The largest fidelity gap:** mean-reversion and momentum-burst see one close a
+  minute here and several prints a second live. Their rows measure the same rule on a
+  slower clock, and the report says so. volatility-gap and zero-to-hero are the faithful rows.
+- Four measurement settings were added: `edge_walk_forward_train_fraction`,
+  `edge_minimum_trades_per_bucket`, `edge_confidence_level` and
+  `edge_pilot_stock_underlyings`.
+- One cold session (2026-09-04, NIFTY): volatility-gap fired 2,240 times and 307
+  trades were scored. The other detectors' windows had not filled yet.
+
 **Files:**
 - Create: `operate/measure_detector_edge.py`
 - Test: `tests/operate/test_measure_detector_edge.py`
@@ -483,17 +504,17 @@ Rules the implementation must follow:
    sessions, and separately scores all buckets there for comparison.
 9. **NOT MEASURED rows** for spread-reversion and the sweeper, with the reason.
 
-- [ ] **Step 1: Write the failing test** on one real past session from Task 1's
+- [x] **Step 1: Write the failing test** on one real past session from Task 1's
   range: at least one `ScoredCandidate`, every `bought` has prints that session,
   `held_seconds > 0`, and `walk_forward` never lists a session in both its train and
   test sets.
-- [ ] **Step 2: Run, expect ImportError.**
-- [ ] **Step 3: Implement** `operate/measure_detector_edge.py` with a `main()` taking
+- [x] **Step 2: Run, expect ImportError.**
+- [x] **Step 3: Implement** `operate/measure_detector_edge.py` with a `main()` taking
   `--from`, `--to`, `--train-fraction`, `--minimum-trades`, writing
   `measurements/2026-09-16-detector-edge-across-sessions/report.md` and
   `buckets.json`. Settings for the last two go into `runtime.toml` with provenance.
-- [ ] **Step 4: Run the test, expect PASS.**
-- [ ] **Step 5: Commit**, `feat: detectors are scored net across past sessions, walked forward`.
+- [x] **Step 4: Run the test, expect PASS.**
+- [x] **Step 5: Commit**, `feat: detectors are scored net across past sessions, walked forward`.
 
 ### Task 6: Run it across every available session and record the finding
 

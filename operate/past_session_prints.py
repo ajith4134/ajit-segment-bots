@@ -54,7 +54,10 @@ class SessionInstrument:
     lot_size: float
     freeze_quantity: float
     instrument_key: str
-    prints: tuple[tuple[int, float], ...]   # (at_ns, close), oldest first
+    # (bar start ns, close), oldest first. A bar's close is known only when the
+    # bar ends, so a reader replaying these must act at start + one interval.
+    prints: tuple[tuple[int, float], ...]
+    candles: tuple                          # the same bars, whole (BrokerCandle)
     source: str
 
 
@@ -82,11 +85,12 @@ def _month_holding(day: str, not_after: datetime.date) -> tuple[str, str]:
     return first.isoformat(), min(last, not_after).isoformat()
 
 
-def _in_session(candles, opens_ns: int, closes_ns: int) -> tuple[tuple[int, float], ...]:
-    # A bar is stamped at its start, so the bar that starts at the close is after it.
+def _in_session(candles, opens_ns: int, closes_ns: int) -> tuple:
+    """The bars that start inside the session. A bar is stamped at its start, so the
+    bar that starts at the close is after it."""
     return tuple(
-        (at_ns, price) for at_ns, price in prints_from_candles(candles)
-        if opens_ns <= at_ns < closes_ns
+        candle for candle in candles
+        if candle.close and opens_ns <= candle.bar_time_ms * 1_000_000 < closes_ns
     )
 
 
@@ -164,10 +168,11 @@ def past_session_instruments(
         if segment is None or row is None:
             continue
         month_from, month_to = _month_holding(day, yesterday)
-        spot = _in_session(
+        spot_bars = _in_session(
             historical_candles(row["instrument_key"], month_from, month_to, token),
             opens_ns, closes_ns,
         )
+        spot = tuple(prints_from_candles(spot_bars))
         if len(spot) < minimum_prints:
             continue
         # An index carries no lot, and an option segment never buys its underlying,
@@ -176,7 +181,8 @@ def past_session_instruments(
             segment=segment, trading_symbol=underlying, underlying=underlying,
             option_type=None, strike=None, expiry=None,
             lot_size=float(row.get("lot_size") or 0), freeze_quantity=float(row.get("freeze_quantity") or 0),
-            instrument_key=row["instrument_key"], prints=spot, source=LISTED_SOURCE,
+            instrument_key=row["instrument_key"], prints=spot, candles=spot_bars,
+            source=LISTED_SOURCE,
         ))
 
         expiry, chain, source = _chain_for(master, row["instrument_key"], underlying, day, token)
@@ -197,10 +203,11 @@ def past_session_instruments(
                 expiry_date = datetime.date.fromisoformat(expiry)
                 contract_from, contract_to = _month_holding(day, min(expiry_date, yesterday))
                 fetch = expired_candles if source == EXPIRED_SOURCE else historical_candles
-                prints = _in_session(
+                bars = _in_session(
                     fetch(contract["instrument_key"], contract_from, contract_to, token),
                     opens_ns, closes_ns,
                 )
+                prints = tuple(prints_from_candles(bars))
                 if len(prints) < minimum_prints:
                     continue
                 held.append(SessionInstrument(
@@ -208,7 +215,8 @@ def past_session_instruments(
                     underlying=underlying, option_type=option_type, strike=strike,
                     expiry=expiry, lot_size=float(contract["lot_size"]),
                     freeze_quantity=float(contract.get("freeze_quantity") or 0),
-                    instrument_key=contract["instrument_key"], prints=prints, source=source,
+                    instrument_key=contract["instrument_key"], prints=prints, candles=bars,
+                    source=source,
                 ))
                 chosen += 1
     return tuple(held)
