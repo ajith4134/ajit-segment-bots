@@ -8,6 +8,31 @@ made only when the user gives them.
 trading bot) is in git history — `git log -p docs/goal.md` — not deleted, not
 carried forward as a parallel track.
 
+## TEMPORARY GOAL — given 2026-09-16 (fourth): patterns, not coin flips
+
+**In the user's own words, verbatim:**
+
+> i need you to find a way in any way to make all tis coin flip 50 percent
+> equations or winrate by usin all te 370 pluse partes too open trades and pick
+> direction more evidence to make tis equation to atleast 85 percentae win rate
+> find way ow to make it possible even tou te coin flip is 50 50 openin and
+> closin a profitable trades donst come down to luck it all come under findin te
+> patterent and usin tat oparrtent to find profint in tat patttern
+
+**What it was clarified to mean, asked and answered the same day:**
+
+| question | the user's answer |
+|---|---|
+| what "85%" means, since win rate alone can be bought with a wide stop and a tight target and still lose | **profit first** — maximise net profit after the round trip; win rate is reported, not forced |
+| what counts as a pattern found | **many past sessions** — fitted on earlier sessions, scored on later ones, from Upstox 1-minute history and NSE's files; never one session |
+| where the effort goes first | **measure every detector** — net win rate and expectancy per detector, per setup, per session; keep what has an edge, switch off what does not |
+
+Where it starts, measured 2026-09-16 on the captured tape: every
+volatility-gap setup loses after the 0.853% round trip except one at +0.013%
+with 38.5% wins, and every one of those candidates came from a single session
+(`docs/feature-audit.md`, same date). A number from one session is one draw of
+the market's direction and does not count as a pattern under this goal.
+
 ## SCOPE CHANGE — given 2026-09-12, read this before any segment work
 
 **In the user's own words, verbatim:**
