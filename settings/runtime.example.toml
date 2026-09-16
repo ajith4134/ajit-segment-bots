@@ -4855,3 +4855,23 @@ note  = "Claude, 2026-09-15, at the operator's instruction ('fix the zero to her
 value = 31536000.0
 unit  = "seconds"
 note  = "Claude, 2026-09-15: the year an estimated option delta is stated over, so a delta estimated before a contract is subscribed matches the one Upstox will state once it is. Calendar seconds (365 x 86,400) to the 15:30 session close, because that basis reproduced Upstox's own delta for the day's NIFTY 15 SEP 26 contracts to a median 0.004 (p90 0.008) over 69 samples; trading seconds to the close (5,512,500 a year) missed by 0.087 and calendar seconds to the master's 23:59:59 expiry stamp by 0.064 (measurements/2026-09-15-zero-to-hero-strikes/upstox-delta-time-basis.txt). Deliberately NOT implied_volatility_trading_seconds_per_year: that one puts a realised-volatility forecast of trading time onto an annual scale, a different question with a different answer. Re-measure if Upstox changes how it computes greeks."
+
+[implied_volatility_annual_carry_rate]
+value = 0.055
+unit  = "fraction per year"
+note  = "Claude, 2026-09-16: the rate runtime/implied_volatility_from_premium.py prices with, so a volatility inverted from a past session's premium agrees with the one Upstox states live. With no rate, calls inverted above Upstox's figure and puts below it by the same amount (2026-09-15 CE +0.0094 / PE -0.0092; 2026-09-08 CE +0.0109 / PE -0.0099), the mark of a rate the broker includes. MEASURED by sweeping the rate on every captured contract's greeks records (measurements/2026-09-16-implied-volatility-from-premium/rate-sweep-*.txt): the bias vanished at 0.04 on 2026-09-15 (an expiry day, 10,962 records) and at 0.07-0.08 on 2026-09-08 (7,280 records), so the figure is absorbing more than a rate -- likely how Upstox prices the forward. 0.05-0.055 gives the least combined median error (0.0090 + 0.0046 and 0.0092 + 0.0044), against 0.0124 + 0.0108 with no rate. Not RBI's repo rate and not to be read as one. Re-sweep when more sessions are captured."
+
+[implied_volatility_agreement_tolerance]
+value = 0.0125
+unit  = "annual volatility, absolute"
+note  = "Claude, 2026-09-16: the largest median gap tests/runtime/test_implied_volatility_from_premium.py accepts between a premium-inverted volatility and Upstox's stated one. Anchored to the measured no-rate median on 2026-09-15 (0.0124, 43,771 records): the carry rate has to do at least as well as leaving it out did. MEASURED with the rate at 0.055: 0.0092 on 2026-09-15 and 0.0044 on 2026-09-08. Upstox's own stated median was 0.2637 that day, so the tolerance is about 5% of a typical figure."
+
+[implied_volatility_search_tolerance]
+value = 0.00001
+unit  = "annual volatility, absolute"
+note  = "Claude, 2026-09-16: where the bisection in runtime/implied_volatility_from_premium.py stops. Nearly three orders of magnitude inside the 0.0044-0.0092 measured disagreement with Upstox, so search precision never shows up in that comparison; each inversion is about 19 halvings from the ceiling, which the 43,771-record measurement ran in well under a minute."
+
+[implied_volatility_search_ceiling]
+value = 10.0
+unit  = "annual volatility"
+note  = "Claude, 2026-09-16: the highest volatility the inversion will search. A premium this volatility cannot reach is refused, not clamped. MEASURED: Upstox's highest stated figure was 1.5601 on 2026-09-15 and 7.0312 on 2026-09-08 (far strikes close to expiry), so a first ceiling of 5.0 was below what the broker itself states. At 10.0, 2026-09-08 refused 1,161 of 28,693 sampled records: 1,157 at or below the discounted intrinsic floor (a stale in-the-money premium) and 4 above the ceiling (measurements/2026-09-16-implied-volatility-from-premium/result-*-with-carry-rate.txt). Each doubling of the ceiling adds one halving to every search."

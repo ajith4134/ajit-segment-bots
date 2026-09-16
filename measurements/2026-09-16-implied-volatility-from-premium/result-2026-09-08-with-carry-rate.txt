@@ -1,0 +1,7 @@
+2026-09-08 at rate 0.055: 27532 paired records, refused {'no volatility prices the premium': 1161}
+  |ours - upstox|  median 0.0042  p75 0.0109  p90 0.0277  p95 0.0449
+  upstox stated    median 0.2222  max 9.7168
+  CE signed (ours - upstox) median +0.0036  n 15982
+  PE signed (ours - upstox) median -0.0026  n 11550
+  premium <= 5s old    n  15766  median error 0.0040
+  premium > 5s old     n  11766  median error 0.0046

@@ -1,0 +1,11 @@
+2026-09-08: 7280 paired records
+  rate 0.000  median |error| 0.0108  CE +0.0109  PE -0.0099  n 6527
+  rate 0.020  median |error| 0.0084  CE +0.0082  PE -0.0077  n 6651
+  rate 0.040  median |error| 0.0055  CE +0.0054  PE -0.0045  n 6765
+  rate 0.050  median |error| 0.0046  CE +0.0041  PE -0.0032  n 6830
+  rate 0.055  median |error| 0.0044  CE +0.0036  PE -0.0027  n 6847
+  rate 0.060  median |error| 0.0042  CE +0.0032  PE -0.0021  n 6864
+  rate 0.065  median |error| 0.0042  CE +0.0027  PE -0.0015  n 6907
+  rate 0.070  median |error| 0.0040  CE +0.0023  PE -0.0006  n 6948
+  rate 0.080  median |error| 0.0041  CE +0.0010  PE +0.0007  n 6992
+  rate 0.100  median |error| 0.0050  CE -0.0015  PE +0.0047  n 7015

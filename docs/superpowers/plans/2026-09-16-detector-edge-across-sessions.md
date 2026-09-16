@@ -126,6 +126,14 @@ incremental.
 
 ### Task 2: Implied volatility from a premium
 
+**Done 2026-09-16, with one change from the plan below:** the functions take an
+`annual_rate`. With no rate, calls inverted about 0.01 high and puts about 0.01 low
+on both captured days, so `implied_volatility_annual_carry_rate` (0.055) was swept
+and adopted. The median disagreement with Upstox is 0.0092 on 2026-09-15 and 0.0042
+on 2026-09-08. The search ceiling is 10.0, because Upstox itself stated up to 9.7 on
+2026-09-08. The code blocks below are the first draft; `runtime/implied_volatility_from_premium.py`
+is authoritative.
+
 **Files:**
 - Create: `runtime/implied_volatility_from_premium.py`
 - Test: `tests/runtime/test_implied_volatility_from_premium.py`
@@ -134,7 +142,7 @@ incremental.
 - Produces: `option_price(spot, strike, option_type, volatility, seconds_to_expiry, seconds_per_year) -> float | None`
   and `implied_volatility(premium, spot, strike, option_type, seconds_to_expiry, seconds_per_year, tolerance, maximum_volatility) -> float | None`.
 
-- [ ] **Step 1: Write the failing test** — real data: read the `.option_greeks` stream for
+- [x] **Step 1: Write the failing test** — real data: read the `.option_greeks` stream for
   every contract on the tape for 2026-09-15, pair each greeks record with the
   underlying's print at the same second, invert the contract's premium, and compare to
   the `iv` Upstox stated.
@@ -211,13 +219,13 @@ def test_inverted_volatility_matches_what_upstox_states():
   Premium and spot are the last prints at or before the greeks record, so a stale
   premium widens the error. That is a real limit of the tape, not a bug to tune away.
 
-- [ ] **Step 2: Add the setting** `implied_volatility_agreement_tolerance` to
+- [x] **Step 2: Add the setting** `implied_volatility_agreement_tolerance` to
   `~/.config/ajit-segment-bots/settings/runtime.toml` with a provenance note, value
   taken from the first run's measured median, not chosen in advance. Also
   `implied_volatility_search_tolerance` and `implied_volatility_search_ceiling`.
-- [ ] **Step 3: Run the test, expect ImportError.**
+- [x] **Step 3: Run the test, expect ImportError.**
   `.venv/bin/python -m pytest tests/runtime/test_implied_volatility_from_premium.py -v`
-- [ ] **Step 4: Implement.**
+- [x] **Step 4: Implement.**
 
 ```python
 """An option's implied volatility, inverted from its premium on the basis option_delta uses.
@@ -276,9 +284,9 @@ def implied_volatility(premium, spot, strike, option_type, seconds_to_expiry,
 __all__ = ["implied_volatility", "option_price"]
 ```
 
-- [ ] **Step 5: Run the test, expect PASS.** If the median disagreement is large,
+- [x] **Step 5: Run the test, expect PASS.** If the median disagreement is large,
   that is a finding about the basis — record it, do not widen the tolerance to pass.
-- [ ] **Step 6: Commit** `runtime/implied_volatility_from_premium.py` and the test,
+- [x] **Step 6: Commit** `runtime/implied_volatility_from_premium.py` and the test,
   `feat: an option's implied volatility is inverted from its premium`.
 
 ### Task 3: One past session's prints, as the segments would have held them
