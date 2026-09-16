@@ -121,6 +121,18 @@ class Fill:
     # pays for a fill keeps one balance per segment. A fill states a price and a
     # quantity, and those are the same whichever segment asked for them.
     segment: str = ""
+    # The quantity step the venue trades this instrument in -- NSE's lot for an
+    # option contract -- carried from the order that produced this fill. The
+    # account that keeps the position has no other source for it, and without it
+    # a residue smaller than any order that could be placed stays in the book for
+    # good: measured 2026-09-16, 16 of the 52 open stock-options positions were
+    # exactly that, the smallest 6.66e-15 units against a lot of 225. Each one
+    # marks its symbol as held, so nothing opens on that symbol again.
+    #
+    # Zero when nothing said, which falls back to `order_quantity_increment` --
+    # the global step whose own note has called itself the coarsest number in the
+    # system since 2026-08-22.
+    quantity_increment: float = 0.0
 
     @property
     def signed_quantity(self) -> float:

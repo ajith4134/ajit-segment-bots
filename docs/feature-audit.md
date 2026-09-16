@@ -2735,3 +2735,36 @@ The one closed trade that was delivered is itself not evidence of a broken join 
 `residues_closed_at_restore: 1` says it was a restore residue, which genuinely has
 no fills, no signal time and no measurable move. The starvation is real; this
 particular trade is not the proof of it.
+
+
+### 2026-09-16 — a holding no order could sell is not an open position
+
+Carried open from 2026-09-15 as "41 stock-option positions in the index-options
+account with fractional quantities". Measured on the live paper book, it is
+smaller than that and it is two separate things:
+
+| | measured 2026-09-16 |
+|---|---|
+| index-options | **2** open positions, both stock options and both short (BDL 1180 PE −5,525, HINDUNILVR 1960 PE −5,700), holding ₹496,740 of margin |
+| stock-options | 52 open, of which **16 are rounding residue** — 12 below the global 0.001 order step, 4 between that step and their own contract's lot |
+
+The residues are the live cost. `quantity == 0` is what floating-point subtraction
+never reaches: `TRENT 2700 PE` held **6.66e-15** units against a 225 lot,
+`BAJAJ-AUTO 11300 CE` 27.346 against 75. An open position marks its symbol as
+held, so all 16 symbols were closed to the segment permanently — and
+`universal-symbol-sweeper` counted 1,707 skips as already-held.
+
+The rule is the one `LotBook.is_flat_within` already states for the lot book, now
+applied to the paper account: below one venue step is flat, because every order is
+snapped to that step before it is sent. The step is carried **per symbol** on the
+`fill` (from the order, which `trade-capital-bounds-gate` had already snapped to
+whole lots) rather than read from `order_quantity_increment` — one global 0.001
+whose own note has called itself the coarsest number in the system since
+2026-08-22, and which would catch only 12 of the 16. A residue's margin returns to
+cash rather than being written off with it, and both are counted
+(`residues_closed`, `residue_margin_returned`) so a dropped residue never looks
+like a position that really closed.
+
+The two misplaced shorts are being traced from the fill journals before anything
+is moved — the operator's call, taken 2026-09-16: a book rewrite on top of an
+unexplained position would hide the cause.

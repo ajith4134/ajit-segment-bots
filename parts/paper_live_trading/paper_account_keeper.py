@@ -103,6 +103,12 @@ class KeeperStanding:
     cash_shortfall_total: float = 0.0
     realised_total: float = 0.0
     fees_total: float = 0.0
+    # Positions closed because what was left was smaller than the smallest order
+    # that could have sold it, and the margin that came back with them. Counted
+    # rather than silent: a residue that is quietly dropped and a position that
+    # was really closed are the same line in a book otherwise.
+    residues_closed: int = 0
+    residue_margin_returned: float = 0.0
     lowest_cash: float | None = None
     # What came back from the checkpoint, and what the store made of the file.
     # Named `restored_symbols` because that is the field
@@ -115,7 +121,10 @@ class KeeperStanding:
 class PaperAccountKeeper:
     """Applies paper fills to a paper balance that starts at the segment's allotment."""
 
-    def __init__(self, segment: str, currency: str = "INR", now_ns=time.time_ns) -> None:
+    def __init__(
+        self, segment: str, currency: str = "INR", now_ns=time.time_ns,
+        default_quantity_increment: float = 0.0,
+    ) -> None:
         self._segment = segment
         self._currency = currency
         self._now_ns = now_ns
@@ -124,7 +133,36 @@ class PaperAccountKeeper:
         self._positions: dict[tuple[str, str], _PaperPosition] = {}
         self._marks: dict[tuple[str, str], float] = {}
         self._seen_fills: set[str] = set()
+        # The venue's own quantity step per symbol, learned from the fills that
+        # built each position -- NSE's lot for an option contract. The fallback
+        # is `order_quantity_increment`, one global step for every instrument.
+        self._quantity_increment: dict[tuple[str, str], float] = {}
+        self._default_quantity_increment = float(default_quantity_increment)
         self.standing = KeeperStanding()
+
+    def _step_for(self, key) -> float:
+        return self._quantity_increment.get(key) or self._default_quantity_increment
+
+    def _is_a_residue_no_order_could_sell(self, key, quantity: float) -> bool:
+        """Is what is left smaller than the smallest order that could sell it?
+
+        Exactly zero is flat and always was. Below one step is flat too, and for
+        the same reason `LotBook.is_flat_within` gives: every order is snapped to
+        the venue's step before it is sent, so a holding under one step cannot be
+        reduced by any order that can be placed. It is not a smaller position, it
+        is the residue of a round trip that is already over.
+
+        Measured 2026-09-16 on the live paper book: 16 of the 52 open
+        stock-options positions were this, the smallest 6.66e-15 units against a
+        lot of 225, and each one marked its symbol as held -- so the segment
+        could never open on that symbol again. Four of them are larger than the
+        global fallback step and smaller than their own contract's lot, which is
+        why the step is carried per symbol rather than read from one setting.
+        """
+        if quantity == 0:
+            return True
+        step = self._step_for(key)
+        return step > 0 and abs(quantity) < step
 
     def read_checkpoint_state(self) -> dict:
         """The account, as the next process needs to find it.
@@ -147,6 +185,12 @@ class PaperAccountKeeper:
                     "quantity": position.quantity,
                     "average_price": position.average_price,
                     "margin_posted": position.margin_posted,
+                    # The venue's step for this instrument, so the account that
+                    # restores this position can still tell a holding from a
+                    # residue before any new fill has arrived to state it.
+                    "quantity_increment": self._quantity_increment.get(
+                        (venue_id, symbol), 0.0
+                    ),
                 }
                 for (venue_id, symbol), position in self._positions.items()
             },
@@ -166,7 +210,21 @@ class PaperAccountKeeper:
         for key, held in (state.get("positions") or {}).items():
             venue_id, _, symbol = key.partition("|")
             quantity = float(held["quantity"])
-            if quantity == 0:
+            step = float(held.get("quantity_increment", 0.0) or 0.0)
+            if step > 0:
+                self._quantity_increment[(venue_id, symbol)] = step
+            if self._is_a_residue_no_order_could_sell((venue_id, symbol), quantity):
+                # A residue does not survive a restart as a position. Its margin
+                # returns to cash the same way it does when one is closed while
+                # running, so the restored account balances against the file it
+                # came from.
+                if quantity != 0:
+                    returned = float(
+                        held.get("margin_posted", abs(quantity) * float(held["average_price"]))
+                    )
+                    self._cash += returned
+                    self.standing.residues_closed += 1
+                    self.standing.residue_margin_returned += returned
                 continue
             average_price = float(held["average_price"])
             self._positions[(venue_id, symbol)] = _PaperPosition(
@@ -214,6 +272,9 @@ class PaperAccountKeeper:
         # bounds had just passed, and would report an equity ten times too small
         # for every cap computed off it.
         margin = capital_committed_by(fill.quantity, fill.price, leverage_behind(fill))
+        step = float(getattr(fill, "quantity_increment", 0.0) or 0.0)
+        if step > 0:
+            self._quantity_increment[(fill.venue_id, fill.symbol)] = step
         opening = held is None or held.quantity == 0 or (held.quantity > 0) == (fill.side == BUY)
 
         # **An executed fill is never refused here** (2026-09-13). This refused a
@@ -287,7 +348,14 @@ class PaperAccountKeeper:
                 abs(held.quantity), fill.price, leverage_behind(fill)
             )
             self._cash -= held.margin_posted
-        if held.quantity == 0:
+        if self._is_a_residue_no_order_could_sell(key, held.quantity):
+            if held.quantity != 0:
+                # Whatever the residue still posted belongs to a position that no
+                # longer exists. Returned rather than written off: it is the
+                # account's own money and the next trade needs it.
+                self._cash += held.margin_posted
+                self.standing.residues_closed += 1
+                self.standing.residue_margin_returned += held.margin_posted
             del self._positions[key]
 
     def read_balance(self) -> PaperBalance:
@@ -343,6 +411,8 @@ def describe_paper_account(keeper: PaperAccountKeeper) -> dict:
         "fills_applied_beyond_cash": keeper.standing.fills_applied_beyond_cash,
         "cash_shortfall_total": keeper.standing.cash_shortfall_total,
         "lowest_cash": keeper.standing.lowest_cash,
+        "residues_closed": keeper.standing.residues_closed,
+        "residue_margin_returned": keeper.standing.residue_margin_returned,
     }
 
 
@@ -545,6 +615,10 @@ def start_part(context) -> int:
                         segment, "quote_currency", context.settings_root
                     ).value
                 ),
+                # The step to fall back on until a fill states the instrument's
+                # own. One global number for every instrument, which is why the
+                # per-symbol one is carried on the fill at all.
+                default_quantity_increment=context.number("order_quantity_increment"),
             )
             for segment in built_segments(context)
         }

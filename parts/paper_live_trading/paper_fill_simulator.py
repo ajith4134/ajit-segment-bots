@@ -963,6 +963,10 @@ class PaperFillSimulator:
             # And whose account that is. One paper account per segment since
             # 2026-09-05, and a fill is the only thing that reaches the keeper.
             segment=getattr(order, "segment", ""),
+            # The instrument's own lot, which trade-capital-bounds-gate already
+            # snapped this order to. Carried so the account keeping the position
+            # can tell a real holding from a rounding residue no order could sell.
+            quantity_increment=float(getattr(order, "quantity_increment", 0.0) or 0.0),
         )
         return self._result(
             client_order_id, order.venue_id, order.symbol, order.side, outcome, fill,
