@@ -445,16 +445,24 @@ def test_a_losing_trade_is_weighed_by_how_far_it_stood_from_noise_not_refused():
             sample_size=10, reason="", assessed_at_ns=1,
         )
 
-    assert evidence_weight_of(assessed(-2.5)) == 2.5
-    assert evidence_weight_of(assessed(1.5)) == 1.5
-    assert evidence_weight_of(None) == 1.0
-    assert evidence_weight_of(assessed(None, measurable=False)) == 1.0
+    CEILING = 4.0  # learning_maximum_evidence_weight, as the live part reads it
+    assert evidence_weight_of(assessed(-2.5), CEILING) == 2.5
+    assert evidence_weight_of(assessed(1.5), CEILING) == 1.5
+    assert evidence_weight_of(None, CEILING) == 1.0
+    assert evidence_weight_of(assessed(None, measurable=False), CEILING) == 1.0
     # A flat trade, or one on a symbol with no measured move, is not evidence either way.
-    assert evidence_weight_of(assessed(0.0)) is None
+    assert evidence_weight_of(assessed(0.0), CEILING) is None
+    # And no single trade outweighs what the loop assumed before it had seen any.
+    # The real maximum on this project's 526 closed trades was 252 standard
+    # moves (2026-09-16), which without this counted as 252 observations of one
+    # bot's hit rate -- twelve times the sample a rate needs to be read at all.
+    assert evidence_weight_of(assessed(-252.0), CEILING) == CEILING
+    assert evidence_weight_of(assessed(20.0), CEILING) == CEILING
 
     subject = a_scorekeeper(minimum=1)
     subject.record_opinion_outcome(
-        BULL, "a-detector", "trending", 0.8, False, -0.02, significance=evidence_weight_of(assessed(-2.5))
+        BULL, "a-detector", "trending", 0.8, False, -0.02,
+        significance=evidence_weight_of(assessed(-2.5), CEILING)
     )
     assert subject.scorecard_for(BULL).trades == 1
 

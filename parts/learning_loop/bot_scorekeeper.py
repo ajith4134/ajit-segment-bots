@@ -199,7 +199,7 @@ class BotScorekeeper:
         return estimator
 
 
-def evidence_weight_of(significance) -> float | None:
+def evidence_weight_of(significance, ceiling: float) -> float | None:
     """How much one closed trade counts, from its outcome-significance.
 
     luck-skill-separator standardises the *signed* return against the symbol's own
@@ -207,11 +207,24 @@ def evidence_weight_of(significance) -> float | None:
     the sign; the weight is the distance from noise. Unassessed or unmeasurable
     counts as an ordinary observation, as it always has. Exactly zero -- a flat
     trade, or no measured move -- is None: not an observation either way.
+
+    **Bounded by `ceiling`**, because the distance from noise is unbounded and
+    `record_opinion_outcome` turns it into that many separate observations of a
+    bot's hit rate. Measured over this project's own 526 closed trades on
+    2026-09-16, with each trade's volatility re-measured from the tape
+    (measurements/2026-09-16-evidence-weight-of-a-closed-trade/): the median
+    trade was worth 1 observation, the 99th percentile 20, and the heaviest
+    single trade **252** -- twelve times the sample a rate needs before it is
+    read as a frequency at all. The ten heaviest trades were 29.1% of every
+    observation the scorekeeper had ever recorded. Capped at the prior's own
+    weight they are 4.5%, and 13.7% of trades are truncated at all.
     """
     if significance is None or significance.standardised is None:
         return 1.0
     weight = abs(significance.standardised)
-    return weight if weight > 0 else None
+    if weight <= 0:
+        return None
+    return min(weight, ceiling)
 
 
 def describe_scorekeeping(scorekeeper: BotScorekeeper) -> dict:
@@ -291,6 +304,10 @@ def start_part(context) -> int:
         half_life_observations=context.number("learning_half_life_observations"),
         minimum_observations=int(context.number("learning_minimum_observations")),
     )
+    # The most one closed trade may be worth, in observations. Read here rather
+    # than clamped inside the estimator: it is a statement about evidence, and
+    # the scorekeeper is what turns evidence into a record.
+    evidence_ceiling = context.number("learning_maximum_evidence_weight")
     # The last acting opinion per bot per symbol: what the bot said before the
     # trade the episode closes. Bounded by symbols the bots have opinions on.
     last_opinion: dict[tuple[str, str, str], object] = {}
@@ -316,7 +333,7 @@ def start_part(context) -> int:
         by_trade = significances.mapping()
         for episode in episodes.payloads():
             trade_id = episode.trade_id
-            weight = evidence_weight_of(by_trade.get(trade_id))
+            weight = evidence_weight_of(by_trade.get(trade_id), evidence_ceiling)
             if weight is None:
                 scorekeeper.standing.outcomes_without_evidence += 1
             for (bot, venue_id, symbol), opinion in list(last_opinion.items()):

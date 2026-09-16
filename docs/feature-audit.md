@@ -2658,3 +2658,39 @@ test rather than passing silently.
 redundant there today -- Upstox types a BSE equity `A`, not `EQ`, so the existing
 instrument-type filter already excluded those rows -- and the comment says so
 rather than claiming a fix it did not make.
+
+
+### 2026-09-16 — one closed trade was worth up to 252 opinions
+
+Carried as open from 2026-09-15, where it was a review finding rather than a
+measurement: `evidence_weight_of` returns `abs(significance.standardised)` with
+no ceiling, and `record_opinion_outcome` turns that into that many separate
+observations of one bot's hit rate.
+
+Measured on this project's own **526 closed trades** (position-recorder's
+journals), each trade's volatility re-measured from the captured tape rather than
+assumed — `measurements/2026-09-16-evidence-weight-of-a-closed-trade/`:
+
+| | observations one trade buys |
+|---|---|
+| median | 1 |
+| p90 | 6 |
+| p99 | 20 |
+| heaviest single trade | **252** |
+
+`learning_minimum_observations` is 20 — the sample a rate needs before it is read
+as a frequency at all. So one trade could both make a rate readable and dominate
+it, and the ten heaviest trades were **29.1%** of every observation the
+scorekeeper had ever recorded.
+
+Bounded by the new `learning_maximum_evidence_weight`, **4** — the operator's
+choice, and `learning_prior_weight`'s own value: one trade is worth at most what
+the loop assumed before it had seen any trade. That is the same reasoning that
+sets the prior at four ("a prior that outvoted a week of evidence would be a rule
+in disguise") applied to the other side of the ledger.
+
+    before   526 trades -> 1,515 observations, heaviest ten 29.1% of the record
+    after    526 trades ->   892 observations, heaviest ten  4.5%, 13.7% truncated
+
+The alternative measured and not taken was 20 (`learning_minimum_observations`):
+1.0% of trades truncated, heaviest ten still 15.3%.
