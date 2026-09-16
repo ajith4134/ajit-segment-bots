@@ -2805,3 +2805,58 @@ lot in several cases (`ABCAPITAL` 2,783 of a 3,100 lot, `TATACONSUM` 462 of 550)
 holding ₹70,695 of margin between them. Discarding them would write off real
 value rather than sweep rounding noise, which is a different decision from the
 one the operator took, and it has not been taken.
+
+
+### 2026-09-16 — the segment split, traced live: a bracket that sold the position twice
+
+Watching the live journal for the next fills on the two split contracts (the
+operator's call: the trail before any book edit) found the cause, and it is not
+primarily a segment bug.
+
+**What the live fills showed.** Replaying every captured fill on
+`HINDUNILVR 1960 PE 29 SEP 26` as a running quantity:
+
+    06:08:08  stop   sell   600    10,800 -> 10,200
+    06:08:08  target sell   600    10,200 ->  9,600
+    06:08:09  stop   sell 3,000     9,600 ->  6,600
+    06:08:09  target sell 3,000     6,600 ->  3,600
+    06:09:04  stop   sell 3,900    10,500 ->  6,600
+    06:09:04  target sell 3,900     6,600 ->  2,700
+
+A stop and a target, each sized to the whole position, **both filling in the same
+second** — five such pairs inside ninety seconds. Each pair sold twice what the
+position had to give. That is how a segment that only ever buys options came to
+hold them short, and why exits on those symbols later arrive as *buys*.
+
+`stop-order-manager` resizes both exits to the position on every tick, which is
+what was not fast enough: both filled between two ticks. `paper-fill-simulator`'s
+own `cancel` docstring already described the intended behaviour — "the target
+fills and the stop must go" — but nothing triggered it except a position already
+reported flat, and over-selling never reaches flat, it overshoots it.
+
+A real bracket is one-cancels-other. The pair now travels linked
+(`OrderRequest.linked_exit_order_id`, set by the manager from the ids it already
+holds) and the paper book gives up the other half at the moment of the fill —
+withdrawing it, or reducing it by what actually sold. Live after restart:
+`bracket_siblings_withdrawn` 1 on the first fill.
+
+**The segment half, measured.** Of the index-options account's fills, every *buy*
+is a real index contract (SENSEX, BANKNIFTY) and every *sell* is a **stock**
+contract (BANKINDIA, APLAPOLLO, ADANIENT), each from an order named `stop-…` or
+`target-…`. The reconciler's own checkpoint still carried **56 stock contracts
+labelled `segment='index-options'`** — stale from before the resolver fix of
+2026-09-15 (`5abc2ae`). `stop-order-manager` stamps an exit with the position's
+label, so those exits were charged to index-options while new opens on the same
+symbols were charged, correctly, to stock-options.
+
+It could not correct itself: a label is only refreshed when a position reopens
+**from flat**, and the float residue meant these never reached exactly flat. Two
+defects holding each other up. A position now adopts the segment of any fill that
+**adds** to it, counted as `segments_corrected_by_an_adding_fill`; a reducing
+fill never changes it, because an exit's own segment is read off that very label
+and adopting it would be circular.
+
+Two test failures found in the full run — `test_on_real_nifty_the_gap_compares_a_
+year_with_a_year` and `test_a_position_opens_and_closes_across_nine_processes`
+("nothing closed") — both reproduce at HEAD without these changes. They are not
+caused by this work and are open.

@@ -1635,3 +1635,70 @@ def test_a_segment_that_really_sells_to_open_can_say_so():
     detector.observe_fill(fill("f1", SELL, 24.0, 100.0, at=1))
 
     assert detector.standing.refused_a_sell_that_would_open_a_short == 0
+
+
+def a_segmented_fill(fill_id, side, price, quantity, segment, at=1):
+    return Fill(
+        fill_id=fill_id, venue_id=VENUE, symbol="BDL 1180 PE 29 SEP 26", side=side,
+        price=price, quantity=quantity, fee=0.0, filled_at_ns=at * SECOND,
+        leverage=1.0, segment=segment,
+    )
+
+
+def test_a_fill_that_adds_to_a_position_corrects_a_stale_segment_label():
+    """Which account an exit is charged to follows this label.
+
+    Real, 2026-09-16: before the segment resolver was fixed the day before
+    (5abc2ae), stock options were charged to index capital, and 56 stock
+    contracts still carried `segment='index-options'` afterwards.
+    `stop-order-manager` stamps an exit with the position's label, so every stop
+    and target on those contracts was still charged to index-options while new
+    opens on the same symbols were charged, correctly, to stock-options. The two
+    paper books ended holding exact mirrors -- index-options −5,525 of
+    `BDL 1180 PE 29 SEP 26` against stock-options +5,525, with ₹496,740 of margin
+    posted against a position that account never bought.
+
+    A label only refreshed itself when a position reopened from flat, and float
+    residue meant these never reached exactly flat, so it never refreshed.
+    """
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    stale = reconciler.observe_fill(
+        a_segmented_fill("f1", BUY, 56.8, 2_125.0, "index-options")
+    )
+    assert stale.segment == "index-options"
+
+    # The resolver is fixed and the next entry names the right segment while the
+    # position is still open.
+    corrected = reconciler.observe_fill(
+        a_segmented_fill("f2", BUY, 57.0, 2_125.0, "stock-options", at=2)
+    )
+    assert corrected.segment == "stock-options"
+    assert reconciler.standing.segments_corrected_by_an_adding_fill == 1
+    assert "index-options" in reconciler.standing.last_segment_correction
+
+
+def test_a_reducing_fill_never_changes_which_segment_owns_the_position():
+    """An exit's own segment is read off this label, so adopting it is circular.
+
+    This is the half that must not 'fix' itself: a sell stamped with the stale
+    label would otherwise confirm the stale label.
+    """
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    reconciler.observe_fill(a_segmented_fill("f1", BUY, 56.8, 2_125.0, "stock-options"))
+    held = reconciler.observe_fill(
+        a_segmented_fill("f2", SELL, 57.0, 1_000.0, "index-options", at=2)
+    )
+    assert held.segment == "stock-options"
+    assert reconciler.standing.segments_corrected_by_an_adding_fill == 0
+
+
+def test_a_position_reopened_from_flat_takes_the_new_fills_segment():
+    reconciler = FillReconciler(quantity_tolerance=1e-9)
+    reconciler.observe_fill(a_segmented_fill("f1", BUY, 56.8, 2_125.0, "index-options"))
+    reconciler.observe_fill(a_segmented_fill("f2", SELL, 57.0, 2_125.0, "index-options", at=2))
+    reopened = reconciler.observe_fill(
+        a_segmented_fill("f3", BUY, 58.0, 500.0, "stock-options", at=3)
+    )
+    assert reopened.segment == "stock-options"
+    # Reopening from flat is the path that always worked; it is not a correction.
+    assert reconciler.standing.segments_corrected_by_an_adding_fill == 0

@@ -100,6 +100,12 @@ class StopOrderAction:
     previous_stop_price: float | None
     reason: str
     decided_at_ns: int
+    # The other half of this position's bracket, so the venue can withdraw it the
+    # moment this one fills. Both exits are sized to the whole position, and
+    # resizing them on the next tick is not fast enough: measured live
+    # 2026-09-16, five stop/target pairs on HINDUNILVR 1960 PE filled within the
+    # same second as each other, each pair selling twice what the position held.
+    linked_exit_order_id: str | None = None
     # Whose money this exit spends, carried for exactly the reason
     # `Position.segment` is: the exits are placed long after the decision that
     # opened the position, and every part that reads money reads one level per
@@ -653,8 +659,26 @@ class StopOrderManager:
             place_order_id=place_id, cancel_order_id=cancel_id, side=side,
             quantity=quantity, stop_price=stop_price, previous_stop_price=previous,
             reason=reason, decided_at_ns=self._now_ns(),
+            linked_exit_order_id=self._other_exit_of(venue_id, symbol, action),
             segment=self._segment_of.get((venue_id, symbol), ""),
         )
+
+    def _other_exit_of(self, venue_id: str, symbol: str, action: str) -> str | None:
+        """The half of this position's bracket that this action is not.
+
+        A stop names the resting target and a target names the resting stop, read
+        from what this manager currently believes is resting. Nothing else in a
+        bracket is linked: a cancel withdraws one named order and a refusal
+        places none.
+        """
+        held = self._resting.get((venue_id, symbol))
+        if held is None or action in (CANCEL_EXIT,):
+            return None
+        if action in (PLACE_TARGET, RESIZE_TARGET):
+            return held.order_id or None
+        if action in (PLACE_NEW, REPLACE, RESIZE):
+            return held.target_order_id or None
+        return None
 
 
 def describe_stop_orders(manager: StopOrderManager, dropped=None) -> dict:
@@ -1173,6 +1197,9 @@ def as_order_request(action: StopOrderAction):
         reason=action.reason,
         routed_at_ns=action.decided_at_ns,
         cancels_client_order_id=action.cancel_order_id,
+        # The other half of the bracket, so the book can withdraw it when this
+        # one fills rather than waiting for the next tick to resize it.
+        linked_exit_order_id=action.linked_exit_order_id,
         # Whose money closes this position. Without it the book resolves no
         # money mode on a spine with more than one segment and refuses the exit
         # as a live order, which leaves a real position with no stop.

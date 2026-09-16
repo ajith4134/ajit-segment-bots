@@ -34,7 +34,7 @@ and filling there manufactures profit out of a data artefact.
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 
 from runtime.indian_equity_fee_model import upstox_equity_intraday_order_cost
 from runtime.indian_options_fee_model import upstox_options_order_cost
@@ -161,6 +161,10 @@ class RestingOrder:
     # order fills long after the message that placed it is gone, and the fill it
     # produces has to say which segment's account pays for it (2026-09-05).
     segment: str = ""
+    # The other half of this position's bracket. A real bracket is
+    # one-cancels-other; without the link both halves rest at the size of the
+    # whole position and both fill.
+    linked_exit_order_id: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -176,6 +180,11 @@ class SimulatorStanding:
     orders_seen: int = 0
     filled: int = 0
     partially_filled: int = 0
+    # A bracket's other half, given up when this one filled. Counted because the
+    # alternative -- both halves filling at the size of the whole position -- is
+    # indistinguishable from a strategy that decided to sell twice.
+    bracket_siblings_withdrawn: int = 0
+    bracket_siblings_reduced: int = 0
     resting: int = 0
     # The paper book, carried across a restart since 2026-09-13. Named
     # `restored_symbols` because that is the field `restore_and_arm_checkpoint`
@@ -483,6 +492,41 @@ class PaperFillSimulator:
         """An order freed by the wait running out rather than by a latency verdict."""
         self.standing.released_without_a_verdict += 1
 
+    def _withdraw_the_other_half_of_the_bracket(self, order, filled: float) -> None:
+        """One exit filled, so the other must give up the same quantity.
+
+        A bracket's stop and target are both sized to the whole position, so a
+        venue that fills one and leaves the other resting at full size sells the
+        position twice. A real bracket is one-cancels-other; this is that, done
+        where the fill happens rather than on the next tick of the part that
+        placed them.
+
+        Measured live 2026-09-16 on `HINDUNILVR 1960 PE 29 SEP 26`: at 06:09:04
+        the stop sold 3,900 and the target sold 3,900 in the same second against
+        a holding of 10,500, and five such pairs fired inside ninety seconds.
+        `stop-order-manager` resizes both exits to the position on every tick and
+        that is exactly what was not fast enough -- both filled between two
+        ticks. Selling twice what is held is how a segment that only buys options
+        came to hold them short.
+
+        Reduced rather than always cancelled: a partial fill on one half leaves a
+        real position behind, and the other half still protects what is left.
+        """
+        sibling_id = getattr(order, "linked_exit_order_id", None)
+        if not sibling_id or filled <= 0:
+            return
+        sibling = self._resting.get(sibling_id)
+        if sibling is None:
+            return
+        left = sibling.quantity - filled
+        if left <= 0:
+            self._resting.pop(sibling_id, None)
+            self.standing.bracket_siblings_withdrawn += 1
+        else:
+            self._resting[sibling_id] = replace(sibling, quantity=left)
+            self.standing.bracket_siblings_reduced += 1
+        self.standing.orders_on_the_book = len(self._resting)
+
     def cancel(self, client_order_id: str, reason: str) -> PaperFillResult | None:
         """Withdraw one resting order. Returns what was withdrawn, or None.
 
@@ -641,6 +685,7 @@ class PaperFillSimulator:
         leverage: float = UNLEVERED,
         price_fidelity=None,
         segment: str = "",
+        linked_exit_order_id: str | None = None,
     ) -> PaperFillResult:
         self.standing.orders_seen += 1
 
@@ -708,7 +753,7 @@ class PaperFillSimulator:
                 client_order_id=client_order_id, venue_id=venue_id, symbol=symbol, side=side,
                 quantity=quantity, order_type=order_type, limit_price=limit_price or None,
                 stop_price=stop_price, rested_at_ns=self._now_ns(), leverage=leverage,
-                segment=segment,
+                segment=segment, linked_exit_order_id=linked_exit_order_id,
             )
             if self.may_fill and market_price is not None and self.is_triggered(
                 order_type, side, stop_price, market_price
@@ -921,6 +966,7 @@ class PaperFillSimulator:
         self._filled_so_far[client_order_id] = already_filled + fillable
         remaining = outstanding - fillable
         outcome = FILLED if remaining <= 0 else PARTIALLY_FILLED
+        self._withdraw_the_other_half_of_the_bracket(order, fillable)
         if outcome == FILLED:
             self.standing.filled += 1
         else:
@@ -935,6 +981,7 @@ class PaperFillSimulator:
                     order_type=order.order_type, limit_price=order.limit_price,
                     stop_price=order.stop_price, rested_at_ns=order.rested_at_ns,
                     leverage=order.leverage, segment=order.segment,
+                    linked_exit_order_id=order.linked_exit_order_id,
                 )
         self.standing.orders_on_the_book = len(self._resting)
 
@@ -995,6 +1042,11 @@ def describe_paper_fills(simulator: PaperFillSimulator) -> dict:
         "orders_seen": simulator.standing.orders_seen,
         "filled": simulator.standing.filled,
         "partially_filled": simulator.standing.partially_filled,
+        # One-cancels-other, done at the venue. Both are on health because a
+        # bracket that never withdraws its other half sells the position twice
+        # and nothing else reports it (2026-09-16).
+        "bracket_siblings_withdrawn": simulator.standing.bracket_siblings_withdrawn,
+        "bracket_siblings_reduced": simulator.standing.bracket_siblings_reduced,
         "resting": simulator.standing.resting,
         "orders_on_the_book": simulator.standing.orders_on_the_book,
         "stops_triggered": simulator.standing.stops_triggered,
@@ -1326,6 +1378,7 @@ def start_part(context) -> int:
             # Carried from the order request through to the fill, so the account
             # that pays knows which of the three it is (2026-09-05).
             "segment": getattr(request, "segment", ""),
+            "linked_exit_order_id": getattr(request, "linked_exit_order_id", None),
             "is_in_flight": False,
             "fill_price_estimate": estimate_by_symbol.get(key),
             "market_price": last_price.get(key),

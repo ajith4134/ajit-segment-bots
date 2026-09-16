@@ -1968,3 +1968,70 @@ def test_a_schedule_is_used_only_for_the_order_it_was_built_for():
     refused = router.route(nothing, Mode("paper"), schedule)
     assert len(refused) == 1 and refused[0].may_be_sent is False
     assert router.standing.refused_nothing_to_send == 1
+
+
+def test_a_filled_exit_takes_the_other_half_of_its_bracket_off_the_book():
+    """A stop and a target are both sized to the whole position.
+
+    Measured live 2026-09-16 on `HINDUNILVR 1960 PE 29 SEP 26`: at 06:09:04 the
+    stop sold 3,900 and the target sold 3,900 in the same second against a
+    holding of 10,500, and five such pairs fired inside ninety seconds. Each
+    pair sold twice what the position had to give -- which is how a segment that
+    only ever buys options ended up holding them short, and how those sells were
+    then booked to a second account.
+
+    `stop-order-manager` resizes both exits to the position on every tick, and
+    that is what was not fast enough: both filled between two ticks. The
+    withdrawal has to happen in the venue, at the fill.
+    """
+    simulator = fill_simulator()
+    # The target rests above the market.
+    rested = simulator.simulate(**an_order(
+        client_order_id="target-1", side=SELL, quantity=3_900.0,
+        order_type=TAKE_PROFIT_MARKET, stop_price=120.0, market_price=100.0,
+        fill_price_estimate=Estimate(120.0, 3_900.0),
+    ))
+    assert rested.outcome == RESTING_STOP
+    # The stop rests below it, naming the target as the other half.
+    simulator.simulate(**an_order(
+        client_order_id="stop-1", side=SELL, quantity=3_900.0,
+        order_type=STOP_MARKET, stop_price=90.0, market_price=100.0,
+        fill_price_estimate=Estimate(90.0, 3_900.0),
+        linked_exit_order_id="target-1",
+    ))
+    assert len(simulator.resting_orders) == 2
+
+    # Price falls through the stop: it fills off the market, exactly as the live
+    # book fills a resting exit, and the target must go with it.
+    results = simulator.evaluate_resting({(VENUE, SYMBOL): 85.0})
+    assert [result.outcome for result in results] == [FILLED]
+    assert [order.client_order_id for order in simulator.resting_orders] == []
+    assert simulator.standing.bracket_siblings_withdrawn == 1
+
+
+def test_an_exit_smaller_than_its_sibling_only_takes_that_much_off_it():
+    """What is left of the position still needs the other half protecting it.
+
+    The shape is real: `stop-order-manager` resizes each exit to the position
+    separately, so between two ticks one half can be smaller than the other. The
+    withdrawal has to be for what actually sold, not for the whole sibling.
+    """
+    simulator = fill_simulator()
+    simulator.simulate(**an_order(
+        client_order_id="target-2", side=SELL, quantity=3_900.0,
+        order_type=TAKE_PROFIT_MARKET, stop_price=120.0, market_price=100.0,
+        fill_price_estimate=Estimate(120.0, 3_900.0),
+    ))
+    simulator.simulate(**an_order(
+        client_order_id="stop-2", side=SELL, quantity=900.0,
+        order_type=STOP_MARKET, stop_price=90.0, market_price=100.0,
+        fill_price_estimate=Estimate(90.0, 900.0),
+        linked_exit_order_id="target-2",
+    ))
+
+    simulator.evaluate_resting({(VENUE, SYMBOL): 85.0})
+
+    resting = {order.client_order_id: order.quantity for order in simulator.resting_orders}
+    assert resting["target-2"] == 3_000.0
+    assert simulator.standing.bracket_siblings_reduced == 1
+    assert simulator.standing.bracket_siblings_withdrawn == 0

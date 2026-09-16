@@ -60,6 +60,29 @@ class Reconciliation:
     observed_at_ns: int
 
 
+def _segment_after(held, fill, increasing: bool, standing) -> str:
+    """Whose money owns the position once this fill is applied.
+
+    Flat before the fill: the fill's own segment, whatever it says. Being added
+    to by a fill from another segment: the fill's segment wins and the
+    correction is counted -- an entry's segment is resolved from the intent that
+    formed it, so it is the fresher statement of ownership. Being reduced: no
+    change, because an exit's segment is read off this label and adopting it
+    would be circular.
+    """
+    stated = str(getattr(fill, "segment", "") or "")
+    if held.quantity == 0:
+        return stated
+    if increasing and stated and stated != held.segment:
+        standing.segments_corrected_by_an_adding_fill += 1
+        standing.last_segment_correction = (
+            f"{held.symbol} was carrying {held.segment or 'no segment'} and a fill "
+            f"adding to it named {stated}"
+        )
+        return stated
+    return held.segment
+
+
 @dataclass
 class ReconcilerStanding:
     fills_applied: int = 0
@@ -73,6 +96,12 @@ class ReconcilerStanding:
     # different facts, and only the second is a fault (Rule 8).
     restored_symbols: int = 0
     checkpoint_verdict: str = ""
+    # A fill that added to a position while naming a different segment than the
+    # position was carrying, and the last one seen. Counted because the label
+    # decides which account an exit is charged to: silently keeping the old one
+    # is how one position comes to be held in two books at once.
+    segments_corrected_by_an_adding_fill: int = 0
+    last_segment_correction: str | None = None
 
 
 class FillReconciler:
@@ -256,14 +285,32 @@ class FillReconciler:
             leverage=(
                 getattr(fill, "leverage", None) if held.quantity == 0 else held.leverage
             ),
-            # A position reopened from flat takes the new fill's segment; one
-            # being added to or reduced keeps the segment it was opened in. Two
-            # segments cannot hold the same (venue, symbol) at once -- an
-            # underlying is claimed by one segment per instrument type -- so this
-            # is a carry, never a merge.
-            segment=(
-                getattr(fill, "segment", "") if held.quantity == 0 else held.segment
-            ),
+            # A position reopened from flat takes the new fill's segment, and so
+            # does one that is being ADDED to by a fill naming a different
+            # segment. Reducing fills never change it. Two segments cannot hold
+            # the same (venue, symbol) at once -- an underlying is claimed by one
+            # segment per instrument type -- so a disagreement is a stale label,
+            # and the money that buys is the money that owns.
+            #
+            # Carrying the label unconditionally is what produced the split books
+            # of 2026-09-16. Before the segment resolver was fixed on 2026-09-15
+            # (5abc2ae) stock options were charged to index capital, and 56 stock
+            # contracts still held `segment='index-options'` the next day.
+            # `stop-order-manager` stamps an exit with the position's label, so
+            # every stop and target on those contracts was still charged to
+            # index-options while new opens on the same symbols were charged --
+            # correctly -- to stock-options. The two books ended holding exact
+            # mirrors: index-options -5,525 of BDL 1180 PE against stock-options
+            # +5,525, with 496,740 rupees of margin posted against a position
+            # that account never bought.
+            #
+            # It could not correct itself, because a label is only refreshed when
+            # a position reopens from flat and float residue meant these never
+            # reached exactly flat (the same residue `paper-account-keeper` now
+            # treats as flat). Adopting on an adding fill is not circular: an
+            # entry's segment is resolved from the intent that formed it, while
+            # an exit's is read off this very label.
+            segment=_segment_after(held, fill, increasing, self.standing),
         )
 
     def observe_venue_report(self, venue_id: str, symbol: str, quantity: float) -> None:
@@ -309,6 +356,12 @@ def describe_reconciliation(reconciler: FillReconciler) -> dict:
         "duplicates_ignored": reconciler.standing.duplicates_ignored,
         "checks": reconciler.standing.checks,
         "divergences": reconciler.standing.divergences,
+        # Which account an exit is charged to follows this label, so a stale one
+        # is how a position comes to be held in two books at once (2026-09-16).
+        "segments_corrected_by_an_adding_fill": (
+            reconciler.standing.segments_corrected_by_an_adding_fill
+        ),
+        "last_segment_correction": reconciler.standing.last_segment_correction,
         "symbols": reconciler.standing.symbols,
         "last_divergence": reconciler.standing.last_divergence,
     }

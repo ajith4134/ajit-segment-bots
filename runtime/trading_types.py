@@ -229,6 +229,23 @@ class OrderRequest:
     # spine where one segment is live and another is on paper, is the one failure
     # this whole block exists to prevent.
     segment: str = ""
+    # The other half of this position's bracket -- the target when this is the
+    # stop, the stop when this is the target -- so the venue can withdraw it when
+    # this one fills. A real bracket is one-cancels-other; the paper book had no
+    # link at all, and both halves are sized to the whole position.
+    #
+    # Measured live on 2026-09-16, HINDUNILVR 1960 PE 29 SEP 26: at 06:09:04 the
+    # stop sold 3,900 and the target sold 3,900 in the same second, against a
+    # holding of 10,500. Five such pairs in ninety seconds. Each pair sold twice
+    # what the position had to give, which is how a segment that only ever buys
+    # options ended up holding them short -- and the stale-segment routing then
+    # booked those sells into the other segment's account.
+    #
+    # `stop-order-manager` resizes both exits to the position on every tick, and
+    # that is not fast enough: both filled inside one second, between two ticks.
+    # The link is what makes the withdrawal immediate, in the venue, where the
+    # fill happens.
+    linked_exit_order_id: str | None = None
 
     @property
     def is_live_money(self) -> bool:
