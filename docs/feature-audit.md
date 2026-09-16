@@ -2860,3 +2860,19 @@ Two test failures found in the full run — `test_on_real_nifty_the_gap_compares
 year_with_a_year` and `test_a_position_opens_and_closes_across_nine_processes`
 ("nothing closed") — both reproduce at HEAD without these changes. They are not
 caused by this work and are open.
+
+
+#### The link has to be symmetric, measured on the live book
+
+Reading it off the order that fills is not enough. `stop-order-manager` names the
+sibling from what it already believes is resting, so **only the half placed
+second can ever carry a link** — on the live book at 06:50 UTC, 2 of 24 resting
+exits carried one, and the unlinked ones were mostly stops, which is exactly the
+half that fires first in a falling market.
+
+The paper book now keeps the pairing both ways round as soon as either half
+declares it, and rebuilds it on restore from whatever the stored orders carry. A
+fill on either side withdraws the other.
+
+One double-exit still landed at 06:45:07, seconds into the restart, from exits
+that had been resting since before the link existed. None since.

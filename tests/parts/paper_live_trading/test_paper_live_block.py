@@ -2035,3 +2035,35 @@ def test_an_exit_smaller_than_its_sibling_only_takes_that_much_off_it():
     assert resting["target-2"] == 3_000.0
     assert simulator.standing.bracket_siblings_reduced == 1
     assert simulator.standing.bracket_siblings_withdrawn == 0
+
+
+def test_the_half_placed_first_is_withdrawn_too_when_the_other_fills():
+    """Only one half of a bracket can ever name the other.
+
+    `stop-order-manager` names the sibling from what it already believes is
+    resting, so the half placed FIRST has nothing to name. Measured on the live
+    book 2026-09-16: 2 of 24 resting exits carried a link. Reading the link only
+    off the order that fills would therefore miss the common case -- the stop
+    resting first and firing first -- which is the whole defect this exists for.
+    """
+    simulator = fill_simulator()
+    # The stop goes on first, naming nothing.
+    simulator.simulate(**an_order(
+        client_order_id="stop-3", side=SELL, quantity=3_900.0,
+        order_type=STOP_MARKET, stop_price=90.0, market_price=100.0,
+        fill_price_estimate=Estimate(90.0, 3_900.0),
+    ))
+    # The target follows and names the stop.
+    simulator.simulate(**an_order(
+        client_order_id="target-3", side=SELL, quantity=3_900.0,
+        order_type=TAKE_PROFIT_MARKET, stop_price=120.0, market_price=100.0,
+        fill_price_estimate=Estimate(120.0, 3_900.0),
+        linked_exit_order_id="stop-3",
+    ))
+    assert len(simulator.resting_orders) == 2
+
+    # Price falls through the stop -- the half that named nobody.
+    simulator.evaluate_resting({(VENUE, SYMBOL): 85.0})
+
+    assert [order.client_order_id for order in simulator.resting_orders] == []
+    assert simulator.standing.bracket_siblings_withdrawn == 1

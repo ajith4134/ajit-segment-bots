@@ -318,7 +318,28 @@ class PaperFillSimulator:
         # The paper book. Keyed by client order id because that is the id a venue
         # holds an order under, and it is what a cancel names.
         self._resting: dict[str, RestingOrder] = {}
+        # Which two resting orders are the halves of one bracket, both ways
+        # round. A stop placed before its target has nothing to name yet, so only
+        # the half placed second ever carries the link: measured on the live book
+        # 2026-09-16, 2 of 24 resting exits carried one. Reading it in one
+        # direction only would leave the common case -- the stop filling --
+        # unlinked, which is the whole defect.
+        self._bracket_link: dict[str, str] = {}
         self.standing = SimulatorStanding()
+
+    def _remember_bracket(self, client_order_id: str, sibling_id: str | None) -> None:
+        """Record a bracket's two halves as each other's sibling."""
+        if not sibling_id or sibling_id == client_order_id:
+            return
+        self._bracket_link[client_order_id] = sibling_id
+        self._bracket_link[sibling_id] = client_order_id
+
+    def _sibling_of(self, order) -> str | None:
+        """The other half of this order's bracket, however it was learned."""
+        return (
+            getattr(order, "linked_exit_order_id", None)
+            or self._bracket_link.get(getattr(order, "client_order_id", ""))
+        )
 
     def read_checkpoint_state(self) -> dict:
         """The paper book, and how much of each resting order has already filled."""
@@ -338,6 +359,7 @@ class PaperFillSimulator:
         for entry in state.get("resting") or ():
             order = RestingOrder(**{name: value for name, value in entry.items() if name in known})
             self._resting[order.client_order_id] = order
+            self._remember_bracket(order.client_order_id, order.linked_exit_order_id)
         self._filled_so_far = {
             client_order_id: float(filled)
             for client_order_id, filled in (state.get("filled_so_far") or {}).items()
@@ -512,7 +534,7 @@ class PaperFillSimulator:
         Reduced rather than always cancelled: a partial fill on one half leaves a
         real position behind, and the other half still protects what is left.
         """
-        sibling_id = getattr(order, "linked_exit_order_id", None)
+        sibling_id = self._sibling_of(order)
         if not sibling_id or filled <= 0:
             return
         sibling = self._resting.get(sibling_id)
@@ -556,6 +578,9 @@ class PaperFillSimulator:
         if order.client_order_id not in self._resting:
             self._resting[order.client_order_id] = order
             self.standing.resting += 1
+        # Learned whichever half of the bracket declares it, and kept both ways
+        # round: the half placed first has no sibling to name yet.
+        self._remember_bracket(order.client_order_id, order.linked_exit_order_id)
         self.standing.orders_on_the_book = len(self._resting)
         return self._result(
             order.client_order_id, order.venue_id, order.symbol, order.side, outcome, None,
