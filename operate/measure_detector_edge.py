@@ -133,7 +133,7 @@ def pilot_underlyings(before_day: str, stocks_wanted: int) -> tuple[str, ...]:
         if day.weekday() >= 5:
             continue
         try:
-            contracts = bhavcopy.contracts_in(bhavcopy.fetch_bhavcopy(day.isoformat(), session=session))
+            contracts = bhavcopy.contracts_in(bhavcopy.fetch_bhavcopy(day.strftime("%Y%m%d"), session=session))
         except Exception:
             continue
         volume = collections.Counter()
