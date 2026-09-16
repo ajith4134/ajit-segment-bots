@@ -2916,3 +2916,55 @@ has never been built, which is why 19 of the news block's 29 parts do not run.
 
 So news still reaches no trade decision. What changed is that the evidence now
 exists and is correct at the point where those parts would read it.
+
+
+### 2026-09-16 — an embedding model is installed, and the LLM chain moves three parts further
+
+`knowledge-embedder` had no model, which is what held the whole block: 26 parts
+running, none of which had ever called one (see the audit above). Rule 3 says
+install rather than skip.
+
+**What it cost.** `torch 2.13.0+cpu` was already on this box for the Kronos
+forecaster, so the install was `transformers` and `tokenizers` — about 20 MB —
+plus 90 MB of weights for `sentence-transformers/all-MiniLM-L6-v2`. Its width is
+384, which is what `embedding_vector_dimensions` has declared since 2026-08-23.
+Measured here at one thread: **25.1 ms** for a single text, **6.1 ms** each in a
+batch of 32 — 165 texts a second. One thread on purpose: torch takes every core it
+can see, and 332 parts share twelve.
+
+    knowledge-embedder   13 documents, 8 chunks embedded, 9 reused, 0 failures
+    retrieval-index      14 vectors indexed (was an empty index)
+
+**The query also needed a vector.** `retrieval-index` said so in its own
+docstring — a `retrieval-query` is text, and nothing it consumed carried a vector,
+so every query was answered `the-query-was-never-embedded`. It now embeds the
+query with the **same setting** the embedder reads, and refuses when the index's
+active model is not that one: comparing across models does not fail, it returns
+confident nonsense.
+
+    queries_without_a_vector               0   (was every query)
+    queries_with_nothing_above_the_floor  67 of 75
+    hits_returned                          0
+
+Those two numbers were one number before today, and they are not the same fact: a
+query nobody could embed is a broken block, and a query embedded against a corpus
+holding nothing close enough is a working block with a thin corpus. The corpus is
+14 chunks of arxiv abstracts against a 0.5 cosine floor, so 67 refusals is the
+honest answer and not a fault.
+
+Proved end to end on real text: embedding a passage about theta, one about freeze
+quantity and one about the monsoon, the query *"how fast does an option lose its
+time value before expiry"* returns the theta passage
+(`tests/parts/llm_foundation/test_the_embedding_model_is_installed.py`).
+
+**Where it stops now, and it is a design gap rather than an absence.**
+`context-assembler` builds its jobs **only from retrieval hits** — `read_jobs`
+groups hits by query and produces nothing when there are none. So a request whose
+retrieval found nothing relevant never becomes a context at all, and
+`prompt-renderer` refuses it for missing context (901 of 904 this run). Its own
+docstring says the opposite is intended: *"Verified facts are placed first and are
+never dropped... Retrieved passages are the compressible part"* — a context with
+facts and no passages is valid by that design. The part cannot know a request
+exists without a hit, because it consumes neither `llm-request` nor
+`retrieval-query`. Closing it is a blueprint edit (a consumed type added), which is
+a proposal rather than a quiet code change.

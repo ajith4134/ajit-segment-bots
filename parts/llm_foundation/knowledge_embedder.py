@@ -76,6 +76,10 @@ class EmbedderStanding:
     wrong_dimensions: int = 0
     vectors_made_stale_by_a_model_change: int = 0
     model_changes: int = 0
+    # Why no model is installed, when none is. A part that cannot embed and a
+    # part that was never asked to look identical on a board otherwise (Rule 8).
+    model_id: str = ""
+    model_refused_to_load: str = ""
 
 
 class KnowledgeEmbedder:
@@ -236,6 +240,8 @@ def describe_embedding(embedder: KnowledgeEmbedder) -> dict:
     return {
         "part_id": PART_ID,
         "documents_seen": embedder.standing.documents_seen,
+        "model_id": embedder.standing.model_id,
+        "model_refused_to_load": embedder.standing.model_refused_to_load,
         "chunks_embedded": embedder.standing.chunks_embedded,
         "chunks_reused": embedder.standing.chunks_reused,
         "too_short": embedder.standing.too_short,
@@ -274,10 +280,20 @@ def run_knowledge_embedder(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    No embedding model is installed on this box, so every text is answered
-    NO_MODEL by name and no vector is published. Documents, journal entries
-    with text in their payload, and skills are the texts offered;
-    `install_model` is the one way a model gets in.
+    Documents, journal entries carrying a narrative, and skills are the texts
+    offered; `install_model` is the one way a model gets in.
+
+    The model named by `embedding_model_id` is loaded here, at start. Until
+    2026-09-16 none was installed on this box, and the cost of that was the whole
+    block: `retrieval-index` served 5,467 queries against an empty index,
+    `context-assembler` published no context, `prompt-renderer` refused 84,228
+    requests for missing context, and not one of the 26 LLM parts had ever called
+    a model.
+
+    A model that will not load leaves this part exactly as it was -- nothing
+    installed, every text answered NO_MODEL by name -- with the reason on health
+    rather than in a log. That is the one honest degraded state: a zero vector
+    would sit in the index looking like a measurement.
     """
     from runtime.input_assembly import Batch
 
@@ -291,6 +307,24 @@ def start_part(context) -> int:
         minimum_characters=int(context.number("embedding_minimum_characters")),
         dimensions=int(context.number("embedding_vector_dimensions")),
     )
+
+    dimensions = int(context.number("embedding_vector_dimensions"))
+    model_id = str(context.setting("embedding_model_id").value)
+    try:
+        from runtime.text_embedding import load_sentence_embedder
+
+        embedder.install_model(
+            model_id,
+            load_sentence_embedder(
+                model_id, dimensions,
+                threads=int(context.number("embedding_model_threads")),
+            ),
+        )
+        embedder.standing.model_id = model_id
+    except Exception as failure:
+        # Named, not raised: a part that cannot embed is still a running part
+        # that reports why, and everything downstream already handles NO_MODEL.
+        embedder.standing.model_refused_to_load = f"{type(failure).__name__}: {failure}"
 
     def read_texts():
         texts = []

@@ -73,6 +73,18 @@ class IndexStanding:
     embeddings_indexed: int = 0
     queries_served: int = 0
     hits_returned: int = 0
+    # A query this part could not embed, and why. Each is a query answered
+    # NO_QUERY_VECTOR, which is correct and is also invisible without a count.
+    queries_refused_for_a_model_mismatch: int = 0
+    query_embeddings_that_failed: int = 0
+    query_model_refused_to_load: str = ""
+    # The two ways a query comes back empty, which are not the same fact and
+    # were one number until 2026-09-16: a query nobody could embed is a broken
+    # block, and a query embedded against a corpus holding nothing close enough
+    # is a working block with a thin corpus. Read together with
+    # `embeddings_indexed`, they say which.
+    queries_without_a_vector: int = 0
+    queries_with_nothing_above_the_floor: int = 0
     empty_results: int = 0
     duplicates_suppressed: int = 0
     excluded_wrong_model: int = 0
@@ -105,6 +117,11 @@ class RetrievalIndex:
         self._active_model: str | None = None
         self._sequence = 0
         self.standing = IndexStanding()
+
+    @property
+    def active_model(self) -> str | None:
+        """Which model produced the vectors this index currently holds."""
+        return self._active_model
 
     def observe_embedding(self, embedding) -> None:
         """The newest model seen becomes the active one; older vectors are excluded."""
@@ -140,6 +157,7 @@ class RetrievalIndex:
     def retrieve(self, query, query_vector) -> RetrievalResult:
         self.standing.queries_served += 1
         if not query_vector:
+            self.standing.queries_without_a_vector += 1
             return self._result(
                 query.query_id, NO_QUERY_VECTOR, (), 0, 0, 0, 0,
                 "the query was never embedded, so there is nothing to compare against",
@@ -171,6 +189,7 @@ class RetrievalIndex:
 
         if not candidates:
             self.standing.empty_results += 1
+            self.standing.queries_with_nothing_above_the_floor += 1
             return self._result(
                 query.query_id, NOTHING_ABOVE_THE_FLOOR, (), below_floor, below_floor, 0,
                 excluded,
@@ -255,6 +274,15 @@ def describe_index(index: RetrievalIndex) -> dict:
         "part_id": PART_ID,
         "embeddings_indexed": index.standing.embeddings_indexed,
         "queries_served": index.standing.queries_served,
+        "queries_refused_for_a_model_mismatch": (
+            index.standing.queries_refused_for_a_model_mismatch
+        ),
+        "query_embeddings_that_failed": index.standing.query_embeddings_that_failed,
+        "query_model_refused_to_load": index.standing.query_model_refused_to_load,
+        "queries_without_a_vector": index.standing.queries_without_a_vector,
+        "queries_with_nothing_above_the_floor": (
+            index.standing.queries_with_nothing_above_the_floor
+        ),
         "hits_returned": index.standing.hits_returned,
         "empty_results": index.standing.empty_results,
         "duplicates_suppressed": index.standing.duplicates_suppressed,
@@ -296,11 +324,20 @@ def run_retrieval_index(
 def start_part(context) -> int:
     """The one entry point every part carries (T-1).
 
-    Embeddings are indexed as they arrive and scores adjust a source's
-    rank. A query needs a vector, and nothing this part consumes carries
-    one for the query's text -- the embedder is on the document side -- so
-    every query is answered NO_QUERY_VECTOR by name until the query itself
-    arrives embedded.
+    Embeddings are indexed as they arrive and scores adjust a source's rank.
+
+    A query needs a vector, and nothing this part consumes carries one: a
+    `retrieval-query` is text. It is embedded here, with the model named by
+    `embedding_model_id` -- **the same setting `knowledge-embedder` reads**,
+    which is what keeps the two sides comparable. A query embedded by a
+    different model than the documents would not fail; it would return
+    confident nonsense, which is the failure this whole part is arranged
+    against, so the vector is used only while the index's own active model is
+    the one loaded here.
+
+    Until 2026-09-16 no model existed on this box at all and every query was
+    answered NO_QUERY_VECTOR by name. That path stays: no model, or a model
+    that disagrees with the index, still answers by name rather than guessing.
     """
     from runtime.input_assembly import Batch
 
@@ -319,11 +356,43 @@ def start_part(context) -> int:
             index.observe_score(score)
         return embeddings.payloads()
 
+    model_id = str(context.setting("embedding_model_id").value)
+    embed_query = None
+    try:
+        from runtime.text_embedding import load_sentence_embedder
+
+        embed_query = load_sentence_embedder(
+            model_id,
+            int(context.number("embedding_vector_dimensions")),
+            threads=int(context.number("embedding_model_threads")),
+        )
+    except Exception as failure:
+        index.standing.query_model_refused_to_load = f"{type(failure).__name__}: {failure}"
+
+    def vector_for(query):
+        """The query's own vector, or None -- which answers NO_QUERY_VECTOR.
+
+        Refused when the index holds vectors from a different model than the one
+        loaded here: comparing across models returns a confident number that
+        means nothing.
+        """
+        if embed_query is None:
+            return None
+        active = index.active_model
+        if active is not None and active != model_id:
+            index.standing.queries_refused_for_a_model_mismatch += 1
+            return None
+        try:
+            return embed_query(str(getattr(query, "text", "") or ""))
+        except Exception:
+            index.standing.query_embeddings_that_failed += 1
+            return None
+
     return run_retrieval_index(
         index=index,
         control_socket=context.control_socket,
         read_embeddings=read_embeddings,
-        read_queries=lambda: tuple((query, None) for query in queries.payloads()),
+        read_queries=lambda: tuple((query, vector_for(query)) for query in queries.payloads()),
         publish_hits=lambda hits: publish_hits(tuple(hits)),
         health_interval_seconds=context.health_interval_seconds,
         input_descriptors=context.input_descriptors,
